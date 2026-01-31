@@ -1,16 +1,17 @@
 # 🤖 OrcBot
 ### TypeScript Autonomous Agent Framework
+#### High-Power Intelligence with Web, Shell, and Self-Management
 
 <div align="center">
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
 [![Status](https://img.shields.io/badge/Status-Beta-orange.svg)]()
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
+[![ReAct](https://img.shields.io/badge/Reasoning-ReAct-purple.svg)]()
 
-**Autonomous. Modular. Extensible.**
+**Autonomous. Modular. Web-Enabled. Shell-Powered.**
 
-[Features](#features) • [Installation](#installation) • [Usage](#usage) • [Configuration](#configuration) • [Deployment](#deployment)
+[Features](#features) • [Installation](#installation) • [Usage](#usage) • [Skills Registry](#-high-power-skills) • [Configuration](#configuration)
 
 </div>
 
@@ -18,114 +19,95 @@
 
 ## 🚀 Why OrcBot?
 
-OrcBot isn't just a chatbot. It's an **autonomous agent** capable of living on your server, thinking for itself, and proactively helping you. It remembers your conversations, manages tasks, and connects to the world via skills.
+OrcBot is a next-generation **autonomous reasoning agent**. Unlike simple chatbots, OrcBot uses a **ReAct reasoning loop** to think in multiple steps, execute background tasks, browse the web, and manage its own system. It doesn't just reply; it **orchestrates**.
 
 ### Key Capabilities
 
-*   🧠 **Multi-LLM Core**: Switch between **OpenAI (GPT-4)** and **Google Gemini** on the fly.
-*   💾 **Persistent Memory**: Remembers users and context across sessions using local JSON storage.
-*   📡 **Telegram Integration**: Chat with OrcBot from anywhere; it learns who you are.
-*   💓 **Autonomy Heartbeat**: OrcBot wakes up periodically (configurable) to reflect on tasks and take initiative.
-*   🖥️ **Interactive TUI**: A beautiful terminal user interface to manage everything.
-*   🔌 **Skill System**: Easily extendable plugin system for new capabilities.
+*   🧠 **ReAct Reasoning Loop**: Thinks, Acts, and Observes in multi-step cycles to complete complex tasks.
+*   🌐 **Built-in Web Browser**: Surfs the web via Playwright to find real-time info.
+*   🐚 **Shell Execution**: Can run command-line tools, manage files, and install dependencies.
+*   🧠 **Autonomous Learning**: Automatically updates `USER.md` (your profile) and `.AI.md` (its identity) as it learns.
+*   💓 **Autonomy Heartbeat**: Proactively wakes up to self-reflect and take action even when idle.
+*   🖥️ **Interactive TUI**: Streamlined terminal interface for high-level management.
+*   🔌 **Self-Extending Skills**: The agent can literally write and install its own skills.
 
 ---
 
 ## 📦 Installation
 
-### Option A: Global Install (Recommended)
-Run it from anywhere.
+### Prerequisites
+- Node.js 18+
+- Chromium (for browsing): `npx playwright install chromium`
 
-```bash
-npm install -g .
-orcbot ui
-```
-
-### Option B: For Developers
-Hack on the core.
-
+### Setup
 ```bash
 git clone https://github.com/fredabila/orcbot.git
 cd orcbot
 npm install
 npm run build
-npm run dev -- ui
+npm install -g .
 ```
+
+---
+
+## 🕹️ High-Power Skills
+
+OrcBot comes out of the box with "God Mode" capabilities:
+
+| Skill | Description | Usage Example |
+|-------|-------------|---------------|
+| `run_command` | Execute any shell command | `run_command("npm test")` |
+| `web_search` | Search DuckDuckGo for info | `web_search("latest AI news")` |
+| `browser_navigate`| Visit a URL and extract text | `browser_navigate("https://google.com")` |
+| `manage_skills` | Install/Update agent skills | `manage_skills("New Skill Definition...")` |
+| `deep_reason` | 01-style intensive analysis | `deep_reason("Ethics of AGl")` |
+| `update_user_profile`| Permanently learn about user | `update_user_profile("User likes coffee")` |
 
 ---
 
 ## 🎮 Usage
 
-### The Terminal UI (TUI)
-
-Launch the visual interface:
+### TUI Mode (Recommended)
+Launch the visual dashboard:
 ```bash
 orcbot ui
 ```
+- **Manage AI Models**: Dedicated menu for OpenAI and Google Gemini keys.
+- **Manage Connections**: Configure Telegram and other channels.
 
-**Use the TUI to:**
-1.  **Configure Agent**: Set API keys (`openaiApiKey`, `googleApiKey`) and Model (`gpt-4o`, `gemini-pro`).
-2.  **Manage Connections**: Setup your **Telegram Bot** token.
-3.  **Start Loop**: Run the agent.
-
-### Command Line
-You can also run commands directly:
-
+### Direct Commands
 ```bash
-# Start the autonomous loop
+# Start the autonomous reasoning loop
 orcbot run
 
-# Manually add a task
-orcbot push "Research quantum computing" --priority 8
-
-# Check status
-orcbot status
+# Push an orchestration task
+orcbot push "Find the current price of BTC and message it to Frederick on Telegram" -p 10
 ```
 
 ---
 
-## 🛠️ Configuration
+## 🧠 The Reasoning Loop (ReAct)
 
-Configuration is stored locally in `orcbot.config.yaml`.
-
-```yaml
-agentName: OrcBot
-modelName: gpt-4o             # or gemini-pro
-autonomyInterval: 15          # Minutes between self-reflection checks
-openaiApiKey: sk-...
-googleApiKey: AIza...
-telegramToken: 12345...
-memoryPath: ./memory.json
-```
-
-### Auto-Model Switching
-OrcBot automatically detects the provider based on the `modelName`:
-*   Starts with `gpt-` → **OpenAI**
-*   Starts with `gemini-` → **Google**
-
----
-
-## 🚢 Deployment
-
-OrcBot is designed to run 24/7 on a VPS.
-
-**Using PM2 (Recommended):**
-```bash
-npm install -g pm2
-pm2 start dist/cli/index.js --name orcbot -- run
-```
-
-Your agent will now stay online, listen to Telegram messages, and run its autonomy heartbeat. See [DEPLOYMENT.md](DEPLOYMENT.md) for Docker instructions.
+OrcBot doesn't just give one answer. It works iteratively:
+1.  **THOUGHT**: "I need to find news first."
+2.  **ACTION**: Calls `web_search`.
+3.  **OBSERVATION**: Receives news results.
+4.  **RE-REASON**: "Now I should update the user's profile and then reply."
+5.  **FINALIZE**: Completes background tasks and then messages the user.
 
 ---
 
 ## 🤝 Contributing
 
-We love contributions! Whether it's a new Skill, a new Channel (Discord?), or a core improvement.
-Check out [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
+OrcBot is built for extensibility. Contributors can add:
+- **Skills**: New tools in `src/core/Agent.ts`.
+- **Channels**: New communication platforms (Slack, Discord).
+- **Providers**: New LLM interfaces in `MultiLLM.ts`.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ---
 
 <div align="center">
-Built with ❤️ in TypeScript
+Built with ❤️ for the Autonomous Era
 </div>
