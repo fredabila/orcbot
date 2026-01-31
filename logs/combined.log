@@ -19,3 +19,24 @@
 2026-01-31 19:28:17 [[32minfo[39m]: SkillsManager: Loaded skills definition from ./SKILLS.md
 2026-01-31 19:28:17 [[32minfo[39m]: Agent identity loaded from .AI.md
 2026-01-31 19:28:17 [[32minfo[39m]: Skill registered: send_telegram
+2026-01-31 23:20:54 [[32minfo[39m]: Initialized missing data file: C:\Users\user\.orcbot\.AI.md
+2026-01-31 23:20:54 [[32minfo[39m]: Initialized missing data file: C:\Users\user\.orcbot\USER.md
+2026-01-31 23:20:54 [[32minfo[39m]: Initialized missing data file: C:\Users\user\.orcbot\LEARNING.md
+2026-01-31 23:20:54 [[32minfo[39m]: Initialized missing data file: C:\Users\user\.orcbot\SKILLS.md
+2026-01-31 23:20:54 [[32minfo[39m]: JSON fallback storage created at C:\Users\user\.orcbot\memory.json
+2026-01-31 23:20:54 [[32minfo[39m]: User context loaded from USER.md
+2026-01-31 23:20:54 [[32minfo[39m]: MultiLLM: Initialized with model gpt-4o
+2026-01-31 23:20:54 [[32minfo[39m]: SkillsManager: Loaded skills definition from C:\Users\user\.orcbot\SKILLS.md
+2026-01-31 23:20:54 [[32minfo[39m]: Agent identity loaded from C:\Users\user\.orcbot\.AI.md
+2026-01-31 23:20:54 [[32minfo[39m]: Skill registered: send_telegram
+2026-01-31 23:20:54 [[32minfo[39m]: Skill registered: run_command
+2026-01-31 23:20:54 [[32minfo[39m]: Skill registered: manage_skills
+2026-01-31 23:20:54 [[32minfo[39m]: Skill registered: browser_navigate
+2026-01-31 23:20:54 [[32minfo[39m]: Skill registered: web_search
+2026-01-31 23:20:54 [[32minfo[39m]: Skill registered: extract_article
+2026-01-31 23:20:54 [[32minfo[39m]: Skill registered: schedule_task
+2026-01-31 23:20:54 [[32minfo[39m]: Skill registered: deep_reason
+2026-01-31 23:20:54 [[32minfo[39m]: Skill registered: update_user_profile
+2026-01-31 23:20:54 [[32minfo[39m]: Skill registered: update_agent_identity
+2026-01-31 23:20:54 [[32minfo[39m]: Skill registered: update_journal
+2026-01-31 23:20:54 [[32minfo[39m]: Skill registered: update_learning

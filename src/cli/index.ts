@@ -53,6 +53,19 @@ program
     });
 
 program
+    .command('reset')
+    .description('Reset agent memory, identity, and task history')
+    .action(async () => {
+        const { confirm } = await inquirer.prompt([
+            { type: 'confirm', name: 'confirm', message: 'Are you sure you want to reset ALL memory? This cannot be undone.', default: false }
+        ]);
+        if (confirm) {
+            await agent.resetMemory();
+            console.log('Agent has been reset to factory settings.');
+        }
+    });
+
+program
     .command('status')
     .description('View agent memory and action queue')
     .action(() => {
@@ -287,6 +300,7 @@ async function showConfigMenu() {
         name: `${key}: ${config[key as keyof typeof config] || '(empty)'}`,
         value: key
     }));
+    choices.push({ name: '🔥 Reset Agent (Fresh Start)', value: 'reset' });
     choices.push({ name: 'Back', value: 'back' });
 
     const { key } = await inquirer.prompt([
@@ -300,6 +314,18 @@ async function showConfigMenu() {
 
     if (key === 'back') {
         return showMainMenu();
+    }
+
+    if (key === 'reset') {
+        const { confirm } = await inquirer.prompt([
+            { type: 'confirm', name: 'confirm', message: 'Are you sure you want to RE-INITIALIZE the agent? This wipes all memory, USER.md, and .AI.md.', default: false }
+        ]);
+        if (confirm) {
+            await agent.resetMemory();
+            console.log('Agent factory reset complete.');
+        }
+        await waitKeyPress();
+        return showConfigMenu();
     }
 
     const { value } = await inquirer.prompt([

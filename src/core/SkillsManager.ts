@@ -11,19 +11,16 @@ export interface Skill {
 export class SkillsManager {
     private skills: Map<string, Skill> = new Map();
 
-    constructor() {
+    constructor(private skillsPath: string = './SKILLS.md') {
         this.loadSkills();
     }
 
     private loadSkills() {
-        const skillsPath = process.env.SKILLS_FILE_PATH || './SKILLS.md';
-        if (fs.existsSync(skillsPath)) {
-            const content = fs.readFileSync(skillsPath, 'utf-8');
-            // In a real implementation, we would parse the markdown to extract skill definitions
-            // For now, let's log that we found the file
-            logger.info(`SkillsManager: Loaded skills definition from ${skillsPath}`);
+        if (fs.existsSync(this.skillsPath)) {
+            const content = fs.readFileSync(this.skillsPath, 'utf-8');
+            logger.info(`SkillsManager: Loaded skills definition from ${this.skillsPath}`);
         } else {
-            logger.warn('SkillsManager: SKILLS.md not found.');
+            logger.warn(`SkillsManager: ${this.skillsPath} not found.`);
         }
     }
 

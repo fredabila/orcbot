@@ -3,6 +3,7 @@ import { logger } from '../utils/logger';
 
 export class JSONAdapter {
     private filePath: string;
+    private cache: any = null;
 
     constructor(filePath: string) {
         this.filePath = filePath;
@@ -13,27 +14,36 @@ export class JSONAdapter {
         if (!fs.existsSync(this.filePath)) {
             fs.writeFileSync(this.filePath, JSON.stringify({}, null, 2));
             logger.info(`JSON fallback storage created at ${this.filePath}`);
+            this.cache = {};
+        } else {
+            this.read(); // Load into cache
         }
     }
 
     public save(key: string, value: any) {
-        const data = this.read();
-        data[key] = value;
-        fs.writeFileSync(this.filePath, JSON.stringify(data, null, 2));
+        if (!this.cache) this.read();
+        this.cache[key] = value;
+        try {
+            fs.writeFileSync(this.filePath, JSON.stringify(this.cache, null, 2));
+        } catch (error) {
+            logger.error(`Error writing JSON storage to ${this.filePath}: ${error}`);
+        }
     }
 
     public get(key: string) {
-        const data = this.read();
-        return data[key];
+        if (!this.cache) this.read();
+        return this.cache[key];
     }
 
     private read() {
         try {
             const content = fs.readFileSync(this.filePath, 'utf-8');
-            return JSON.parse(content);
+            this.cache = JSON.parse(content);
+            return this.cache;
         } catch (error) {
-            logger.error(`Error reading JSON storage: ${error}`);
-            return {};
+            logger.error(`Error reading JSON storage from ${this.filePath}: ${error}`);
+            this.cache = this.cache || {};
+            return this.cache;
         }
     }
 }

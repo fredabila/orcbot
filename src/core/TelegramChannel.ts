@@ -8,6 +8,7 @@ export interface IChannel {
     start(): Promise<void>;
     stop(): Promise<void>;
     sendMessage(to: string, message: string): Promise<void>;
+    sendTypingIndicator(to: string): Promise<void>;
 }
 
 export class TelegramChannel implements IChannel {
@@ -89,10 +90,48 @@ export class TelegramChannel implements IChannel {
 
     public async sendMessage(to: string, message: string): Promise<void> {
         try {
-            await this.bot.telegram.sendMessage(to, message);
-            logger.info(`TelegramChannel: Sent message to ${to}`);
+            // Telegram has a 4096 character limit. We'll chunk the message into parts.
+            const MAX_LENGTH = 4000;
+            if (message.length <= MAX_LENGTH) {
+                await this.bot.telegram.sendMessage(to, message);
+                logger.info(`TelegramChannel: Sent message to ${to}`);
+            } else {
+                logger.warn(`TelegramChannel: Message too long (${message.length} chars). Chunking...`);
+                // Split by length, but ideally we'd split by newlines if possible
+                const chunks: string[] = [];
+                let current = message;
+                while (current.length > 0) {
+                    if (current.length <= MAX_LENGTH) {
+                        chunks.push(current);
+                        break;
+                    }
+                    // Try to find a good breaking point (newline)
+                    let breakPoint = current.lastIndexOf('\n', MAX_LENGTH);
+                    if (breakPoint === -1 || breakPoint < MAX_LENGTH * 0.8) {
+                        breakPoint = MAX_LENGTH;
+                    }
+
+                    chunks.push(current.substring(0, breakPoint));
+                    current = current.substring(breakPoint).trim();
+                }
+
+                for (let i = 0; i < chunks.length; i++) {
+                    await this.bot.telegram.sendMessage(to, `[Part ${i + 1}/${chunks.length}]\n${chunks[i]}`);
+                    // Small delay to prevent rate limiting
+                    await new Promise(r => setTimeout(r, 500));
+                }
+                logger.info(`TelegramChannel: Sent ${chunks.length} chunks to ${to}`);
+            }
         } catch (error) {
             logger.error(`TelegramChannel: Error sending message to ${to}: ${error}`);
+        }
+    }
+
+    public async sendTypingIndicator(to: string): Promise<void> {
+        try {
+            await this.bot.telegram.sendChatAction(to, 'typing');
+        } catch (error) {
+            // Ignore errors for typing indicators as they are non-critical
         }
     }
 }

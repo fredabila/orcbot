@@ -1,6 +1,7 @@
 import fs from 'fs';
 import yaml from 'yaml';
 import path from 'path';
+import os from 'os';
 import { logger } from '../utils/logger';
 
 export interface AgentConfig {
@@ -13,28 +14,45 @@ export interface AgentConfig {
     memoryPath?: string;
     skillsPath?: string;
     userProfilePath?: string;
+    agentIdentityPath?: string;
+    actionQueuePath?: string;
+    journalPath?: string;
+    learningPath?: string;
 }
 
 export class ConfigManager {
     private configPath: string;
     private config: AgentConfig;
+    private dataHome: string;
 
     constructor(customPath?: string) {
+        this.dataHome = path.join(os.homedir(), '.orcbot');
+        if (!fs.existsSync(this.dataHome)) {
+            fs.mkdirSync(this.dataHome, { recursive: true });
+        }
+
         this.configPath = customPath || path.resolve(process.cwd(), 'orcbot.config.yaml');
         this.config = this.loadConfig();
     }
 
     private loadConfig(): AgentConfig {
+        const defaults = this.getStringDefaultConfig();
         if (fs.existsSync(this.configPath)) {
             try {
                 const fileContents = fs.readFileSync(this.configPath, 'utf8');
-                return yaml.parse(fileContents) as AgentConfig;
+                const yamlConfig = yaml.parse(fileContents) || {};
+
+                // Merge YAML with defaults
+                return {
+                    ...defaults,
+                    ...yamlConfig
+                };
             } catch (error) {
                 logger.error(`Error loading config from ${this.configPath}: ${error}`);
-                return this.getStringDefaultConfig();
+                return defaults;
             }
         }
-        return this.getStringDefaultConfig();
+        return defaults;
     }
 
     private getStringDefaultConfig(): AgentConfig {
@@ -42,9 +60,13 @@ export class ConfigManager {
             agentName: 'OrcBot',
             modelName: 'gpt-4o',
             autonomyInterval: 15,
-            memoryPath: './memory.json',
-            skillsPath: './SKILLS.md',
-            userProfilePath: './USER.md'
+            memoryPath: path.join(this.dataHome, 'memory.json'),
+            skillsPath: path.join(this.dataHome, 'SKILLS.md'),
+            userProfilePath: path.join(this.dataHome, 'USER.md'),
+            agentIdentityPath: path.join(this.dataHome, '.AI.md'),
+            actionQueuePath: path.join(this.dataHome, 'actions.json'),
+            journalPath: path.join(this.dataHome, 'JOURNAL.md'),
+            learningPath: path.join(this.dataHome, 'LEARNING.md')
         };
     }
 

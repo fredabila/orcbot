@@ -26,18 +26,33 @@ export class Agent {
     public telegram: TelegramChannel | undefined;
     public browser: WebBrowser;
     private lastActionTime: number;
+    private agentConfigFile: string;
+    private agentIdentity: string = '';
+    private isBusy: boolean = false;
 
-    constructor(private agentConfigFile: string = '.AI.md') {
+    constructor() {
         this.config = new ConfigManager();
-        this.memory = new MemoryManager();
+        this.agentConfigFile = this.config.get('agentIdentityPath');
+        this.initializeStorage();
+
+        this.memory = new MemoryManager(
+            this.config.get('memoryPath'),
+            this.config.get('userProfilePath')
+        );
         this.llm = new MultiLLM({
             apiKey: this.config.get('openaiApiKey'),
             googleApiKey: this.config.get('googleApiKey'),
             modelName: this.config.get('modelName')
         });
-        this.skills = new SkillsManager();
-        this.decisionEngine = new DecisionEngine(this.memory, this.llm, this.skills);
-        this.actionQueue = new ActionQueue();
+        this.skills = new SkillsManager(this.config.get('skillsPath') || './SKILLS.md');
+        this.decisionEngine = new DecisionEngine(
+            this.memory,
+            this.llm,
+            this.skills,
+            this.config.get('journalPath'),
+            this.config.get('learningPath')
+        );
+        this.actionQueue = new ActionQueue(this.config.get('actionQueuePath') || './actions.json');
         this.scheduler = new Scheduler();
         this.browser = new WebBrowser();
         this.lastActionTime = Date.now();
@@ -46,6 +61,46 @@ export class Agent {
         this.setupEventListeners();
         this.setupChannels();
         this.registerInternalSkills();
+    }
+
+    private initializeStorage() {
+        const paths = {
+            agentIdentity: this.config.get('agentIdentityPath'),
+            userProfile: this.config.get('userProfilePath'),
+            journal: this.config.get('journalPath'),
+            learning: this.config.get('learningPath'),
+            actionQueue: this.config.get('actionQueuePath'),
+            skills: this.config.get('skillsPath')
+        };
+
+        for (const [key, filePath] of Object.entries(paths)) {
+            if (!filePath) continue;
+
+            // Ensure directory exists
+            const dir = path.dirname(filePath);
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+                logger.info(`Created directory: ${dir}`);
+            }
+
+            // Ensure file exists with default content if missing
+            if (!fs.existsSync(filePath)) {
+                let defaultContent = '';
+                if (key === 'agentIdentity') defaultContent = '# .AI.md\nName: Alice\nPersonality: proactive, concise, professional\nAutonomyLevel: high\nDefaultBehavior: \n  - prioritize tasks based on user goals\n  - act proactively when deadlines are near\n  - consult SKILLS.md tools to accomplish actions\n';
+                if (key === 'userProfile') defaultContent = '# User Profile\n\nThis file contains information about the user.\n\n## Core Identity\n- Name: Frederick\n- Preferences: None known yet\n';
+                if (key === 'journal') defaultContent = '# Agent Journal\nThis file contains self-reflections and activity logs.\n';
+                if (key === 'learning') defaultContent = '# Agent Learning Base\nThis file contains structured knowledge on various topics.\n';
+                if (key === 'actionQueue') defaultContent = '[]';
+                if (key === 'skills') defaultContent = '# Global Skills\n(Skills are loaded from SKILLS.md)\n';
+
+                try {
+                    fs.writeFileSync(filePath, defaultContent);
+                    logger.info(`Initialized missing data file: ${filePath}`);
+                } catch (e) {
+                    logger.error(`Failed to initialize ${key} at ${filePath}: ${e}`);
+                }
+            }
+        }
     }
 
     private setupChannels() {
@@ -63,14 +118,11 @@ export class Agent {
             description: 'Send a message to a Telegram user',
             usage: 'send_telegram(chat_id, message)',
             handler: async (args: any) => {
-                logger.info(`Skill send_telegram received args: ${JSON.stringify(args)}`);
                 const chat_id = args.chat_id || args.chatId || args.id;
                 const message = args.message || args.content || args.text;
 
-                if (!chat_id) {
-                    logger.error('send_telegram: Missing chat_id in arguments');
-                    return 'Error: Missing chat_id. You must provide the numeric chat ID.';
-                }
+                if (!chat_id) return 'Error: Missing chat_id. Use the numeric ID provided in context.';
+                if (!message) return 'Error: Missing message content.';
 
                 if (this.telegram) {
                     await this.telegram.sendMessage(chat_id, message);
@@ -85,7 +137,10 @@ export class Agent {
             name: 'run_command',
             description: 'Execute a shell command on the server',
             usage: 'run_command(command)',
-            handler: async ({ command }: { command: string }) => {
+            handler: async (args: any) => {
+                const command = args.command || args.cmd || args.text;
+                if (!command) return 'Error: Missing command string.';
+
                 const { exec } = require('child_process');
                 return new Promise((resolve) => {
                     exec(command, (error: any, stdout: string, stderr: string) => {
@@ -101,12 +156,15 @@ export class Agent {
             name: 'manage_skills',
             description: 'Install or update a skill in SKILLS.md',
             usage: 'manage_skills(skill_definition)',
-            handler: async ({ skill_definition }: { skill_definition: string }) => {
-                const skillsPath = this.config.get('skillsPath') || 'SKILLS.md';
+            handler: async (args: any) => {
+                const skill_definition = args.skill_definition || args.definition || args.skill || args.text;
+                if (!skill_definition) return 'Error: Missing skill_definition.';
+
+                const skillsPath = this.config.get('skillsPath');
                 try {
                     fs.appendFileSync(skillsPath, `\n\n${skill_definition}`);
                     this.skills = new SkillsManager(); // Refresh
-                    return `Successfully added skill: ${skill_definition.split('\n')[0]}`;
+                    return `Successfully added skill to ${skillsPath}`;
                 } catch (e) {
                     return `Failed to update skills: ${e}`;
                 }
@@ -118,7 +176,9 @@ export class Agent {
             name: 'browser_navigate',
             description: 'Navigate to a URL and get text content',
             usage: 'browser_navigate(url)',
-            handler: async ({ url }: { url: string }) => {
+            handler: async (args: any) => {
+                const url = args.url || args.link || args.site;
+                if (!url) return 'Error: Missing url.';
                 return this.browser.navigate(url);
             }
         });
@@ -128,7 +188,9 @@ export class Agent {
             name: 'web_search',
             description: 'Search the web for information',
             usage: 'web_search(query)',
-            handler: async ({ query }: { query: string }) => {
+            handler: async (args: any) => {
+                const query = args.query || args.text || args.search || args.q;
+                if (!query) return 'Error: Missing search query.';
                 return this.browser.search(query);
             }
         });
@@ -138,9 +200,10 @@ export class Agent {
             name: 'extract_article',
             description: 'Extract clean text content from a news or article link',
             usage: 'extract_article(url)',
-            handler: async ({ url }: { url: string }) => {
+            handler: async (args: any) => {
+                const url = args.url || args.link;
+                if (!url) return 'Error: Missing url.';
                 try {
-                    // We use playwright to get the HTML first as it handles JS
                     const { chromium } = require('playwright');
                     const browser = await chromium.launch({ headless: true });
                     const page = await browser.newPage();
@@ -148,7 +211,8 @@ export class Agent {
                     const html = await page.content();
                     await browser.close();
 
-                    // Parse with Readability
+                    const { DOMParser } = require('linkedom');
+                    const { Readability } = require('@mozilla/readability');
                     const doc = new DOMParser().parseFromString(html, 'text/html');
                     const reader = new Readability(doc as any);
                     const article = reader.parse();
@@ -166,21 +230,27 @@ export class Agent {
             name: 'schedule_task',
             description: 'Schedule a task to run later using cron syntax or relative time (e.g. "in 5 minutes")',
             usage: 'schedule_task(time_or_cron, task_description)',
-            handler: async ({ time_or_cron, task_description }: { time_or_cron: string, task_description: string }) => {
+            handler: async (args: any) => {
+                const time_or_cron = args.time_or_cron || args.time || args.schedule;
+                const task_description = args.task_description || args.task || args.description;
+
+                if (!time_or_cron || !task_description) return 'Error: Missing time_or_cron or task_description.';
+
                 try {
-                    // Handle "in X minutes" pattern
                     let schedule: string | Date = time_or_cron;
-                    const relativeMatch = time_or_cron.match(/in (\d+) (minute|hour|day)s?/i);
+                    const relativeMatch = time_or_cron.match(/in (\d+) (second|minute|hour|day)s?/i);
                     if (relativeMatch) {
                         const amount = parseInt(relativeMatch[1]);
                         const unit = relativeMatch[2].toLowerCase();
                         const date = new Date();
+                        if (unit.startsWith('second')) date.setSeconds(date.getSeconds() + amount);
                         if (unit.startsWith('minute')) date.setMinutes(date.getMinutes() + amount);
                         if (unit.startsWith('hour')) date.setHours(date.getHours() + amount);
                         if (unit.startsWith('day')) date.setDate(date.getDate() + amount);
                         schedule = date;
                     }
 
+                    const { Cron } = require('croner');
                     new Cron(schedule, () => {
                         logger.info(`Scheduled Task Triggered: ${task_description}`);
                         this.pushTask(`Scheduled Task: ${task_description}`, 8);
@@ -198,7 +268,10 @@ export class Agent {
             name: 'deep_reason',
             description: 'Perform an intensive analysis of a topic with multiple steps',
             usage: 'deep_reason(topic)',
-            handler: async ({ topic }: { topic: string }) => {
+            handler: async (args: any) => {
+                const topic = args.topic || args.subject || args.query || args.text;
+                if (!topic) return 'Error: Missing topic.';
+
                 const system = `You are an elite reasoning engine. Use a meticulous chain-of-thought to analyze the topic.
 Break it into components, evaluate pros/cons, and synthesize a deep conclusion.
 Be thorough and academic.`;
@@ -211,14 +284,17 @@ Be thorough and academic.`;
             name: 'update_user_profile',
             description: 'Save new information learned about the user',
             usage: 'update_user_profile(info_text)',
-            handler: async ({ info_text }: { info_text: string }) => {
-                const userPath = this.config.get('userProfilePath') || 'USER.md';
+            handler: async (args: any) => {
+                const info_text = args.info_text || args.info || args.text || args.data;
+                if (!info_text) return 'Error: Missing info_text.';
+
+                const userPath = this.config.get('userProfilePath');
                 try {
                     fs.appendFileSync(userPath, `\n- ${new Date().toISOString()}: ${info_text}`);
-                    this.memory = new MemoryManager(); // Reload
-                    return `Updated user profile with: "${info_text}"`;
+                    this.memory.refreshUserContext(userPath);
+                    return `Successfully updated user profile at ${userPath} with: "${info_text}"`;
                 } catch (e) {
-                    return `Failed to update profile: ${e}`;
+                    return `Failed to update profile at ${userPath}: ${e}`;
                 }
             }
         });
@@ -228,12 +304,57 @@ Be thorough and academic.`;
             name: 'update_agent_identity',
             description: 'Update your own identity/personality',
             usage: 'update_agent_identity(trait)',
-            handler: async ({ trait }: { trait: string }) => {
+            handler: async (args: any) => {
+                const trait = args.trait || args.info || args.text;
+                if (!trait) return 'Error: Missing trait.';
+
+                const identityPath = this.config.get('agentIdentityPath');
                 try {
-                    fs.appendFileSync(this.agentConfigFile, `\n- Learned Trait: ${trait}`);
-                    return `Updated agent identity with: "${trait}"`;
+                    fs.appendFileSync(identityPath, `\n- Learned Trait: ${trait}`);
+                    this.loadAgentIdentity();
+                    return `Successfully updated agent identity at ${identityPath} with: "${trait}"`;
                 } catch (e) {
-                    return `Failed to update identity: ${e}`;
+                    return `Failed to update identity at ${identityPath}: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Update Journal
+        this.skills.registerSkill({
+            name: 'update_journal',
+            description: 'Record a self-reflection entry or activity log in JOURNAL.md',
+            usage: 'update_journal(entry_text)',
+            handler: async (args: any) => {
+                const entry_text = args.entry_text || args.entry || args.text;
+                if (!entry_text) return 'Error: Missing entry_text.';
+
+                const journalPath = this.config.get('journalPath');
+                try {
+                    fs.appendFileSync(journalPath, `\n\n## [${new Date().toISOString()}] Reflection\n${entry_text}`);
+                    return `Journal entry saved to ${journalPath}`;
+                } catch (e) {
+                    return `Failed to update journal at ${journalPath}: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Update Learning
+        this.skills.registerSkill({
+            name: 'update_learning',
+            description: 'Save structured research findings or knowledge to LEARNING.md',
+            usage: 'update_learning(topic, knowledge_content)',
+            handler: async (args: any) => {
+                const topic = args.topic || args.subject || args.title;
+                const knowledge_content = args.knowledge_content || args.content || args.text || args.data;
+
+                if (!topic || !knowledge_content) return 'Error: Missing topic or knowledge_content.';
+
+                const learningPath = this.config.get('learningPath');
+                try {
+                    fs.appendFileSync(learningPath, `\n\n# Topic: ${topic}\nDate: ${new Date().toISOString()}\n\n${knowledge_content}\n---`);
+                    return `Knowledge saved to ${learningPath} under topic: ${topic}`;
+                } catch (e) {
+                    return `Failed to update learning base at ${learningPath}: ${e}`;
                 }
             }
         });
@@ -241,11 +362,13 @@ Be thorough and academic.`;
 
     private loadAgentIdentity() {
         if (fs.existsSync(this.agentConfigFile)) {
-            const content = fs.readFileSync(this.agentConfigFile, 'utf-8');
+            this.agentIdentity = fs.readFileSync(this.agentConfigFile, 'utf-8');
             logger.info(`Agent identity loaded from ${this.agentConfigFile}`);
         } else {
+            this.agentIdentity = "Your name is OrcBot. You are a professional autonomous agent.";
             logger.warn(`${this.agentConfigFile} not found. Using default identity.`);
         }
+        this.decisionEngine.setAgentIdentity(this.agentIdentity);
     }
 
     private setupEventListeners() {
@@ -265,10 +388,67 @@ Be thorough and academic.`;
 
         const idleTimeMs = Date.now() - this.lastActionTime;
         if (idleTimeMs > intervalMinutes * 60 * 1000 && this.actionQueue.getQueue().length === 0) {
-            logger.info('Agent: Heartbeat trigger - Agent is idle. Initiating self-reflection.');
-            this.pushTask('System Heartbeat: Review recent events and memory. Decide if any proactive action is needed. If none, just log "All good".', 2);
+            logger.info('Agent: Heartbeat trigger - Agent is idle. Initiating proactive autonomy.');
+
+            const proactivePrompt = `
+SYSTEM HEARTBEAT (IDLE AUTONOMY MODE):
+You haven't interacted with the user or performed a task in ${intervalMinutes} minutes. 
+As an autonomous agent with free will, decide on a proactive action to take. 
+
+OBJECTIVES:
+1. **Self-Improvement**: Is there a topic discussed recently (e.g. robots, medicine, engineering) you should research deeper? Use "web_search" and "deep_reason".
+2. **Identity Growth**: Have you learned something new about your role or preferences? Use "update_agent_identity".
+3. **User Success**: Does the user have an unfulfilled goal or a topic they seemed interested in? Maybe send a thoughtful follow-up message using "send_telegram".
+4. **Maintenance**: Consolidate memories or clean up your profile if needed.
+
+If you decide no action is needed, respond with "tool": null and reasoning: "All systems nominal. No proactive actions needed."
+`;
+
+            this.pushTask(proactivePrompt, 2);
             this.lastActionTime = Date.now();
         }
+    }
+
+    public async resetMemory() {
+        logger.info('Agent: Resetting all memory and identity files...');
+
+        // Clear memory.json
+        const memoryPath = this.config.get('memoryPath') || './memory.json';
+        if (fs.existsSync(memoryPath)) fs.writeFileSync(memoryPath, JSON.stringify({}, null, 2));
+
+        // Clear actions.json
+        const actionPath = this.config.get('actionQueuePath') || './actions.json';
+        if (fs.existsSync(actionPath)) fs.writeFileSync(actionPath, JSON.stringify([], null, 2));
+
+        // Reset USER.md
+        const userPath = this.config.get('userProfilePath') || './USER.md';
+        const defaultUser = '# User Profile\n\nThis file contains information about the user.\n\n## Core Identity\n- Name: Unknown\n- Preferences: None known yet\n\n## Learned Facts\n(Empty)\n';
+        fs.writeFileSync(userPath, defaultUser);
+
+        // Reset .AI.md
+        const defaultAI = '# .AI.md\nName: Alice\nPersonality: proactive, concise, professional\nAutonomyLevel: high\nDefaultBehavior: \n  - prioritize tasks based on user goals\n  - act proactively when deadlines are near\n  - consult SKILLS.md tools to accomplish actions\n';
+        fs.writeFileSync(this.agentConfigFile, defaultAI);
+
+        // Reset JOURNAL.md
+        const journalPath = this.config.get('journalPath') || './JOURNAL.md';
+        fs.writeFileSync(journalPath, '# Agent Journal\nThis file contains self-reflections and activity logs.\n');
+
+        // Reset LEARNING.md
+        const learningPath = this.config.get('learningPath') || './LEARNING.md';
+        fs.writeFileSync(learningPath, '# Agent Learning Base\nThis file contains structured knowledge on various topics.\n');
+
+        // Reload managers
+        this.memory = new MemoryManager(memoryPath, userPath);
+        this.actionQueue = new ActionQueue(actionPath);
+        this.decisionEngine = new DecisionEngine(
+            this.memory,
+            this.llm,
+            this.skills,
+            journalPath,
+            learningPath
+        );
+
+        logger.info('Agent: Memory and Identity have been reset.');
     }
 
     public async start() {
@@ -301,43 +481,99 @@ Be thorough and academic.`;
     }
 
     private async processNextAction() {
+        if (this.isBusy) return;
+
         const action = this.actionQueue.getNext();
         if (!action) return;
 
-        this.lastActionTime = Date.now();
-        this.actionQueue.updateStatus(action.id, 'in-progress');
-
-        const MAX_STEPS = 5;
-        let currentStep = 0;
-
+        this.isBusy = true;
         try {
+            this.lastActionTime = Date.now();
+            this.actionQueue.updateStatus(action.id, 'in-progress');
+
+            const MAX_STEPS = 10;
+            let currentStep = 0;
+            let messagesSent = 0;
+            let lastStepToolSignatures = '';
+
             while (currentStep < MAX_STEPS) {
                 currentStep++;
                 logger.info(`Agent: Step ${currentStep} for action ${action.id}`);
-                const decision = await this.decisionEngine.decide(action);
 
-                if (decision.tool) {
-                    const toolResult = await this.skills.executeSkill(decision.tool, decision.metadata || {});
+                if (this.telegram && action.payload.source === 'telegram') {
+                    await this.telegram.sendTypingIndicator(action.payload.sourceId);
+                }
 
-                    let observation = `Observation: Tool ${decision.tool} returned: ${JSON.stringify(toolResult)}`;
-                    if (decision.tool === 'send_telegram') {
-                        observation += ". [SYSTEM HINT: You have sent the message. DO NOT send another message unless you have entirely new information. Continue with other background tasks or finish.]";
+                const decision = await this.decisionEngine.decide({
+                    ...action,
+                    payload: {
+                        ...action.payload,
+                        messagesSent,
+                        messagingLocked: messagesSent > 0,
+                        currentStep
                     }
+                });
+                if (decision.reasoning) {
+                    logger.info(`Agent Reasoning: ${decision.reasoning}`);
+                }
 
-                    this.memory.saveMemory({
-                        id: `${action.id}-step-${currentStep}`,
-                        type: 'short',
-                        content: observation,
-                        metadata: { tool: decision.tool, result: toolResult }
-                    });
+                if (decision.tools && decision.tools.length > 0) {
+                    // Check for infinite logic loop
+                    const currentStepSignatures = decision.tools.map(t => `${t.name}:${JSON.stringify(t.metadata)}`).join('|');
+                    if (currentStepSignatures === lastStepToolSignatures) {
+                        logger.warn(`Agent: Detected redundant logic loop across steps. Breaking action ${action.id}.`);
+                        break;
+                    }
+                    lastStepToolSignatures = currentStepSignatures;
+
+                    let lastMessageContent = '';
+                    let forceBreak = false;
+                    for (const toolCall of decision.tools) {
+                        if (toolCall.name === 'send_telegram') {
+                            const currentMessage = toolCall.metadata?.message || '';
+                            if (currentMessage === lastMessageContent) {
+                                logger.warn(`Agent: Blocked redundant message in action ${action.id}.`);
+                                continue;
+                            }
+                            lastMessageContent = currentMessage;
+                        }
+
+                        logger.info(`Executing skill: ${toolCall.name}`);
+                        const toolResult = await this.skills.executeSkill(toolCall.name, toolCall.metadata || {});
+
+                        let observation = `Observation: Tool ${toolCall.name} returned: ${JSON.stringify(toolResult)}`;
+                        if (toolCall.name === 'send_telegram') {
+                            messagesSent++;
+                            observation += `. [SYSTEM: Message Sent (#${messagesSent}). Content: "${toolCall.metadata?.message}". If this satisfies the user, terminate NOW.]`;
+                        }
+
+                        this.memory.saveMemory({
+                            id: `${action.id}-step-${currentStep}-${toolCall.name}`,
+                            type: 'short',
+                            content: observation,
+                            metadata: { tool: toolCall.name, result: toolResult }
+                        });
+
+                        // HARD BREAK after scheduling to prevent loops
+                        if (toolCall.name === 'schedule_task') {
+                            logger.info(`Agent: Task scheduled for action ${action.id}. Terminating sequence.`);
+                            forceBreak = true;
+                            break;
+                        }
+                    }
+                    if (forceBreak) break;
                 } else {
+                    logger.info(`Agent: Action ${action.id} reached self-termination. Reasoning: ${decision.reasoning || 'No further tools needed.'}`);
                     break;
                 }
             }
             this.actionQueue.updateStatus(action.id, 'completed');
+            await this.memory.consolidate(this.llm);
         } catch (error) {
             logger.error(`Error processing action ${action.id}: ${error}`);
             this.actionQueue.updateStatus(action.id, 'failed');
+        } finally {
+            this.isBusy = false;
         }
     }
 }
