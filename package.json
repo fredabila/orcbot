@@ -1,0 +1,33 @@
+{
+  "name": "orcbot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "bin": {
+    "orcbot": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli/index.js",
+    "dev": "ts-node src/cli/index.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.1.0",
+    "@types/winston": "^2.4.4",
+    "@types/yaml": "^1.9.6"
+  },
+  "dependencies": {
+    "commander": "^14.0.3",
+    "dotenv": "^17.2.3",
+    "eventemitter3": "^5.0.4",
+    "inquirer": "^9.3.8",
+    "telegraf": "^4.16.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3",
+    "winston": "^3.19.0"
+  }
+}

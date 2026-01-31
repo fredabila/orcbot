@@ -1,0 +1,4 @@
+agentName: OrcBot
+memoryPath: ./memory.json
+skillsPath: ./SKILLS.md
+userProfilePath: ./USER.md
