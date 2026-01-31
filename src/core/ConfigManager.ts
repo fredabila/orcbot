@@ -7,6 +7,9 @@ export interface AgentConfig {
     agentName: string;
     telegramToken?: string;
     openaiApiKey?: string;
+    googleApiKey?: string;
+    modelName?: string;
+    autonomyInterval?: number; // In minutes, default 0 (disabled)
     memoryPath?: string;
     skillsPath?: string;
     userProfilePath?: string;
@@ -37,6 +40,8 @@ export class ConfigManager {
     private getStringDefaultConfig(): AgentConfig {
         return {
             agentName: 'OrcBot',
+            modelName: 'gpt-4o',
+            autonomyInterval: 15,
             memoryPath: './memory.json',
             skillsPath: './SKILLS.md',
             userProfilePath: './USER.md'
@@ -48,7 +53,7 @@ export class ConfigManager {
     }
 
     public set(key: keyof AgentConfig, value: any) {
-        this.config[key] = value;
+        (this.config as any)[key] = value;
         this.saveConfig();
     }
 

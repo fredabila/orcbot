@@ -20,15 +20,21 @@ export class Agent {
     public scheduler: Scheduler;
     public config: ConfigManager;
     public telegram: TelegramChannel | undefined;
+    private lastActionTime: number;
 
     constructor(private agentConfigFile: string = '.AI.md') {
         this.config = new ConfigManager();
         this.memory = new MemoryManager();
-        this.llm = new MultiLLM();
+        this.llm = new MultiLLM({
+            apiKey: this.config.get('openaiApiKey'),
+            googleApiKey: this.config.get('googleApiKey'),
+            modelName: this.config.get('modelName')
+        });
         this.skills = new SkillsManager();
         this.decisionEngine = new DecisionEngine(this.memory, this.llm, this.skills);
         this.actionQueue = new ActionQueue();
         this.scheduler = new Scheduler();
+        this.lastActionTime = Date.now();
 
         this.loadAgentIdentity();
         this.setupEventListeners();
@@ -72,11 +78,24 @@ export class Agent {
     private setupEventListeners() {
         eventBus.on('scheduler:tick', async () => {
             await this.processNextAction();
+            this.checkHeartbeat();
         });
 
         eventBus.on('action:queued', (action: Action) => {
             logger.info(`Agent: Noticed new action ${action.id} in queue`);
         });
+    }
+
+    private checkHeartbeat() {
+        const intervalMinutes = this.config.get('autonomyInterval') || 0;
+        if (intervalMinutes <= 0) return;
+
+        const idleTimeMs = Date.now() - this.lastActionTime;
+        if (idleTimeMs > intervalMinutes * 60 * 1000 && this.actionQueue.getQueue().length === 0) {
+            logger.info('Agent: Heartbeat trigger - Agent is idle. Initiating self-reflection.');
+            this.pushTask('System Heartbeat: Review recent events and memory. Decide if any proactive action is needed. If none, just log "All good".', 2);
+            this.lastActionTime = Date.now(); // Reset to avoid spamming
+        }
     }
 
     public async start() {
@@ -111,6 +130,7 @@ export class Agent {
         const action = this.actionQueue.getNext();
         if (!action) return;
 
+        this.lastActionTime = Date.now(); // Update activity timestamp
         this.actionQueue.updateStatus(action.id, 'in-progress');
 
         try {

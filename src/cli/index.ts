@@ -92,6 +92,7 @@ async function showMainMenu() {
                 { name: 'Start Agent Loop', value: 'start' },
                 { name: 'Push Task', value: 'push' },
                 { name: 'View Status', value: 'status' },
+                { name: 'Manage Connections', value: 'connections' },
                 { name: 'Configure Agent', value: 'config' },
                 { name: 'Exit', value: 'exit' },
             ],
@@ -104,19 +105,15 @@ async function showMainMenu() {
             await agent.start();
             break;
         case 'push':
-            const { task, priority } = await inquirer.prompt([
-                { type: 'input', name: 'task', message: 'Enter task description:' },
-                { type: 'number', name: 'priority', message: 'Enter priority (1-10):', default: 5 },
-            ]);
-            await agent.pushTask(task, priority);
-            console.log('Task pushed!');
-            await waitKeyPress();
-            await showMainMenu();
+            await showPushTaskMenu();
             break;
         case 'status':
             showStatus();
             await waitKeyPress();
             await showMainMenu();
+            break;
+        case 'connections':
+            await showConnectionsMenu();
             break;
         case 'config':
             await showConfigMenu();
@@ -126,9 +123,79 @@ async function showMainMenu() {
     }
 }
 
+async function showPushTaskMenu() {
+    const { task } = await inquirer.prompt([
+        { type: 'input', name: 'task', message: 'Enter task description (or leave empty to go back):' }
+    ]);
+
+    if (!task.trim()) {
+        return showMainMenu();
+    }
+
+    const { priority } = await inquirer.prompt([
+        { type: 'number', name: 'priority', message: 'Enter priority (1-10):', default: 5 },
+    ]);
+
+    await agent.pushTask(task, priority);
+    console.log('Task pushed!');
+    await waitKeyPress();
+    await showMainMenu();
+}
+
+async function showConnectionsMenu() {
+    const { channel } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'channel',
+            message: 'Manage Connections:',
+            choices: [
+                { name: 'Telegram Bot', value: 'telegram' },
+                { name: 'Back', value: 'back' },
+            ]
+        }
+    ]);
+
+    if (channel === 'back') return showMainMenu();
+
+    if (channel === 'telegram') {
+        const currentToken = agent.config.get('telegramToken') || 'Not Set';
+        console.log(`Current Telegram Token: ${currentToken}`);
+
+        const { action } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'action',
+                message: 'Telegram Settings:',
+                choices: [
+                    { name: 'Set Token', value: 'set' },
+                    { name: 'Back', value: 'back' }
+                ]
+            }
+        ]);
+
+        if (action === 'back') return showConnectionsMenu();
+
+        if (action === 'set') {
+            const { token } = await inquirer.prompt([
+                { type: 'input', name: 'token', message: 'Enter Telegram Bot Token:' }
+            ]);
+            agent.config.set('telegramToken', token);
+            console.log('Token updated! Restart the agent to apply changes.');
+            await waitKeyPress();
+            return showConnectionsMenu();
+        }
+    }
+}
+
 async function showConfigMenu() {
     const config = agent.config.getAll();
-    const choices = Object.keys(config).map(key => ({ name: `${key}: ${config[key as keyof typeof config]}`, value: key }));
+    // Ensure we show explicit keys relative to core config
+    const keys = ['agentName', 'openaiApiKey', 'googleApiKey', 'modelName', 'autonomyInterval', 'telegramToken', 'memoryPath'] as const;
+
+    const choices: { name: string, value: string }[] = keys.map(key => ({
+        name: `${key}: ${config[key as keyof typeof config] || '(empty)'}`,
+        value: key
+    }));
     choices.push({ name: 'Back', value: 'back' });
 
     const { key } = await inquirer.prompt([

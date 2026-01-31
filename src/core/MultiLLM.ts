@@ -1,9 +1,6 @@
 import { logger } from '../utils/logger';
-import dotenv from 'dotenv';
 
-dotenv.config();
-
-export type LLMProvider = 'openai' | 'anthropic' | 'llama';
+export type LLMProvider = 'openai' | 'google';
 
 export interface LLMMessage {
     role: 'system' | 'user' | 'assistant';
@@ -11,30 +8,41 @@ export interface LLMMessage {
 }
 
 export class MultiLLM {
-    private apiKey: string | undefined;
+    private openaiKey: string | undefined;
+    private googleKey: string | undefined;
+    private modelName: string;
 
-    constructor() {
-        this.apiKey = process.env.OPENAI_API_KEY;
-        if (this.apiKey) {
-            logger.info('MultiLLM: OpenAI provider initialized');
-        } else {
-            logger.warn('MultiLLM: OpenAI API key not found');
-        }
+    constructor(config?: { apiKey?: string, googleApiKey?: string, modelName?: string }) {
+        this.openaiKey = config?.apiKey || process.env.OPENAI_API_KEY;
+        this.googleKey = config?.googleApiKey || process.env.GOOGLE_API_KEY;
+        this.modelName = config?.modelName || 'gpt-4o';
+
+        logger.info(`MultiLLM: Initialized with model ${this.modelName}`);
     }
 
-    public async call(provider: LLMProvider, prompt: string, systemMessage?: string): Promise<string> {
-        if (provider !== 'openai') {
-            throw new Error(`LLM provider ${provider} not yet implemented`);
+    private inferProvider(): LLMProvider {
+        const lower = this.modelName.toLowerCase();
+        if (lower.includes('gemini')) return 'google';
+        return 'openai';
+    }
+
+    public async call(prompt: string, systemMessage?: string, provider?: LLMProvider): Promise<string> {
+        const activeProvider = provider || this.inferProvider();
+
+        if (activeProvider === 'openai') {
+            return this.callOpenAI(prompt, systemMessage);
+        } else if (activeProvider === 'google') {
+            return this.callGoogle(prompt, systemMessage);
         }
 
-        if (!this.apiKey) {
-            throw new Error('OpenAI API key not configured');
-        }
+        throw new Error(`Provider ${activeProvider} not supported`);
+    }
+
+    private async callOpenAI(prompt: string, systemMessage?: string): Promise<string> {
+        if (!this.openaiKey) throw new Error('OpenAI API key not configured');
 
         const messages: LLMMessage[] = [];
-        if (systemMessage) {
-            messages.push({ role: 'system', content: systemMessage });
-        }
+        if (systemMessage) messages.push({ role: 'system', content: systemMessage });
         messages.push({ role: 'user', content: prompt });
 
         try {
@@ -42,19 +50,59 @@ export class MultiLLM {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${this.apiKey}`,
+                    'Authorization': `Bearer ${this.openaiKey}`,
                 },
                 body: JSON.stringify({
-                    model: 'gpt-4o',
+                    model: this.modelName,
                     messages,
                     temperature: 0.7,
                 }),
             });
 
-            const data = await response.json() as { choices?: { message?: { content?: string } }[] };
-            return data.choices?.[0]?.message?.content || '';
+            if (!response.ok) {
+                const err = await response.text();
+                throw new Error(`OpenAI API Error: ${response.status} ${err}`);
+            }
+
+            const data = await response.json() as any;
+            return data.choices[0].message.content;
         } catch (error) {
-            logger.error(`MultiLLM call failed: ${error}`);
+            logger.error(`MultiLLM OpenAI Error: ${error}`);
+            throw error;
+        }
+    }
+
+    private async callGoogle(prompt: string, systemMessage?: string): Promise<string> {
+        if (!this.googleKey) throw new Error('Google API key not configured');
+
+        // Gemini doesn't have "system" role in the same way for v1beta, but we can prepend it.
+        // Or use the separate 'system_instruction' field if available (checking docs, v1beta just added it but safe to prepend for compatibility).
+        // Let's prepend system message to user prompt for robustness.
+        const fullPrompt = systemMessage ? `System: ${systemMessage}\n\nUser: ${prompt}` : prompt;
+
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.modelName}:generateContent?key=${this.googleKey}`;
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: fullPrompt }] }]
+                })
+            });
+
+            if (!response.ok) {
+                const err = await response.text();
+                throw new Error(`Google API Error: ${response.status} ${err}`);
+            }
+
+            const data = await response.json() as any;
+            if (data.candidates && data.candidates.length > 0 && data.candidates[0].content) {
+                return data.candidates[0].content.parts[0].text;
+            }
+            throw new Error('No content in Gemini response');
+        } catch (error) {
+            logger.error(`MultiLLM Google Error: ${error}`);
             throw error;
         }
     }

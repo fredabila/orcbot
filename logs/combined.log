@@ -14,3 +14,8 @@
 2026-01-31 18:57:08 [[32minfo[39m]: Action pushed: TASK (quth15)
 2026-01-31 18:57:08 [[32minfo[39m]: Agent: Noticed new action quth15 in queue
 2026-01-31 18:57:08 [[32minfo[39m]: Manual task pushed via CLI: Test autonomous task
+2026-01-31 19:28:17 [[32minfo[39m]: User context loaded from USER.md
+2026-01-31 19:28:17 [[32minfo[39m]: MultiLLM: OpenAI provider initialized
+2026-01-31 19:28:17 [[32minfo[39m]: SkillsManager: Loaded skills definition from ./SKILLS.md
+2026-01-31 19:28:17 [[32minfo[39m]: Agent identity loaded from .AI.md
+2026-01-31 19:28:17 [[32minfo[39m]: Skill registered: send_telegram

@@ -22,6 +22,12 @@ export class DecisionEngine {
 You are an autonomous agent. Your goal is to assist the user based on their preferences and history.
 ${ParserLayer.getSystemPromptSnippet()}
 
+IMPORTANT:
+- If a task involves communicating with a user (e.g. from Telegram), you MUST use the 'send_telegram' skill.
+- The task description will contain the user's ID (e.g. "Telegram user Name (12345)"). You MUST extract this numeric ID and use it as the 'chat_id' argument.
+- Arguments must be valid JSON. Example: send_telegram({"chat_id": "12345", "message": "Hello!"})
+
+
 User Context:
 ${userContext.raw || 'No user information available.'}
 
@@ -32,7 +38,7 @@ ${availableSkills}
 `;
 
         logger.info('DecisionEngine: Reasoning about task...');
-        const rawResponse = await this.llm.call('openai', task, systemPrompt);
+        const rawResponse = await this.llm.call(task, systemPrompt);
         return ParserLayer.normalize(rawResponse);
     }
 }
