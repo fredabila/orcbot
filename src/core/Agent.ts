@@ -7,6 +7,9 @@ import { Scheduler } from './Scheduler';
 import { ConfigManager } from './ConfigManager';
 import { TelegramChannel } from './TelegramChannel';
 import { WebBrowser } from './WebBrowser';
+import { Cron } from 'croner';
+import { Readability } from '@mozilla/readability';
+import { DOMParser } from 'linkedom';
 import { eventBus } from './EventBus';
 import { logger } from '../utils/logger';
 import path from 'path';
@@ -127,6 +130,66 @@ export class Agent {
             usage: 'web_search(query)',
             handler: async ({ query }: { query: string }) => {
                 return this.browser.search(query);
+            }
+        });
+
+        // Skill: Extract Article
+        this.skills.registerSkill({
+            name: 'extract_article',
+            description: 'Extract clean text content from a news or article link',
+            usage: 'extract_article(url)',
+            handler: async ({ url }: { url: string }) => {
+                try {
+                    // We use playwright to get the HTML first as it handles JS
+                    const { chromium } = require('playwright');
+                    const browser = await chromium.launch({ headless: true });
+                    const page = await browser.newPage();
+                    await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+                    const html = await page.content();
+                    await browser.close();
+
+                    // Parse with Readability
+                    const doc = new DOMParser().parseFromString(html, 'text/html');
+                    const reader = new Readability(doc as any);
+                    const article = reader.parse();
+
+                    if (!article) return "Failed to extract article content.";
+                    return `Title: ${article.title}\n\nContent:\n${article.textContent.substring(0, 5000)}`;
+                } catch (e) {
+                    return `Error extracting article: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Schedule Task
+        this.skills.registerSkill({
+            name: 'schedule_task',
+            description: 'Schedule a task to run later using cron syntax or relative time (e.g. "in 5 minutes")',
+            usage: 'schedule_task(time_or_cron, task_description)',
+            handler: async ({ time_or_cron, task_description }: { time_or_cron: string, task_description: string }) => {
+                try {
+                    // Handle "in X minutes" pattern
+                    let schedule: string | Date = time_or_cron;
+                    const relativeMatch = time_or_cron.match(/in (\d+) (minute|hour|day)s?/i);
+                    if (relativeMatch) {
+                        const amount = parseInt(relativeMatch[1]);
+                        const unit = relativeMatch[2].toLowerCase();
+                        const date = new Date();
+                        if (unit.startsWith('minute')) date.setMinutes(date.getMinutes() + amount);
+                        if (unit.startsWith('hour')) date.setHours(date.getHours() + amount);
+                        if (unit.startsWith('day')) date.setDate(date.getDate() + amount);
+                        schedule = date;
+                    }
+
+                    new Cron(schedule, () => {
+                        logger.info(`Scheduled Task Triggered: ${task_description}`);
+                        this.pushTask(`Scheduled Task: ${task_description}`, 8);
+                    });
+
+                    return `Task scheduled successfully for: ${schedule}`;
+                } catch (e) {
+                    return `Failed to schedule task: ${e}`;
+                }
             }
         });
 

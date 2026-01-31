@@ -1,52 +1,61 @@
 # Contributing to OrcBot
 
-We welcome contributions! OrcBot is designed to be modular and easy to extend. We want to make this the best TypeScript Agent framework.
+We welcome contributions! OrcBot is designed to be a "High-Power" autonomous agent framework. This guide explains how to extend its intelligence and capabilities.
 
-## Development Setup
+## 🛠 How to Add a New Skill
 
-1. **Fork and Clone**
-   ```bash
-   git clone https://github.com/yourusername/orcbot.git
-   cd orcbot
-   ```
+Skills are the tools the agent uses to interact with the world. They are defined in `src/core/Agent.ts` within the `registerInternalSkills` method.
 
-2. **Install Dependencies**
-   ```bash
-   npm install
-   ```
+### 1. Define the Skill
+A skill consists of a name, description, usage example, and an async handler.
 
-3. **Run in Dev Mode**
-   ```bash
-   npm run dev -- ui
-   ```
+```typescript
+this.skills.registerSkill({
+    name: 'check_weather',
+    description: 'Get current weather for a city',
+    usage: 'check_weather(city)',
+    handler: async ({ city }: { city: string }) => {
+        // Implementation logic (API calls, etc.)
+        const result = await weatherApi.get(city);
+        return `The weather in ${city} is ${result.temp}°C`;
+    }
+});
+```
 
-## Key Areas to Contribute
+### 2. Validation with Zod
+For safety, you should validate input arguments using `zod`. This prevents the LLM from passing garbage data into your tools.
 
-### 1. New Providers (`src/core/MultiLLM.ts`)
-We currently support OpenAI and Google Gemini.
-- Implement new providers (e.g., Anthropic, Local LLMs) in `MultiLLM.ts`.
-- Update `inferProvider` logic.
+```typescript
+import { z } from 'zod';
 
-### 2. New Skills (`src/core/SkillsManager.ts`)
-- Define new skills in `SKILLS.md` if they are prompt-based.
-- For complex logic, register handler functions in `Agent.ts` (`registerInternalSkills`).
+const WeatherSchema = z.object({ city: z.string() });
 
-### 3. Channels (`src/core/`)
-- Implement `IChannel` interface for new platforms (Discord, Slack, Matrix).
-- Add the channel initialization to `Agent.ts`.
+// Inside handler:
+const { city } = WeatherSchema.parse(args);
+```
 
-## Code Style
-- Use TypeScript.
-- Follow the existing folder structure.
-- Ensure `npm run build` passes before submitting.
-- Use `npm run dev -- <command>` to test your changes.
+### 3. Return Values (Observations)
+The LLM processes the return value of your handler. 
+- **Be Descriptive**: Return "Page title is 'News' and it has 5 articles" rather than just "Done".
+- **Error Handling**: Use `try/catch` and return clear error messages. The agent's ReAct loop allows it to see the error and "re-think" a different strategy.
 
-## Submitting Pull Requests
-1. Create a branch (`feature/amazing-feature`)
-2. Commit your changes.
-3. Push to the branch.
-4. Open a Pull Request.
+### 4. Update the Registry
+Add your skill to `SKILLS.md`. This is critical because the Agent uses this file to build its system prompt and know what it's capable of.
 
-## Community
+## 📡 Adding a New Channel
+Channels are providers like Discord, Slack, or WhatsApp.
+1. Implement the `Channel` interface (see `src/core/TelegramChannel.ts`).
+2. Add a setup method in the `Agent` class via `setupChannels`.
+3. Add configuration keys in `ConfigManager.ts` to store tokens.
 
-Join our discussions on [GitHub Issues](https://github.com/yourusername/orcbot/issues).
+## 🧠 Core Improvements
+- **MultiLLM**: Add new providers (Anthropic, Local LLMs) in `src/core/MultiLLM.ts`.
+- **DecisionEngine**: Refine the system prompt or reasoning logic.
+
+## 🧪 Testing
+- Run `npm run build` to verify type safety.
+- Use `orcbot run` to test autonomous behavior.
+- Add logs via `logger.info()` to trace the reasoning loop steps.
+
+---
+Built with ❤️ for the Autonomous Era
