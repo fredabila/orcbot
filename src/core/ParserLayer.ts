@@ -50,6 +50,7 @@ IMPORTANT: You MUST always respond with a valid JSON object wrapped in code bloc
   "action": "THOUGHT",
   "reasoning": "I need to...",
   "tool": "optional_tool_name",
+  "metadata": { "arg1": "value" },
   "content": "message to user or result"
 }
 \`\`\`

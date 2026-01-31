@@ -1,8 +1,10 @@
-# USER.md
-Name: Frederick Abila
-Role: CEO
-Preferences:
-  - prefers summaries over full text
-  - avoid unnecessary notifications
-PastInteractions:
-  - 2026-01-30: Discussed agent automation
+# User Profile
+
+This file contains information about the user. The agent will learn and update this over time.
+
+## Core Identity
+- Name: Unknown
+- Preferences: None known yet
+
+## Learned Facts
+(Empty)

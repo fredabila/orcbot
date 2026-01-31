@@ -49,7 +49,15 @@ export class TelegramChannel implements IChannel {
             });
 
             // Push task to agent
-            await this.agent.pushTask(`Respond to Telegram user ${userName} (${userId}): "${text}"`, 10);
+            await this.agent.pushTask(
+                `Telegram message from ${userName}: "${text}"`,
+                10,
+                {
+                    source: 'telegram',
+                    sourceId: userId,
+                    senderName: userName
+                }
+            );
 
             // We could wait for a response event here, but for now we'll rely on the agent to act
             // and maybe implementing a "SendMessage" skill would be better.

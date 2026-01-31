@@ -93,6 +93,7 @@ async function showMainMenu() {
                 { name: 'Push Task', value: 'push' },
                 { name: 'View Status', value: 'status' },
                 { name: 'Manage Connections', value: 'connections' },
+                { name: 'Manage AI Models', value: 'models' },
                 { name: 'Configure Agent', value: 'config' },
                 { name: 'Exit', value: 'exit' },
             ],
@@ -115,12 +116,102 @@ async function showMainMenu() {
         case 'connections':
             await showConnectionsMenu();
             break;
+        case 'models':
+            await showModelsMenu();
+            break;
         case 'config':
             await showConfigMenu();
             break;
         case 'exit':
             process.exit(0);
     }
+}
+
+async function showModelsMenu() {
+    const { provider } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'provider',
+            message: 'Select AI Provider to Configure:',
+            choices: [
+                { name: 'OpenAI (GPT-4, etc.)', value: 'openai' },
+                { name: 'Google (Gemini Pro/Flash)', value: 'google' },
+                { name: 'Back', value: 'back' }
+            ]
+        }
+    ]);
+
+    if (provider === 'back') return showMainMenu();
+
+    if (provider === 'openai') {
+        await showOpenAIConfig();
+    } else if (provider === 'google') {
+        await showGeminiConfig();
+    }
+}
+
+async function showOpenAIConfig() {
+    const currentModel = agent.config.get('modelName');
+    const apiKey = agent.config.get('openaiApiKey') || 'Not Set';
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: `OpenAI Settings (Active Model: ${currentModel}):`,
+            choices: [
+                { name: `Set API Key (current: ${apiKey.substring(0, 8)}...)`, value: 'key' },
+                { name: 'Set Model Name', value: 'model' },
+                { name: 'Back', value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showModelsMenu();
+
+    if (action === 'key') {
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter OpenAI API Key:' }]);
+        agent.config.set('openaiApiKey', val);
+    } else if (action === 'model') {
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter Model (e.g., gpt-4o, gpt-3.5-turbo):', default: 'gpt-4o' }]);
+        agent.config.set('modelName', val);
+    }
+
+    console.log('OpenAI settings updated!');
+    await waitKeyPress();
+    return showOpenAIConfig();
+}
+
+async function showGeminiConfig() {
+    const currentModel = agent.config.get('modelName');
+    const apiKey = agent.config.get('googleApiKey') || 'Not Set';
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: `Google Gemini Settings (Active Model: ${currentModel}):`,
+            choices: [
+                { name: `Set API Key (current: ${apiKey.substring(0, 8)}...)`, value: 'key' },
+                { name: 'Set Model Name', value: 'model' },
+                { name: 'Back', value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showModelsMenu();
+
+    if (action === 'key') {
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter Google API Key:' }]);
+        agent.config.set('googleApiKey', val);
+    } else if (action === 'model') {
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter Model (e.g., gemini-pro, gemini-1.5-flash):', default: 'gemini-pro' }]);
+        agent.config.set('modelName', val);
+    }
+
+    console.log('Gemini settings updated!');
+    await waitKeyPress();
+    return showGeminiConfig();
 }
 
 async function showPushTaskMenu() {

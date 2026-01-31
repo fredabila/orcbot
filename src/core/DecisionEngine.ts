@@ -11,22 +11,37 @@ export class DecisionEngine {
         private skills: SkillsManager
     ) { }
 
-    public async decide(task: string): Promise<StandardResponse> {
+    public async decide(action: any): Promise<StandardResponse> {
+        const taskDescription = action.payload.description;
+        const metadata = action.payload;
+
         const userContext = this.memory.getUserContext();
         const recentContext = this.memory.getRecentContext();
         const availableSkills = this.skills.getSkillsPrompt();
 
         const contextString = recentContext.map(c => `[${c.type}] ${c.content}`).join('\n');
 
+        let channelInstructions = '';
+        if (metadata.source === 'telegram') {
+            channelInstructions = `
+ACTIVE CHANNEL CONTEXT:
+You are communicating via Telegram.
+- **Chat ID**: "${metadata.sourceId}" (Sender: ${metadata.senderName})
+- To reply, use skill "send_telegram" and put arguments in 'metadata':
+  \`{ "tool": "send_telegram", "metadata": { "chat_id": "${metadata.sourceId}", "message": "..." } }\`
+`;
+        }
+
         const systemPrompt = `
 You are an autonomous agent. Your goal is to assist the user based on their preferences and history.
 ${ParserLayer.getSystemPromptSnippet()}
 
-IMPORTANT:
-- If a task involves communicating with a user (e.g. from Telegram), you MUST use the 'send_telegram' skill.
-- The task description will contain the user's ID (e.g. "Telegram user Name (12345)"). You MUST extract this numeric ID and use it as the 'chat_id' argument.
-- Arguments must be valid JSON. Example: send_telegram({"chat_id": "12345", "message": "Hello!"})
+LEARNING MODE:
+- If you learn something new about the user (name, preference, goal), use \`update_user_profile(info_text)\` to save it.
+- If you develop a new personality trait or rule for yourself, use \`update_agent_identity(trait)\`.
+- Do not just say "I'll remember that"—actually save it.
 
+${channelInstructions}
 
 User Context:
 ${userContext.raw || 'No user information available.'}
@@ -37,8 +52,8 @@ ${contextString || 'No recent history.'}
 ${availableSkills}
 `;
 
-        logger.info('DecisionEngine: Reasoning about task...');
-        const rawResponse = await this.llm.call(task, systemPrompt);
+        logger.info(`DecisionEngine: Reasoning about task: "${taskDescription}"`);
+        const rawResponse = await this.llm.call(taskDescription, systemPrompt);
         return ParserLayer.normalize(rawResponse);
     }
 }

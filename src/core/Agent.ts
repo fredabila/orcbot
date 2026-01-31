@@ -56,12 +56,54 @@ export class Agent {
             name: 'send_telegram',
             description: 'Send a message to a Telegram user',
             usage: 'send_telegram(chat_id, message)',
-            handler: async ({ chat_id, message }: { chat_id: string, message: string }) => {
+            handler: async (args: any) => {
+                logger.info(`Skill send_telegram received args: ${JSON.stringify(args)}`);
+                const chat_id = args.chat_id || args.chatId || args.id;
+                const message = args.message || args.content || args.text;
+
+                if (!chat_id) {
+                    logger.error('send_telegram: Missing chat_id in arguments');
+                    return 'Error: Missing chat_id. You must provide the numeric chat ID.';
+                }
+
                 if (this.telegram) {
                     await this.telegram.sendMessage(chat_id, message);
                     return `Message sent to ${chat_id}`;
                 }
                 return 'Telegram channel not available';
+            }
+        });
+
+        // Skill: Learn User Info
+        this.skills.registerSkill({
+            name: 'update_user_profile',
+            description: 'Save new information learned about the user',
+            usage: 'update_user_profile(info_text)',
+            handler: async ({ info_text }: { info_text: string }) => {
+                const userPath = this.config.get('userProfilePath') || 'USER.md';
+                try {
+                    fs.appendFileSync(userPath, `\n- ${new Date().toISOString()}: ${info_text}`);
+                    // Reload memory context
+                    this.memory = new MemoryManager(); // Simplistic reload
+                    return `Updated user profile with: "${info_text}"`;
+                } catch (e) {
+                    return `Failed to update profile: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Evolve Identity
+        this.skills.registerSkill({
+            name: 'update_agent_identity',
+            description: 'Update your own identity/personality',
+            usage: 'update_agent_identity(trait)',
+            handler: async ({ trait }: { trait: string }) => {
+                try {
+                    fs.appendFileSync(this.agentConfigFile, `\n- Learned Trait: ${trait}`);
+                    return `Updated agent identity with: "${trait}"`;
+                } catch (e) {
+                    return `Failed to update identity: ${e}`;
+                }
             }
         });
     }
@@ -114,11 +156,11 @@ export class Agent {
         logger.info('Agent stopped.');
     }
 
-    public async pushTask(description: string, priority: number = 5) {
+    public async pushTask(description: string, priority: number = 5, metadata: any = {}) {
         const action: Action = {
             id: Math.random().toString(36).substring(7),
             type: 'TASK',
-            payload: { description },
+            payload: { description, ...metadata },
             priority,
             status: 'pending',
             timestamp: new Date().toISOString(),
@@ -130,25 +172,39 @@ export class Agent {
         const action = this.actionQueue.getNext();
         if (!action) return;
 
-        this.lastActionTime = Date.now(); // Update activity timestamp
+        this.lastActionTime = Date.now();
         this.actionQueue.updateStatus(action.id, 'in-progress');
 
+        const MAX_STEPS = 5;
+        let currentStep = 0;
+        let lastResult = "";
+
         try {
-            const decision = await this.decisionEngine.decide(action.payload.description);
-            logger.info(`Decision made: ${decision.action} - ${decision.reasoning}`);
+            while (currentStep < MAX_STEPS) {
+                currentStep++;
+                logger.info(`Agent: Step ${currentStep} for action ${action.id}`);
 
-            if (decision.tool) {
-                const toolResult = await this.skills.executeSkill(decision.tool, decision.metadata || {});
-                logger.info(`Tool ${decision.tool} result: ${JSON.stringify(toolResult)}`);
+                const decision = await this.decisionEngine.decide(action);
+                logger.info(`Decision: ${decision.action} - ${decision.reasoning}`);
+
+                if (decision.tool) {
+                    const toolResult = await this.skills.executeSkill(decision.tool, decision.metadata || {});
+                    lastResult = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
+                    logger.info(`Tool ${decision.tool} result: ${lastResult}`);
+
+                    // Save to memory so DecisionEngine sees it in next step
+                    this.memory.saveMemory({
+                        id: `${action.id}-step-${currentStep}`,
+                        type: 'short',
+                        content: `Observation: Tool ${decision.tool} returned: ${lastResult}`,
+                        metadata: { tool: decision.tool, result: toolResult }
+                    });
+                } else {
+                    // No more tools, we are finished with this task
+                    logger.info(`Agent finished task ${action.id} after ${currentStep} steps.`);
+                    break;
+                }
             }
-
-            this.memory.saveMemory({
-                id: action.id,
-                type: 'short',
-                content: `Executed task: ${action.payload.description}. Result: ${decision.content}`,
-                metadata: { decision }
-            });
-
             this.actionQueue.updateStatus(action.id, 'completed');
         } catch (error) {
             logger.error(`Error processing action ${action.id}: ${error}`);
