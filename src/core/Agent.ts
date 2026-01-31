@@ -6,6 +6,7 @@ import { ActionQueue, Action } from './ActionQueue';
 import { Scheduler } from './Scheduler';
 import { ConfigManager } from './ConfigManager';
 import { TelegramChannel } from './TelegramChannel';
+import { WebBrowser } from './WebBrowser';
 import { eventBus } from './EventBus';
 import { logger } from '../utils/logger';
 import path from 'path';
@@ -20,6 +21,7 @@ export class Agent {
     public scheduler: Scheduler;
     public config: ConfigManager;
     public telegram: TelegramChannel | undefined;
+    public browser: WebBrowser;
     private lastActionTime: number;
 
     constructor(private agentConfigFile: string = '.AI.md') {
@@ -34,6 +36,7 @@ export class Agent {
         this.decisionEngine = new DecisionEngine(this.memory, this.llm, this.skills);
         this.actionQueue = new ActionQueue();
         this.scheduler = new Scheduler();
+        this.browser = new WebBrowser();
         this.lastActionTime = Date.now();
 
         this.loadAgentIdentity();
@@ -51,7 +54,7 @@ export class Agent {
     }
 
     private registerInternalSkills() {
-        // Register skill to send telegram messages
+        // Skill: Send Telegram
         this.skills.registerSkill({
             name: 'send_telegram',
             description: 'Send a message to a Telegram user',
@@ -74,6 +77,72 @@ export class Agent {
             }
         });
 
+        // Skill: Run Shell Command
+        this.skills.registerSkill({
+            name: 'run_command',
+            description: 'Execute a shell command on the server',
+            usage: 'run_command(command)',
+            handler: async ({ command }: { command: string }) => {
+                const { exec } = require('child_process');
+                return new Promise((resolve) => {
+                    exec(command, (error: any, stdout: string, stderr: string) => {
+                        if (error) resolve(`Error: ${error.message}\nStderr: ${stderr}`);
+                        resolve(stdout || stderr || "Command executed successfully (no output)");
+                    });
+                });
+            }
+        });
+
+        // Skill: Manage Skills
+        this.skills.registerSkill({
+            name: 'manage_skills',
+            description: 'Install or update a skill in SKILLS.md',
+            usage: 'manage_skills(skill_definition)',
+            handler: async ({ skill_definition }: { skill_definition: string }) => {
+                const skillsPath = this.config.get('skillsPath') || 'SKILLS.md';
+                try {
+                    fs.appendFileSync(skillsPath, `\n\n${skill_definition}`);
+                    this.skills = new SkillsManager(); // Refresh
+                    return `Successfully added skill: ${skill_definition.split('\n')[0]}`;
+                } catch (e) {
+                    return `Failed to update skills: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Browser Navigate
+        this.skills.registerSkill({
+            name: 'browser_navigate',
+            description: 'Navigate to a URL and get text content',
+            usage: 'browser_navigate(url)',
+            handler: async ({ url }: { url: string }) => {
+                return this.browser.navigate(url);
+            }
+        });
+
+        // Skill: Web Search
+        this.skills.registerSkill({
+            name: 'web_search',
+            description: 'Search the web for information',
+            usage: 'web_search(query)',
+            handler: async ({ query }: { query: string }) => {
+                return this.browser.search(query);
+            }
+        });
+
+        // Skill: Deep Reasoning
+        this.skills.registerSkill({
+            name: 'deep_reason',
+            description: 'Perform an intensive analysis of a topic with multiple steps',
+            usage: 'deep_reason(topic)',
+            handler: async ({ topic }: { topic: string }) => {
+                const system = `You are an elite reasoning engine. Use a meticulous chain-of-thought to analyze the topic.
+Break it into components, evaluate pros/cons, and synthesize a deep conclusion.
+Be thorough and academic.`;
+                return this.llm.call(topic, system);
+            }
+        });
+
         // Skill: Learn User Info
         this.skills.registerSkill({
             name: 'update_user_profile',
@@ -83,8 +152,7 @@ export class Agent {
                 const userPath = this.config.get('userProfilePath') || 'USER.md';
                 try {
                     fs.appendFileSync(userPath, `\n- ${new Date().toISOString()}: ${info_text}`);
-                    // Reload memory context
-                    this.memory = new MemoryManager(); // Simplistic reload
+                    this.memory = new MemoryManager(); // Reload
                     return `Updated user profile with: "${info_text}"`;
                 } catch (e) {
                     return `Failed to update profile: ${e}`;
@@ -136,7 +204,7 @@ export class Agent {
         if (idleTimeMs > intervalMinutes * 60 * 1000 && this.actionQueue.getQueue().length === 0) {
             logger.info('Agent: Heartbeat trigger - Agent is idle. Initiating self-reflection.');
             this.pushTask('System Heartbeat: Review recent events and memory. Decide if any proactive action is needed. If none, just log "All good".', 2);
-            this.lastActionTime = Date.now(); // Reset to avoid spamming
+            this.lastActionTime = Date.now();
         }
     }
 
@@ -153,6 +221,7 @@ export class Agent {
         if (this.telegram) {
             await this.telegram.stop();
         }
+        await this.browser.close();
         logger.info('Agent stopped.');
     }
 
@@ -177,31 +246,28 @@ export class Agent {
 
         const MAX_STEPS = 5;
         let currentStep = 0;
-        let lastResult = "";
 
         try {
             while (currentStep < MAX_STEPS) {
                 currentStep++;
                 logger.info(`Agent: Step ${currentStep} for action ${action.id}`);
-
                 const decision = await this.decisionEngine.decide(action);
-                logger.info(`Decision: ${decision.action} - ${decision.reasoning}`);
 
                 if (decision.tool) {
                     const toolResult = await this.skills.executeSkill(decision.tool, decision.metadata || {});
-                    lastResult = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
-                    logger.info(`Tool ${decision.tool} result: ${lastResult}`);
 
-                    // Save to memory so DecisionEngine sees it in next step
+                    let observation = `Observation: Tool ${decision.tool} returned: ${JSON.stringify(toolResult)}`;
+                    if (decision.tool === 'send_telegram') {
+                        observation += ". [SYSTEM HINT: You have sent the message. DO NOT send another message unless you have entirely new information. Continue with other background tasks or finish.]";
+                    }
+
                     this.memory.saveMemory({
                         id: `${action.id}-step-${currentStep}`,
                         type: 'short',
-                        content: `Observation: Tool ${decision.tool} returned: ${lastResult}`,
+                        content: observation,
                         metadata: { tool: decision.tool, result: toolResult }
                     });
                 } else {
-                    // No more tools, we are finished with this task
-                    logger.info(`Agent finished task ${action.id} after ${currentStep} steps.`);
                     break;
                 }
             }

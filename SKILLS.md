@@ -1,13 +1,18 @@
-# SKILLS.md
-- email_sender:
-    description: Sends emails to contacts
-    usage: send_email(to, subject, body)
-- calendar_manager:
-    description: Manage events and schedules
-    usage: add_event(date, title, description)
-- web_search:
-    description: Search the web for information
-    usage: web_search(query)
-- telegram_sender:
-    description: Send a message to a Telegram user. ID is the numeric chat ID.
-    usage: send_telegram(chat_id, message)
+# OrcBot Skills Registry
+
+This file lists the available skills for the agent.
+
+## Internal Skills (Core)
+- **send_telegram(chat_id, message)**: Reply to users on Telegram.
+- **run_command(command)**: Execute shell commands (e.g., `ls`, `npm test`).
+- **manage_skills(skill_definition)**: Add new skills by defining them here.
+- **update_user_profile(info_text)**: Persistent memory about the user.
+- **update_agent_identity(trait)**: Persistent evolution of personality.
+- **deep_reason(topic)**: High-intensity analysis using chain-of-thought.
+
+## Web Skills (Browsing & Search)
+- **web_search(query)**: Search the web via DuckDuckGo.
+- **browser_navigate(url)**: Visit a website and extract content.
+
+## Community Skills
+(Add your custom skills here)
