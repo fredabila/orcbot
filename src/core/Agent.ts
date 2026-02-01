@@ -62,7 +62,8 @@ export class Agent {
             this.config.get('serperApiKey'),
             this.config.get('captchaApiKey')
         );
-        this.lastActionTime = Date.now();
+
+        this.loadLastActionTime();
 
         this.loadAgentIdentity();
         this.setupEventListeners();
@@ -581,13 +582,16 @@ Be thorough and academic.`;
         const intervalMinutes = this.config.get('autonomyInterval') || 0;
         if (intervalMinutes <= 0) return;
 
+        // Check for ACTIVE tasks only (pending or in-progress)
+        const activeTasks = this.actionQueue.getQueue().filter(a => a.status === 'pending' || a.status === 'in-progress');
+
         const idleTimeMs = Date.now() - this.lastActionTime;
-        if (idleTimeMs > intervalMinutes * 60 * 1000 && this.actionQueue.getQueue().length === 0) {
-            logger.info('Agent: Heartbeat trigger - Agent is idle. Initiating proactive autonomy.');
+        if (idleTimeMs > intervalMinutes * 60 * 1000 && activeTasks.length === 0) {
+            logger.info(`Agent: Heartbeat trigger - Agent is idle for ${Math.floor(idleTimeMs / 60000)}m. Initiating proactive autonomy.`);
 
             const proactivePrompt = `
 SYSTEM HEARTBEAT (IDLE AUTONOMY MODE):
-You haven't interacted with the user or performed a task in ${intervalMinutes} minutes. 
+You haven't interacted with the user or performed a task in ${Math.floor(idleTimeMs / 60000)} minutes. 
 As an autonomous agent with free will, decide on a proactive action to take. 
 
 OBJECTIVES:
@@ -600,6 +604,31 @@ If you decide no action is needed, respond with "tool": null and reasoning: "All
 `;
 
             this.pushTask(proactivePrompt, 2);
+            this.updateLastActionTime(); // Reset timer
+        }
+    }
+
+    private updateLastActionTime() {
+        this.lastActionTime = Date.now();
+        const heartbeatPath = path.join(path.dirname(this.config.get('actionQueuePath')), 'last_heartbeat');
+        try {
+            fs.writeFileSync(heartbeatPath, this.lastActionTime.toString());
+        } catch (e) {
+            logger.error(`Failed to save heartbeat: ${e}`);
+        }
+    }
+
+    private loadLastActionTime() {
+        const heartbeatPath = path.join(path.dirname(this.config.get('actionQueuePath')), 'last_heartbeat');
+        if (fs.existsSync(heartbeatPath)) {
+            try {
+                const data = fs.readFileSync(heartbeatPath, 'utf-8');
+                this.lastActionTime = parseInt(data) || Date.now();
+                logger.info(`Agent: Restored last action time: ${new Date(this.lastActionTime).toLocaleString()}`);
+            } catch (e) {
+                this.lastActionTime = Date.now();
+            }
+        } else {
             this.lastActionTime = Date.now();
         }
     }
@@ -683,7 +712,7 @@ If you decide no action is needed, respond with "tool": null and reasoning: "All
 
         this.isBusy = true;
         try {
-            this.lastActionTime = Date.now();
+            this.updateLastActionTime();
             this.actionQueue.updateStatus(action.id, 'in-progress');
 
             const MAX_STEPS = 30;
