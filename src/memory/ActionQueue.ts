@@ -1,5 +1,5 @@
 import { logger } from '../utils/logger';
-import { eventBus } from './EventBus';
+import { eventBus } from '../core/EventBus';
 import fs from 'fs';
 import path from 'path';
 

@@ -60,6 +60,19 @@ export async function runSetup() {
             name: 'pluginsPath',
             message: 'Plugins Directory:',
             default: currentConfig.pluginsPath || './plugins'
+        },
+        {
+            type: 'confirm',
+            name: 'whatsappEnabled',
+            message: 'Enable WhatsApp Channel?',
+            default: currentConfig.whatsappEnabled || false
+        },
+        {
+            type: 'confirm',
+            name: 'whatsappAutoReplyEnabled',
+            message: 'Enable AI Auto-Reply for 1-on-1 WhatsApp chats?',
+            default: currentConfig.whatsappAutoReplyEnabled || false,
+            when: (ans) => ans.whatsappEnabled
         }
     ]);
 
@@ -71,7 +84,9 @@ export async function runSetup() {
         userProfilePath: path.join(dataHome, 'USER.md'),
         journalPath: path.join(dataHome, 'JOURNAL.md'),
         learningPath: path.join(dataHome, 'LEARNING.md'),
-        agentIdentityPath: path.join(dataHome, '.AI.md')
+        agentIdentityPath: path.join(dataHome, '.AI.md'),
+        whatsappEnabled: answers.whatsappEnabled,
+        whatsappAutoReplyEnabled: answers.whatsappAutoReplyEnabled
     };
 
     fs.writeFileSync(configPath, yaml.stringify(newConfig));

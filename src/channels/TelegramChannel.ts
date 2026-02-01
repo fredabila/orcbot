@@ -1,15 +1,9 @@
 import { Telegraf } from 'telegraf';
 import { logger } from '../utils/logger';
-import { Agent } from './Agent';
-import { eventBus } from './EventBus';
+import { Agent } from '../core/Agent';
+import { eventBus } from '../core/EventBus';
 
-export interface IChannel {
-    name: string;
-    start(): Promise<void>;
-    stop(): Promise<void>;
-    sendMessage(to: string, message: string): Promise<void>;
-    sendTypingIndicator(to: string): Promise<void>;
-}
+import { IChannel } from './IChannel';
 
 export class TelegramChannel implements IChannel {
     public name = 'telegram';

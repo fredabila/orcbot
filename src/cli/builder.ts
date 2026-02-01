@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { MultiLLM } from '../core/MultiLLM';
-import { ConfigManager } from '../core/ConfigManager';
+import { ConfigManager } from '../config/ConfigManager';
 import { logger } from '../utils/logger';
 
 export class SkillBuilder {

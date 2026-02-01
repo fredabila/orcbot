@@ -1,4 +1,4 @@
-import { MemoryManager } from './MemoryManager';
+import { MemoryManager } from '../memory/MemoryManager';
 import { MultiLLM } from './MultiLLM';
 import { ParserLayer, StandardResponse } from './ParserLayer';
 import { SkillsManager } from './SkillsManager';
@@ -46,6 +46,13 @@ ACTIVE CHANNEL CONTEXT:
 - Chat ID: "${metadata.sourceId}" (Sender: ${metadata.senderName})
 - Rule: To message this user, you MUST use the "send_telegram" skill.
 `;
+        } else if (metadata.source === 'whatsapp') {
+            channelInstructions = `
+ACTIVE CHANNEL CONTEXT:
+- Channel: WhatsApp
+- JID: "${metadata.sourceId}" (Sender: ${metadata.senderName})
+- Rule: To message this user, you MUST use the "send_whatsapp" skill.
+`;
         }
 
         const systemPrompt = `
@@ -65,6 +72,7 @@ DYNAMIC COMMUNICATION INTELLIGENCE:
 - **Informative Updates**: If a task is complex (e.g., long web search), providing a status update IS encouraged.
 - **Logical Finality**: Once the goal is reached, provide a final comprehensive report and terminate immediately.
 - **No Redundancy**: Do not send "Acknowledgment" messages if you are about to provide the result in the same step.
+- **Sent Message Awareness**: BEFORE you send any message to the user (via any channel skill like \`send_telegram\`, \`send_discord\`, \`send_slack\`, etc.), READ the 'Recent Conversation History'. If you see ANY message observation confirming success or reporting the same information, DO NOT send another message.
 
 STRATEGIC REASONING PROTOCOLS:
 1.  **Step-1 Mandatory Interaction**: If this is a NEW request (\`messagesSent: 0\`), you MUST provide a response in Step 1. Do NOT stay silent.
@@ -77,6 +85,8 @@ STRATEGIC REASONING PROTOCOLS:
     - Explain WHY you need the data.
     - provide context on which step you reached before stopping.
     - Execution will PAUSE until the user provides the answer. Do NOT guess or hallucinate missing data.
+
+8.  **User Correction Override**: If the user's NEW message provides corrective information (e.g., a new password after a failed login, a corrected URL, updated credentials), this is a RETRY TRIGGER. You MUST attempt the action AGAIN with the new data, even if you previously failed. The goal is always to SUCCEED, not just to try once and give up.
 
 7.  **Semantic Web Navigation**: When using browser tools, you will receive a "Semantic Snapshot".
     - Elements are formatted as: \`role "Label" [ref=N]\`.

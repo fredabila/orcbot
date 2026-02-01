@@ -2,7 +2,7 @@ import fs from 'fs';
 import { JSONAdapter } from '../storage/JSONAdapter';
 import { logger } from '../utils/logger';
 import dotenv from 'dotenv';
-import { MultiLLM } from './MultiLLM';
+import { MultiLLM } from '../core/MultiLLM';
 
 dotenv.config();
 

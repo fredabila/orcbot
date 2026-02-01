@@ -21,6 +21,12 @@ export interface AgentConfig {
     journalPath?: string;
     learningPath?: string;
     pluginsPath?: string;
+    whatsappEnabled?: boolean;
+    whatsappSessionPath?: string;
+    whatsappAutoReplyEnabled?: boolean;
+    whatsappStatusReplyEnabled?: boolean;
+    whatsappAutoReactEnabled?: boolean;
+    whatsappOwnerJID?: string;
 }
 
 export class ConfigManager {
@@ -117,7 +123,13 @@ export class ConfigManager {
             actionQueuePath: path.join(this.dataHome, 'actions.json'),
             journalPath: path.join(this.dataHome, 'JOURNAL.md'),
             learningPath: path.join(this.dataHome, 'LEARNING.md'),
-            pluginsPath: path.join(this.dataHome, 'plugins')
+            pluginsPath: path.join(this.dataHome, 'plugins'),
+            whatsappEnabled: false,
+            whatsappSessionPath: path.join(this.dataHome, 'whatsapp-session'),
+            whatsappAutoReplyEnabled: false,
+            whatsappStatusReplyEnabled: false,
+            whatsappAutoReactEnabled: false,
+            whatsappOwnerJID: undefined
         };
     }
 

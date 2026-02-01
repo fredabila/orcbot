@@ -4,7 +4,9 @@ import inquirer from 'inquirer';
 import { Agent } from '../core/Agent';
 import { logger } from '../utils/logger';
 import dotenv from 'dotenv';
-import { ConfigManager } from '../core/ConfigManager';
+import { ConfigManager } from '../config/ConfigManager';
+import { eventBus } from '../core/EventBus';
+import qrcode from 'qrcode-terminal';
 
 import path from 'path';
 import os from 'os';
@@ -321,6 +323,7 @@ async function showConnectionsMenu() {
             message: 'Manage Connections:',
             choices: [
                 { name: 'Telegram Bot', value: 'telegram' },
+                { name: 'WhatsApp (Baileys)', value: 'whatsapp' },
                 { name: 'Back', value: 'back' },
             ]
         }
@@ -329,39 +332,142 @@ async function showConnectionsMenu() {
     if (channel === 'back') return showMainMenu();
 
     if (channel === 'telegram') {
-        const currentToken = agent.config.get('telegramToken') || 'Not Set';
-        console.log(`Current Telegram Token: ${currentToken}`);
-
-        const { action } = await inquirer.prompt([
-            {
-                type: 'list',
-                name: 'action',
-                message: 'Telegram Settings:',
-                choices: [
-                    { name: 'Set Token', value: 'set' },
-                    { name: 'Back', value: 'back' }
-                ]
-            }
-        ]);
-
-        if (action === 'back') return showConnectionsMenu();
-
-        if (action === 'set') {
-            const { token } = await inquirer.prompt([
-                { type: 'input', name: 'token', message: 'Enter Telegram Bot Token:' }
-            ]);
-            agent.config.set('telegramToken', token);
-            console.log('Token updated! Restart the agent to apply changes.');
-            await waitKeyPress();
-            return showConnectionsMenu();
-        }
+        await showTelegramConfig();
+    } else if (channel === 'whatsapp') {
+        await showWhatsAppConfig();
     }
+}
+
+async function showTelegramConfig() {
+    const currentToken = agent.config.get('telegramToken') || 'Not Set';
+    console.log(`\n--- Telegram Settings ---`);
+    console.log(`Current Token: ${currentToken}`);
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: 'Telegram Options:',
+            choices: [
+                { name: 'Set Token', value: 'set' },
+                { name: 'Back', value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showConnectionsMenu();
+
+    if (action === 'set') {
+        const { token } = await inquirer.prompt([
+            { type: 'input', name: 'token', message: 'Enter Telegram Bot Token:' }
+        ]);
+        agent.config.set('telegramToken', token);
+        console.log('Token updated! Restart the agent to apply changes.');
+        await waitKeyPress();
+        return showTelegramConfig();
+    }
+}
+
+async function showWhatsAppConfig() {
+    const enabled = agent.config.get('whatsappEnabled');
+    const autoReply = agent.config.get('whatsappAutoReplyEnabled');
+    const statusReply = agent.config.get('whatsappStatusReplyEnabled');
+    const autoReact = agent.config.get('whatsappAutoReactEnabled');
+    const ownerJid = agent.config.get('whatsappOwnerJID') || 'Not Linked';
+
+    console.log(`\n--- WhatsApp Settings ---`);
+    console.log(`Status: ${enabled ? 'ENABLED' : 'DISABLED'}`);
+    console.log(`Auto-Reply (1-on-1): ${autoReply ? 'ON' : 'OFF'}`);
+    console.log(`Status Interactions: ${statusReply ? 'ON' : 'OFF'}`);
+    console.log(`Auto-React (Emojis): ${autoReact ? 'ON' : 'OFF'}`);
+    console.log(`Linked Account: ${ownerJid}`);
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: 'WhatsApp Options:',
+            choices: [
+                { name: enabled ? 'Disable WhatsApp' : 'Enable WhatsApp', value: 'toggle_enabled' },
+                { name: autoReply ? 'Disable Auto-Reply' : 'Enable Auto-Reply', value: 'toggle_auto' },
+                { name: statusReply ? 'Disable Status Interactions' : 'Enable Status Interactions', value: 'toggle_status' },
+                { name: autoReact ? 'Disable Auto-React' : 'Enable Auto-React', value: 'toggle_react' },
+                { name: 'Link Account / Show QR', value: 'link' },
+                { name: 'Back', value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showConnectionsMenu();
+
+    switch (action) {
+        case 'toggle_enabled':
+            agent.config.set('whatsappEnabled', !enabled);
+            break;
+        case 'toggle_auto':
+            agent.config.set('whatsappAutoReplyEnabled', !autoReply);
+            break;
+        case 'toggle_status':
+            agent.config.set('whatsappStatusReplyEnabled', !statusReply);
+            break;
+        case 'toggle_react':
+            agent.config.set('whatsappAutoReactEnabled', !autoReact);
+            break;
+        case 'link':
+            if (!agent.whatsapp) {
+                console.log('\nEnabling WhatsApp channel...');
+                agent.config.set('whatsappEnabled', true);
+                agent.setupChannels();
+            }
+
+            console.log('\nStarting WhatsApp pairing process...');
+
+            // Listener for QR events
+            const qrListener = (qr: string) => {
+                console.clear();
+                console.log('🤖 OrcBot WhatsApp Pairing');
+                console.log('-------------------------------------------');
+                console.log('Scan this QR code with your WhatsApp app:');
+                console.log('1. Open WhatsApp on your phone');
+                console.log('2. Tap Menu or Settings and select Linked Devices');
+                console.log('3. Tap on "Link a Device"');
+                console.log('-------------------------------------------');
+                qrcode.generate(qr, { small: true });
+                console.log('-------------------------------------------');
+                console.log('Waiting for scan...');
+            };
+
+            eventBus.on('whatsapp:qr', qrListener);
+
+            // Start/Restart pairing
+            await agent.whatsapp.start();
+
+            // Wait for connected status
+            await new Promise<void>((resolve) => {
+                const statusListener = (status: string) => {
+                    if (status === 'connected') {
+                        eventBus.off('whatsapp:qr', qrListener);
+                        eventBus.off('whatsapp:status', statusListener);
+                        resolve();
+                    }
+                };
+                eventBus.on('whatsapp:status', statusListener);
+            });
+
+            console.log('\n✅ WhatsApp Linked Successfully!');
+            await waitKeyPress();
+            break;
+    }
+
+    console.log('WhatsApp settings updated!');
+    await waitKeyPress();
+    return showWhatsAppConfig();
 }
 
 async function showConfigMenu() {
     const config = agent.config.getAll();
     // Ensure we show explicit keys relative to core config
-    const keys = ['agentName', 'openaiApiKey', 'googleApiKey', 'serperApiKey', 'captchaApiKey', 'modelName', 'autonomyInterval', 'telegramToken', 'memoryPath'] as const;
+    const keys = ['agentName', 'openaiApiKey', 'googleApiKey', 'serperApiKey', 'captchaApiKey', 'modelName', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'whatsappAutoReplyEnabled', 'memoryPath'] as const;
 
     const choices: { name: string, value: string }[] = keys.map(key => ({
         name: `${key}: ${config[key as keyof typeof config] || '(empty)'}`,
@@ -476,7 +582,8 @@ function showStatus() {
     console.log('--- Agent Status ---');
     console.log(`Memory Entries: ${agent.memory.searchMemory('short').length} (short-term)`);
     console.log(`Action Queue: ${agent.actionQueue.getQueue().length} total actions`);
-    console.log(`Telegram Bot: ${agent.telegram ? 'Configured' : 'Not Configured'}`);
+    console.log(`Telegram Bot: ${agent.telegram ? 'Connected' : 'Disconnected/Not Set'}`);
+    console.log(`WhatsApp: ${agent.whatsapp ? 'Connected' : 'Disconnected/Disabled'}`);
     console.log('--------------------');
 }
 

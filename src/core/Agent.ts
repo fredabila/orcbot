@@ -1,12 +1,13 @@
-import { MemoryManager, MemoryEntry } from './MemoryManager';
+import { MemoryManager } from '../memory/MemoryManager';
 import { MultiLLM } from './MultiLLM';
 import { SkillsManager } from './SkillsManager';
 import { DecisionEngine } from './DecisionEngine';
-import { ActionQueue, Action } from './ActionQueue';
+import { ActionQueue, Action } from '../memory/ActionQueue';
 import { Scheduler } from './Scheduler';
-import { ConfigManager } from './ConfigManager';
-import { TelegramChannel } from './TelegramChannel';
-import { WebBrowser } from './WebBrowser';
+import { ConfigManager } from '../config/ConfigManager';
+import { TelegramChannel } from '../channels/TelegramChannel';
+import { WhatsAppChannel } from '../channels/WhatsAppChannel';
+import { WebBrowser } from '../tools/WebBrowser';
 import { Cron } from 'croner';
 import { Readability } from '@mozilla/readability';
 import { DOMParser } from 'linkedom';
@@ -25,6 +26,7 @@ export class Agent {
     public scheduler: Scheduler;
     public config: ConfigManager;
     public telegram: TelegramChannel | undefined;
+    public whatsapp: WhatsAppChannel | undefined;
     public browser: WebBrowser;
     private lastActionTime: number;
     private agentConfigFile: string;
@@ -120,11 +122,17 @@ export class Agent {
         }
     }
 
-    private setupChannels() {
+    public setupChannels() {
         const telegramToken = this.config.get('telegramToken');
         if (telegramToken) {
             this.telegram = new TelegramChannel(telegramToken, this);
             logger.info('Agent: Telegram channel configured');
+        }
+
+        const whatsappEnabled = this.config.get('whatsappEnabled');
+        if (whatsappEnabled) {
+            this.whatsapp = new WhatsAppChannel(this);
+            logger.info('Agent: WhatsApp channel configured');
         }
     }
 
@@ -146,6 +154,85 @@ export class Agent {
                     return `Message sent to ${chat_id}`;
                 }
                 return 'Telegram channel not available';
+            }
+        });
+
+        // Skill: Send WhatsApp
+        this.skills.registerSkill({
+            name: 'send_whatsapp',
+            description: 'Send a message to a WhatsApp contact or group',
+            usage: 'send_whatsapp(jid, message)',
+            handler: async (args: any) => {
+                const jid = args.jid || args.to || args.id;
+                const message = args.message || args.content || args.text;
+
+                if (!jid) return 'Error: Missing jid (WhatsApp ID).';
+                if (!message) return 'Error: Missing message content.';
+
+                if (this.whatsapp) {
+                    await this.whatsapp.sendMessage(jid, message);
+                    return `Message sent to ${jid} via WhatsApp`;
+                }
+                return 'WhatsApp channel not available';
+            }
+        });
+
+        // Skill: Post WhatsApp Status
+        this.skills.registerSkill({
+            name: 'post_whatsapp_status',
+            description: 'Post a text update to your WhatsApp status (Stories)',
+            usage: 'post_whatsapp_status(text)',
+            handler: async (args: any) => {
+                const text = args.text || args.message || args.content;
+                if (!text) return 'Error: Missing text content.';
+
+                if (this.whatsapp) {
+                    await this.whatsapp.postStatus(text);
+                    return 'WhatsApp status update posted successfully';
+                }
+                return 'WhatsApp channel not available';
+            }
+        });
+
+        // Skill: React to WhatsApp Message
+        this.skills.registerSkill({
+            name: 'react_whatsapp',
+            description: 'React to a specific WhatsApp message with an emoji',
+            usage: 'react_whatsapp(jid, message_id, emoji)',
+            handler: async (args: any) => {
+                const jid = args.jid || args.to;
+                const messageId = args.message_id || args.messageId || args.id;
+                const emoji = args.emoji || args.reaction || '✅';
+
+                if (!jid) return 'Error: Missing jid.';
+                if (!messageId) return 'Error: Missing message_id. You must get this from the message context.';
+
+                if (this.whatsapp) {
+                    await this.whatsapp.react(jid, messageId, emoji);
+                    return `Reacted with ${emoji} to message ${messageId}`;
+                }
+                return 'WhatsApp channel not available';
+            }
+        });
+
+        // Skill: Reply to WhatsApp Status
+        this.skills.registerSkill({
+            name: 'reply_whatsapp_status',
+            description: 'Reply to a contact\'s WhatsApp status update',
+            usage: 'reply_whatsapp_status(jid, message)',
+            handler: async (args: any) => {
+                const jid = args.jid || args.to;
+                const message = args.message || args.content || args.text;
+
+                if (!jid) return 'Error: Missing jid.';
+                if (!message) return 'Error: Missing message content.';
+
+                if (this.whatsapp) {
+                    // For status reply, the JID is the person who posted the status
+                    await this.whatsapp.sendMessage(jid, message);
+                    return `Replied to status of ${jid}`;
+                }
+                return 'WhatsApp channel not available';
             }
         });
 
@@ -800,15 +887,26 @@ RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. we
     public async start() {
         logger.info('Agent is starting...');
         this.scheduler.start();
+
+        const startupPromises: Promise<void>[] = [];
         if (this.telegram) {
-            await this.telegram.start();
+            startupPromises.push(this.telegram.start());
         }
+        if (this.whatsapp) {
+            startupPromises.push(this.whatsapp.start());
+        }
+
+        await Promise.all(startupPromises);
+        logger.info('Agent: All channels initialized');
     }
 
     public async stop() {
         this.scheduler.stop();
         if (this.telegram) {
             await this.telegram.stop();
+        }
+        if (this.whatsapp) {
+            await this.whatsapp.stop();
         }
         await this.browser.close();
         logger.info('Agent stopped.');
@@ -914,16 +1012,6 @@ RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. we
                                 continue;
                             }
 
-                            // 2. SOCIAL COMMUNICATION LOCK: Step 2+ requires new "Deep Data"
-                            if (currentStep > 1 && !deepToolExecuted) {
-                                logger.warn(`Agent: Blocked non-essential communication in Step ${currentStep} (No Deep Data).`);
-                                this.memory.saveMemory({
-                                    id: `${action.id}-step-${currentStep}-lock`,
-                                    type: 'short',
-                                    content: `[SYSTEM LOCK: You have already communicated in Step 1. You cannot speak again in Step 2+ without presenting NEW data from a deep skill (Search/Command/Web). Purely social redirected/reflections are forbidden. Terminate now.]`
-                                });
-                                continue;
-                            }
 
                             lastMessageContent = currentMessage;
                         }
@@ -990,8 +1078,6 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         let observation = `Observation: Tool ${toolCall.name} returned: ${JSON.stringify(toolResult)}`;
                         if (toolCall.name === 'send_telegram') {
                             messagesSent++;
-                            deepToolExecuted = false; // RESET LOCK: If you speak, you must find NEW data to speak again.
-                            observation += `. [SYSTEM: Message Sent (#${messagesSent}). Communication Lock ENABLED. You cannot send another telegram until you find NEW DEEP DATA.]`;
                         }
 
                         this.memory.saveMemory({
@@ -1028,9 +1114,12 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
             this.actionQueue.updateStatus(action.id, 'failed');
 
             // SOS Notification
+            const sosMessage = `⚠️ *Action Failed*: I encountered a persistent error while processing your request: "${action.payload.description}"\n\n*Error*: ${error.message}`;
+
             if (this.telegram && action.payload.source === 'telegram') {
-                const sosMessage = `⚠️ *Action Failed*: I encountered a persistent error while processing your request: "${action.payload.description}"\n\n*Error*: ${error.message}\n\nI've logged this to my journal and will attempt to recover in the next turn.`;
-                await this.telegram.sendMessage(action.payload.sourceId, sosMessage);
+                await this.telegram.sendMessage(action.payload.sourceId, sosMessage + `\n\nI've logged this to my journal and will attempt to recover in the next turn.`);
+            } else if (this.whatsapp && action.payload.source === 'whatsapp') {
+                await this.whatsapp.sendMessage(action.payload.sourceId, sosMessage);
             }
         } finally {
             this.isBusy = false;
