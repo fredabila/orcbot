@@ -5,6 +5,7 @@ import makeWASocket, {
     makeCacheableSignalKeyStore,
     WAMessageContent,
     WAMessageKey,
+    downloadMediaMessage
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode-terminal';
@@ -15,6 +16,7 @@ import { logger } from '../utils/logger';
 import { eventBus } from '../core/EventBus';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 
 export class WhatsAppChannel implements IChannel {
     public name = 'whatsapp';
@@ -100,77 +102,100 @@ export class WhatsAppChannel implements IChannel {
                     // OR are from me but sent TO me (self-messaging commands)
                     if (msg.message && (!isFromMe || isToMe)) {
                         const messageId = msg.key.id;
+                        const imageMsg = msg.message.imageMessage;
+                        const audioMsg = msg.message.audioMessage;
+                        const docMsg = msg.message.documentMessage;
+                        const videoMsg = msg.message.videoMessage;
+
                         const text = msg.message.conversation ||
                             msg.message.extendedTextMessage?.text ||
-                            msg.message.imageMessage?.caption;
+                            imageMsg?.caption || docMsg?.caption || videoMsg?.caption || '';
 
-                        if (text) {
-                            const senderName = msg.pushName || 'WhatsApp User';
-                            const isGroup = senderId?.endsWith('@g.us');
-                            const isStatus = senderId === 'status@broadcast';
-                            const isFromOwner = senderId === ownerJid;
-                            const autoReplyEnabled = this.agent.config.get('whatsappAutoReplyEnabled');
-                            const statusReplyEnabled = this.agent.config.get('whatsappStatusReplyEnabled');
-                            const autoReactEnabled = this.agent.config.get('whatsappAutoReactEnabled');
-                            const profilingEnabled = this.agent.config.get('whatsappContextProfilingEnabled');
+                        const senderName = msg.pushName || 'WhatsApp User';
+                        const isGroup = senderId?.endsWith('@g.us');
+                        const isStatus = senderId === 'status@broadcast';
+                        const isFromOwner = senderId === ownerJid;
+                        const autoReplyEnabled = this.agent.config.get('whatsappAutoReplyEnabled');
+                        const statusReplyEnabled = this.agent.config.get('whatsappStatusReplyEnabled');
+                        const autoReactEnabled = this.agent.config.get('whatsappAutoReactEnabled');
+                        const profilingEnabled = this.agent.config.get('whatsappContextProfilingEnabled');
 
-                            // Skip group chats for now unless mentioned or requested (simpler for now)
-                            if (isGroup) return;
+                        // Download Media if present
+                        let mediaPath = '';
+                        if (imageMsg || audioMsg || docMsg || videoMsg) {
+                            try {
+                                const buffer = await downloadMediaMessage(msg, 'buffer', {});
+                                const downloadsDir = path.join(os.homedir(), '.orcbot', 'downloads');
+                                if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
 
-                            // Special handling for Status Updates
-                            if (isStatus) {
-                                const participant = msg.key.participant || msg.participant;
-                                logger.info(`WhatsApp Status: ${participant} posted: ${text}`);
-
-                                // Record it in memory so the agent knows.
-                                this.agent.memory.saveMemory({
-                                    id: `wa-status-${messageId}`,
-                                    type: 'short',
-                                    content: `WhatsApp STATUS from ${participant}: ${text}`,
-                                    timestamp: new Date().toISOString(),
-                                    metadata: { source: 'whatsapp', type: 'status', messageId, senderId: participant }
-                                });
-
-                                // Only trigger a task if Status Interactions are enabled
-                                if (statusReplyEnabled) {
-                                    await this.agent.pushTask(
-                                        `WhatsApp STATUS update from ${participant} (ID: ${messageId}): "${text}". \n\nGoal: Decide if you should reply to this status. If yes, use 'reply_whatsapp_status'.`,
-                                        3,
-                                        { source: 'whatsapp', sourceId: participant, senderName: participant, type: 'status', messageId }
-                                    );
-                                }
-                                return;
+                                const ext = imageMsg ? 'jpg' : audioMsg ? 'ogg' : videoMsg ? 'mp4' : (docMsg?.mimetype?.split('/')[1] || 'bin');
+                                mediaPath = path.join(downloadsDir, `wa_${messageId}.${ext}`);
+                                fs.writeFileSync(mediaPath, buffer);
+                                logger.info(`WhatsApp Media saved: ${mediaPath}`);
+                            } catch (e) {
+                                logger.error(`Failed to download media: ${e}`);
                             }
+                        }
 
-                            logger.info(`WhatsApp Msg: ${senderName} (${senderId}): ${text} [ID: ${messageId}] | autoReply=${autoReplyEnabled} | isOwner=${isFromOwner} | isToMe=${isToMe}`);
+                        // Skip group chats for now unless mentioned or requested (simpler for now)
+                        if (isGroup) return;
 
-                            // Save to memory for context
+                        // Special handling for Status Updates
+                        if (isStatus && text) {
+                            const participant = msg.key.participant || msg.participant;
+                            logger.info(`WhatsApp Status: ${participant} posted: ${text}`);
+
+                            // Record it in memory so the agent knows.
                             this.agent.memory.saveMemory({
-                                id: `wa-${messageId}`,
+                                id: `wa-status-${messageId}`,
                                 type: 'short',
-                                content: `User ${senderName} (${senderId}) said on WhatsApp: ${text}`,
+                                content: `WhatsApp STATUS from ${participant}: ${text}`,
                                 timestamp: new Date().toISOString(),
-                                metadata: { source: 'whatsapp', messageId, senderId, senderName }
+                                metadata: { source: 'whatsapp', type: 'status', messageId, senderId: participant }
                             });
 
-                            const reactInstruction = autoReactEnabled ? " or 'react_whatsapp'" : "";
-                            const profileInstruction = profilingEnabled ? "\n- Also, evaluate if you've learned something new about this person and update their profile using 'update_contact_profile' if needed." : "";
-
-                            // Treat as Command if from Owner
-                            if (isFromOwner || isToMe) {
+                            // Only trigger a task if Status Interactions are enabled
+                            if (statusReplyEnabled) {
                                 await this.agent.pushTask(
-                                    `WhatsApp command from yourself (ID: ${messageId}): "${text}"${profileInstruction}`,
-                                    10,
-                                    { source: 'whatsapp', sourceId: senderId, senderName: senderName, isOwner: true, messageId }
-                                );
-                            } else if (autoReplyEnabled) {
-                                // Treat as External Interaction for AI to decide on
-                                await this.agent.pushTask(
-                                    `EXTERNAL WHATSAPP MESSAGE from ${senderName} (ID: ${messageId}): "${text}". \n\nGoal: Decide if you should respond${reactInstruction} to this person on my behalf based on our history and my persona. If yes, use 'send_whatsapp'${reactInstruction}.${profileInstruction}`,
-                                    5,
-                                    { source: 'whatsapp', sourceId: senderId, senderName: senderName, isExternal: true, messageId }
+                                    `WhatsApp STATUS update from ${participant} (ID: ${messageId}): "${text}". \n\nGoal: Decide if you should reply to this status. If yes, use 'reply_whatsapp_status'.`,
+                                    3,
+                                    { source: 'whatsapp', sourceId: participant, senderName: participant, type: 'status', messageId }
                                 );
                             }
+                            return;
+                        }
+
+                        // Skip if no text AND no media (e.g. some system msg)
+                        if (!text && !mediaPath) return;
+
+                        logger.info(`WhatsApp Msg: ${senderName} (${senderId}): ${text || '[Media]'} [ID: ${messageId}] | autoReply=${autoReplyEnabled}`);
+
+                        // Save to memory for context
+                        this.agent.memory.saveMemory({
+                            id: `wa-${messageId}`,
+                            type: 'short',
+                            content: `User ${senderName} (${senderId}) said on WhatsApp: ${text}`,
+                            timestamp: new Date().toISOString(),
+                            metadata: { source: 'whatsapp', messageId, senderId, senderName }
+                        });
+
+                        const reactInstruction = autoReactEnabled ? " or 'react_whatsapp'" : "";
+                        const profileInstruction = profilingEnabled ? "\n- Also, evaluate if you've learned something new about this person and update their profile using 'update_contact_profile' if needed." : "";
+
+                        // Treat as Command if from Owner
+                        if (isFromOwner || isToMe) {
+                            await this.agent.pushTask(
+                                `WhatsApp command from yourself (ID: ${messageId}): "${text}"${profileInstruction}`,
+                                10,
+                                { source: 'whatsapp', sourceId: senderId, senderName: senderName, isOwner: true, messageId }
+                            );
+                        } else if (autoReplyEnabled) {
+                            // Treat as External Interaction for AI to decide on
+                            await this.agent.pushTask(
+                                `EXTERNAL WHATSAPP MESSAGE from ${senderName} (ID: ${messageId}): "${text}". \n\nGoal: Decide if you should respond${reactInstruction} to this person on my behalf based on our history and my persona. If yes, use 'send_whatsapp'${reactInstruction}.${profileInstruction}`,
+                                5,
+                                { source: 'whatsapp', sourceId: senderId, senderName: senderName, isExternal: true, messageId }
+                            );
                         }
                     }
                 }

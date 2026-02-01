@@ -1,6 +1,23 @@
-# Contributing to OrcBot
+## 🏗 Project Structure
 
-We welcome contributions! OrcBot is designed to be a "High-Power" autonomous agent framework. This guide explains how to extend its intelligence and capabilities.
+OrcBot is organized into modular core layers:
+
+- `src/core`: The brain. Contains `Agent.ts`, `DecisionEngine.ts`, `SimulationEngine.ts`, `MultiLLM.ts`, and `SkillsManager.ts`.
+- `src/channels`: Communication adapters for Telegram, WhatsApp, and the local CLI.
+- `src/tools`: Specialized interaction tools like `WebBrowser.ts`.
+- `src/memory`: Storage and context managers (`MemoryManager.ts`, `ActionQueue.ts`).
+- `src/cli`: CLI commands and the Setup Wizard.
+- `apps/www`: The landing page and web-based dashboard.
+
+## 🤝 Pull Request Process
+
+We encourage contributions! To ensure stability, please follow this flow:
+
+1.  **Fork & Branch**: Create a feature branch from `main`.
+2.  **Lint & Build**: Mandatory verification via `npm run build`. We use strict TypeScript rules.
+3.  **Atomic Commits**: Use conventional commits (`feat:`, `fix:`, `docs:`, `refactor:`).
+4.  **Documentation**: If you add a skill, update `SKILLS.md` and the appropriate registry in `Agent.ts`.
+5.  **Test**: Verified your changes in the autonomous loop using `orcbot run`.
 
 ## 🛠 How to Add a New Skill
 
@@ -22,67 +39,41 @@ this.skills.registerSkill({
 });
 ```
 
-### 2. Validation with Zod
-For safety, you should validate input arguments using `zod`. This prevents the LLM from passing garbage data into your tools.
-
-```typescript
-import { z } from 'zod';
-
-const WeatherSchema = z.object({ city: z.string() });
-
-// Inside handler:
-const { city } = WeatherSchema.parse(args);
-```
+### 2. Validation
+For safety, you should validate input arguments. The agent handles ReAct loops based on your return values.
 
 ### 3. Return Values (Observations)
 The LLM processes the return value of your handler. 
 - **Be Descriptive**: Return "Page title is 'News' and it has 5 articles" rather than just "Done".
-- **Error Handling**: Use `try/catch` and return clear error messages. The agent's ReAct loop allows it to see the error and "re-think" a different strategy.
+- **Error Handling**: Use `try/catch` and return clear error messages. The agent's reasoning loop allows it to see the error and "re-think" a different strategy.
 
-### 4. Update the Registry
-Add your skill to `SKILLS.md`. This is critical because the Agent uses this file to build its system prompt and know what it's capable of.
+---
 
 ## 📡 Adding a New Channel
 Channels are providers like Discord, Slack, or WhatsApp.
-1. Implement the `Channel` interface (see `src/core/TelegramChannel.ts`).
+1. Implement the `IChannel` interface (`src/channels/IChannel.ts`).
 2. Add a setup method in the `Agent` class via `setupChannels`.
 3. Add configuration keys in `ConfigManager.ts` to store tokens.
+
+---
 
 ## 🧠 Core Improvements
 - **MultiLLM**: Add new providers (Anthropic, Local LLMs) in `src/core/MultiLLM.ts`.
 - **DecisionEngine**: Refine the system prompt or reasoning logic.
+- **SimulationEngine**: Improve planning strategies and contingencies.
+
+---
 
 ## 🔌 Dynamic Plugin System
-OrcBot now supports a hot-loadable plugin system. This allows you (and the agent!) to add powers without recompiling or editing the core source.
+OrcBot supports a hot-loadable plugin system. This allows you (and the agent!) to add powers without recompiling or editing the core source.
 
 ### 1. The Plugins Directory
 By default, OrcBot scans `~/.orcbot/plugins` (global) or `./plugins` (local) for `.ts` or `.js` files.
 
-### 2. Plugin Structure
-A plugin is a simple object exported from a file:
-
-```typescript
-// ./plugins/check_price.ts
-export const check_price = {
-    name: 'check_stock_price',
-    description: 'Fetch the live price for a stock symbol',
-    usage: 'check_stock_price(symbol)',
-    handler: async ({ symbol }: { symbol: string }) => {
-        const data = await fetch(`https://api.example.com/quote/${symbol}`);
-        return `Current price for ${symbol} is $${data.price}`;
-    }
-};
-```
-
-### 3. Autonomous Skill Building
+### 2. Autonomous Skill Building
 The agent has a special skill called `create_custom_skill`. 
 - **The Loop**: If the agent is asked to do something it can't, it will search for the logic, write the code, and call `create_custom_skill` to install it.
-- **Dependencies**: Use `install_npm_dependency` if your plugin requires external libraries.
-
-## 🧪 Testing
-- Run `npm run build` to verify type safety.
-- Use `orcbot run` to test autonomous behavior.
-- Add logs via `logger.info()` to trace the reasoning loop steps.
+- **Immune System**: OrcBot v2.0 now includes an autonomous self-repair trigger. If a plugin fails to compile, the agent will automatically attempt to fix it!
 
 ---
 Built with ❤️ for the Autonomous Era

@@ -1,15 +1,16 @@
-# 🤖 OrcBot
-### TypeScript Autonomous Agent Framework
-#### High-Power Intelligence with Web, Shell, and Self-Management
-
 <div align="center">
+<img src="orcbot_hero_banner_1769974399613.png" width="100%" alt="OrcBot Hero Banner">
+
+# OrcBot v2.0
+### The Production-Ready Strategic AI Agent
+#### High-Power Intelligence with Web, Shell, and Strategic Simulation
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
 [![Status](https://img.shields.io/badge/Status-Beta-orange.svg)]()
 [![ReAct](https://img.shields.io/badge/Reasoning-ReAct-purple.svg)]()
 
-**Autonomous. Modular. Web-Enabled. Shell-Powered.**
+**Autonomous. Strategic. Multi-Modal. Self-Healing.**
 
 [Features](#features) • [Installation](#installation) • [Usage](#usage) • [Skills Registry](#-high-power-skills) • [Configuration](#configuration)
 
@@ -17,20 +18,20 @@
 
 ---
 
-## 🚀 Why OrcBot?
+## 🚀 Why OrcBot v2.0?
 
-OrcBot is a next-generation **autonomous reasoning agent**. Unlike simple chatbots, OrcBot uses a **ReAct reasoning loop** to think in multiple steps, execute background tasks, browse the web, and manage its own system. It doesn't just reply; it **orchestrates**.
+OrcBot is a next-generation **autonomous reasoning agent**. In v2.0, we've moved beyond simple ReAct loops to a **Strategic Simulation Architecture**. Before executing a task, OrcBot simulates the outcome, identifies potential pitfalls, and generates a robust execution plan with built-in fallbacks.
 
 ### Key Capabilities
 
-*   🧠 **ReAct Reasoning Loop**: Thinks, Acts, and Observes in multi-step cycles to complete complex tasks.
-*   🌐 **Built-in Web Browser**: Surfs the web via Playwright to find real-time info.
-*   🐚 **Shell Execution**: Can run command-line tools, manage files, and install dependencies.
-*   🧠 **Autonomous Learning**: Automatically updates `USER.md` (your profile) and `.AI.md` (its identity) as it learns.
+*   🧠 **Strategic Simulation Layer**: Pre-task planning that anticipates errors (like CAPTCHAs or search failures) before they happen.
+*   🛡️ **Autonomous Immune System**: Automatically detects broken plugin code and uses its `self_repair_skill` to fix itself.
+*   📸 **Multi-Modal Intelligence**: Native capability to analyze images, audio, and documents via Telegram and WhatsApp.
+*   🌐 **Context-Aware Browsing**: Strategic web navigation that handles dynamic content and bypasses anti-bot measures.
+*   🐚 **Shell Execution**: Full system access to run commands, manage files, and install dependencies.
 *   💓 **Autonomy Heartbeat**: Proactively wakes up to self-reflect and take action even when idle.
-*   🖥️ **Interactive TUI**: Streamlined terminal interface for high-level management.
-*   🔌 **Self-Learning Plugin System**: Drop `.ts` or `.js` files into the `plugins/` directory to live-load new capabilities.
-*   🧠 **Autonomous Skill Building**: The agent can autonomously research, write, and install its own skills using the `create_custom_skill` power.
+*   🖥️ **Interactive TUI & Dashboard**: Comprehensive terminal interface and web landing page for management.
+*   🔌 **Dynamic Plugin System**: Hot-loadable TypeScript plugins for limitless extensibility.
 
 ---
 
@@ -45,7 +46,7 @@ curl -sSL https://orcbot.ai/install.sh | bash
 
 **Windows (PowerShell)**
 ```powershell
-iwr https://orcbot.ai/install.ps1 | iex
+iwr https://orcbot.vercel.app/install.ps1 | iex
 ```
 
 Alternatively, clone the repo and run:

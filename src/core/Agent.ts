@@ -2,6 +2,7 @@ import { MemoryManager } from '../memory/MemoryManager';
 import { MultiLLM } from './MultiLLM';
 import { SkillsManager } from './SkillsManager';
 import { DecisionEngine } from './DecisionEngine';
+import { SimulationEngine } from './SimulationEngine';
 import { ActionQueue, Action } from '../memory/ActionQueue';
 import { Scheduler } from './Scheduler';
 import { ConfigManager } from '../config/ConfigManager';
@@ -22,6 +23,7 @@ export class Agent {
     public llm: MultiLLM;
     public skills: SkillsManager;
     public decisionEngine: DecisionEngine;
+    public simulationEngine: SimulationEngine;
     public actionQueue: ActionQueue;
     public scheduler: Scheduler;
     public config: ConfigManager;
@@ -58,6 +60,7 @@ export class Agent {
             this.config.get('journalPath'),
             this.config.get('learningPath')
         );
+        this.simulationEngine = new SimulationEngine(this.llm);
         this.actionQueue = new ActionQueue(this.config.get('actionQueuePath') || './actions.json');
         this.scheduler = new Scheduler();
         this.browser = new WebBrowser(
@@ -174,6 +177,83 @@ export class Agent {
                     return `Message sent to ${jid} via WhatsApp`;
                 }
                 return 'WhatsApp channel not available';
+            }
+        });
+
+        // Skill: Download File
+        this.skills.registerSkill({
+            name: 'download_file',
+            description: 'Download a file from the web to the agent\'s local storage.',
+            usage: 'download_file(url, filename?)',
+            handler: async (args: any) => {
+                const url = args.url;
+                if (!url) return 'Error: Missing url.';
+
+                try {
+                    let filename = args.filename || path.basename(new URL(url).pathname) || `file_${Date.now()}`;
+                    const downloadsDir = path.join(path.dirname(this.config.get('memoryPath')), 'downloads');
+                    if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
+
+                    const filePath = path.join(downloadsDir, filename);
+                    const response = await fetch(url);
+                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+                    const buffer = await response.arrayBuffer();
+                    fs.writeFileSync(filePath, Buffer.from(buffer));
+
+                    return `File downloaded successfully to: ${filePath}`;
+                } catch (e) {
+                    return `Error downloading file: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Send File
+        this.skills.registerSkill({
+            name: 'send_file',
+            description: 'Send a file (image, document, audio) to a Telegram or WhatsApp contact.',
+            usage: 'send_file(jid, path, caption?)',
+            handler: async (args: any) => {
+                const jid = args.jid || args.to;
+                const filePath = args.path || args.file_path;
+                const caption = args.caption || '';
+
+                if (!jid) return 'Error: Missing jid.';
+                if (!filePath) return 'Error: Missing file path.';
+
+                try {
+                    const isWhatsApp = jid.includes('@s.whatsapp.net') || jid.includes('@g.us');
+                    if (isWhatsApp && this.whatsapp) {
+                        await this.whatsapp.sendFile(jid, filePath, caption);
+                        return `File ${path.basename(filePath)} sent via WhatsApp to ${jid}`;
+                    } else if (this.telegram && !isWhatsApp) {
+                        await this.telegram.sendFile(jid, filePath, caption);
+                        return `File ${path.basename(filePath)} sent via Telegram to ${jid}`;
+                    }
+                    return 'Appropriate channel not available or JID type not recognized.';
+                } catch (e) {
+                    return `Error sending file: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Analyze Media
+        this.skills.registerSkill({
+            name: 'analyze_media',
+            description: 'Use AI to analyze an image, audio, or document file. Provide the path and what you want to know.',
+            usage: 'analyze_media(path, prompt?)',
+            handler: async (args: any) => {
+                const filePath = args.path || args.file_path;
+                const prompt = args.prompt || 'Describe the content of this file.';
+
+                if (!filePath) return 'Error: Missing path.';
+                if (!fs.existsSync(filePath)) return `Error: File not found at ${filePath}`;
+
+                try {
+                    return await this.llm.analyzeMedia(filePath, prompt);
+                } catch (e) {
+                    return `Error analyzing media: ${e}`;
+                }
             }
         });
 
@@ -518,7 +598,7 @@ Output the fixed code:
         // Skill: Create Custom Skill
         this.skills.registerSkill({
             name: 'create_custom_skill',
-            description: 'Autonomously create a new skill. The "code" argument must be the BODY of a Node.js async function. To interact with the browser, you MUST use `await context.browser.evaluate(() => { ... })`. Do NOT write browser-side code directly in the top level.',
+            description: 'Autonomously create a new skill. The "code" argument must be the **BODY** of a Node.js async function. \n\nIMPORTANT RULES:\n1. Do NOT wrap the code in `async function() { ... }` or `() => { ... }`. Provide ONLY the inner logic.\n2. To access the browser, use `await context.browser.evaluate(() => { ... })`.\n3. Do NOT try to call other skills as functions (e.g. `send_file(...)` is NOT available directly). You must use `context.agent.skills.execute("skill_name", { args })` if you strictly need to call another skill, or better yet, implement the logic natively using `fs`, `fetch`, etc.\n4. Ensure you `return` a string at the end of the operation.',
             usage: 'create_custom_skill({ name, description, usage, code })',
             handler: async (args: any) => {
                 const { name, description, usage, code } = args;
@@ -532,9 +612,20 @@ Output the fixed code:
                 const fileName = `${name}.ts`;
                 const filePath = path.resolve(pluginsDir, fileName);
 
+                // Basic Sanitization: Remove outer function wrappers if the AI messed up
+                let sanitizedCode = code.trim();
+                // Remove "async function(url, context) {" or similar prefixes
+                sanitizedCode = sanitizedCode.replace(/^(async\s+)?function\s*\([^)]*\)\s*\{/, '');
+                // Remove trailing "}"
+                if (code.includes('function') && sanitizedCode.endsWith('}')) {
+                    sanitizedCode = sanitizedCode.substring(0, sanitizedCode.lastIndexOf('}'));
+                }
+
                 // Ensure correct formatting for a plugin
                 const finalCode = code.includes('export') ? code : `
 import { AgentContext } from '../src/core/SkillsManager';
+import fs from 'fs';
+import path from 'path';
 
 export const ${name} = {
     name: "${name}",
@@ -545,9 +636,8 @@ export const ${name} = {
         // 1. Use 'context.browser' to access the browser (e.g. context.browser.evaluate(...))
         // 2. Use 'context.config' to access settings.
         // 3. Use standard 'fetch' for external APIs.
-        // 4. Do NOT try to call other skills as functions (e.g. do not call browser_run_js() directly).
         
-        ${code}
+        ${sanitizedCode}
     }
 };
 `;
@@ -572,11 +662,16 @@ export const ${name} = {
 
                 return new Promise((resolve) => {
                     const { exec } = require('child_process');
-                    exec(`npm install ${pkg}`, (error: any, stdout: string, stderr: string) => {
+                    logger.info(`Agent: Installing NPM package '${pkg}'...`);
+                    const child = exec(`npm install ${pkg}`, { timeout: 120000 }, (error: any, stdout: string, stderr: string) => {
                         if (error) {
-                            resolve(`Error: ${error.message}\n${stderr}`);
+                            if (error.killed) {
+                                resolve(`Error: Installation of '${pkg}' timed out after 120 seconds. It might still be running in the background, but I am moving on.`);
+                            } else {
+                                resolve(`Error installing '${pkg}': ${error.message}\n${stderr}`);
+                            }
                         } else {
-                            resolve(`Package '${pkg}' installed.\n${stdout}`);
+                            resolve(`Package '${pkg}' installed successfully.\n${stdout}`);
                         }
                     });
                 });
@@ -967,6 +1062,12 @@ RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. we
                 metadata: { actionId: action.id, source: action.payload.source }
             });
 
+            // SIMULATION LAYER (New)
+            // Run a quick mental simulation to plan the steps (executed once per action start)
+            const recentHist = this.memory.getRecentContext();
+            const contextStr = recentHist.map(c => `[${c.type}] ${c.content}`).join('\n');
+            const executionPlan = await this.simulationEngine.simulate(action.payload.description, contextStr);
+
             const MAX_STEPS = 30;
             let currentStep = 0;
             let messagesSent = 0;
@@ -994,7 +1095,8 @@ RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. we
                                 ...action.payload,
                                 messagesSent,
                                 messagingLocked: messagesSent > 0,
-                                currentStep
+                                currentStep,
+                                executionPlan // Pass plan to DecisionEngine
                             }
                         });
                     }, { maxRetries: 2 });

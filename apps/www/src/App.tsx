@@ -3,7 +3,7 @@ import './index.css';
 
 function App() {
   const [copied, setCopied] = useState(false);
-  const installCmd = 'curl -sSL https://orcbot.ai/install.sh | bash';
+  const installCmd = 'curl -sSL https://orcbot.vercel.app/install.sh | bash';
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(installCmd);
@@ -14,9 +14,9 @@ function App() {
   return (
     <div className="app-container">
       <header>
-        <div className="badge">v1.1.0 — Global CLI Ready</div>
+        <div className="badge">v2.0.0 — The Strategic Era</div>
         <h1>OrcBot</h1>
-        <p className="subtitle">The production-ready autonomous AI operating system. One command for global terminal access.</p>
+        <p className="subtitle">The production-ready autonomous AI operating system. Pure intelligence, simulated for success.</p>
       </header>
 
       <main>
@@ -38,30 +38,30 @@ function App() {
           </div>
         </div>
 
-        <h2 className="section-title">Capabilities</h2>
+        <h2 className="section-title">Strategic Capabilities</h2>
         <div className="grid">
           <div className="card">
-            <h3>Global CLI Native</h3>
-            <p>Installs globally on your OS. Run `orcbot` commands from any path. Full system access with zero cloud latency.</p>
+            <h3>Strategic Planning</h3>
+            <p>OrcBot v2.0 simulates tasks before execution. It generates a roadmap with contingencies, avoiding loops and anticipating failures.</p>
           </div>
           <div className="card">
-            <h3>Autonomous Browsing</h3>
-            <p>Controlling browsers like a human. Navigating, extracting, and acting on the web with adaptive reasoning.</p>
+            <h3>Autonomous Immune System</h3>
+            <p>Plugin failed? OrcBot fixes it. The agent automatically detects compilation errors in its own code and repairs them autonomously.</p>
+          </div>
+          <div className="card">
+            <h3>Multi-Modal Hub</h3>
+            <p>Native Telegram and WhatsApp integration. Send images, audio, or files—OrcBot downloads and analyzes them on the fly.</p>
+          </div>
+          <div className="card">
+            <h3>Global CLI & Hybrid Core</h3>
+            <p>Run locally for privacy and speed, or connect via cloud channels. OrcBot lives where you work.</p>
           </div>
           <div className="card">
             <h3>Self-Evolving Skills</h3>
-            <p>OrcBot can write its own TypeScript plugins to learn new capabilities on the fly. It grows with your needs.</p>
+            <p>The agent researches, writes, and installs its own TypeScript skills. It builds the tools it needs to satisfy your requests.</p>
           </div>
           <div className="card">
-            <h3>Persistent Context</h3>
-            <p>Automatic journaling and long-term memory. It remembers what you did last week and uses it for today's tasks.</p>
-          </div>
-          <div className="card">
-            <h3>Multi-Modal Input</h3>
-            <p>Control via Terminal, Telegram, or even a local API. Your agent is always a message away.</p>
-          </div>
-          <div className="card">
-            <h3>Privacy First</h3>
+            <h3>Privacy First Architecture</h3>
             <p>All logs, memories, and configurations stay on your hardware. You own your data and your agent's identity.</p>
           </div>
         </div>

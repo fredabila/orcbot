@@ -455,6 +455,8 @@ export class WebBrowser {
                 }).filter(Boolean);
             });
 
+            if (!results || results.length === 0) return 'Error: No results found on Bing.';
+
             const formatted = results.map((r: any) => `[${r.title}](${r.link})\n${r.snippet}`).join('\n\n');
             return `Search Results (via Bing):\n\n${formatted}`;
         } catch (e) {

@@ -1,5 +1,7 @@
 import { Telegraf } from 'telegraf';
 import fs from 'fs';
+import path from 'path';
+import os from 'os';
 import { logger } from '../utils/logger';
 import { Agent } from '../core/Agent';
 import { eventBus } from '../core/EventBus';
@@ -29,20 +31,59 @@ export class TelegramChannel implements IChannel {
             ctx.reply(`Status:\n- Short-term Memories: ${memoryCount}\n- Pending Actions: ${queueCount}`);
         });
 
-        this.bot.on('text', async (ctx) => {
-            const text = ctx.message.text;
-            const userId = ctx.message.from.id.toString();
-            const userName = ctx.message.from.first_name;
+        this.bot.on(['text', 'photo', 'document', 'audio', 'voice', 'video'], async (ctx) => {
+            const message = ctx.message as any;
+            const userId = ctx.from.id.toString();
+            const userName = ctx.from.first_name;
             const autoReplyEnabled = this.agent.config.get('telegramAutoReplyEnabled');
 
-            logger.info(`Telegram: Message from ${userName} (${userId}): ${text} | autoReply=${autoReplyEnabled}`);
+            let text = message.text || message.caption || '';
+            let mediaPath = '';
+
+            // Handle Media
+            const photo = message.photo;
+            const doc = message.document;
+            const audio = message.audio || message.voice;
+            const video = message.video;
+
+            if (photo || doc || audio || video) {
+                try {
+                    const fileId = photo ? photo[photo.length - 1].file_id :
+                        doc ? doc.file_id :
+                            audio ? audio.file_id :
+                                video ? video.file_id : '';
+
+                    if (fileId) {
+                        const fileLink = await this.bot.telegram.getFileLink(fileId);
+                        const response = await fetch(fileLink.href);
+                        const buffer = await response.arrayBuffer();
+
+                        const downloadsDir = path.join(os.homedir(), '.orcbot', 'downloads');
+                        if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
+
+                        const ext = photo ? 'jpg' : doc ? (doc.file_name?.split('.').pop() || 'bin') : audio ? 'ogg' : video ? 'mp4' : 'bin';
+                        mediaPath = path.join(downloadsDir, `tg_${message.message_id}.${ext}`);
+                        fs.writeFileSync(mediaPath, Buffer.from(buffer));
+                        logger.info(`Telegram Media saved: ${mediaPath}`);
+                    }
+                } catch (e) {
+                    logger.error(`Failed to download Telegram media: ${e}`);
+                }
+            }
+
+            if (!text && !mediaPath) return;
+
+            logger.info(`Telegram: Message from ${userName} (${userId}): ${text || '[Media]'} | autoReply=${autoReplyEnabled}`);
+
+            const content = text ? `User ${userName} (Telegram ${userId}) said: ${text}` : `User ${userName} (Telegram ${userId}) sent a file: ${path.basename(mediaPath)}`;
 
             // Store user message in memory
             this.agent.memory.saveMemory({
-                id: Math.random().toString(36).substring(7),
+                id: `tg-${message.message_id}`,
                 type: 'short',
-                content: `User ${userName} (Telegram ${userId}) said: ${text}`,
-                timestamp: new Date().toISOString()
+                content: content,
+                timestamp: new Date().toISOString(),
+                metadata: { source: 'telegram', messageId: message.message_id, userId, userName, mediaPath }
             });
 
             if (!autoReplyEnabled) {
@@ -52,12 +93,13 @@ export class TelegramChannel implements IChannel {
 
             // Push task to agent
             await this.agent.pushTask(
-                `Telegram message from ${userName}: "${text}"`,
+                `Telegram message from ${userName}: "${text || '[Media]'}"${mediaPath ? ` (File stored at: ${mediaPath})` : ''}`,
                 10,
                 {
                     source: 'telegram',
                     sourceId: userId,
-                    senderName: userName
+                    senderName: userName,
+                    mediaPath
                 }
             );
 

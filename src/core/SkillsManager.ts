@@ -118,8 +118,22 @@ export class SkillsManager {
                     } else {
                         logger.warn(`SkillsManager: Plugin ${file} loaded but contains no valid skill export.`);
                     }
-                } catch (e) {
+                } catch (e: any) {
                     logger.error(`SkillsManager: Failed to load plugin ${file}: ${e}`);
+
+                    // SELF REPAIR TRIGGER
+                    // If it's a TypeScript compilation error, we can try to auto-repair it.
+                    if (e.message && e.message.includes('TSError') && this.context && this.context.agent) {
+                        const skillName = path.parse(file).name;
+                        logger.warn(`SkillsManager: Triggering self-repair for broken plugin ${skillName}...`);
+
+                        // We push a high priority task to the agent to fix this immediately
+                        this.context.agent.pushTask(
+                            `System Alert: The plugin skill '${skillName}' failed to compile. Error:\n${e.message}\n\nPlease use 'self_repair_skill' to fix it immediately.`,
+                            10,
+                            { source: 'system', error: e.message, skillName }
+                        );
+                    }
                 }
             } else {
                 logger.debug(`SkillsManager: Skipping non-script file: ${file}`);
