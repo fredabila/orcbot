@@ -1,4 +1,5 @@
 import { Telegraf } from 'telegraf';
+import fs from 'fs';
 import { logger } from '../utils/logger';
 import { Agent } from '../core/Agent';
 import { eventBus } from '../core/EventBus';
@@ -132,6 +133,31 @@ export class TelegramChannel implements IChannel {
             await this.bot.telegram.sendChatAction(to, 'typing');
         } catch (error) {
             // Ignore errors for typing indicators as they are non-critical
+        }
+    }
+
+    public async sendFile(to: string, filePath: string, caption?: string): Promise<void> {
+        try {
+            if (!fs.existsSync(filePath)) {
+                throw new Error(`File not found: ${filePath}`);
+            }
+
+            const ext = filePath.split('.').pop()?.toLowerCase();
+
+            if (['png', 'jpg', 'jpeg', 'webp'].includes(ext || '')) {
+                await this.bot.telegram.sendPhoto(to, { source: filePath }, { caption });
+            } else if (['mp4', 'mov'].includes(ext || '')) {
+                await this.bot.telegram.sendVideo(to, { source: filePath }, { caption });
+            } else if (['mp3', 'm4a', 'ogg'].includes(ext || '')) {
+                await this.bot.telegram.sendAudio(to, { source: filePath }, { caption });
+            } else {
+                await this.bot.telegram.sendDocument(to, { source: filePath }, { caption });
+            }
+
+            logger.info(`TelegramChannel: Sent file ${filePath} to ${to}`);
+        } catch (error) {
+            logger.error(`TelegramChannel: Error sending file: ${error}`);
+            throw error;
         }
     }
 }

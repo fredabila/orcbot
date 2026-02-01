@@ -13,8 +13,8 @@ import { IChannel } from './IChannel';
 import { Agent } from '../core/Agent';
 import { logger } from '../utils/logger';
 import { eventBus } from '../core/EventBus';
-import path from 'path';
 import fs from 'fs';
+import path from 'path';
 
 export class WhatsAppChannel implements IChannel {
     public name = 'whatsapp';
@@ -263,5 +263,40 @@ export class WhatsAppChannel implements IChannel {
     public async getHistory(jid: string, count: number = 20): Promise<any[]> {
         // Basic history stub since makeInMemoryStore is currently unavailable
         return [];
+    }
+
+    public async sendFile(to: string, filePath: string, caption?: string): Promise<void> {
+        try {
+            if (!fs.existsSync(filePath)) {
+                throw new Error(`File not found: ${filePath}`);
+            }
+
+            const ext = path.extname(filePath).toLowerCase().substring(1);
+            const fileName = path.basename(filePath);
+            const buffer = fs.readFileSync(filePath);
+
+            let messageContent: any = {};
+
+            if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
+                messageContent = { image: buffer, caption };
+            } else if (['mp4', 'mov'].includes(ext)) {
+                messageContent = { video: buffer, caption };
+            } else if (['mp3', 'm4a', 'ogg'].includes(ext)) {
+                messageContent = { audio: buffer, caption, mimetype: `audio/${ext === 'mp3' ? 'mpeg' : ext}` };
+            } else {
+                messageContent = {
+                    document: buffer,
+                    fileName: fileName,
+                    caption: caption,
+                    mimetype: 'application/octet-stream'
+                };
+            }
+
+            await this.sock.sendMessage(to, messageContent);
+            logger.info(`WhatsAppChannel: Sent file ${filePath} to ${to}`);
+        } catch (error) {
+            logger.error(`WhatsAppChannel: Error sending file: ${error}`);
+            throw error;
+        }
     }
 }
