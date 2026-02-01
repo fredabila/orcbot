@@ -31,9 +31,13 @@ export class Agent {
     public whatsapp: WhatsAppChannel | undefined;
     public browser: WebBrowser;
     private lastActionTime: number;
+    private lastHeartbeatAt: number = 0;
     private agentConfigFile: string;
     private agentIdentity: string = '';
     private isBusy: boolean = false;
+    private lastPluginHealthCheckAt: number = 0;
+    private currentActionId: string | null = null;
+    private currentActionStartAt: number | null = null;
 
     constructor() {
         this.config = new ConfigManager();
@@ -47,7 +51,11 @@ export class Agent {
         this.llm = new MultiLLM({
             apiKey: this.config.get('openaiApiKey'),
             googleApiKey: this.config.get('googleApiKey'),
-            modelName: this.config.get('modelName')
+            modelName: this.config.get('modelName'),
+            bedrockRegion: this.config.get('bedrockRegion'),
+            bedrockAccessKeyId: this.config.get('bedrockAccessKeyId'),
+            bedrockSecretAccessKey: this.config.get('bedrockSecretAccessKey'),
+            bedrockSessionToken: this.config.get('bedrockSessionToken')
         });
         this.skills = new SkillsManager(
             this.config.get('skillsPath') || './SKILLS.md',
@@ -58,17 +66,22 @@ export class Agent {
             this.llm,
             this.skills,
             this.config.get('journalPath'),
-            this.config.get('learningPath')
+            this.config.get('learningPath'),
+            this.config
         );
         this.simulationEngine = new SimulationEngine(this.llm);
         this.actionQueue = new ActionQueue(this.config.get('actionQueuePath') || './actions.json');
         this.scheduler = new Scheduler();
         this.browser = new WebBrowser(
             this.config.get('serperApiKey'),
-            this.config.get('captchaApiKey')
+            this.config.get('captchaApiKey'),
+            this.config.get('braveSearchApiKey'),
+            this.config.get('searxngUrl'),
+            this.config.get('searchProviderOrder')
         );
 
         this.loadLastActionTime();
+        this.loadLastHeartbeatTime();
 
         // Inject Context into SkillsManager for Plugins
         this.skills.setContext({
@@ -267,8 +280,12 @@ export class Agent {
                 if (!text) return 'Error: Missing text content.';
 
                 if (this.whatsapp) {
-                    await this.whatsapp.postStatus(text);
-                    return 'WhatsApp status update posted successfully';
+                    try {
+                        await this.whatsapp.postStatus(text);
+                        return 'WhatsApp status update posted successfully';
+                    } catch (e) {
+                        return `Error posting WhatsApp status: ${e}`;
+                    }
                 }
                 return 'WhatsApp channel not available';
             }
@@ -894,9 +911,83 @@ Be thorough and academic.`;
         this.decisionEngine.setAgentIdentity(this.agentIdentity);
     }
 
+    private isTrivialSocialIntent(text: string): boolean {
+        const normalized = (text || '').toLowerCase();
+        const quotedMatch = normalized.match(/"([^"]+)"/);
+        const payload = (quotedMatch?.[1] || normalized).trim();
+
+        if (payload.length === 0) return false;
+
+        const patterns = [
+            /^hi\b/, /^hello\b/, /^hey\b/, /^yo\b/,
+            /\bgood (morning|afternoon|evening)\b/,
+            /\bhow are you\b/,
+            /\bhow's it going\b/,
+            /\byou there\b/,
+            /\bare you there\b/,
+            /\bare you ignoring me\b/,
+            /\bp(i|y)ng\b/,
+            /^thanks\b/, /^thank you\b/
+        ];
+
+        return payload.length <= 80 && patterns.some(p => p.test(payload));
+    }
+
+    private getPluginHealthCheckIntervalMs(): number {
+        const minutes = this.config.get('pluginHealthCheckIntervalMinutes') || 15;
+        return Math.max(1, minutes) * 60 * 1000;
+    }
+
+    private async runPluginHealthCheck(trigger: 'startup' | 'tick') {
+        const now = Date.now();
+        if (now - this.lastPluginHealthCheckAt < this.getPluginHealthCheckIntervalMs()) return;
+        this.lastPluginHealthCheckAt = now;
+
+        const { healthy, issues } = await this.skills.checkPluginsHealth();
+        if (healthy.length > 0) {
+            logger.info(`Agent: Plugin health check (${trigger}) healthy: ${healthy.join(', ')}`);
+        }
+
+        if (issues.length === 0) return;
+
+        for (const issue of issues) {
+            logger.warn(`Agent: Plugin health issue detected (${issue.skillName}): ${issue.error}`);
+            this.memory.saveMemory({
+                id: `plugin-health-${issue.skillName}-${Date.now()}`,
+                type: 'short',
+                content: `Plugin health issue: ${issue.skillName} at ${issue.pluginPath} - ${issue.error}`,
+                metadata: { tool: 'plugin_health_check', plugin: issue.skillName, path: issue.pluginPath }
+            });
+
+            let repaired = false;
+            try {
+                await this.skills.executeSkill('self_repair_skill', {
+                    skillName: issue.skillName,
+                    errorMessage: issue.error,
+                    pluginPath: issue.pluginPath,
+                    trigger
+                });
+                repaired = true;
+                logger.info(`Agent: self_repair_skill executed for ${issue.skillName}`);
+            } catch (e) {
+                logger.warn(`Agent: self_repair_skill unavailable or failed for ${issue.skillName}: ${e}`);
+            }
+
+            if (!repaired) {
+                await this.pushTask(
+                    `System Alert: Plugin health check failed for '${issue.skillName}'. Error:\n${issue.error}\n\nPlease use 'self_repair_skill' to fix it immediately.`,
+                    10,
+                    { source: 'system', error: issue.error, skillName: issue.skillName },
+                    'autonomy'
+                );
+            }
+        }
+    }
+
     private setupEventListeners() {
         eventBus.on('scheduler:tick', async () => {
             await this.processNextAction();
+            await this.runPluginHealthCheck('tick');
             this.checkHeartbeat();
         });
 
@@ -906,15 +997,23 @@ Be thorough and academic.`;
     }
 
     private checkHeartbeat() {
+        this.detectStalledAction();
+        this.recoverStaleInProgressActions();
+
+        const autonomyEnabled = this.config.get('autonomyEnabled');
         const intervalMinutes = this.config.get('autonomyInterval') || 0;
-        if (intervalMinutes <= 0) return;
+        if (!autonomyEnabled || intervalMinutes <= 0) return;
 
         // Check for ACTIVE tasks only (pending or in-progress)
         const activeTasks = this.actionQueue.getQueue().filter(a => a.status === 'pending' || a.status === 'in-progress');
 
         const idleTimeMs = Date.now() - this.lastActionTime;
-        if (idleTimeMs > intervalMinutes * 60 * 1000 && activeTasks.length === 0) {
-            logger.info(`Agent: Heartbeat trigger - Agent is idle for ${Math.floor(idleTimeMs / 60000)}m. Initiating proactive autonomy.`);
+        const heartbeatDue = (Date.now() - this.lastHeartbeatAt) > intervalMinutes * 60 * 1000;
+        const backlogLimit = this.config.get('autonomyBacklogLimit') || 3;
+        const hasBacklogSpace = activeTasks.length < backlogLimit;
+
+        if (heartbeatDue && hasBacklogSpace) {
+            logger.info(`Agent: Heartbeat trigger - Agent idle for ${Math.floor(idleTimeMs / 60000)}m. Initiating proactive autonomy.`);
 
             const proactivePrompt = `
 SYSTEM HEARTBEAT (IDLE AUTONOMY MODE):
@@ -931,7 +1030,9 @@ RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. we
 `;
 
             this.pushTask(proactivePrompt, 2, {}, 'autonomy');
-            this.updateLastActionTime(); // Reset timer
+            this.updateLastHeartbeatTime();
+        } else if (heartbeatDue && !hasBacklogSpace) {
+            logger.info(`Agent: Heartbeat skipped due to backlog (${activeTasks.length}/${backlogLimit}).`);
         }
     }
 
@@ -942,6 +1043,16 @@ RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. we
             fs.writeFileSync(heartbeatPath, this.lastActionTime.toString());
         } catch (e) {
             logger.error(`Failed to save heartbeat: ${e}`);
+        }
+    }
+
+    private updateLastHeartbeatTime() {
+        this.lastHeartbeatAt = Date.now();
+        const heartbeatPath = path.join(path.dirname(this.config.get('actionQueuePath')), 'last_heartbeat_autonomy');
+        try {
+            fs.writeFileSync(heartbeatPath, this.lastHeartbeatAt.toString());
+        } catch (e) {
+            logger.error(`Failed to save heartbeat autonomy time: ${e}`);
         }
     }
 
@@ -957,6 +1068,46 @@ RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. we
             }
         } else {
             this.lastActionTime = Date.now();
+        }
+    }
+
+    private loadLastHeartbeatTime() {
+        const heartbeatPath = path.join(path.dirname(this.config.get('actionQueuePath')), 'last_heartbeat_autonomy');
+        if (fs.existsSync(heartbeatPath)) {
+            try {
+                const data = fs.readFileSync(heartbeatPath, 'utf-8');
+                this.lastHeartbeatAt = parseInt(data) || Date.now();
+            } catch (e) {
+                this.lastHeartbeatAt = Date.now();
+            }
+        } else {
+            this.lastHeartbeatAt = Date.now();
+        }
+    }
+
+    private detectStalledAction() {
+        if (!this.isBusy || !this.currentActionStartAt || !this.currentActionId) return;
+        const maxMinutes = this.config.get('maxActionRunMinutes') || 10;
+        const elapsedMs = Date.now() - this.currentActionStartAt;
+        if (elapsedMs <= maxMinutes * 60 * 1000) return;
+
+        logger.error(`Agent: Action ${this.currentActionId} stalled for ${Math.floor(elapsedMs / 60000)}m. Forcing failure.`);
+        this.actionQueue.updateStatus(this.currentActionId, 'failed');
+        this.isBusy = false;
+        this.currentActionId = null;
+        this.currentActionStartAt = null;
+    }
+
+    private recoverStaleInProgressActions() {
+        const maxMinutes = this.config.get('maxStaleActionMinutes') || 30;
+        const threshold = Date.now() - maxMinutes * 60 * 1000;
+        const queue = this.actionQueue.getQueue();
+        const stale = queue.filter(a => a.status === 'in-progress' && new Date(a.updatedAt || a.timestamp).getTime() < threshold);
+        if (stale.length === 0) return;
+
+        for (const action of stale) {
+            logger.warn(`Agent: Found stale in-progress action ${action.id}. Marking failed.`);
+            this.actionQueue.updateStatus(action.id, 'failed');
         }
     }
 
@@ -1015,6 +1166,7 @@ RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. we
         }
 
         await Promise.all(startupPromises);
+        await this.runPluginHealthCheck('startup');
         logger.info('Agent: All channels initialized');
     }
 
@@ -1050,6 +1202,8 @@ RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. we
         if (!action) return;
 
         this.isBusy = true;
+        this.currentActionId = action.id;
+        this.currentActionStartAt = Date.now();
         try {
             this.updateLastActionTime();
             this.actionQueue.updateStatus(action.id, 'in-progress');
@@ -1066,9 +1220,13 @@ RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. we
             // Run a quick mental simulation to plan the steps (executed once per action start)
             const recentHist = this.memory.getRecentContext();
             const contextStr = recentHist.map(c => `[${c.type}] ${c.content}`).join('\n');
-            const executionPlan = await this.simulationEngine.simulate(action.payload.description, contextStr);
+            const isSocialFastPath = this.isTrivialSocialIntent(action.payload.description || '');
+            const executionPlan = isSocialFastPath
+                ? 'Respond once with a brief, friendly reply and terminate immediately. Do not perform research or multi-step actions.'
+                : await this.simulationEngine.simulate(action.payload.description, contextStr);
 
-            const MAX_STEPS = 30;
+            const MAX_STEPS = isSocialFastPath ? 1 : (this.config.get('maxStepsPerAction') || 30);
+            const MAX_MESSAGES = isSocialFastPath ? 1 : (this.config.get('maxMessagesPerAction') || 3);
             let currentStep = 0;
             let messagesSent = 0;
             let lastMessageContent = '';
@@ -1097,6 +1255,11 @@ RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. we
                 stepsSinceLastMessage++;
                 logger.info(`Agent: Step ${currentStep} for action ${action.id}`);
 
+                if (messagesSent >= MAX_MESSAGES) {
+                    logger.warn(`Agent: Message budget reached (${messagesSent}/${MAX_MESSAGES}). Forcing termination for action ${action.id}.`);
+                    break;
+                }
+
                 if (this.telegram && action.payload.source === 'telegram') {
                     await this.telegram.sendTypingIndicator(action.payload.sourceId);
                 }
@@ -1122,6 +1285,16 @@ RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. we
 
                 if (decision.reasoning) {
                     logger.info(`Agent Reasoning: ${decision.reasoning}`);
+                }
+
+                const pipelineNotes = decision.metadata?.pipelineNotes;
+                if (pipelineNotes && (pipelineNotes.warnings?.length || pipelineNotes.dropped?.length)) {
+                    this.memory.saveMemory({
+                        id: `${action.id}-step-${currentStep}-pipeline-notes`,
+                        type: 'short',
+                        content: `Pipeline notes: ${JSON.stringify(pipelineNotes)}`,
+                        metadata: { tool: 'pipeline', ...pipelineNotes }
+                    });
                 }
 
                 if (decision.verification) {
@@ -1284,7 +1457,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             id: `${action.id}-step-${currentStep}-${toolCall.name}`,
                             type: 'short',
                             content: observation,
-                            metadata: { tool: toolCall.name, result: toolResult }
+                            metadata: { tool: toolCall.name, result: toolResult, input: toolCall.metadata }
                         });
 
                         // HARD BREAK after scheduling to prevent loops
@@ -1323,6 +1496,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
             }
         } finally {
             this.isBusy = false;
+            this.currentActionId = null;
+            this.currentActionStartAt = null;
 
             // BACKGROUND TASK: Memory Consolidation
             // We do this in the background after the agent is marked as not busy

@@ -9,10 +9,21 @@ export interface AgentConfig {
     telegramToken?: string;
     openaiApiKey?: string;
     googleApiKey?: string;
+    braveSearchApiKey?: string;
+    searxngUrl?: string;
+    searchProviderOrder?: string[];
     serperApiKey?: string;
     captchaApiKey?: string;
     modelName?: string;
+    bedrockRegion?: string;
+    bedrockAccessKeyId?: string;
+    bedrockSecretAccessKey?: string;
+    bedrockSessionToken?: string;
+    autonomyEnabled?: boolean;
     autonomyInterval?: number; // In minutes, default 0 (disabled)
+    autonomyBacklogLimit?: number;
+    maxActionRunMinutes?: number;
+    maxStaleActionMinutes?: number;
     memoryPath?: string;
     skillsPath?: string;
     userProfilePath?: string;
@@ -29,6 +40,9 @@ export interface AgentConfig {
     whatsappContextProfilingEnabled?: boolean;
     whatsappOwnerJID?: string;
     telegramAutoReplyEnabled?: boolean;
+    maxMessagesPerAction?: number;
+    maxStepsPerAction?: number;
+    messageDedupWindow?: number;
 }
 
 export class ConfigManager {
@@ -110,9 +124,15 @@ export class ConfigManager {
         const envConfig: Partial<AgentConfig> = {
             openaiApiKey: process.env.OPENAI_API_KEY,
             googleApiKey: process.env.GOOGLE_API_KEY,
+            braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY,
+            searxngUrl: process.env.SEARXNG_URL,
             serperApiKey: process.env.SERPER_API_KEY,
             captchaApiKey: process.env.CAPTCHA_API_KEY,
             telegramToken: process.env.TELEGRAM_TOKEN,
+            bedrockRegion: process.env.BEDROCK_REGION || process.env.AWS_REGION,
+            bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
+            bedrockSecretAccessKey: process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY,
+            bedrockSessionToken: process.env.BEDROCK_SESSION_TOKEN || process.env.AWS_SESSION_TOKEN,
             // @ts-ignore - Dynamic key support
             MOLTBOOK_API_KEY: process.env.MOLTBOOK_API_KEY
         };
@@ -136,7 +156,12 @@ export class ConfigManager {
         return {
             agentName: 'OrcBot',
             modelName: 'gpt-4o',
+            searchProviderOrder: ['serper', 'brave', 'searxng', 'google', 'bing', 'duckduckgo'],
+            autonomyEnabled: true,
             autonomyInterval: 15,
+            autonomyBacklogLimit: 3,
+            maxActionRunMinutes: 10,
+            maxStaleActionMinutes: 30,
             memoryPath: path.join(this.dataHome, 'memory.json'),
             skillsPath: path.join(this.dataHome, 'SKILLS.md'),
             userProfilePath: path.join(this.dataHome, 'USER.md'),
@@ -152,7 +177,14 @@ export class ConfigManager {
             whatsappAutoReactEnabled: false,
             whatsappContextProfilingEnabled: false,
             whatsappOwnerJID: undefined,
-            telegramAutoReplyEnabled: false
+            telegramAutoReplyEnabled: false,
+            maxMessagesPerAction: 3,
+            maxStepsPerAction: 30,
+            messageDedupWindow: 10,
+            bedrockRegion: process.env.BEDROCK_REGION || process.env.AWS_REGION,
+            bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
+            bedrockSecretAccessKey: process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY,
+            bedrockSessionToken: process.env.BEDROCK_SESSION_TOKEN || process.env.AWS_SESSION_TOKEN
         };
     }
 

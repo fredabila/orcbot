@@ -11,6 +11,7 @@ export interface Action {
     lane?: 'user' | 'autonomy';
     status: 'pending' | 'in-progress' | 'completed' | 'failed';
     timestamp: string;
+    updatedAt?: string;
 }
 
 export class ActionQueue {
@@ -68,6 +69,7 @@ export class ActionQueue {
         const action = queue.find(a => a.id === id);
         if (action) {
             action.status = status;
+            action.updatedAt = new Date().toISOString();
             this.saveQueue(queue);
             logger.info(`Action ${id} status updated to ${status} (persistent)`);
         }

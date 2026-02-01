@@ -182,6 +182,9 @@ async function showToolingMenu() {
             message: 'Select Tool to Configure:',
             choices: [
                 { name: 'Serper (Web Search API)', value: 'serper' },
+                { name: 'Brave Search (Web Search API)', value: 'brave' },
+                { name: 'SearxNG (Self-hosted Search)', value: 'searxng' },
+                { name: 'Search Provider Order', value: 'searchOrder' },
                 { name: '2Captcha (CAPTCHA Solver)', value: 'captcha' },
                 { name: 'Back', value: 'back' }
             ]
@@ -196,6 +199,31 @@ async function showToolingMenu() {
             { type: 'input', name: 'key', message: `Enter Serper API Key (current: ${apiKey.substring(0, 8)}...):` }
         ]);
         if (key) agent.config.set('serperApiKey', key);
+    } else if (tool === 'brave') {
+        const apiKey = agent.config.get('braveSearchApiKey') || 'Not Set';
+        const { key } = await inquirer.prompt([
+            { type: 'input', name: 'key', message: `Enter Brave Search API Key (current: ${apiKey.substring(0, 8)}...):` }
+        ]);
+        if (key) agent.config.set('braveSearchApiKey', key);
+    } else if (tool === 'searxng') {
+        const currentUrl = agent.config.get('searxngUrl') || 'Not Set';
+        const { url } = await inquirer.prompt([
+            { type: 'input', name: 'url', message: `Enter SearxNG Base URL (current: ${currentUrl}):` }
+        ]);
+        if (url) agent.config.set('searxngUrl', url);
+    } else if (tool === 'searchOrder') {
+        const currentOrder = agent.config.get('searchProviderOrder') || ['serper', 'brave', 'searxng', 'google', 'bing', 'duckduckgo'];
+        const { order } = await inquirer.prompt([
+            {
+                type: 'input',
+                name: 'order',
+                message: `Enter provider order (comma-separated) (current: ${currentOrder.join(', ')}):`
+            }
+        ]);
+        if (order) {
+            const parsed = order.split(',').map((s: string) => s.trim()).filter(Boolean);
+            if (parsed.length > 0) agent.config.set('searchProviderOrder', parsed);
+        }
     } else if (tool === 'captcha') {
         const apiKey = agent.config.get('captchaApiKey') || 'Not Set';
         const { key } = await inquirer.prompt([
@@ -218,6 +246,7 @@ async function showModelsMenu() {
             choices: [
                 { name: 'OpenAI (GPT-4, etc.)', value: 'openai' },
                 { name: 'Google (Gemini Pro/Flash)', value: 'google' },
+                { name: 'AWS Bedrock (Claude/other foundation models)', value: 'bedrock' },
                 { name: 'Back', value: 'back' }
             ]
         }
@@ -229,6 +258,8 @@ async function showModelsMenu() {
         await showOpenAIConfig();
     } else if (provider === 'google') {
         await showGeminiConfig();
+    } else if (provider === 'bedrock') {
+        await showBedrockConfig();
     }
 }
 
@@ -294,6 +325,49 @@ async function showGeminiConfig() {
     console.log('Gemini settings updated!');
     await waitKeyPress();
     return showGeminiConfig();
+}
+
+async function showBedrockConfig() {
+    const currentModel = agent.config.get('modelName');
+    const region = agent.config.get('bedrockRegion') || 'Not Set';
+    const accessKey = agent.config.get('bedrockAccessKeyId') || 'Not Set';
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: `AWS Bedrock Settings (Model: ${currentModel}):`,
+            choices: [
+                { name: `Set Region (current: ${region})`, value: 'region' },
+                { name: accessKey === 'Not Set' ? 'Set Access Keys' : 'Update Access Keys', value: 'keys' },
+                { name: 'Set Model Name (e.g., bedrock/anthropic.claude-3-sonnet-20240229-v1:0)', value: 'model' },
+                { name: 'Back', value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showModelsMenu();
+
+    if (action === 'region') {
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter AWS Region for Bedrock (e.g., us-east-1):' }]);
+        agent.config.set('bedrockRegion', val);
+    } else if (action === 'keys') {
+        const answers = await inquirer.prompt([
+            { type: 'input', name: 'accessKeyId', message: 'Access Key ID:', mask: '*' },
+            { type: 'input', name: 'secretAccessKey', message: 'Secret Access Key:', mask: '*' },
+            { type: 'input', name: 'sessionToken', message: 'Session Token (optional):', mask: '*' }
+        ]);
+        if (answers.accessKeyId) agent.config.set('bedrockAccessKeyId', answers.accessKeyId);
+        if (answers.secretAccessKey) agent.config.set('bedrockSecretAccessKey', answers.secretAccessKey);
+        if (answers.sessionToken) agent.config.set('bedrockSessionToken', answers.sessionToken);
+    } else if (action === 'model') {
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter Bedrock Model ID:', default: currentModel || 'bedrock/anthropic.claude-3-sonnet-20240229-v1:0' }]);
+        agent.config.set('modelName', val);
+    }
+
+    console.log('Bedrock settings updated!');
+    await waitKeyPress();
+    return showBedrockConfig();
 }
 
 async function showPushTaskMenu() {
@@ -479,7 +553,7 @@ async function showWhatsAppConfig() {
 async function showConfigMenu() {
     const config = agent.config.getAll();
     // Ensure we show explicit keys relative to core config
-    const keys = ['agentName', 'openaiApiKey', 'googleApiKey', 'serperApiKey', 'captchaApiKey', 'modelName', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'whatsappAutoReplyEnabled', 'memoryPath'] as const;
+    const keys = ['agentName', 'openaiApiKey', 'googleApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl', 'searchProviderOrder', 'captchaApiKey', 'modelName', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'whatsappAutoReplyEnabled', 'memoryPath'] as const;
 
     const choices: { name: string, value: string }[] = keys.map(key => ({
         name: `${key}: ${config[key as keyof typeof config] || '(empty)'}`,
@@ -517,7 +591,12 @@ async function showConfigMenu() {
         { type: 'input', name: 'value', message: `Enter new value for ${key}:` },
     ]);
 
-    agent.config.set(key as any, value);
+    if (key === 'searchProviderOrder') {
+        const parsed = (value || '').split(',').map((s: string) => s.trim()).filter(Boolean);
+        agent.config.set(key as any, parsed);
+    } else {
+        agent.config.set(key as any, value);
+    }
     console.log('Configuration updated!');
     await waitKeyPress();
     await showConfigMenu();

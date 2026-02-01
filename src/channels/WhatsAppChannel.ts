@@ -24,11 +24,26 @@ export class WhatsAppChannel implements IChannel {
     private sock: any;
     private sessionPath: string;
     private store: any;
+    private contactJids: Set<string> = new Set();
 
     constructor(agent: Agent) {
         this.agent = agent;
         this.sessionPath = agent.config.get('whatsappSessionPath') || './whatsapp-session';
         this.store = null; // Removed makeInMemoryStore due to library issues
+    }
+
+    private recordContactJid(jid?: string) {
+        if (!jid) return;
+        if (jid === 'status@broadcast') return;
+        if (!jid.endsWith('@s.whatsapp.net')) return;
+        this.contactJids.add(jid);
+    }
+
+    private recordContacts(contacts: Array<{ id?: string }>) {
+        if (!contacts || contacts.length === 0) return;
+        for (const contact of contacts) {
+            this.recordContactJid(contact.id);
+        }
     }
 
     public async start(): Promise<void> {
@@ -62,6 +77,17 @@ export class WhatsAppChannel implements IChannel {
 
         this.sock.ev.on('creds.update', saveCreds);
         this.store?.bind(this.sock.ev);
+
+        this.sock.ev.on('contacts.upsert', (contacts: any[]) => {
+            this.recordContacts(contacts || []);
+            logger.info(`WhatsApp: Contacts upserted (${contacts?.length || 0})`);
+        });
+
+        this.sock.ev.on('contacts.set', (payload: any) => {
+            const contacts = payload?.contacts || [];
+            this.recordContacts(contacts);
+            logger.info(`WhatsApp: Contacts set (${contacts.length})`);
+        });
 
         this.sock.ev.on('connection.update', (update: any) => {
             const { connection, lastDisconnect, qr } = update;
@@ -138,12 +164,14 @@ export class WhatsAppChannel implements IChannel {
                         }
 
                         // Skip group chats for now unless mentioned or requested (simpler for now)
+                        if (!isGroup) this.recordContactJid(senderId);
                         if (isGroup) return;
 
                         // Special handling for Status Updates
                         if (isStatus && text) {
                             const participant = msg.key.participant || msg.participant;
                             logger.info(`WhatsApp Status: ${participant} posted: ${text}`);
+                            this.recordContactJid(participant);
 
                             // Record it in memory so the agent knows.
                             this.agent.memory.saveMemory({
@@ -268,17 +296,27 @@ export class WhatsAppChannel implements IChannel {
      */
     public async postStatus(text: string): Promise<void> {
         try {
+            const recipients = Array.from(this.contactJids);
+            if (recipients.length === 0) {
+                throw new Error('No synced contacts available for status broadcast yet. Wait for contacts to sync, then try again.');
+            }
             // For text status, we usually need specific metadata for it to appear correctly
             await this.sock.sendMessage('status@broadcast',
-                { text },
                 {
+                    text,
                     backgroundColor: '#075E54', // WhatsApp Green
-                    font: 1
+                    font: 1,
+                    statusJidList: recipients,
+                    broadcast: true
+                },
+                {
+                    statusJidList: recipients
                 }
             );
-            logger.info('WhatsAppChannel: Posted status update');
+            logger.info(`WhatsAppChannel: Posted status update to ${recipients.length} contacts`);
         } catch (error) {
             logger.error(`WhatsAppChannel: Error posting status: ${error}`);
+            throw error;
         }
     }
 

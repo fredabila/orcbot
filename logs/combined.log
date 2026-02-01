@@ -40,3 +40,6 @@
 2026-01-31 23:20:54 [[32minfo[39m]: Skill registered: update_agent_identity
 2026-01-31 23:20:54 [[32minfo[39m]: Skill registered: update_journal
 2026-01-31 23:20:54 [[32minfo[39m]: Skill registered: update_learning
+2026-02-01 21:06:31 [[32minfo[39m]: DecisionPipeline: No execution plan provided; using cautious mode; Suppressed send: message cap 2 reached | dropped=dedup:send_telegram,limit:send_whatsapp
+2026-02-01 21:06:31 [[32minfo[39m]: DecisionPipeline: Terminated due to max step budget | dropped=
+2026-02-01 21:06:31 [[32minfo[39m]: DecisionPipeline: No execution plan provided; using cautious mode; Suppressed send: duplicate content for channel/user | dropped=dupe:send_whatsapp

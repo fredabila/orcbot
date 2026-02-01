@@ -9,6 +9,26 @@ OrcBot is organized into modular core layers:
 - `src/cli`: CLI commands and the Setup Wizard.
 - `apps/www`: The landing page and web-based dashboard.
 
+---
+
+## 🧪 Local Development
+
+```bash
+npm install
+npm run build
+npm run dev
+```
+
+Frontend (landing page):
+
+```bash
+cd apps/www
+npm install
+npm run dev
+```
+
+---
+
 ## 🤝 Pull Request Process
 
 We encourage contributions! To ensure stability, please follow this flow:
@@ -17,7 +37,18 @@ We encourage contributions! To ensure stability, please follow this flow:
 2.  **Lint & Build**: Mandatory verification via `npm run build`. We use strict TypeScript rules.
 3.  **Atomic Commits**: Use conventional commits (`feat:`, `fix:`, `docs:`, `refactor:`).
 4.  **Documentation**: If you add a skill, update `SKILLS.md` and the appropriate registry in `Agent.ts`.
-5.  **Test**: Verified your changes in the autonomous loop using `orcbot run`.
+5.  **Test**: Verify changes using `orcbot run` and the TUI (`orcbot ui`).
+6.  **Frontend**: If you change the web UI, verify `apps/www` renders without console errors.
+
+---
+
+## ✅ Tests
+
+```bash
+npm test
+```
+
+---
 
 ## 🛠 How to Add a New Skill
 
@@ -49,6 +80,14 @@ The LLM processes the return value of your handler.
 
 ---
 
+## 🔒 Security & Secrets
+
+- Never hardcode API keys or tokens.
+- Use `ConfigManager.get(...)` and environment variables.
+- Avoid logging secrets in skill output or channel messages.
+
+---
+
 ## 📡 Adding a New Channel
 Channels are providers like Discord, Slack, or WhatsApp.
 1. Implement the `IChannel` interface (`src/channels/IChannel.ts`).
@@ -57,10 +96,27 @@ Channels are providers like Discord, Slack, or WhatsApp.
 
 ---
 
+## 🧩 Plugin Guidelines
+
+- Export `{ name, description, usage, handler }` from your plugin.
+- Keep plugins CommonJS-friendly for `require`.
+- Add a header comment `// @source: <url>` if generated from a spec.
+- Prefer resilient handlers: validate inputs and return helpful errors.
+
+---
+
 ## 🧠 Core Improvements
 - **MultiLLM**: Add new providers (Anthropic, Local LLMs) in `src/core/MultiLLM.ts`.
 - **DecisionEngine**: Refine the system prompt or reasoning logic.
 - **SimulationEngine**: Improve planning strategies and contingencies.
+
+---
+
+## 📘 Documentation Expectations
+
+- Update README for user-facing changes.
+- Update SKILLS.md if new skills are added or existing ones change.
+- Keep examples accurate and runnable.
 
 ---
 

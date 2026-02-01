@@ -45,6 +45,29 @@ export async function runSetup() {
         },
         {
             type: 'input',
+            name: 'bedrockRegion',
+            message: 'AWS Bedrock Region (optional, e.g., us-east-1):'
+        },
+        {
+            type: 'input',
+            name: 'bedrockAccessKeyId',
+            message: 'Bedrock Access Key ID (optional):',
+            mask: '*'
+        },
+        {
+            type: 'input',
+            name: 'bedrockSecretAccessKey',
+            message: 'Bedrock Secret Access Key (optional):',
+            mask: '*'
+        },
+        {
+            type: 'input',
+            name: 'bedrockSessionToken',
+            message: 'Bedrock Session Token (optional):',
+            mask: '*'
+        },
+        {
+            type: 'input',
             name: 'serperApiKey',
             message: 'Serper.dev API Key (for web search):',
             mask: '*'
@@ -86,7 +109,8 @@ export async function runSetup() {
         learningPath: path.join(dataHome, 'LEARNING.md'),
         agentIdentityPath: path.join(dataHome, '.AI.md'),
         whatsappEnabled: answers.whatsappEnabled,
-        whatsappAutoReplyEnabled: answers.whatsappAutoReplyEnabled
+        whatsappAutoReplyEnabled: answers.whatsappAutoReplyEnabled,
+        bedrockRegion: answers.bedrockRegion || undefined
     };
 
     fs.writeFileSync(configPath, yaml.stringify(newConfig));
@@ -96,6 +120,10 @@ export async function runSetup() {
     let envContent = '';
     if (answers.openaiApiKey) envContent += `OPENAI_API_KEY=${answers.openaiApiKey}\n`;
     if (answers.googleApiKey) envContent += `GOOGLE_API_KEY=${answers.googleApiKey}\n`;
+    if (answers.bedrockRegion) envContent += `BEDROCK_REGION=${answers.bedrockRegion}\n`;
+    if (answers.bedrockAccessKeyId) envContent += `BEDROCK_ACCESS_KEY_ID=${answers.bedrockAccessKeyId}\n`;
+    if (answers.bedrockSecretAccessKey) envContent += `BEDROCK_SECRET_ACCESS_KEY=${answers.bedrockSecretAccessKey}\n`;
+    if (answers.bedrockSessionToken) envContent += `BEDROCK_SESSION_TOKEN=${answers.bedrockSessionToken}\n`;
     if (answers.serperApiKey) envContent += `SERPER_API_KEY=${answers.serperApiKey}\n`;
     if (answers.telegramToken) envContent += `TELEGRAM_TOKEN=${answers.telegramToken}\n`;
 

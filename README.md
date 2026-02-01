@@ -12,7 +12,7 @@
 
 **Autonomous. Strategic. Multi-Modal. Self-Healing.**
 
-[Features](#features) • [Installation](#installation) • [Usage](#usage) • [Skills Registry](#-high-power-skills) • [Configuration](#configuration)
+[Features](#features) • [Installation](#installation) • [Quickstart](#quickstart) • [Usage](#-usage) • [Configuration](#configuration) • [Autonomy](#autonomy--heartbeat) • [Skills](#-high-power-skills) • [Plugins](#-dynamic-plugin-system) • [Security](#security--privacy)
 
 </div>
 
@@ -35,7 +35,37 @@ OrcBot is a next-generation **autonomous reasoning agent**. In v2.0, we've moved
 
 ---
 
-### Installation
+## Features
+
+OrcBot is built around **strategic autonomy**: it plans, executes, and repairs itself while staying grounded in your local data and configuration.
+
+---
+
+## Architecture
+
+The system is designed to run locally while integrating with external channels and providers. This diagram shows the core infrastructure flow:
+
+```mermaid
+flowchart LR
+	User((User)) -->|Telegram / WhatsApp / CLI| Channels
+	Channels --> Agent[Agent Core]
+	Agent --> Decision[DecisionEngine]
+	Agent --> Simulation[SimulationEngine]
+	Agent --> Skills[SkillsManager]
+	Agent --> Memory[(Memory + Profiles)]
+	Agent --> Scheduler[Heartbeat Scheduler]
+	Skills --> Web[WebBrowser + Search Providers]
+	Skills --> Plugins[Dynamic Plugins]
+	Web -->|Serper / Brave / SearxNG / Google / Bing / DDG| SearchAPIs[(Search APIs)]
+	Decision --> LLM[MultiLLM]
+	LLM --> Providers[(OpenAI / Gemini / Bedrock)]
+	Scheduler --> Queue[(Action Queue)]
+	Queue --> Agent
+```
+
+---
+
+## Installation
 
 You can get started instantly with our one-line installer:
 
@@ -54,6 +84,21 @@ Alternatively, clone the repo and run:
 npm install
 npm run build
 npm run setup
+```
+
+---
+
+## Quickstart
+
+```bash
+# Start the autonomous loop
+orcbot run
+
+# Open the TUI dashboard
+orcbot ui
+
+# Push a task immediately
+orcbot push "Summarize today’s AI news and save to my journal" -p 10
 ```
 
 ---
@@ -94,6 +139,41 @@ orcbot push "Find the current price of BTC and message it to Frederick on Telegr
 
 ---
 
+## Configuration
+
+OrcBot reads configuration in this order (highest priority first):
+
+1. Environment variables
+2. Local `./orcbot.config.yaml`
+3. Home `~/orcbot.config.yaml`
+4. Global `~/.orcbot/orcbot.config.yaml`
+
+Key settings (excerpt):
+
+- `modelName`: LLM routing (OpenAI, Gemini, or Bedrock)
+- `telegramToken` / `whatsappEnabled`
+- `maxStepsPerAction`, `maxMessagesPerAction`, `messageDedupWindow`
+- `autonomyEnabled`, `autonomyInterval`, `autonomyBacklogLimit`
+
+You can manage settings via the TUI (`orcbot ui`) or by editing your config file directly.
+
+---
+
+## Autonomy & Heartbeat
+
+OrcBot uses a **heartbeat scheduler** to work even when you’re away:
+
+- **Idle triggers** generate proactive tasks
+- **Backlog limits** prevent runaway queues
+- **Stall detection** fails stuck actions and recovers
+- **Stale action recovery** frees the queue if work gets stuck
+
+Heartbeat defaults are safe for long-running sessions, but can be tuned for aggressive autonomy.
+
+---
+
+---
+
 ## 🧠 The Reasoning Loop (ReAct)
 
 OrcBot doesn't just give one answer. It works iteratively:
@@ -102,6 +182,23 @@ OrcBot doesn't just give one answer. It works iteratively:
 3.  **OBSERVATION**: Receives news results.
 4.  **RE-REASON**: "Now I should update the user's profile and then reply."
 5.  **FINALIZE**: Completes background tasks and then messages the user.
+
+---
+
+## 🔌 Dynamic Plugin System
+
+OrcBot supports hot-loadable skills via TypeScript or JavaScript plugins in `~/.orcbot/plugins` (or `./plugins`).
+
+- **Self-Repair**: If a plugin fails, OrcBot will attempt `self_repair_skill` automatically.
+- **Zero restarts**: Plugins are hot-loaded at runtime.
+
+---
+
+## Security & Privacy
+
+- **Local-first**: memory, logs, and profiles stay on your machine
+- **No hidden uploads**: network calls only happen when a skill requires them
+- **Config isolation**: secrets are loaded from your config and environment variables
 
 ---
 

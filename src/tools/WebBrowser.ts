@@ -6,6 +6,7 @@ import os from 'os';
 export class WebBrowser {
     private browser: Browser | null = null;
     private _page: Page | null = null; // Renamed from 'page' to '_page'
+    private searchCache: Map<string, { ts: number; result: string }> = new Map();
 
     public get page(): Page | null {
         return this._page;
@@ -13,7 +14,10 @@ export class WebBrowser {
 
     constructor(
         private serperApiKey?: string,
-        private captchaApiKey?: string
+        private captchaApiKey?: string,
+        private braveSearchApiKey?: string,
+        private searxngUrl?: string,
+        private searchProviderOrder: string[] = ['serper', 'brave', 'searxng', 'google', 'bing', 'duckduckgo']
     ) { }
 
     private async ensureBrowser() {
@@ -365,24 +369,117 @@ export class WebBrowser {
     }
 
     public async search(query: string): Promise<string> {
-        if (this.serperApiKey) {
-            const serperResult = await this.searchSerper(query);
-            if (!serperResult.includes('Error')) return serperResult;
-            logger.warn('Serper API failed, falling back to browser search.');
+        const normalized = query.trim().toLowerCase();
+        const cached = this.searchCache.get(normalized);
+        if (cached && Date.now() - cached.ts < 5 * 60 * 1000) {
+            return `${cached.result}\n\n[cache]`; 
         }
 
-        // Try Google first
-        const googleResult = await this.searchGoogle(query);
-        if (!googleResult.includes('CAPTCHA') && !googleResult.includes('Error: No results')) return googleResult;
+        const providers = this.searchProviderOrder.length > 0
+            ? this.searchProviderOrder
+            : ['serper', 'brave', 'searxng', 'google', 'bing', 'duckduckgo'];
 
-        // Fallback to Bing
-        logger.warn('Google search blocked or empty, trying Bing...');
-        const bingResult = await this.searchBing(query);
-        if (!bingResult.includes('Error: No results')) return bingResult;
+        for (const provider of providers) {
+            let result = '';
+            if (provider === 'serper' && this.serperApiKey) {
+                result = await this.searchSerper(query);
+                if (!result.includes('Error')) {
+                    this.searchCache.set(normalized, { ts: Date.now(), result });
+                    return result;
+                }
+                logger.warn('Serper API failed, falling back to next provider.');
+                continue;
+            }
 
-        // Final fallback to DuckDuckGo
-        logger.warn('Bing failed, falling back to DuckDuckGo.');
-        return this.searchDuckDuckGo(query);
+            if (provider === 'brave' && this.braveSearchApiKey) {
+                result = await this.searchBrave(query);
+                if (!result.includes('Error')) {
+                    this.searchCache.set(normalized, { ts: Date.now(), result });
+                    return result;
+                }
+                logger.warn('Brave Search API failed, falling back to next provider.');
+                continue;
+            }
+
+            if (provider === 'searxng' && this.searxngUrl) {
+                result = await this.searchSearxng(query);
+                if (!result.includes('Error')) {
+                    this.searchCache.set(normalized, { ts: Date.now(), result });
+                    return result;
+                }
+                logger.warn('SearxNG failed, falling back to next provider.');
+                continue;
+            }
+
+            if (provider === 'google') {
+                result = await this.searchGoogle(query);
+                if (!result.includes('CAPTCHA') && !result.includes('Error: No results')) {
+                    this.searchCache.set(normalized, { ts: Date.now(), result });
+                    return result;
+                }
+                logger.warn('Google search blocked or empty, trying next provider...');
+                continue;
+            }
+
+            if (provider === 'bing') {
+                result = await this.searchBing(query);
+                if (!result.includes('Error: No results')) {
+                    this.searchCache.set(normalized, { ts: Date.now(), result });
+                    return result;
+                }
+                logger.warn('Bing failed, trying next provider...');
+                continue;
+            }
+
+            if (provider === 'duckduckgo') {
+                result = await this.searchDuckDuckGo(query);
+                if (!result.includes('Error: No results')) {
+                    this.searchCache.set(normalized, { ts: Date.now(), result });
+                    return result;
+                }
+                logger.warn('DuckDuckGo failed, no results.');
+                continue;
+            }
+        }
+
+        return 'Error: All search providers failed.';
+    }
+
+    private async searchBrave(query: string): Promise<string> {
+        try {
+            const response = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`, {
+                headers: {
+                    'Accept': 'application/json',
+                    'X-Subscription-Token': this.braveSearchApiKey as string
+                }
+            });
+
+            if (!response.ok) return `Brave Search Error: ${response.status}`;
+            const data = await response.json() as any;
+            const results = (data?.web?.results || []).slice(0, 5).map((r: any) =>
+                `[${r.title}](${r.url})\n${r.description || ''}`
+            ).join('\n\n');
+
+            return results.length > 0 ? `Search Results (via Brave):\n\n${results}` : 'Error: No results from Brave.';
+        } catch (e) {
+            return `Brave Search Error: ${e}`;
+        }
+    }
+
+    private async searchSearxng(query: string): Promise<string> {
+        try {
+            const baseUrl = this.searxngUrl?.replace(/\/$/, '');
+            const url = `${baseUrl}/search?q=${encodeURIComponent(query)}&format=json`;
+            const response = await fetch(url);
+            if (!response.ok) return `SearxNG Error: ${response.status}`;
+            const data = await response.json() as any;
+            const results = (data?.results || []).slice(0, 5).map((r: any) =>
+                `[${r.title}](${r.url})\n${r.content || ''}`
+            ).join('\n\n');
+            return results.length > 0 ? `Search Results (via SearxNG):\n\n${results}` : 'Error: No results from SearxNG.';
+        } catch (e) {
+            return `SearxNG Error: ${e}`;
+        }
     }
 
     private async searchSerper(query: string): Promise<string> {

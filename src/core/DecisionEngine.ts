@@ -4,17 +4,23 @@ import { ParserLayer, StandardResponse } from './ParserLayer';
 import { SkillsManager } from './SkillsManager';
 import { logger } from '../utils/logger';
 import fs from 'fs';
+import { ConfigManager } from '../config/ConfigManager';
+import { DecisionPipeline } from './DecisionPipeline';
 
 export class DecisionEngine {
     private agentIdentity: string = '';
+    private pipeline: DecisionPipeline;
 
     constructor(
         private memory: MemoryManager,
         private llm: MultiLLM,
         private skills: SkillsManager,
         private journalPath: string = './JOURNAL.md',
-        private learningPath: string = './LEARNING.md'
-    ) { }
+        private learningPath: string = './LEARNING.md',
+        private config?: ConfigManager,
+    ) {
+        this.pipeline = new DecisionPipeline(this.config || new ConfigManager());
+    }
 
     public setAgentIdentity(identity: string) {
         this.agentIdentity = identity;
@@ -145,6 +151,20 @@ ${availableSkills}
 
         logger.info(`DecisionEngine: Deliberating on task: "${taskDescription}"`);
         const rawResponse = await this.llm.call(taskDescription, systemPrompt);
-        return ParserLayer.normalize(rawResponse);
+        const parsed = ParserLayer.normalize(rawResponse);
+
+        // Run parsed response through structured pipeline guardrails
+        const piped = this.pipeline.evaluate(parsed, {
+            actionId: metadata.id || metadata.actionId || 'unknown',
+            source: metadata.source,
+            sourceId: metadata.sourceId,
+            messagesSent: metadata.messagesSent || 0,
+            currentStep: metadata.currentStep || 1,
+            executionPlan: metadata.executionPlan,
+            lane: metadata.lane,
+            recentMemories: this.memory.getRecentContext()
+        });
+
+        return piped;
     }
 }

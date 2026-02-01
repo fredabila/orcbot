@@ -35,6 +35,23 @@ export class SkillsManager {
         this.context = context;
     }
 
+    private ensureTsNodeRegistered() {
+        try {
+            if (!process[Symbol.for('ts-node.register.instance')]) {
+                // eslint-disable-next-line @typescript-eslint/no-require-imports
+                require('ts-node').register({
+                    transpileOnly: true,
+                    compilerOptions: {
+                        module: 'commonjs'
+                    }
+                });
+                logger.info('SkillsManager: Registered ts-node for plugin compilation.');
+            }
+        } catch (e) {
+            logger.debug(`SkillsManager: ts-node registration skipped or failed: ${e}`);
+        }
+    }
+
     private loadSkills() {
         if (fs.existsSync(this.skillsPath)) {
             // Logic for parsing SKILLS.md could go here if needed for documentation
@@ -51,21 +68,7 @@ export class SkillsManager {
         }
 
         // Try to register ts-node if we are loading .ts files
-        try {
-            // Check if we are already in a TS environment
-            if (!process[Symbol.for('ts-node.register.instance')]) {
-                // eslint-disable-next-line @typescript-eslint/no-require-imports
-                require('ts-node').register({
-                    transpileOnly: true, // Speed up loading
-                    compilerOptions: {
-                        module: 'commonjs' // Ensure we output CommonJS for require()
-                    }
-                });
-                logger.info('SkillsManager: Registered ts-node for plugin compilation.');
-            }
-        } catch (e) {
-            logger.debug(`SkillsManager: ts-node registration skipped or failed: ${e}`);
-        }
+        this.ensureTsNodeRegistered();
 
         const files = fs.readdirSync(this.pluginsDir);
         logger.info(`SkillsManager: Found ${files.length} files in ${this.pluginsDir}: ${files.join(', ')}`);
@@ -162,6 +165,56 @@ export class SkillsManager {
 
     public getAllSkills(): Skill[] {
         return Array.from(this.skills.values());
+    }
+
+    public async checkPluginsHealth(): Promise<{ healthy: string[]; issues: { skillName: string; pluginPath: string; error: string }[] }> {
+        const issues: { skillName: string; pluginPath: string; error: string }[] = [];
+        const healthy: string[] = [];
+
+        if (!this.pluginsDir) return { healthy, issues };
+
+        this.ensureTsNodeRegistered();
+
+        const pluginSkills = this.getAllSkills().filter(s => s.pluginPath);
+        for (const skill of pluginSkills) {
+            const fullPath = skill.pluginPath as string;
+            try {
+                delete require.cache[fullPath];
+                // eslint-disable-next-line @typescript-eslint/no-require-imports
+                const loadedModule = require(fullPath);
+
+                let registerable: any = null;
+                if (loadedModule.default && loadedModule.default.name) {
+                    registerable = loadedModule.default;
+                } else if (loadedModule.name) {
+                    registerable = loadedModule;
+                } else {
+                    const baseName = path.parse(fullPath).name;
+                    if (loadedModule[baseName] && loadedModule[baseName].name) {
+                        registerable = loadedModule[baseName];
+                    }
+                }
+
+                if (!registerable || !registerable.name) {
+                    throw new Error('No valid skill export found during health check');
+                }
+
+                const healthcheck = registerable.healthcheck || loadedModule.healthcheck || loadedModule.describe;
+                if (typeof healthcheck === 'function') {
+                    await Promise.resolve(healthcheck({ dryRun: true, healthcheck: true }, this.context));
+                }
+
+                healthy.push(registerable.name);
+            } catch (e: any) {
+                issues.push({
+                    skillName: skill.name,
+                    pluginPath: fullPath,
+                    error: e?.message || String(e)
+                });
+            }
+        }
+
+        return { healthy, issues };
     }
 
     public uninstallSkill(name: string): string {
