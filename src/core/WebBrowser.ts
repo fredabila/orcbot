@@ -34,19 +34,25 @@ export class WebBrowser {
         }
     }
 
+    private async waitForStablePage(timeout = 10000) {
+        if (!this.page) return;
+        try {
+            await Promise.all([
+                this.page.waitForLoadState('load', { timeout }),
+                this.page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => { }) // Network idle is nice but not critical
+            ]);
+        } catch (e) {
+            logger.warn(`Stable page wait exceeded timeout: ${e}`);
+        }
+    }
+
     public async navigate(url: string, waitSelectors: string[] = []): Promise<string> {
         try {
             await this.ensureBrowser();
             if (!this.page) throw new Error('Failed to create page');
 
             await this.page.goto(url, { waitUntil: 'load', timeout: 60000 });
-
-            // Wait for network to settle
-            try {
-                await this.page.waitForLoadState('networkidle', { timeout: 5000 });
-            } catch (e) {
-                logger.warn(`Network idle timed out for ${url}, proceeding anyway.`);
-            }
+            await this.waitForStablePage();
 
             for (const selector of waitSelectors) {
                 await this.page.waitForSelector(selector, { timeout: 10000 });
@@ -63,17 +69,32 @@ export class WebBrowser {
 
     public async detectCaptcha(): Promise<string | null> {
         if (!this.page) return null;
-        const content = await this.page.content();
-        if (content.includes('g-recaptcha') || content.includes('recaptcha/api.js')) return 'Google reCAPTCHA';
-        if (content.includes('h-captcha') || content.includes('hcaptcha.com')) return 'hCaptcha';
-        if (content.includes('cf-turnstile') || content.includes('challenges.cloudflare.com')) return 'Cloudflare Turnstile';
-        if (content.includes('Please verify you are a human') || content.includes('Verify you are human')) {
-            // Check if there is a simple button/checkbox we can just click
-            const hasButton = await this.page.evaluate(() => {
-                const buttons = Array.from(document.querySelectorAll('button, input[type="button"], [role="button"], input[type="checkbox"]'));
-                return buttons.some(b => b.textContent?.includes('Verify') || b.textContent?.includes('human') || (b as HTMLElement).innerText?.includes('Verify'));
-            });
-            return hasButton ? 'Verification Button/Checkbox' : 'Generic CAPTCHA Page';
+
+        let retries = 3;
+        while (retries > 0) {
+            try {
+                const content = await this.page.content();
+                if (content.includes('g-recaptcha') || content.includes('recaptcha/api.js')) return 'Google reCAPTCHA';
+                if (content.includes('h-captcha') || content.includes('hcaptcha.com')) return 'hCaptcha';
+                if (content.includes('cf-turnstile') || content.includes('challenges.cloudflare.com')) return 'Cloudflare Turnstile';
+                if (content.includes('Please verify you are a human') || content.includes('Verify you are human')) {
+                    // Check if there is a simple button/checkbox we can just click
+                    const hasButton = await this.page.evaluate(() => {
+                        const buttons = Array.from(document.querySelectorAll('button, input[type="button"], [role="button"], input[type="checkbox"]'));
+                        return buttons.some(b => b.textContent?.includes('Verify') || b.textContent?.includes('human') || (b as HTMLElement).innerText?.includes('Verify'));
+                    });
+                    return hasButton ? 'Verification Button/Checkbox' : 'Generic CAPTCHA Page';
+                }
+                return null;
+            } catch (e: any) {
+                if (e.message.includes('navigating')) {
+                    logger.info(`detectCaptcha: Page is navigating, waiting and retrying... (${retries} left)`);
+                    await this.page.waitForTimeout(500);
+                    retries--;
+                    continue;
+                }
+                throw e;
+            }
         }
         return null;
     }
@@ -168,6 +189,64 @@ export class WebBrowser {
         }
     }
 
+    public async getSemanticSnapshot(): Promise<string> {
+        try {
+            await this.ensureBrowser();
+            await this.waitForStablePage();
+
+            const snapshot = await this.page!.evaluate(() => {
+                const interactiveSelectors = [
+                    'a', 'button', 'input', 'select', 'textarea',
+                    '[role="button"]', '[role="link"]', '[role="checkbox"]',
+                    '[role="menuitem"]', '[role="tab"]', '[onclick]'
+                ];
+
+                const elements = Array.from(document.querySelectorAll(interactiveSelectors.join(','))) as HTMLElement[];
+                const visibleElements = elements.filter(el => {
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    const isVisible = rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                    if (!isVisible) return false;
+
+                    // Simple check if element is actually visible in viewport or at least has content
+                    return true;
+                });
+
+                let refCounter = 1;
+                const result: string[] = [];
+
+                visibleElements.forEach(el => {
+                    const refId = refCounter++;
+                    el.setAttribute('data-orcbot-ref', refId.toString());
+
+                    const role = el.getAttribute('role') || el.tagName.toLowerCase();
+                    const label = el.getAttribute('aria-label') ||
+                        el.getAttribute('placeholder') ||
+                        el.getAttribute('title') ||
+                        (el as any).value ||
+                        el.innerText.trim().slice(0, 50);
+
+                    const typeAttr = (el as HTMLInputElement).type ? ` (${(el as HTMLInputElement).type})` : '';
+                    result.push(`${role}${typeAttr} "${label || '(no label)'}" [ref=${refId}]`);
+                });
+
+                // Also include headings for context
+                const headings = Array.from(document.querySelectorAll('h1, h2, h3')).slice(0, 10);
+                headings.forEach(h => {
+                    const text = (h as HTMLElement).innerText.trim();
+                    if (text) result.unshift(`heading "${text.slice(0, 100)}"`);
+                });
+
+                return result.join('\n');
+            });
+
+            const title = await this.page!.title();
+            return `PAGE: "${title}"\n\nSEMANTIC SNAPSHOT:\n${snapshot || '(No interactive elements found)'}`;
+        } catch (e) {
+            return `Failed to get semantic snapshot: ${e}`;
+        }
+    }
+
     public async wait(ms: number): Promise<string> {
         try {
             await this.ensureBrowser();
@@ -191,7 +270,14 @@ export class WebBrowser {
     public async click(selector: string): Promise<string> {
         try {
             await this.ensureBrowser();
-            await this.page!.click(selector, { timeout: 15000 });
+
+            // Handle ref ID
+            let finalSelector = selector;
+            if (/^\d+$/.test(selector)) {
+                finalSelector = `[data-orcbot-ref="${selector}"]`;
+            }
+
+            await this.page!.click(finalSelector, { timeout: 15000 });
             return `Successfully clicked: ${selector}`;
         } catch (e) {
             return `Failed to click ${selector}: ${e}`;
@@ -201,7 +287,14 @@ export class WebBrowser {
     public async type(selector: string, text: string): Promise<string> {
         try {
             await this.ensureBrowser();
-            await this.page!.fill(selector, text, { timeout: 15000 });
+
+            // Handle ref ID
+            let finalSelector = selector;
+            if (/^\d+$/.test(selector)) {
+                finalSelector = `[data-orcbot-ref="${selector}"]`;
+            }
+
+            await this.page!.fill(finalSelector, text, { timeout: 15000 });
             return `Successfully typed into ${selector}: "${text}"`;
         } catch (e) {
             return `Failed to type in ${selector}: ${e}`;

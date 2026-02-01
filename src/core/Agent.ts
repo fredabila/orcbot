@@ -12,6 +12,7 @@ import { Readability } from '@mozilla/readability';
 import { DOMParser } from 'linkedom';
 import { eventBus } from './EventBus';
 import { logger } from '../utils/logger';
+import { ErrorHandler } from '../utils/ErrorHandler';
 import path from 'path';
 import fs from 'fs';
 
@@ -194,13 +195,24 @@ export class Agent {
         // Skill: Browser Navigate
         this.skills.registerSkill({
             name: 'browser_navigate',
-            description: 'Navigate to a URL and optionally wait for specific selectors',
-            usage: 'browser_navigate(url, waitSelectors?)',
+            description: 'Navigate to a URL and return a semantic snapshot of interactive elements.',
+            usage: 'browser_navigate(url)',
             handler: async (args: any) => {
                 const url = args.url || args.link || args.site;
-                const waitSelectors = args.waitSelectors || args.selectors || [];
                 if (!url) return 'Error: Missing url.';
-                return this.browser.navigate(url, Array.isArray(waitSelectors) ? waitSelectors : [waitSelectors]);
+                const res = await this.browser.navigate(url);
+                if (res.startsWith('Error')) return res;
+                return await this.browser.getSemanticSnapshot();
+            }
+        });
+
+        // Skill: Browser Examine Page
+        this.skills.registerSkill({
+            name: 'browser_examine_page',
+            description: 'Get a text-based semantic snapshot of the current page including all interactive elements with reference IDs.',
+            usage: 'browser_examine_page()',
+            handler: async () => {
+                return await this.browser.getSemanticSnapshot();
             }
         });
 
@@ -231,25 +243,25 @@ export class Agent {
         // Skill: Browser Click
         this.skills.registerSkill({
             name: 'browser_click',
-            description: 'Click an element on the current page using a CSS selector',
-            usage: 'browser_click(selector)',
+            description: 'Click an element using a CSS selector or a numeric reference ID [ref=N] from the semantic snapshot.',
+            usage: 'browser_click(selector_or_ref)',
             handler: async (args: any) => {
-                const selector = args.selector || args.css;
-                if (!selector) return 'Error: Missing selector.';
-                return this.browser.click(selector);
+                const selector = args.selector_or_ref || args.selector || args.css || args.ref;
+                if (!selector) return 'Error: Missing selector or ref.';
+                return this.browser.click(String(selector));
             }
         });
 
         // Skill: Browser Type
         this.skills.registerSkill({
             name: 'browser_type',
-            description: 'Type text into an input field using a CSS selector',
-            usage: 'browser_type(selector, text)',
+            description: 'Type text into an input field using a CSS selector or a numeric reference ID [ref=N].',
+            usage: 'browser_type(selector_or_ref, text)',
             handler: async (args: any) => {
-                const selector = args.selector || args.css;
+                const selector = args.selector_or_ref || args.selector || args.css || args.ref;
                 const text = args.text || args.value;
-                if (!selector || !text) return 'Error: Missing selector or text.';
-                return this.browser.type(selector, text);
+                if (!selector || !text) return 'Error: Missing selector/ref or text.';
+                return this.browser.type(String(selector), text);
             }
         });
 
@@ -526,6 +538,21 @@ Be thorough and academic.`;
                 }
             }
         });
+
+        // Skill: Request Supporting Data
+        this.skills.registerSkill({
+            name: 'request_supporting_data',
+            description: 'Pause execution and ask the user for missing information, credentials, or clarification.',
+            usage: 'request_supporting_data(question)',
+            handler: async (args: any) => {
+                const question = args.question || args.text || args.info;
+                if (!question) return 'Error: Missing question.';
+
+                // We'll rely on the Agent loop to handle the "pause" by detecting this tool call.
+                // But we should actually send the message here if we can.
+                return `CLARIFICATION_REQUESTED: ${question}`;
+            }
+        });
     }
 
     private loadAgentIdentity() {
@@ -659,7 +686,7 @@ If you decide no action is needed, respond with "tool": null and reasoning: "All
             this.lastActionTime = Date.now();
             this.actionQueue.updateStatus(action.id, 'in-progress');
 
-            const MAX_STEPS = 10;
+            const MAX_STEPS = 30;
             let currentStep = 0;
             let messagesSent = 0;
             let lastMessageContent = '';
@@ -676,15 +703,24 @@ If you decide no action is needed, respond with "tool": null and reasoning: "All
                     await this.telegram.sendTypingIndicator(action.payload.sourceId);
                 }
 
-                const decision = await this.decisionEngine.decide({
-                    ...action,
-                    payload: {
-                        ...action.payload,
-                        messagesSent,
-                        messagingLocked: messagesSent > 0,
-                        currentStep
-                    }
-                });
+                let decision;
+                try {
+                    decision = await ErrorHandler.withRetry(async () => {
+                        return await this.decisionEngine.decide({
+                            ...action,
+                            payload: {
+                                ...action.payload,
+                                messagesSent,
+                                messagingLocked: messagesSent > 0,
+                                currentStep
+                            }
+                        });
+                    }, { maxRetries: 2 });
+                } catch (e) {
+                    logger.error(`DecisionEngine failed after retries: ${e}`);
+                    throw new Error(`LLM Decision Failure: ${e}`);
+                }
+
                 if (decision.reasoning) {
                     logger.info(`Agent Reasoning: ${decision.reasoning}`);
                 }
@@ -724,7 +760,30 @@ If you decide no action is needed, respond with "tool": null and reasoning: "All
                         }
 
                         logger.info(`Executing skill: ${toolCall.name}`);
-                        const toolResult = await this.skills.executeSkill(toolCall.name, toolCall.metadata || {});
+                        let toolResult;
+                        try {
+                            toolResult = await this.skills.executeSkill(toolCall.name, toolCall.metadata || {});
+                        } catch (e) {
+                            logger.error(`Skill execution failed: ${toolCall.name} - ${e}`);
+                            toolResult = `Error executing skill ${toolCall.name}: ${e}`;
+                        }
+
+                        // CLARIFICATION HANDLING: Break sequence if agent is asking for info
+                        if (toolCall.name === 'request_supporting_data') {
+                            const question = toolCall.metadata?.question || toolCall.metadata?.text || 'I need more information to proceed.';
+                            if (this.telegram && action.payload.source === 'telegram') {
+                                await this.telegram.sendMessage(action.payload.sourceId, `❓ *Clarification Needed*: ${question}`);
+                            }
+                            logger.info(`Agent: Clarification requested. Pausing action ${action.id}.`);
+                            forceBreak = true;
+
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-clarification`,
+                                type: 'short',
+                                content: `[SYSTEM: Agent requested clarification: "${question}". Pausing sequence.]`
+                            });
+                            break;
+                        }
 
                         // Mark if a deep tool was successfully used
                         if (!nonDeepSkills.includes(toolCall.name) && !JSON.stringify(toolResult).toLowerCase().includes('error')) {
@@ -758,12 +817,24 @@ If you decide no action is needed, respond with "tool": null and reasoning: "All
                 }
             }
             this.actionQueue.updateStatus(action.id, 'completed');
-            await this.memory.consolidate(this.llm);
-        } catch (error) {
+        } catch (error: any) {
             logger.error(`Error processing action ${action.id}: ${error}`);
             this.actionQueue.updateStatus(action.id, 'failed');
+
+            // SOS Notification
+            if (this.telegram && action.payload.source === 'telegram') {
+                const sosMessage = `⚠️ *Action Failed*: I encountered a persistent error while processing your request: "${action.payload.description}"\n\n*Error*: ${error.message}\n\nI've logged this to my journal and will attempt to recover in the next turn.`;
+                await this.telegram.sendMessage(action.payload.sourceId, sosMessage);
+            }
         } finally {
             this.isBusy = false;
+
+            // BACKGROUND TASK: Memory Consolidation
+            // We do this in the background after the agent is marked as not busy
+            // to prevent blocking the next task.
+            this.memory.consolidate(this.llm).catch(e => {
+                logger.error(`Background Memory Consolidation Error: ${e}`);
+            });
         }
     }
 }
