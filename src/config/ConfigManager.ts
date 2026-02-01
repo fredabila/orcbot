@@ -26,6 +26,7 @@ export interface AgentConfig {
     whatsappAutoReplyEnabled?: boolean;
     whatsappStatusReplyEnabled?: boolean;
     whatsappAutoReactEnabled?: boolean;
+    whatsappContextProfilingEnabled?: boolean;
     whatsappOwnerJID?: string;
 }
 
@@ -129,6 +130,7 @@ export class ConfigManager {
             whatsappAutoReplyEnabled: false,
             whatsappStatusReplyEnabled: false,
             whatsappAutoReactEnabled: false,
+            whatsappContextProfilingEnabled: false,
             whatsappOwnerJID: undefined
         };
     }

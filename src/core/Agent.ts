@@ -236,6 +236,29 @@ export class Agent {
             }
         });
 
+        // Skill: Update Contact Profile
+        this.skills.registerSkill({
+            name: 'update_contact_profile',
+            description: 'Update the autonomous profile/memory of a specific WhatsApp contact. Use this to store traits, facts, and relationship context.',
+            usage: 'update_contact_profile(jid, profile_json)',
+            handler: async (args: any) => {
+                const jid = args.jid || args.to;
+                const profileJson = args.profile_json || args.profile || args.content;
+
+                if (!jid) return 'Error: Missing jid.';
+                if (!profileJson) return 'Error: Missing profile_json.';
+
+                try {
+                    // Validate JSON if it's a string, or just save it
+                    const data = typeof profileJson === 'string' ? profileJson : JSON.stringify(profileJson, null, 2);
+                    this.memory.saveContactProfile(jid, data);
+                    return `Profile for ${jid} updated successfully.`;
+                } catch (e) {
+                    return `Error updating profile: ${e}`;
+                }
+            }
+        });
+
         // Skill: Run Shell Command
         this.skills.registerSkill({
             name: 'run_command',

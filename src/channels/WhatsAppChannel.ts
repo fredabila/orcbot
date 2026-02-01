@@ -112,6 +112,7 @@ export class WhatsAppChannel implements IChannel {
                             const autoReplyEnabled = this.agent.config.get('whatsappAutoReplyEnabled');
                             const statusReplyEnabled = this.agent.config.get('whatsappStatusReplyEnabled');
                             const autoReactEnabled = this.agent.config.get('whatsappAutoReactEnabled');
+                            const profilingEnabled = this.agent.config.get('whatsappContextProfilingEnabled');
 
                             // Skip group chats for now unless mentioned or requested (simpler for now)
                             if (isGroup) return;
@@ -141,7 +142,7 @@ export class WhatsAppChannel implements IChannel {
                                 return;
                             }
 
-                            logger.info(`WhatsApp Msg: ${senderName} (${senderId}): ${text} [ID: ${messageId}]`);
+                            logger.info(`WhatsApp Msg: ${senderName} (${senderId}): ${text} [ID: ${messageId}] | autoReply=${autoReplyEnabled} | isOwner=${isFromOwner} | isToMe=${isToMe}`);
 
                             // Save to memory for context
                             this.agent.memory.saveMemory({
@@ -153,18 +154,19 @@ export class WhatsAppChannel implements IChannel {
                             });
 
                             const reactInstruction = autoReactEnabled ? " or 'react_whatsapp'" : "";
+                            const profileInstruction = profilingEnabled ? "\n- Also, evaluate if you've learned something new about this person and update their profile using 'update_contact_profile' if needed." : "";
 
                             // Treat as Command if from Owner
                             if (isFromOwner || isToMe) {
                                 await this.agent.pushTask(
-                                    `WhatsApp command from yourself (ID: ${messageId}): "${text}"`,
+                                    `WhatsApp command from yourself (ID: ${messageId}): "${text}"${profileInstruction}`,
                                     10,
                                     { source: 'whatsapp', sourceId: senderId, senderName: senderName, isOwner: true, messageId }
                                 );
                             } else if (autoReplyEnabled) {
                                 // Treat as External Interaction for AI to decide on
                                 await this.agent.pushTask(
-                                    `EXTERNAL WHATSAPP MESSAGE from ${senderName} (ID: ${messageId}): "${text}". \n\nGoal: Decide if you should respond${reactInstruction} to this person on my behalf based on our history and my persona. If yes, use 'send_whatsapp'${reactInstruction}.`,
+                                    `EXTERNAL WHATSAPP MESSAGE from ${senderName} (ID: ${messageId}): "${text}". \n\nGoal: Decide if you should respond${reactInstruction} to this person on my behalf based on our history and my persona. If yes, use 'send_whatsapp'${reactInstruction}.${profileInstruction}`,
                                     5,
                                     { source: 'whatsapp', sourceId: senderId, senderName: senderName, isExternal: true, messageId }
                                 );
@@ -241,7 +243,14 @@ export class WhatsAppChannel implements IChannel {
      */
     public async postStatus(text: string): Promise<void> {
         try {
-            await this.sock.sendMessage('status@broadcast', { text });
+            // For text status, we usually need specific metadata for it to appear correctly
+            await this.sock.sendMessage('status@broadcast',
+                { text },
+                {
+                    backgroundColor: '#075E54', // WhatsApp Green
+                    font: 1
+                }
+            );
             logger.info('WhatsAppChannel: Posted status update');
         } catch (error) {
             logger.error(`WhatsAppChannel: Error posting status: ${error}`);

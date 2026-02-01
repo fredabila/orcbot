@@ -373,16 +373,16 @@ export class WebBrowser {
 
         // Try Google first
         const googleResult = await this.searchGoogle(query);
-        if (!googleResult.includes('CAPTCHA') && googleResult.length > 50) return googleResult;
+        if (!googleResult.includes('CAPTCHA') && !googleResult.includes('Error: No results')) return googleResult;
 
         // Fallback to Bing
         logger.warn('Google search blocked or empty, trying Bing...');
         const bingResult = await this.searchBing(query);
-        if (bingResult.length > 50) return bingResult;
+        if (!bingResult.includes('Error: No results')) return bingResult;
 
         // Final fallback to DuckDuckGo
         logger.warn('Bing failed, falling back to DuckDuckGo.');
-        return this.navigate(`https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`);
+        return this.searchDuckDuckGo(query);
     }
 
     private async searchSerper(query: string): Promise<string> {
@@ -459,6 +459,35 @@ export class WebBrowser {
             return `Search Results (via Bing):\n\n${formatted}`;
         } catch (e) {
             return `Bing Search Error: ${e}`;
+        }
+    }
+
+    private async searchDuckDuckGo(query: string): Promise<string> {
+        const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+        try {
+            await this.ensureBrowser();
+            await this.page!.goto(url, { waitUntil: 'load' });
+            await this.waitForStablePage();
+
+            const results = await this.page!.evaluate(() => {
+                const items = Array.from(document.querySelectorAll('.result'));
+                return items.slice(0, 5).map(item => {
+                    const titleEl = item.querySelector('.result__title a') as HTMLAnchorElement;
+                    const snippetEl = item.querySelector('.result__snippet') as HTMLElement;
+                    return titleEl ? {
+                        title: titleEl.innerText,
+                        link: titleEl.href,
+                        snippet: snippetEl?.innerText || ''
+                    } : null;
+                }).filter(Boolean);
+            });
+
+            if (!results || results.length === 0) return 'Error: No results found on DuckDuckGo.';
+
+            const formatted = results.map((r: any) => `[${r.title}](${r.link})\n${r.snippet}`).join('\n\n');
+            return `Search Results (via DuckDuckGo):\n\n${formatted}`;
+        } catch (e) {
+            return `DuckDuckGo Search Error: ${e}`;
         }
     }
 }

@@ -373,6 +373,7 @@ async function showWhatsAppConfig() {
     const autoReply = agent.config.get('whatsappAutoReplyEnabled');
     const statusReply = agent.config.get('whatsappStatusReplyEnabled');
     const autoReact = agent.config.get('whatsappAutoReactEnabled');
+    const contextProfiling = agent.config.get('whatsappContextProfilingEnabled');
     const ownerJid = agent.config.get('whatsappOwnerJID') || 'Not Linked';
 
     console.log(`\n--- WhatsApp Settings ---`);
@@ -380,6 +381,7 @@ async function showWhatsAppConfig() {
     console.log(`Auto-Reply (1-on-1): ${autoReply ? 'ON' : 'OFF'}`);
     console.log(`Status Interactions: ${statusReply ? 'ON' : 'OFF'}`);
     console.log(`Auto-React (Emojis): ${autoReact ? 'ON' : 'OFF'}`);
+    console.log(`Context Profiling: ${contextProfiling ? 'ON' : 'OFF'}`);
     console.log(`Linked Account: ${ownerJid}`);
 
     const { action } = await inquirer.prompt([
@@ -392,6 +394,7 @@ async function showWhatsAppConfig() {
                 { name: autoReply ? 'Disable Auto-Reply' : 'Enable Auto-Reply', value: 'toggle_auto' },
                 { name: statusReply ? 'Disable Status Interactions' : 'Enable Status Interactions', value: 'toggle_status' },
                 { name: autoReact ? 'Disable Auto-React' : 'Enable Auto-React', value: 'toggle_react' },
+                { name: contextProfiling ? 'Disable Context Profiling' : 'Enable Context Profiling', value: 'toggle_profile' },
                 { name: 'Link Account / Show QR', value: 'link' },
                 { name: 'Back', value: 'back' }
             ]
@@ -412,6 +415,9 @@ async function showWhatsAppConfig() {
             break;
         case 'toggle_react':
             agent.config.set('whatsappAutoReactEnabled', !autoReact);
+            break;
+        case 'toggle_profile':
+            agent.config.set('whatsappContextProfilingEnabled', !contextProfiling);
             break;
         case 'link':
             if (!agent.whatsapp) {

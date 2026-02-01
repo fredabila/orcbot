@@ -3,6 +3,8 @@ import { JSONAdapter } from '../storage/JSONAdapter';
 import { logger } from '../utils/logger';
 import dotenv from 'dotenv';
 import { MultiLLM } from '../core/MultiLLM';
+import path from 'path';
+import os from 'os';
 
 dotenv.config();
 
@@ -17,10 +19,18 @@ export interface MemoryEntry {
 export class MemoryManager {
     private storage: JSONAdapter;
     private userContext: any = {};
+    private profilesDir: string;
 
     constructor(dbPath: string = './memory.json', userPath: string = './USER.md') {
         this.storage = new JSONAdapter(dbPath);
         this.loadUserContext(userPath);
+
+        // Profiles directory in .orcbot
+        const dataHome = path.join(os.homedir(), '.orcbot');
+        this.profilesDir = path.join(dataHome, 'profiles');
+        if (!fs.existsSync(this.profilesDir)) {
+            fs.mkdirSync(this.profilesDir, { recursive: true });
+        }
     }
 
     public refreshUserContext(userPath: string) {
@@ -100,5 +110,28 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
         const episodic = this.searchMemory('episodic').slice(-5); // Include last 5 summaries
         const short = this.searchMemory('short').slice(-limit);
         return [...episodic, ...short];
+    }
+
+    public getContactProfile(jid: string): string | null {
+        const profilePath = path.join(this.profilesDir, `${jid.replace(/[^a-zA-Z0-9]/g, '_')}.json`);
+        if (fs.existsSync(profilePath)) {
+            try {
+                const content = fs.readFileSync(profilePath, 'utf-8');
+                return content;
+            } catch (e) {
+                logger.error(`Error reading contact profile for ${jid}: ${e}`);
+            }
+        }
+        return null;
+    }
+
+    public saveContactProfile(jid: string, content: string) {
+        const profilePath = path.join(this.profilesDir, `${jid.replace(/[^a-zA-Z0-9]/g, '_')}.json`);
+        try {
+            fs.writeFileSync(profilePath, content);
+            logger.info(`Contact profile saved for ${jid}`);
+        } catch (e) {
+            logger.error(`Error saving contact profile for ${jid}: ${e}`);
+        }
     }
 }

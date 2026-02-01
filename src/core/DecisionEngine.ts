@@ -47,11 +47,16 @@ ACTIVE CHANNEL CONTEXT:
 - Rule: To message this user, you MUST use the "send_telegram" skill.
 `;
         } else if (metadata.source === 'whatsapp') {
+            const profilingEnabled = this.memory.getUserContext().raw?.includes('whatsappContextProfilingEnabled: true'); // Basic check or pass agent config here
+            const contactProfile = this.memory.getContactProfile(metadata.sourceId);
+
             channelInstructions = `
 ACTIVE CHANNEL CONTEXT:
 - Channel: WhatsApp
 - JID: "${metadata.sourceId}" (Sender: ${metadata.senderName})
 - Rule: To message this user, you MUST use the "send_whatsapp" skill.
+${contactProfile ? `\nCONTACT PROFILE (Learned Knowledge):\n${contactProfile}\n` : ''}
+${profilingEnabled && !contactProfile ? '\n- Task: I don\'t have a profile for this contact yet. Use \'update_contact_profile\' if you learn important facts about them.\n' : ''}
 `;
         }
 
@@ -97,8 +102,9 @@ STRATEGIC REASONING PROTOCOLS:
 HUMAN-LIKE COLLABORATION:
 - Combined multiple confirmations into one natural response.
 - Use the user's name (Frederick) if available.
-- **Proactive Context Building**: Whenever you learn something new about Frederick (interests, career, schedule, preferences), you MUST use the update_user_profile skill to persist it.
-- **Autonomous Error Recovery**: If a custom skill (plugin) returns an error or behaves unexpectedly, you SHOULD attempt to fix it using the self_repair_skill(skillName, errorMessage) instead of just reporting the failure.
+- **Proactive Context Building**: Whenever you learn something new about USER (interests, career, schedule, preferences), you MUST use the 'update_user_profile' skill to persist it.
+- **Autonomous Error Recovery**: If a custom skill (plugin) returns an error or behaves unexpectedly, you SHOULD attempt to fix it using the 'self_repair_skill(skillName, errorMessage)' instead of just reporting the failure.
+- **Web Search Strategy**: If 'web_search' fails to yield results after 2 attempts, STOP searching. Instead, change strategy: navigate directly to a suspected URL, use 'extract_article' on a known portal, or inform the user you are unable to find the specific info. Do NOT repeat the same query.
 
 ${channelInstructions}
 
