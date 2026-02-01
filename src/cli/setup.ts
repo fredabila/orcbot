@@ -1,0 +1,91 @@
+import inquirer from 'inquirer';
+import fs from 'fs';
+import path from 'path';
+import yaml from 'yaml';
+import { logger } from '../utils/logger';
+
+import os from 'os';
+
+export async function runSetup() {
+    console.log('\n🤖 Welcome to the OrcBot Setup Wizard!\n');
+
+    const dataHome = path.join(os.homedir(), '.orcbot');
+    if (!fs.existsSync(dataHome)) fs.mkdirSync(dataHome, { recursive: true });
+
+    const configPath = path.join(dataHome, 'orcbot.config.yaml');
+    const envPath = path.join(dataHome, '.env');
+
+    let currentConfig: any = {};
+    if (fs.existsSync(configPath)) {
+        try {
+            currentConfig = yaml.parse(fs.readFileSync(configPath, 'utf8')) || {};
+        } catch (e) {
+            logger.warn('Failed to parse existing config, starting fresh.');
+        }
+    }
+
+    const answers = await inquirer.prompt([
+        {
+            type: 'input',
+            name: 'modelName',
+            message: 'Default LLM Model Name:',
+            default: currentConfig.modelName || 'gpt-4o'
+        },
+        {
+            type: 'input',
+            name: 'openaiApiKey',
+            message: 'OpenAI API Key (optional):',
+            mask: '*'
+        },
+        {
+            type: 'input',
+            name: 'googleApiKey',
+            message: 'Google (Gemini) API Key (optional):',
+            mask: '*'
+        },
+        {
+            type: 'input',
+            name: 'serperApiKey',
+            message: 'Serper.dev API Key (for web search):',
+            mask: '*'
+        },
+        {
+            type: 'input',
+            name: 'telegramToken',
+            message: 'Telegram Bot Token:',
+            mask: '*'
+        },
+        {
+            type: 'input',
+            name: 'pluginsPath',
+            message: 'Plugins Directory:',
+            default: currentConfig.pluginsPath || './plugins'
+        }
+    ]);
+
+    // Save YAML Config
+    const newConfig = {
+        modelName: answers.modelName,
+        pluginsPath: answers.pluginsPath,
+        memoryPath: './memory.json',
+        userProfilePath: './USER.md',
+        journalPath: './JOURNAL.md',
+        learningPath: './LEARNING.md',
+        agentIdentityPath: './.AI.md'
+    };
+
+    fs.writeFileSync(configPath, yaml.stringify(newConfig));
+    console.log(`✅ Config saved to ${configPath}`);
+
+    // Save .env
+    let envContent = '';
+    if (answers.openaiApiKey) envContent += `OPENAI_API_KEY=${answers.openaiApiKey}\n`;
+    if (answers.googleApiKey) envContent += `GOOGLE_API_KEY=${answers.googleApiKey}\n`;
+    if (answers.serperApiKey) envContent += `SERPER_API_KEY=${answers.serperApiKey}\n`;
+    if (answers.telegramToken) envContent += `TELEGRAM_TOKEN=${answers.telegramToken}\n`;
+
+    fs.writeFileSync(envPath, envContent);
+    console.log(`✅ Environment variables saved to ${envPath}`);
+
+    console.log('\n🚀 Setup complete! You can now run "orcbot start" to begin.\n');
+}

@@ -40,22 +40,46 @@ export class ConfigManager {
 
     private loadConfig(): AgentConfig {
         const defaults = this.getStringDefaultConfig();
-        if (fs.existsSync(this.configPath)) {
-            try {
-                const fileContents = fs.readFileSync(this.configPath, 'utf8');
-                const yamlConfig = yaml.parse(fileContents) || {};
+        let yamlConfig: any = {};
 
-                // Merge YAML with defaults
-                return {
-                    ...defaults,
-                    ...yamlConfig
-                };
-            } catch (error) {
-                logger.error(`Error loading config from ${this.configPath}: ${error}`);
-                return defaults;
+        // 1. Try local dir first, then fallback to global home
+        const pathsToTry = [
+            this.configPath, // Usually ./orcbot.config.yaml
+            path.join(this.dataHome, 'orcbot.config.yaml')
+        ];
+
+        for (const p of pathsToTry) {
+            if (fs.existsSync(p)) {
+                try {
+                    const fileContents = fs.readFileSync(p, 'utf8');
+                    yamlConfig = yaml.parse(fileContents) || {};
+                    logger.info(`ConfigManager: Loaded config from ${p}`);
+                    break;
+                } catch (error) {
+                    logger.error(`Error loading config from ${p}: ${error}`);
+                }
             }
         }
-        return defaults;
+
+        // 2. Merge Env Vars (Highest priority for keys)
+        const envConfig: Partial<AgentConfig> = {
+            openaiApiKey: process.env.OPENAI_API_KEY,
+            googleApiKey: process.env.GOOGLE_API_KEY,
+            serperApiKey: process.env.SERPER_API_KEY,
+            captchaApiKey: process.env.CAPTCHA_API_KEY,
+            telegramToken: process.env.TELEGRAM_TOKEN
+        };
+
+        // Filter out undefined env vars
+        const activeEnv = Object.fromEntries(
+            Object.entries(envConfig).filter(([_, v]) => v !== undefined)
+        );
+
+        return {
+            ...defaults,
+            ...yamlConfig,
+            ...activeEnv
+        };
     }
 
     private getStringDefaultConfig(): AgentConfig {

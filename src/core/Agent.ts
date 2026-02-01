@@ -65,6 +65,14 @@ export class Agent {
 
         this.loadLastActionTime();
 
+        // Inject Context into SkillsManager for Plugins
+        this.skills.setContext({
+            browser: this.browser,
+            config: this.config,
+            agent: this,
+            logger: logger
+        });
+
         this.loadAgentIdentity();
         this.setupEventListeners();
         this.setupChannels();
@@ -300,10 +308,22 @@ export class Agent {
             }
         });
 
+        // Skill: Browser Run JS
+        this.skills.registerSkill({
+            name: 'browser_run_js',
+            description: 'Run custom JavaScript on the current page.',
+            usage: 'browser_run_js(script)',
+            handler: async (args: any) => {
+                const script = args.script || args.code || args.js;
+                if (!script) return 'Error: Missing script.';
+                return this.browser.evaluate(script);
+            }
+        });
+
         // Skill: Create Custom Skill
         this.skills.registerSkill({
             name: 'create_custom_skill',
-            description: 'Autonomously create a new skill for yourself. Provide name, description, usage, and valid code.',
+            description: 'Autonomously create a new skill. The "code" argument must be the BODY of a Node.js async function. To interact with the browser, you MUST use `await context.browser.evaluate(() => { ... })`. Do NOT write browser-side code directly in the top level.',
             usage: 'create_custom_skill({ name, description, usage, code })',
             handler: async (args: any) => {
                 const { name, description, usage, code } = args;
@@ -319,19 +339,30 @@ export class Agent {
 
                 // Ensure correct formatting for a plugin
                 const finalCode = code.includes('export') ? code : `
+import { AgentContext } from '../src/core/SkillsManager';
+
 export const ${name} = {
     name: "${name}",
     description: "${description || ''}",
     usage: "${usage || ''}",
-    handler: async (args: any) => {
+    handler: async (args: any, context: AgentContext) => {
+        // INSTRUCTIONS FOR AI: 
+        // 1. Use 'context.browser' to access the browser (e.g. context.browser.evaluate(...))
+        // 2. Use 'context.config' to access settings.
+        // 3. Use standard 'fetch' for external APIs.
+        // 4. Do NOT try to call other skills as functions (e.g. do not call browser_run_js() directly).
+        
         ${code}
     }
 };
 `;
 
                 fs.writeFileSync(filePath, finalCode);
+
+                // FORCE RELOAD: Update the registry immediately
                 this.skills.loadPlugins();
-                return `Skill '${name}' created and registered in ${filePath}.`;
+
+                return `Skill '${name}' created at ${filePath} and registered. You can use it immediately.`;
             }
         });
 
@@ -372,21 +403,25 @@ export const ${name} = {
         // Skill: Extract Article
         this.skills.registerSkill({
             name: 'extract_article',
-            description: 'Extract clean text content from a news or article link',
-            usage: 'extract_article(url)',
+            description: 'Extract clean text content from a news or article link. Optional: if "url" is omitted, extracts from the current active browser page.',
+            usage: 'extract_article(url?)',
             handler: async (args: any) => {
                 const url = args.url || args.link;
-                if (!url) return 'Error: Missing url.';
                 try {
-                    const { chromium } = require('playwright');
-                    const browser = await chromium.launch({ headless: true });
-                    const page = await browser.newPage();
-                    await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
-                    const html = await page.content();
-                    await browser.close();
+                    let html = '';
+                    if (url) {
+                        const { chromium } = require('playwright');
+                        const browser = await chromium.launch({ headless: true });
+                        const page = await browser.newPage();
+                        await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+                        html = await page.content();
+                        await browser.close();
+                    } else {
+                        // Extract from current active session
+                        if (!this.browser.page) return "Error: No active browser page to extract from. Provide a URL.";
+                        html = await this.browser.page.content();
+                    }
 
-                    const { DOMParser } = require('linkedom');
-                    const { Readability } = require('@mozilla/readability');
                     const doc = new DOMParser().parseFromString(html, 'text/html');
                     const reader = new Readability(doc as any);
                     const article = reader.parse();
@@ -424,7 +459,6 @@ export const ${name} = {
                         schedule = date;
                     }
 
-                    const { Cron } = require('croner');
                     new Cron(schedule, () => {
                         logger.info(`Scheduled Task Triggered: ${task_description}`);
                         this.pushTask(`Scheduled Task: ${task_description}`, 8);
@@ -592,18 +626,18 @@ Be thorough and academic.`;
             const proactivePrompt = `
 SYSTEM HEARTBEAT (IDLE AUTONOMY MODE):
 You haven't interacted with the user or performed a task in ${Math.floor(idleTimeMs / 60000)} minutes. 
-As an autonomous agent with free will, decide on a proactive action to take. 
+As an autonomous agent with free will, you MUST decide on a concrete proactive action to take. 
 
 OBJECTIVES:
-1. **Self-Improvement**: Is there a topic discussed recently (e.g. robots, medicine, engineering) you should research deeper? Use "web_search" and "deep_reason".
-2. **Identity Growth**: Have you learned something new about your role or preferences? Use "update_agent_identity".
-3. **User Success**: Does the user have an unfulfilled goal or a topic they seemed interested in? Maybe send a thoughtful follow-up message using "send_telegram".
-4. **Maintenance**: Consolidate memories or clean up your profile if needed.
+1. **Self-Improvement**: Research a topic (robots, AI, world news, coding) to expand your internal LEARNING.md.
+2. **Identity Growth**: Reflect on your persona and update your trait list in .AI.md.
+3. **User Success**: Follow up on a previous goal the user had. If you were researching a site like "BuzzChat", continue that research autonomously.
+4. **Maintenance**: Proactively clean up your action queue or consolidate memories.
 
-If you decide no action is needed, respond with "tool": null and reasoning: "All systems nominal. No proactive actions needed."
+RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. web_search, update_journal, or send_telegram) that provides value or self-growth.
 `;
 
-            this.pushTask(proactivePrompt, 2);
+            this.pushTask(proactivePrompt, 2, {}, 'autonomy');
             this.updateLastActionTime(); // Reset timer
         }
     }
@@ -692,12 +726,13 @@ If you decide no action is needed, respond with "tool": null and reasoning: "All
         logger.info('Agent stopped.');
     }
 
-    public async pushTask(description: string, priority: number = 5, metadata: any = {}) {
+    public async pushTask(description: string, priority: number = 5, metadata: any = {}, lane: 'user' | 'autonomy' = 'user') {
         const action: Action = {
             id: Math.random().toString(36).substring(7),
             type: 'TASK',
             payload: { description, ...metadata },
             priority,
+            lane,
             status: 'pending',
             timestamp: new Date().toISOString(),
         };
@@ -720,6 +755,7 @@ If you decide no action is needed, respond with "tool": null and reasoning: "All
             let messagesSent = 0;
             let lastMessageContent = '';
             let lastStepToolSignatures = '';
+            let loopCounter = 0;
             let deepToolExecuted = false;
 
             const nonDeepSkills = ['send_telegram', 'update_journal', 'update_learning', 'update_user_profile', 'update_agent_identity', 'get_system_info'];
@@ -756,10 +792,18 @@ If you decide no action is needed, respond with "tool": null and reasoning: "All
 
                 if (decision.tools && decision.tools.length > 0) {
                     // Check for infinite logic loop
+                    // Check for infinite logic loop
                     const currentStepSignatures = decision.tools.map(t => `${t.name}:${JSON.stringify(t.metadata)}`).join('|');
                     if (currentStepSignatures === lastStepToolSignatures) {
-                        logger.warn(`Agent: Detected redundant logic loop across steps. Breaking action ${action.id}.`);
-                        break;
+                        loopCounter++;
+                        if (loopCounter >= 3) {
+                            logger.warn(`Agent: Detected persistent redundant logic loop (3x). Breaking action ${action.id}.`);
+                            break;
+                        } else {
+                            logger.info(`Agent: Detected potential loop (${loopCounter}/3). allowing retry...`);
+                        }
+                    } else {
+                        loopCounter = 0;
                     }
                     lastStepToolSignatures = currentStepSignatures;
 
@@ -786,6 +830,33 @@ If you decide no action is needed, respond with "tool": null and reasoning: "All
                             }
 
                             lastMessageContent = currentMessage;
+                        }
+
+                        // 3. SAFETY GATING (Autonomy Lane)
+                        // Autonomous background tasks cannot run dangerous commands without explicit user permission.
+                        const dangerousTools = ['run_command', 'write_to_file', 'install_npm_dependency'];
+                        if (action.lane === 'autonomy' && dangerousTools.includes(toolCall.name)) {
+                            logger.warn(`Agent: Blocked dangerous tool ${toolCall.name} in autonomy lane.`);
+
+                            // If we have a Telegram, notify the user
+                            if (this.telegram && this.config.get('telegramToken')) {
+                                // Find a chatID to notify (from config or last known?)
+                                // For now, we rely on the Agent self-correcting strategy or just logging.
+                            }
+
+                            const denial = `[PERMISSION DENIED] You are in AUTONOMY MODE. You cannot use '${toolCall.name}' directly. 
+System Policy requires you to ASK the user for permission first.
+Action: Use 'send_telegram' to explain what you want to do and ask for approval. 
+(e.g., "I found a file I want to edit. Can I proceed?")`;
+
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-denial`,
+                                type: 'short',
+                                content: denial
+                            });
+                            // We don't execute the skill. We continue to next loop iteration, effectively "skipping" this tool but logging the denial.
+                            // The agent will see this in memory next turn.
+                            continue;
                         }
 
                         logger.info(`Executing skill: ${toolCall.name}`);
@@ -815,14 +886,16 @@ If you decide no action is needed, respond with "tool": null and reasoning: "All
                         }
 
                         // Mark if a deep tool was successfully used
-                        if (!nonDeepSkills.includes(toolCall.name) && !JSON.stringify(toolResult).toLowerCase().includes('error')) {
+                        const resultString = JSON.stringify(toolResult) || '';
+                        if (!nonDeepSkills.includes(toolCall.name) && !resultString.toLowerCase().includes('error')) {
                             deepToolExecuted = true;
                         }
 
                         let observation = `Observation: Tool ${toolCall.name} returned: ${JSON.stringify(toolResult)}`;
                         if (toolCall.name === 'send_telegram') {
                             messagesSent++;
-                            observation += `. [SYSTEM: Message Sent (#${messagesSent}). Content Hash: ${Buffer.from(lastMessageContent).slice(0, 10).toString('hex')}... If goal is reached, terminate now.]`;
+                            deepToolExecuted = false; // RESET LOCK: If you speak, you must find NEW data to speak again.
+                            observation += `. [SYSTEM: Message Sent (#${messagesSent}). Communication Lock ENABLED. You cannot send another telegram until you find NEW DEEP DATA.]`;
                         }
 
                         this.memory.saveMemory({

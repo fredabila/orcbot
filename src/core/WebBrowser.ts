@@ -5,7 +5,11 @@ import os from 'os';
 
 export class WebBrowser {
     private browser: Browser | null = null;
-    private page: Page | null = null;
+    private _page: Page | null = null; // Renamed from 'page' to '_page'
+
+    public get page(): Page | null {
+        return this._page;
+    }
 
     constructor(
         private serperApiKey?: string,
@@ -30,16 +34,16 @@ export class WebBrowser {
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             });
 
-            this.page = await context.newPage();
+            this._page = await context.newPage();
         }
     }
 
     private async waitForStablePage(timeout = 10000) {
-        if (!this.page) return;
+        if (!this._page) return;
         try {
             await Promise.all([
-                this.page.waitForLoadState('load', { timeout }),
-                this.page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => { }) // Network idle is nice but not critical
+                this._page.waitForLoadState('load', { timeout }),
+                this._page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => { }) // Network idle is nice but not critical
             ]);
         } catch (e) {
             logger.warn(`Stable page wait exceeded timeout: ${e}`);
@@ -49,17 +53,24 @@ export class WebBrowser {
     public async navigate(url: string, waitSelectors: string[] = []): Promise<string> {
         try {
             await this.ensureBrowser();
-            if (!this.page) throw new Error('Failed to create page');
+            if (!this._page) throw new Error('Failed to create page');
 
-            await this.page.goto(url, { waitUntil: 'load', timeout: 60000 });
+            // Auto-fix protocol if missing
+            let targetUrl = url;
+            if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+                targetUrl = 'https://' + targetUrl;
+            }
+
+            logger.info(`Browser: Navigating to ${targetUrl}`);
+            await this._page.goto(targetUrl, { waitUntil: 'load', timeout: 30000 });
             await this.waitForStablePage();
 
             for (const selector of waitSelectors) {
-                await this.page.waitForSelector(selector, { timeout: 10000 });
+                await this._page.waitForSelector(selector, { timeout: 10000 });
             }
 
             const captcha = await this.detectCaptcha();
-            const title = await this.page.title();
+            const title = await this._page.title();
             return `Page Loaded: ${title}\nURL: ${url}${captcha ? `\n[WARNING: ${captcha}]` : ''}`;
         } catch (e) {
             logger.error(`Browser Error at ${url}: ${e}`);
@@ -68,18 +79,18 @@ export class WebBrowser {
     }
 
     public async detectCaptcha(): Promise<string | null> {
-        if (!this.page) return null;
+        if (!this._page) return null;
 
         let retries = 3;
         while (retries > 0) {
             try {
-                const content = await this.page.content();
+                const content = await this._page.content();
                 if (content.includes('g-recaptcha') || content.includes('recaptcha/api.js')) return 'Google reCAPTCHA';
                 if (content.includes('h-captcha') || content.includes('hcaptcha.com')) return 'hCaptcha';
                 if (content.includes('cf-turnstile') || content.includes('challenges.cloudflare.com')) return 'Cloudflare Turnstile';
                 if (content.includes('Please verify you are a human') || content.includes('Verify you are human')) {
                     // Check if there is a simple button/checkbox we can just click
-                    const hasButton = await this.page.evaluate(() => {
+                    const hasButton = await this._page.evaluate(() => {
                         const buttons = Array.from(document.querySelectorAll('button, input[type="button"], [role="button"], input[type="checkbox"]'));
                         return buttons.some(b => b.textContent?.includes('Verify') || b.textContent?.includes('human') || (b as HTMLElement).innerText?.includes('Verify'));
                     });
@@ -89,7 +100,7 @@ export class WebBrowser {
             } catch (e: any) {
                 if (e.message.includes('navigating')) {
                     logger.info(`detectCaptcha: Page is navigating, waiting and retrying... (${retries} left)`);
-                    await this.page.waitForTimeout(500);
+                    await this._page.waitForTimeout(500);
                     retries--;
                     continue;
                 }
@@ -328,11 +339,28 @@ export class WebBrowser {
         }
     }
 
+    public async evaluate(script: string): Promise<string> {
+        try {
+            await this.ensureBrowser();
+            const result = await this.page!.evaluate((s) => {
+                try {
+                    // eslint-disable-next-line no-eval
+                    return eval(s);
+                } catch (err) {
+                    return `Script Error: ${err}`;
+                }
+            }, script);
+            return typeof result === 'object' ? JSON.stringify(result) : String(result);
+        } catch (e) {
+            return `Failed to evaluate script: ${e}`;
+        }
+    }
+
     public async close() {
         if (this.browser) {
             await this.browser.close();
             this.browser = null;
-            this.page = null;
+            this._page = null;
         }
     }
 

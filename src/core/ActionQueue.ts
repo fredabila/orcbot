@@ -8,6 +8,7 @@ export interface Action {
     type: string;
     payload: any;
     priority: number;
+    lane?: 'user' | 'autonomy';
     status: 'pending' | 'in-progress' | 'completed' | 'failed';
     timestamp: string;
 }

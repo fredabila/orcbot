@@ -34,19 +34,25 @@ OrcBot is a next-generation **autonomous reasoning agent**. Unlike simple chatbo
 
 ---
 
-## 📦 Installation
+### Installation
 
-### Prerequisites
-- Node.js 18+
-- Chromium (for browsing): `npx playwright install chromium`
+You can get started instantly with our one-line installer:
 
-### Setup
+**Linux / macOS**
 ```bash
-git clone https://github.com/fredabila/orcbot.git
-cd orcbot
+curl -sSL https://orcbot.ai/install.sh | bash
+```
+
+**Windows (PowerShell)**
+```powershell
+iwr https://orcbot.ai/install.ps1 | iex
+```
+
+Alternatively, clone the repo and run:
+```bash
 npm install
 npm run build
-npm install -g .
+npm run setup
 ```
 
 ---

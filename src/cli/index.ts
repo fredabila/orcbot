@@ -6,7 +6,11 @@ import { logger } from '../utils/logger';
 import dotenv from 'dotenv';
 import { ConfigManager } from '../core/ConfigManager';
 
-dotenv.config();
+import path from 'path';
+import os from 'os';
+
+dotenv.config(); // Local .env
+dotenv.config({ path: path.join(os.homedir(), '.orcbot', '.env') }); // Global .env
 
 const program = new Command();
 const agent = new Agent();
@@ -23,6 +27,26 @@ program
         console.log('Initializing agent environment...');
         console.log('Files created: .env, USER.md, SKILLS.md, .AI.md, memory.json, orcbot.config.yaml');
         logger.info('Agent environment initialized');
+    });
+
+program
+    .command('setup')
+    .description('Launch the interactive configuration wizard')
+    .action(async () => {
+        const { runSetup } = require('./setup');
+        await runSetup();
+    });
+
+program
+    .command('builder')
+    .description('Build a new skill from a remote SKILLS.md specification')
+    .argument('<url>', 'URL to the specification')
+    .action(async (url) => {
+        const { SkillBuilder } = require('./builder');
+        const builder = new SkillBuilder();
+        console.log(`Fetching spec and building skill from ${url}...`);
+        const result = await builder.buildFromUrl(url);
+        console.log(result);
     });
 
 program
@@ -105,6 +129,7 @@ async function showMainMenu() {
                 { name: 'Start Agent Loop', value: 'start' },
                 { name: 'Push Task', value: 'push' },
                 { name: 'View Status', value: 'status' },
+                { name: 'Manage Skills (Plugins)', value: 'skills' },
                 { name: 'Manage Connections', value: 'connections' },
                 { name: 'Manage AI Models', value: 'models' },
                 { name: 'Tooling & APIs', value: 'tooling' },
@@ -126,6 +151,9 @@ async function showMainMenu() {
             showStatus();
             await waitKeyPress();
             await showMainMenu();
+            break;
+        case 'skills':
+            await showSkillsMenu();
             break;
         case 'connections':
             await showConnectionsMenu();
@@ -375,6 +403,73 @@ async function showConfigMenu() {
     console.log('Configuration updated!');
     await waitKeyPress();
     await showConfigMenu();
+}
+
+async function showSkillsMenu() {
+    const skills = agent.skills.getAllSkills();
+    const choices = skills.map(s => ({
+        name: `${s.name} ${s.pluginPath ? '(Plugin)' : '(Core)'}: ${s.description}`,
+        value: s.name
+    }));
+    choices.push({ name: '✨ Build New Skill from URL', value: 'build' });
+    choices.push({ name: 'Back', value: 'back' });
+
+    const { selection } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'selection',
+            message: 'Manage Agent Skills:',
+            choices
+        }
+    ]);
+
+    if (selection === 'back') return showMainMenu();
+
+    if (selection === 'build') {
+        const { url } = await inquirer.prompt([
+            { type: 'input', name: 'url', message: 'Enter URL for SKILLS.md specification:' }
+        ]);
+        if (url) {
+            const { SkillBuilder } = require('./builder');
+            const builder = new SkillBuilder();
+            console.log('Building skill...');
+            const result = await builder.buildFromUrl(url);
+            console.log(result);
+            agent.skills.loadPlugins(); // Reload to pick up new skill
+            await waitKeyPress();
+        }
+        return showSkillsMenu();
+    }
+
+    // Individual skill management
+    const selectedSkill = skills.find(s => s.name === selection);
+    if (selectedSkill?.pluginPath) {
+        const { action } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'action',
+                message: `Skill: ${selection}`,
+                choices: [
+                    { name: '🗑️ Uninstall (Delete Plugin)', value: 'uninstall' },
+                    { name: 'Back', value: 'back' }
+                ]
+            }
+        ]);
+
+        if (action === 'uninstall') {
+            const { confirm } = await inquirer.prompt([{ type: 'confirm', name: 'confirm', message: `Really delete ${selection}?`, default: false }]);
+            if (confirm) {
+                const res = agent.skills.uninstallSkill(selection);
+                console.log(res);
+                await waitKeyPress();
+            }
+        }
+    } else {
+        console.log(`\nCore skill "${selection}" cannot be uninstalled.\nUsage: ${selectedSkill?.usage}`);
+        await waitKeyPress();
+    }
+
+    return showSkillsMenu();
 }
 
 function showStatus() {
