@@ -120,6 +120,24 @@ main {
   margin-bottom: 24px;
 }
 
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  color: var(--muted);
+}
+
+th, td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+th {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .grid {
   display: grid;
   gap: 20px;

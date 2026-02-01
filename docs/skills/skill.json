@@ -1,0 +1,9 @@
+{
+  "name": "example_skill",
+  "version": "1.0.0",
+  "description": "Example skill metadata",
+  "author": "OrcBot",
+  "entry": "example_skill.ts",
+  "permissions": ["network"],
+  "config": ["EXAMPLE_API_KEY"]
+}

@@ -28,6 +28,19 @@
       </div>
     </header>
 
+          <section class="card">
+            <h2>Skill files (Markdown specs)</h2>
+            <p>Skill specs are written in Markdown and can reference additional files via a <strong>Skill Files</strong> table. OrcBot will fetch all linked URLs when building the skill.</p>
+            <pre><code>## Skill Files
+
+    | File | URL |
+    |------|-----|
+    | **SKILL.md** | https://fredabila.github.io/orcbot/docs/skills/skill.md |
+    | **HEARTBEAT.md** | https://fredabila.github.io/orcbot/docs/skills/heartbeat.md |
+    | **MESSAGING.md** | https://fredabila.github.io/orcbot/docs/skills/messaging.md |
+    | **package.json** | https://fredabila.github.io/orcbot/docs/skills/skill.json |</code></pre>
+            <p>When the TUI skill builder sees this table, it downloads every linked file and uses the combined content to generate a plugin.</p>
+          </section>
     <main class="container">
       <section class="card">
         <h2>Core skills</h2>
@@ -39,6 +52,23 @@
           <h3>Plugin directory</h3>
           <p>Store plugins in <code>~/.orcbot/plugins</code> or <code>./plugins</code>.</p>
         </div>
+          <section class="grid">
+            <div class="card">
+              <h3>Skill spec directory</h3>
+              <p>We host example specs under <code>/docs/skills/</code> for direct installation.</p>
+              <a class="text-link" href="skills/skill.md">Open SKILL.md →</a>
+            </div>
+            <div class="card">
+              <h3>Heartbeat spec</h3>
+              <p>Document heartbeat behaviors and guardrails.</p>
+              <a class="text-link" href="skills/heartbeat.md">Open HEARTBEAT.md →</a>
+            </div>
+            <div class="card">
+              <h3>Messaging spec</h3>
+              <p>Message templates, limits, and channel rules.</p>
+              <a class="text-link" href="skills/messaging.md">Open MESSAGING.md →</a>
+            </div>
+          </section>
         <div class="card">
           <h3>Self repair</h3>
           <p>Broken plugins trigger <code>self_repair_skill</code> and reload automatically.</p>
