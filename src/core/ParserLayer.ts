@@ -13,6 +13,10 @@ export interface StandardResponse {
     content?: string;
     metadata?: Record<string, any>;
     reasoning?: string;
+    verification?: {
+        goals_met: boolean;
+        analysis: string;
+    };
 }
 
 export class ParserLayer {
@@ -37,6 +41,7 @@ export class ParserLayer {
                     content: parsed.content,
                     metadata: parsed.metadata,
                     reasoning: parsed.reasoning,
+                    verification: parsed.verification
                 };
             }
 
@@ -66,12 +71,14 @@ JSON Format:
 {
   "action": "THOUGHT",
   "reasoning": "I need to research X and then message the user.",
+  "verification": {
+    "goals_met": false,
+    "analysis": "I have found the names but not the emails yet."
+  },
   "tools": [
-    { "name": "web_search", "metadata": { "query": "robotics" } },
-    { "name": "update_journal", "metadata": { "entry_text": "Researched robotics for Frederick." } },
-    { "name": "send_telegram", "metadata": { "message": "I've finished my research on robotics!" } }
+    { "name": "web_search", "metadata": { "query": "robotics" } }
   ],
-  "content": "Final summary if no telegram tool used"
+  "content": "..."
 }
 \`\`\`
 `;

@@ -96,10 +96,13 @@ export class MultiLLM {
             }
 
             const data = await response.json() as any;
-            if (data.candidates && data.candidates[0].content) {
+            if (data.candidates && data.candidates.length > 0 &&
+                data.candidates[0].content &&
+                data.candidates[0].content.parts &&
+                data.candidates[0].content.parts.length > 0) {
                 return data.candidates[0].content.parts[0].text;
             }
-            throw new Error('No analytical content in Gemini response');
+            throw new Error(`No analytical content in Gemini response: ${JSON.stringify(data)}`);
         } catch (error) {
             logger.error(`MultiLLM Google Media Error: ${error}`);
             throw error;
@@ -252,10 +255,13 @@ export class MultiLLM {
             }
 
             const data = await response.json() as any;
-            if (data.candidates && data.candidates.length > 0 && data.candidates[0].content) {
+            if (data.candidates && data.candidates.length > 0 &&
+                data.candidates[0].content &&
+                data.candidates[0].content.parts &&
+                data.candidates[0].content.parts.length > 0) {
                 return data.candidates[0].content.parts[0].text;
             }
-            throw new Error('No content in Gemini response');
+            throw new Error(`No text content in Gemini response: ${JSON.stringify(data)}`);
         } catch (error) {
             logger.error(`MultiLLM Google Error: ${error}`);
             throw error;

@@ -1,5 +1,5 @@
 <div align="center">
-<img src="orcbot_hero_banner_1769974399613.png" width="100%" alt="OrcBot Hero Banner">
+<img src="assets/banner.png" width="100%" alt="OrcBot Hero Banner">
 
 # OrcBot v2.0
 ### The Production-Ready Strategic AI Agent

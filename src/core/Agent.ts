@@ -1074,12 +1074,27 @@ RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. we
             let lastMessageContent = '';
             let lastStepToolSignatures = '';
             let loopCounter = 0;
-            let deepToolExecuted = false;
+            let deepToolExecutedSinceLastMessage = true; // Start true to allow Step 1 message
+            let stepsSinceLastMessage = 0;
+            let consecutiveNonDeepTurns = 0;
+            const sentMessagesInAction: string[] = [];
 
-            const nonDeepSkills = ['send_telegram', 'send_whatsapp', 'update_journal', 'update_learning', 'update_user_profile', 'update_agent_identity', 'get_system_info'];
+            const nonDeepSkills = [
+                'send_telegram',
+                'send_whatsapp',
+                'update_journal',
+                'update_learning',
+                'update_user_profile',
+                'update_agent_identity',
+                'get_system_info',
+                'browser_examine_page', // Examining without action is low info
+                'browser_screenshot',
+                'request_supporting_data'
+            ];
 
             while (currentStep < MAX_STEPS) {
                 currentStep++;
+                stepsSinceLastMessage++;
                 logger.info(`Agent: Step ${currentStep} for action ${action.id}`);
 
                 if (this.telegram && action.payload.source === 'telegram') {
@@ -1109,9 +1124,43 @@ RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. we
                     logger.info(`Agent Reasoning: ${decision.reasoning}`);
                 }
 
+                if (decision.verification) {
+                    logger.info(`Verification: [Goals Met: ${decision.verification.goals_met}] ${decision.verification.analysis}`);
+                    if (decision.verification.goals_met) {
+                        logger.info(`Agent: Strategic goal satisfied. Terminating action ${action.id}.`);
+                        break;
+                    }
+                }
+
                 if (decision.tools && decision.tools.length > 0) {
-                    // Check for infinite logic loop
-                    // Check for infinite logic loop
+                    // 1. INTRA-STEP DEDUPLICATION (Fixes multi-call issues on commands)
+                    const uniqueTools: any[] = [];
+                    const seenSignatures = new Set<string>();
+                    for (const t of decision.tools) {
+                        const sig = `${t.name}:${JSON.stringify(t.metadata)}`;
+                        if (!seenSignatures.has(sig)) {
+                            uniqueTools.push(t);
+                            seenSignatures.add(sig);
+                        } else {
+                            logger.warn(`Agent: Dropped intra-step duplicate tool: ${t.name}`);
+                        }
+                    }
+                    decision.tools = uniqueTools;
+
+                    // 2. PLANNING LOOP PROTECTION
+                    // If all tools in this turn are non-deep (journal, learning, etc.), increment turn counter
+                    const hasDeepToolThisTurn = decision.tools.some((t: any) => !nonDeepSkills.includes(t.name));
+                    if (!hasDeepToolThisTurn) {
+                        consecutiveNonDeepTurns++;
+                        if (consecutiveNonDeepTurns >= 3) {
+                            logger.warn(`Agent: Detected planning loop (3 turns without deep action). Terminating action ${action.id}.`);
+                            break;
+                        }
+                    } else {
+                        consecutiveNonDeepTurns = 0;
+                    }
+
+                    // 3. INFINITE LOGIC LOOP (Signature-based)
                     const currentStepSignatures = decision.tools.map(t => `${t.name}:${JSON.stringify(t.metadata)}`).join('|');
                     if (currentStepSignatures === lastStepToolSignatures) {
                         loopCounter++;
@@ -1127,18 +1176,43 @@ RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. we
                     lastStepToolSignatures = currentStepSignatures;
 
                     let forceBreak = false;
+                    let hasSentMessageInThisStep = false;
+
                     for (const toolCall of decision.tools) {
+                        // Reset cooldown if a deep tool (search, command, browser interaction) is used
+                        if (!nonDeepSkills.includes(toolCall.name)) {
+                            deepToolExecutedSinceLastMessage = true;
+                        }
+
                         if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp') {
                             const currentMessage = (toolCall.metadata?.message || '').trim();
 
-                            // 1. Block exact duplicates across any step
-                            if (currentMessage === lastMessageContent) {
-                                logger.warn(`Agent: Blocked redundant message in action ${action.id} (Exact duplicate).`);
+                            // 1. Block exact duplicates across any step in this action
+                            if (sentMessagesInAction.includes(currentMessage)) {
+                                logger.warn(`Agent: Blocked redundant message in action ${action.id} (Action-wide duplicate).`);
                                 continue;
                             }
 
+                            // 2. Communication Cooldown: Block if no new deep info since last message
+                            // Exceptions: 
+                            // - Step 1 is mandatory (Greeter)
+                            // - If 15+ steps have passed without an update (Status update for long tasks)
+                            if (currentStep > 1 && !deepToolExecutedSinceLastMessage && stepsSinceLastMessage < 15) {
+                                logger.warn(`Agent: Blocked redundant message in action ${action.id} (Communication Cooldown - No new deep data).`);
+                                continue;
+                            }
 
+                            // 3. Block double-messages in a single step
+                            if (hasSentMessageInThisStep) {
+                                logger.warn(`Agent: Blocked redundant message in action ${action.id} (Already sent message in this step).`);
+                                continue;
+                            }
+
+                            sentMessagesInAction.push(currentMessage);
                             lastMessageContent = currentMessage;
+                            hasSentMessageInThisStep = true;
+                            deepToolExecutedSinceLastMessage = false; // Reset cooldown after sending
+                            stepsSinceLastMessage = 0; // Reset status update timer
                         }
 
                         // 3. SAFETY GATING (Autonomy Lane)
@@ -1168,7 +1242,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             continue;
                         }
 
-                        logger.info(`Executing skill: ${toolCall.name}`);
+
+                        // logger.info(`Executing skill: ${toolCall.name}`); // Redundant, SkillsManager logs this
                         let toolResult;
                         try {
                             toolResult = await this.skills.executeSkill(toolCall.name, toolCall.metadata || {});
@@ -1197,7 +1272,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         // Mark if a deep tool was successfully used
                         const resultString = JSON.stringify(toolResult) || '';
                         if (!nonDeepSkills.includes(toolCall.name) && !resultString.toLowerCase().includes('error')) {
-                            deepToolExecuted = true;
+                            deepToolExecutedSinceLastMessage = true;
                         }
 
                         let observation = `Observation: Tool ${toolCall.name} returned: ${JSON.stringify(toolResult)}`;
