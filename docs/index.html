@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OrcBot Docs</title>
+    <link rel="stylesheet" href="assets/style.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="container">
+        <div class="badge">OrcBot Docs</div>
+        <h1>Operate OrcBot with confidence.</h1>
+        <p class="lead">
+          Local-first autonomous AI agent with strategic simulation, resilient tooling, and pluggable skills.
+        </p>
+        <div class="cta">
+          <a class="primary" href="#getting-started">Get started</a>
+          <a class="secondary" href="https://github.com/fredabila/orcbot">GitHub</a>
+        </div>
+      </div>
+    </header>
+
+    <main class="container">
+      <section id="getting-started" class="card">
+        <h2>Getting started</h2>
+        <ol>
+          <li>Install dependencies: <code>npm install</code></li>
+          <li>Build: <code>npm run build</code></li>
+          <li>Run the agent: <code>orcbot run</code></li>
+          <li>Open the TUI: <code>orcbot ui</code></li>
+        </ol>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <h3>Configuration</h3>
+          <p>Configuration is resolved in this priority order:</p>
+          <ul>
+            <li>Environment variables</li>
+            <li><code>./orcbot.config.yaml</code></li>
+            <li><code>~/orcbot.config.yaml</code></li>
+            <li><code>~/.orcbot/orcbot.config.yaml</code></li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Autonomy & heartbeat</h3>
+          <p>Heartbeat triggers proactive work when idle, with backlog limits, stall detection, and recovery.</p>
+        </div>
+        <div class="card">
+          <h3>Skills & plugins</h3>
+          <p>Core skills live in <code>src/core/Agent.ts</code>. Hot-load plugins from <code>~/.orcbot/plugins</code>.</p>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Infrastructure map</h2>
+        <div class="diagram">
+          <div>Channels → Agent Core → Skills & Tools → Providers</div>
+          <div class="diagram-note">Telegram / WhatsApp / CLI • LLMs • Search providers • Storage</div>
+        </div>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <h3>Channels</h3>
+          <p>Telegram and WhatsApp are supported out of the box. Add more in <code>src/channels</code>.</p>
+        </div>
+        <div class="card">
+          <h3>Search reliability</h3>
+          <p>Configure Serper, Brave Search, or SearxNG for resilient web search.</p>
+        </div>
+        <div class="card">
+          <h3>Troubleshooting</h3>
+          <p>Check logs in <code>logs/</code> and the memory store in <code>~/.orcbot</code> for diagnostics.</p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container">© 2026 OrcBot Project</div>
+    </footer>
+  </body>
+</html>

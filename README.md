@@ -88,6 +88,12 @@ npm run setup
 
 ---
 
+## Documentation
+
+Live docs (GitHub Pages): https://fredabila.github.io/orcbot/
+
+---
+
 ## Quickstart
 
 ```bash

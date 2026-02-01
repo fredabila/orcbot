@@ -13,7 +13,6 @@ function App() {
 
   return (
     <div className="app">
-      <div className="aurora"></div>
       <header className="hero">
         <nav className="nav">
           <div className="logo">OrcBot</div>
@@ -50,14 +49,6 @@ function App() {
                 <span className="stat-label">Memory & configs</span>
               </div>
             </div>
-          </div>
-
-          <div className="hero-visual" aria-hidden="true">
-            <div className="core"></div>
-            <div className="orbit orbit-one"></div>
-            <div className="orbit orbit-two"></div>
-            <div className="orbit orbit-three"></div>
-            <div className="pulse"></div>
           </div>
         </div>
       </header>
@@ -201,7 +192,7 @@ function App() {
         <div className="social-links">
           <a href="https://github.com/fredabila/orcbot">GitHub</a>
           <a href="https://twitter.com/orcbot_ai">Twitter</a>
-          <a href="#">Documentation</a>
+          <a href="https://fredabila.github.io/orcbot/">Documentation</a>
         </div>
       </main>
 

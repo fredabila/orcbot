@@ -1,16 +1,16 @@
 @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
-  --bg-color: #06080f;
-  --panel-bg: rgba(9, 12, 20, 0.7);
-  --panel-border: rgba(126, 148, 255, 0.18);
-  --accent-color: #7b8cff;
-  --accent-secondary: #00ffd1;
-  --text-main: #f8f9ff;
-  --text-muted: rgba(215, 223, 255, 0.72);
+  --bg-color: #0b0d12;
+  --panel-bg: rgba(16, 18, 24, 0.85);
+  --panel-border: rgba(255, 255, 255, 0.08);
+  --accent-color: #8ea1ff;
+  --accent-secondary: #e9efff;
+  --text-main: #f5f7ff;
+  --text-muted: rgba(190, 198, 220, 0.72);
   --font-sans: 'Manrope', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
-  --glow: 0 0 50px rgba(123, 140, 255, 0.2);
+  --glow: 0 0 24px rgba(142, 161, 255, 0.14);
 }
 
 * {
@@ -31,18 +31,7 @@ body {
 .app {
   min-height: 100vh;
   position: relative;
-}
-
-.aurora {
-  position: fixed;
-  inset: -20% -10% auto -10%;
-  height: 70vh;
-  background: radial-gradient(circle at 20% 20%, rgba(123, 140, 255, 0.35), transparent 45%),
-    radial-gradient(circle at 70% 10%, rgba(0, 255, 209, 0.25), transparent 55%),
-    radial-gradient(circle at 50% 60%, rgba(123, 140, 255, 0.15), transparent 60%);
-  filter: blur(10px);
-  z-index: 0;
-  pointer-events: none;
+  background: linear-gradient(180deg, rgba(19, 22, 30, 0.9) 0%, rgba(9, 11, 16, 1) 100%);
 }
 
 .hero {
@@ -56,7 +45,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  margin-bottom: 80px;
+  margin-bottom: 72px;
 }
 
 .logo {
@@ -84,14 +73,14 @@ body {
   text-decoration: none;
   color: var(--text-main);
   font-weight: 600;
-  background: rgba(9, 12, 20, 0.7);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .hero-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   align-items: center;
-  gap: 64px;
+  gap: 32px;
 }
 
 .hero-copy h1 {
@@ -103,11 +92,11 @@ body {
 
 .badge {
   display: inline-block;
-  padding: 8px 18px;
-  background: rgba(123, 140, 255, 0.12);
-  border: 1px solid rgba(123, 140, 255, 0.3);
-  border-radius: 100px;
-  font-size: 0.75rem;
+  padding: 6px 14px;
+  background: rgba(142, 161, 255, 0.12);
+  border: 1px solid rgba(142, 161, 255, 0.25);
+  border-radius: 999px;
+  font-size: 0.7rem;
   font-weight: 700;
   color: var(--accent-color);
   text-transform: uppercase;
@@ -141,15 +130,15 @@ body {
 }
 
 .primary-btn {
-  background: linear-gradient(120deg, var(--accent-color), var(--accent-secondary));
-  color: #06080f;
-  box-shadow: 0 12px 30px rgba(123, 140, 255, 0.3);
+  background: var(--accent-color);
+  color: #0b0d12;
+  box-shadow: 0 10px 24px rgba(142, 161, 255, 0.25);
 }
 
 .ghost-btn {
   border: 1px solid var(--panel-border);
   color: var(--text-main);
-  background: rgba(9, 12, 20, 0.6);
+  background: transparent;
 }
 
 .stats {
@@ -170,41 +159,6 @@ body {
   font-size: 0.85rem;
 }
 
-.hero-visual {
-  position: relative;
-  height: 320px;
-  display: grid;
-  place-items: center;
-}
-
-.core {
-  width: 120px;
-  height: 120px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 30% 30%, #fff, #7b8cff 55%, rgba(0, 255, 209, 0.5));
-  box-shadow: 0 0 60px rgba(123, 140, 255, 0.5);
-}
-
-.orbit {
-  position: absolute;
-  border: 1px solid rgba(123, 140, 255, 0.3);
-  border-radius: 999px;
-  animation: spin 18s linear infinite;
-}
-
-.orbit-one { width: 220px; height: 220px; }
-.orbit-two { width: 280px; height: 280px; animation-duration: 24s; }
-.orbit-three { width: 320px; height: 320px; animation-duration: 30s; }
-
-.pulse {
-  position: absolute;
-  width: 180px;
-  height: 180px;
-  border-radius: 50%;
-  border: 1px dashed rgba(0, 255, 209, 0.4);
-  animation: pulse 3.6s ease-in-out infinite;
-}
-
 main {
   width: 100%;
   max-width: 1120px;
@@ -219,12 +173,12 @@ main {
 }
 
 .terminal-container {
-  background: rgba(5, 8, 15, 0.9);
+  background: rgba(10, 12, 16, 0.98);
   border: 1px solid var(--panel-border);
-  border-radius: 20px;
+  border-radius: 18px;
   overflow: hidden;
-  box-shadow: 0 40px 80px rgba(0,0,0,0.6), var(--glow);
-  margin-bottom: 90px;
+  box-shadow: 0 24px 48px rgba(0,0,0,0.45);
+  margin-bottom: 80px;
 }
 
 .terminal-header {
@@ -266,11 +220,11 @@ main {
 .command { color: #e6edf3; font-size: 1.15rem; }
 
 .copy-button {
-  background: rgba(123, 140, 255, 0.1);
+  background: rgba(255, 255, 255, 0.06);
   color: var(--text-main);
-  border: 1px solid rgba(123, 140, 255, 0.4);
+  border: 1px solid var(--panel-border);
   padding: 10px 20px;
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 0.85rem;
   font-weight: 600;
   cursor: pointer;
@@ -314,10 +268,9 @@ main {
 .card {
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);
-  padding: 40px;
-  border-radius: 24px;
-  transition: transform 0.3s cubic-bezier(0.2, 0, 0.2, 1), border-color 0.3s, background 0.3s;
-  backdrop-filter: blur(20px);
+  padding: 36px;
+  border-radius: 20px;
+  transition: transform 0.2s ease, border-color 0.2s;
 }
 
 .card:hover {
@@ -327,8 +280,8 @@ main {
 }
 
 .card h3 {
-  font-size: 1.5rem;
-  margin-bottom: 16px;
+  font-size: 1.4rem;
+  margin-bottom: 12px;
   color: var(--accent-secondary);
   font-weight: 600;
 }
@@ -342,15 +295,15 @@ main {
 
 .autonomy .timeline {
   display: grid;
-  gap: 24px;
+  gap: 20px;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .timeline-step {
-  border: 1px solid rgba(123, 140, 255, 0.2);
-  padding: 24px;
-  border-radius: 18px;
-  background: rgba(9, 12, 20, 0.6);
+  border: 1px solid var(--panel-border);
+  padding: 22px;
+  border-radius: 16px;
+  background: rgba(16, 18, 24, 0.8);
 }
 
 .timeline-step span {
@@ -424,10 +377,10 @@ main {
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding: 40px;
-  border-radius: 24px;
-  border: 1px solid rgba(123, 140, 255, 0.3);
-  background: linear-gradient(120deg, rgba(123, 140, 255, 0.15), rgba(0, 255, 209, 0.1));
+  padding: 36px;
+  border-radius: 20px;
+  border: 1px solid var(--panel-border);
+  background: rgba(16, 18, 24, 0.85);
 }
 
 .cta p {
@@ -456,16 +409,6 @@ footer {
   color: rgba(215, 223, 255, 0.6);
   font-size: 0.85rem;
   text-align: center;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-@keyframes pulse {
-  0%, 100% { transform: scale(0.9); opacity: 0.6; }
-  50% { transform: scale(1.05); opacity: 1; }
 }
 
 @media (max-width: 900px) {
