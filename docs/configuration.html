@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Configuration | OrcBot Docs</title>
+    <link rel="stylesheet" href="assets/style.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="container">
+        <nav class="doc-nav">
+          <div class="logo">OrcBot Docs</div>
+          <div class="links">
+            <a href="index.html">Overview</a>
+            <a href="getting-started.html">Start</a>
+            <a href="configuration.html">Configuration</a>
+            <a href="architecture.html">Architecture</a>
+            <a href="skills.html">Skills</a>
+            <a href="autonomy.html">Autonomy</a>
+            <a href="operations.html">Operations</a>
+          </div>
+          <a class="nav-cta" href="https://github.com/fredabila/orcbot">GitHub</a>
+        </nav>
+        <div class="badge">Configuration</div>
+        <h1>Control how OrcBot behaves.</h1>
+        <p class="lead">Configuration is file-backed, environment-aware, and editable from the TUI.</p>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="card">
+        <h2>Resolution order</h2>
+        <ol>
+          <li>Environment variables</li>
+          <li><code>./orcbot.config.yaml</code></li>
+          <li><code>~/orcbot.config.yaml</code></li>
+          <li><code>~/.orcbot/orcbot.config.yaml</code></li>
+        </ol>
+      </section>
+
+      <section class="card">
+        <h2>Key settings</h2>
+        <div class="key-grid">
+          <div>
+            <h4>Core</h4>
+            <ul>
+              <li><code>agentName</code></li>
+              <li><code>modelName</code></li>
+              <li><code>maxStepsPerAction</code></li>
+              <li><code>maxMessagesPerAction</code></li>
+              <li><code>messageDedupWindow</code></li>
+            </ul>
+          </div>
+          <div>
+            <h4>Autonomy</h4>
+            <ul>
+              <li><code>autonomyEnabled</code></li>
+              <li><code>autonomyInterval</code></li>
+              <li><code>autonomyBacklogLimit</code></li>
+              <li><code>maxActionRunMinutes</code></li>
+              <li><code>maxStaleActionMinutes</code></li>
+            </ul>
+          </div>
+          <div>
+            <h4>Providers</h4>
+            <ul>
+              <li><code>openaiApiKey</code></li>
+              <li><code>googleApiKey</code></li>
+              <li><code>bedrockRegion</code></li>
+              <li><code>bedrockAccessKeyId</code></li>
+            </ul>
+          </div>
+          <div>
+            <h4>Search</h4>
+            <ul>
+              <li><code>serperApiKey</code></li>
+              <li><code>braveSearchApiKey</code></li>
+              <li><code>searxngUrl</code></li>
+              <li><code>searchProviderOrder</code></li>
+            </ul>
+          </div>
+          <div>
+            <h4>Channels</h4>
+            <ul>
+              <li><code>telegramToken</code></li>
+              <li><code>whatsappEnabled</code></li>
+              <li><code>whatsappAutoReplyEnabled</code></li>
+              <li><code>whatsappStatusReplyEnabled</code></li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>TUI management</h2>
+        <p>Open the TUI with <code>orcbot ui</code> to configure models, tooling, and connections without editing files.</p>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container">© 2026 OrcBot Project</div>
+    </footer>
+  </body>
+</html>

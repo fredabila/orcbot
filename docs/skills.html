@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Skills & Plugins | OrcBot Docs</title>
+    <link rel="stylesheet" href="assets/style.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="container">
+        <nav class="doc-nav">
+          <div class="logo">OrcBot Docs</div>
+          <div class="links">
+            <a href="index.html">Overview</a>
+            <a href="getting-started.html">Start</a>
+            <a href="configuration.html">Configuration</a>
+            <a href="architecture.html">Architecture</a>
+            <a href="skills.html">Skills</a>
+            <a href="autonomy.html">Autonomy</a>
+            <a href="operations.html">Operations</a>
+          </div>
+          <a class="nav-cta" href="https://github.com/fredabila/orcbot">GitHub</a>
+        </nav>
+        <div class="badge">Skills & Plugins</div>
+        <h1>Extend OrcBot with new tools.</h1>
+        <p class="lead">Core skills live in the agent; plugins are hot-loaded without restarts.</p>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="card">
+        <h2>Core skills</h2>
+        <p>Defined in <code>src/core/Agent.ts</code>. Core skills include web search, browser automation, and channel messaging.</p>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <h3>Plugin directory</h3>
+          <p>Store plugins in <code>~/.orcbot/plugins</code> or <code>./plugins</code>.</p>
+        </div>
+        <div class="card">
+          <h3>Self repair</h3>
+          <p>Broken plugins trigger <code>self_repair_skill</code> and reload automatically.</p>
+        </div>
+        <div class="card">
+          <h3>Skill builder</h3>
+          <p>Use the TUI to build new skills from specifications.</p>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Plugin contract</h2>
+        <pre><code>module.exports = {
+  name: 'skill_name',
+  description: 'What it does',
+  usage: 'skill_name(arg)',
+  handler: async (args, context) =&gt; {
+    return 'result';
+  }
+};</code></pre>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container">© 2026 OrcBot Project</div>
+    </footer>
+  </body>
+</html>

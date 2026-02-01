@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Operations | OrcBot Docs</title>
+    <link rel="stylesheet" href="assets/style.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="container">
+        <nav class="doc-nav">
+          <div class="logo">OrcBot Docs</div>
+          <div class="links">
+            <a href="index.html">Overview</a>
+            <a href="getting-started.html">Start</a>
+            <a href="configuration.html">Configuration</a>
+            <a href="architecture.html">Architecture</a>
+            <a href="skills.html">Skills</a>
+            <a href="autonomy.html">Autonomy</a>
+            <a href="operations.html">Operations</a>
+          </div>
+          <a class="nav-cta" href="https://github.com/fredabila/orcbot">GitHub</a>
+        </nav>
+        <div class="badge">Operations</div>
+        <h1>Run OrcBot in production.</h1>
+        <p class="lead">Logs, diagnostics, and operational checklists for reliable uptime.</p>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="card">
+        <h2>Logs</h2>
+        <p>Review <code>logs/combined.log</code> for runtime events, errors, and search telemetry.</p>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <h3>Data locations</h3>
+          <p>State is stored under <code>~/.orcbot</code> (memory, profiles, plugins, downloads).</p>
+        </div>
+        <div class="card">
+          <h3>Backups</h3>
+          <p>Back up <code>memory.json</code>, <code>actions.json</code>, and <code>USER.md</code> for continuity.</p>
+        </div>
+        <div class="card">
+          <h3>Search failures</h3>
+          <p>Configure Serper/Brave/SearxNG for reliable search and avoid loop retries.</p>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Troubleshooting checklist</h2>
+        <ul>
+          <li>Confirm API keys are set in config or env.</li>
+          <li>Restart the agent after changing channel settings.</li>
+          <li>Inspect failed actions in <code>actions.json</code>.</li>
+        </ul>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container">© 2026 OrcBot Project</div>
+    </footer>
+  </body>
+</html>

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Autonomy | OrcBot Docs</title>
+    <link rel="stylesheet" href="assets/style.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="container">
+        <nav class="doc-nav">
+          <div class="logo">OrcBot Docs</div>
+          <div class="links">
+            <a href="index.html">Overview</a>
+            <a href="getting-started.html">Start</a>
+            <a href="configuration.html">Configuration</a>
+            <a href="architecture.html">Architecture</a>
+            <a href="skills.html">Skills</a>
+            <a href="autonomy.html">Autonomy</a>
+            <a href="operations.html">Operations</a>
+          </div>
+          <a class="nav-cta" href="https://github.com/fredabila/orcbot">GitHub</a>
+        </nav>
+        <div class="badge">Autonomy</div>
+        <h1>Heartbeat-driven autonomy.</h1>
+        <p class="lead">The scheduler keeps OrcBot active even when you are away.</p>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="card">
+        <h2>Heartbeat loop</h2>
+        <p>Heartbeat runs on the scheduler tick and enqueues proactive tasks when idle.</p>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <h3>Backlog limit</h3>
+          <p>Use <code>autonomyBacklogLimit</code> to cap queued proactive tasks.</p>
+        </div>
+        <div class="card">
+          <h3>Stall detection</h3>
+          <p>Long-running actions are failed via <code>maxActionRunMinutes</code>.</p>
+        </div>
+        <div class="card">
+          <h3>Stale recovery</h3>
+          <p>Stale in-progress actions are marked failed after <code>maxStaleActionMinutes</code>.</p>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Autonomy checklist</h2>
+        <ul>
+          <li>Enable <code>autonomyEnabled</code></li>
+          <li>Set a heartbeat interval that fits your workload</li>
+          <li>Monitor logs for proactive task output</li>
+        </ul>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container">© 2026 OrcBot Project</div>
+    </footer>
+  </body>
+</html>

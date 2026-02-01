@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Architecture | OrcBot Docs</title>
+    <link rel="stylesheet" href="assets/style.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="container">
+        <nav class="doc-nav">
+          <div class="logo">OrcBot Docs</div>
+          <div class="links">
+            <a href="index.html">Overview</a>
+            <a href="getting-started.html">Start</a>
+            <a href="configuration.html">Configuration</a>
+            <a href="architecture.html">Architecture</a>
+            <a href="skills.html">Skills</a>
+            <a href="autonomy.html">Autonomy</a>
+            <a href="operations.html">Operations</a>
+          </div>
+          <a class="nav-cta" href="https://github.com/fredabila/orcbot">GitHub</a>
+        </nav>
+        <div class="badge">Architecture</div>
+        <h1>Understand the system layout.</h1>
+        <p class="lead">Core orchestration, memory, tools, and external providers.</p>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="card">
+        <h2>Core flow</h2>
+        <div class="diagram">
+          <div>Channels → Agent Core → Skills & Tools → Providers</div>
+          <div class="diagram-note">Telegram / WhatsApp / CLI • LLMs • Search providers • Storage</div>
+        </div>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <h3>Agent Core</h3>
+          <p>DecisionEngine + SimulationEngine orchestrate every task with plans and guardrails.</p>
+        </div>
+        <div class="card">
+          <h3>Memory & Queue</h3>
+          <p>MemoryManager stores short/episodic context. ActionQueue persists tasks.</p>
+        </div>
+        <div class="card">
+          <h3>Scheduler</h3>
+          <p>Heartbeat triggers autonomy tasks and monitors for stalls.</p>
+        </div>
+        <div class="card">
+          <h3>Skills</h3>
+          <p>SkillsManager loads core tools and hot-reload plugins at runtime.</p>
+        </div>
+        <div class="card">
+          <h3>Web tools</h3>
+          <p>WebBrowser handles navigation, snapshots, and search providers.</p>
+        </div>
+        <div class="card">
+          <h3>Providers</h3>
+          <p>MultiLLM routes to OpenAI, Gemini, or Bedrock with fallback logic.</p>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Data paths</h2>
+        <ul>
+          <li><code>~/.orcbot</code>: memory, profiles, plugins, downloads</li>
+          <li><code>logs/</code>: runtime logs</li>
+          <li><code>orcbot.config.yaml</code>: configuration source</li>
+        </ul>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container">© 2026 OrcBot Project</div>
+    </footer>
+  </body>
+</html>

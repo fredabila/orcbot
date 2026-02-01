@@ -19,6 +19,41 @@ body {
   color: var(--text);
 }
 
+.doc-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.logo {
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.links {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.links a {
+  color: var(--muted);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.nav-cta {
+  text-decoration: none;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-weight: 600;
+}
+
 .hero {
   padding: 72px 0 56px;
   background: linear-gradient(180deg, rgba(19, 22, 30, 0.9) 0%, rgba(11, 13, 18, 1) 100%);
@@ -92,6 +127,17 @@ main {
   margin-bottom: 24px;
 }
 
+.key-grid {
+  margin-top: 16px;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.key-grid h4 {
+  margin: 0 0 8px;
+}
+
 ul, ol {
   padding-left: 20px;
   color: var(--muted);
@@ -102,6 +148,22 @@ code {
   background: rgba(255, 255, 255, 0.06);
   padding: 2px 6px;
   border-radius: 6px;
+}
+
+pre {
+  background: rgba(16, 18, 24, 0.9);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  overflow-x: auto;
+}
+
+.text-link {
+  display: inline-block;
+  margin-top: 10px;
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
 }
 
 .diagram {

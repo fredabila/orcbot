@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Getting Started | OrcBot Docs</title>
+    <link rel="stylesheet" href="assets/style.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="container">
+        <nav class="doc-nav">
+          <div class="logo">OrcBot Docs</div>
+          <div class="links">
+            <a href="index.html">Overview</a>
+            <a href="getting-started.html">Start</a>
+            <a href="configuration.html">Configuration</a>
+            <a href="architecture.html">Architecture</a>
+            <a href="skills.html">Skills</a>
+            <a href="autonomy.html">Autonomy</a>
+            <a href="operations.html">Operations</a>
+          </div>
+          <a class="nav-cta" href="https://github.com/fredabila/orcbot">GitHub</a>
+        </nav>
+        <div class="badge">Getting started</div>
+        <h1>Launch OrcBot in minutes.</h1>
+        <p class="lead">Install dependencies, run the agent, and open the TUI dashboard.</p>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="card">
+        <h2>Install & build</h2>
+        <ol>
+          <li>Install dependencies: <code>npm install</code></li>
+          <li>Build the CLI: <code>npm run build</code></li>
+          <li>Run the agent: <code>orcbot run</code></li>
+        </ol>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <h3>Run the TUI</h3>
+          <p>Use <code>orcbot ui</code> to configure models, connections, and tooling.</p>
+        </div>
+        <div class="card">
+          <h3>Push a task</h3>
+          <p>Trigger work immediately with <code>orcbot push "Your task" -p 10</code>.</p>
+        </div>
+        <div class="card">
+          <h3>Verify logs</h3>
+          <p>Check <code>logs/combined.log</code> for runtime traces and diagnostics.</p>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Quick checklist</h2>
+        <ul>
+          <li>Set API keys via <code>orcbot ui</code> or config files.</li>
+          <li>Enable channels you need (Telegram / WhatsApp).</li>
+          <li>Confirm heartbeat settings for autonomy.</li>
+        </ul>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container">© 2026 OrcBot Project</div>
+    </footer>
+  </body>
+</html>

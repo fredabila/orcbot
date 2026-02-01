@@ -192,7 +192,7 @@ function App() {
         <div className="social-links">
           <a href="https://github.com/fredabila/orcbot">GitHub</a>
           <a href="https://twitter.com/orcbot_ai">Twitter</a>
-          <a href="https://fredabila.github.io/orcbot/">Documentation</a>
+          <a href="https://fredabila.github.io/orcbot/docs/">Documentation</a>
         </div>
       </main>
 
