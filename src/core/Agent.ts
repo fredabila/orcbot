@@ -81,11 +81,11 @@ export class Agent {
 
     private initializeStorage() {
         const paths = {
-            agentIdentity: this.config.get('agentIdentityPath'),
             userProfile: this.config.get('userProfilePath'),
             journal: this.config.get('journalPath'),
             learning: this.config.get('learningPath'),
             actionQueue: this.config.get('actionQueuePath'),
+            memory: this.config.get('memoryPath'),
             skills: this.config.get('skillsPath')
         };
 
@@ -107,6 +107,7 @@ export class Agent {
                 if (key === 'journal') defaultContent = '# Agent Journal\nThis file contains self-reflections and activity logs.\n';
                 if (key === 'learning') defaultContent = '# Agent Learning Base\nThis file contains structured knowledge on various topics.\n';
                 if (key === 'actionQueue') defaultContent = '[]';
+                if (key === 'memory') defaultContent = '{"memories":[]}';
                 if (key === 'skills') defaultContent = '# Global Skills\n(Skills are loaded from SKILLS.md)\n';
 
                 try {
@@ -181,10 +182,92 @@ export class Agent {
             }
         });
 
+        // Skill: Self Repair
+        this.skills.registerSkill({
+            name: 'self_repair_skill',
+            description: 'Autonomously diagnose and fix a failing plugin skill. Use this when a tool returns an error or fails to execute correctly.',
+            usage: 'self_repair_skill(skillName, errorMessage)',
+            handler: async (args: any) => {
+                const { skillName, errorMessage } = args;
+                if (!skillName || !errorMessage) return 'Error: skillName and errorMessage are required.';
+
+                const skillsList = this.skills.getAllSkills();
+                const targetSkill = skillsList.find(s => s.name === skillName);
+
+                if (!targetSkill || !targetSkill.pluginPath) {
+                    return `Error: Skill "${skillName}" not found or is a core skill that cannot be modified.`;
+                }
+
+                try {
+                    const pluginContent = fs.readFileSync(targetSkill.pluginPath, 'utf8');
+                    let specContent = '';
+
+                    if (targetSkill.sourceUrl) {
+                        try {
+                            const res = await fetch(targetSkill.sourceUrl);
+                            if (res.ok) specContent = await res.text();
+                        } catch (e) {
+                            logger.warn(`SelfRepair: Failed to fetch spec from ${targetSkill.sourceUrl}: ${e}`);
+                        }
+                    }
+
+                    const repairPrompt = `
+I am attempting to fix a bug in the OrcBot plugin "${skillName}".
+THE ERROR:
+"""
+${errorMessage}
+"""
+
+THE CURRENT CODE:
+\`\`\`typescript
+${pluginContent}
+\`\`\`
+
+${specContent ? `THE ORIGINAL SPECIFICATION:\n\"\"\"\n${specContent}\n\"\"\"\n` : ''}
+
+RULES:
+1. Identify the cause of the error (e.g., wrong API endpoint, missing headers, logic bug).
+2. Generate the CORRECTED TypeScript code. 
+3. Maintain the same "Skill" interface and export structure.
+4. Keep the "@source" tag in the header if it exists.
+5. Output ONLY the raw TypeScript code, no markdown blocks.
+
+Output the fixed code:
+`;
+
+                    logger.info(`SelfRepair: Consulting LLM to fix "${skillName}"...`);
+                    const fixedCode = await this.llm.call(repairPrompt, "You are a master at debugging and fixing AI agent plugins.");
+                    const cleanCode = fixedCode.replace(/```typescript/g, '').replace(/```/g, '').trim();
+
+                    fs.writeFileSync(targetSkill.pluginPath, cleanCode);
+                    this.skills.loadPlugins(); // Reload registry
+
+                    return `Successfully repaired and reloaded skill "${skillName}". You can now try to use it again.`;
+
+                } catch (error: any) {
+                    return `Self-repair failed for ${skillName}: ${error.message}`;
+                }
+            }
+        });
+
+        // Skill: Set Config
+        this.skills.registerSkill({
+            name: 'set_config',
+            description: 'Persistently save a configuration key-value pair. Use this to store API keys or settings (e.g., MOLTBOOK_API_KEY).',
+            usage: 'set_config(key, value)',
+            handler: async (args: any) => {
+                const key = args.key;
+                const value = args.value;
+                if (!key || value === undefined) return 'Error: Key and value are required.';
+                this.config.set(key, value);
+                return `Successfully saved ${key} to configuration.`;
+            }
+        });
+
         // Skill: Manage Skills
         this.skills.registerSkill({
             name: 'manage_skills',
-            description: 'Install or update a skill in SKILLS.md',
+            description: 'Install or update a skill in SKILLS.md. Use this to describe new tools the agent should have access to.',
             usage: 'manage_skills(skill_definition)',
             handler: async (args: any) => {
                 const skill_definition = args.skill_definition || args.definition || args.skill || args.text;
@@ -193,8 +276,10 @@ export class Agent {
                 const skillsPath = this.config.get('skillsPath');
                 try {
                     fs.appendFileSync(skillsPath, `\n\n${skill_definition}`);
-                    this.skills = new SkillsManager(); // Refresh
-                    return `Successfully added skill to ${skillsPath}`;
+                    // Instead of re-instantiating, we just log. 
+                    // Manual skills are already registered. Plugins can be reloaded.
+                    this.skills.loadPlugins();
+                    return `Successfully added skill to ${skillsPath}. The new definition is now active in your context.`;
                 } catch (e) {
                     return `Failed to update skills: ${e}`;
                 }
@@ -490,7 +575,7 @@ Be thorough and academic.`;
         // Skill: Learn User Info
         this.skills.registerSkill({
             name: 'update_user_profile',
-            description: 'Save new information learned about the user',
+            description: 'Save permanent information learned about the user (name, preferences, habits, goals). Use this PROACTIVELY whenever you learn something new about Frederick.',
             usage: 'update_user_profile(info_text)',
             handler: async (args: any) => {
                 const info_text = args.info_text || args.info || args.text || args.data;
@@ -498,9 +583,12 @@ Be thorough and academic.`;
 
                 const userPath = this.config.get('userProfilePath');
                 try {
-                    fs.appendFileSync(userPath, `\n- ${new Date().toISOString()}: ${info_text}`);
+                    // Prepend date for chronological history
+                    const entry = `\n- [${new Date().toLocaleDateString()}] ${info_text}`;
+                    fs.appendFileSync(userPath, entry);
                     this.memory.refreshUserContext(userPath);
-                    return `Successfully updated user profile at ${userPath} with: "${info_text}"`;
+                    logger.info(`User Profile Updated: ${info_text}`);
+                    return `Successfully updated user profile with: "${info_text}"`;
                 } catch (e) {
                     return `Failed to update profile at ${userPath}: ${e}`;
                 }
@@ -750,6 +838,14 @@ RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. we
             this.updateLastActionTime();
             this.actionQueue.updateStatus(action.id, 'in-progress');
 
+            // Record Task Start in Episodic Memory
+            this.memory.saveMemory({
+                id: `${action.id}-start`,
+                type: 'episodic',
+                content: `Starting Task: "${action.payload.description}" ${action.payload.source === 'telegram' ? `(via Telegram from ${action.payload.senderName})` : ''}`,
+                metadata: { actionId: action.id, source: action.payload.source }
+            });
+
             const MAX_STEPS = 30;
             let currentStep = 0;
             let messagesSent = 0;
@@ -918,6 +1014,14 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                     break;
                 }
             }
+            // Record Final Response/Reasoning in Memory upon completion
+            this.memory.saveMemory({
+                id: `${action.id}-conclusion`,
+                type: 'episodic',
+                content: `Task Finished: ${action.payload.description}. Current status marked as completed.`,
+                metadata: { actionId: action.id, steps: currentStep }
+            });
+
             this.actionQueue.updateStatus(action.id, 'completed');
         } catch (error: any) {
             logger.error(`Error processing action ${action.id}: ${error}`);

@@ -66,12 +66,12 @@ export async function runSetup() {
     // Save YAML Config
     const newConfig = {
         modelName: answers.modelName,
-        pluginsPath: answers.pluginsPath,
-        memoryPath: './memory.json',
-        userProfilePath: './USER.md',
-        journalPath: './JOURNAL.md',
-        learningPath: './LEARNING.md',
-        agentIdentityPath: './.AI.md'
+        pluginsPath: path.join(dataHome, 'plugins'),
+        memoryPath: path.join(dataHome, 'memory.json'),
+        userProfilePath: path.join(dataHome, 'USER.md'),
+        journalPath: path.join(dataHome, 'JOURNAL.md'),
+        learningPath: path.join(dataHome, 'LEARNING.md'),
+        agentIdentityPath: path.join(dataHome, '.AI.md')
     };
 
     fs.writeFileSync(configPath, yaml.stringify(newConfig));

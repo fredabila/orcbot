@@ -11,10 +11,10 @@ export class JSONAdapter {
     }
 
     private initialize() {
-        if (!fs.existsSync(this.filePath)) {
-            fs.writeFileSync(this.filePath, JSON.stringify({}, null, 2));
-            logger.info(`JSON fallback storage created at ${this.filePath}`);
+        if (!fs.existsSync(this.filePath) || fs.statSync(this.filePath).size === 0) {
             this.cache = {};
+            fs.writeFileSync(this.filePath, JSON.stringify(this.cache, null, 2));
+            logger.info(`JSON fallback storage initialized at ${this.filePath}`);
         } else {
             this.read(); // Load into cache
         }

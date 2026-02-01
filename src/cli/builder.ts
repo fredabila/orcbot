@@ -43,9 +43,10 @@ RULES for the generated code:
    }
 2. The code MUST be self-contained. Import necessary Node.js modules (fs, path, child_process, etc.).
 3. The 'context' object contains: browser, config, agent, memory, and a 'logger' object.
-4. IMPORTANT: Use 'context.logger' for all logging (e.g. context.logger.info, context.logger.error). DO NOT attempt to import the internal OrcBot logger via relative paths like '../utils/logger'.
-5. NO EXTERNAL DEPENDENCIES besides what is already in the project (playwright, telegraf, croner, etc.).
-6. Output ONLY the raw TypeScript code, no markdown blocks.
+4. IMPORTANT: Use 'context.logger' for all logging. DO NOT attempt to import the internal OrcBot logger.
+5. IMPORTANT: Use 'context.config.get("KEY_NAME")' to retrieve API keys or settings. DO NOT use direct property access (e.g., context.config.KEY_NAME is wrong).
+6. NO EXTERNAL DEPENDENCIES besides what is already in the project (playwright, telegraf, croner, etc.).
+7. Output ONLY the raw TypeScript code, no markdown blocks.
 
 Output the code for the .ts file:
 `;
@@ -63,7 +64,8 @@ Output the code for the .ts file:
             if (!fs.existsSync(pluginsDir)) fs.mkdirSync(pluginsDir, { recursive: true });
 
             const filePath = path.join(pluginsDir, fileName);
-            fs.writeFileSync(filePath, cleanCode);
+            const taggedCode = `// @source: ${url}\n${cleanCode}`;
+            fs.writeFileSync(filePath, taggedCode);
 
             logger.info(`SkillBuilder: Generated skill saved to ${filePath}`);
             return `Successfully built and installed skill: ${fileName}`;

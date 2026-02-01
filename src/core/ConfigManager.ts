@@ -34,32 +34,50 @@ export class ConfigManager {
             fs.mkdirSync(this.dataHome, { recursive: true });
         }
 
-        this.configPath = customPath || path.resolve(process.cwd(), 'orcbot.config.yaml');
-        this.config = this.loadConfig();
+        // Standard global path
+        const globalConfigPath = path.join(this.dataHome, 'orcbot.config.yaml');
+        // Local override path
+        const localConfigPath = path.resolve(process.cwd(), 'orcbot.config.yaml');
+
+        // Final config location: custom > local > global
+        this.configPath = customPath || (fs.existsSync(localConfigPath) ? localConfigPath : globalConfigPath);
+
+        this.config = this.loadConfig(customPath);
     }
 
-    private loadConfig(): AgentConfig {
+    private loadConfig(customPath?: string): AgentConfig {
         const defaults = this.getStringDefaultConfig();
-        let yamlConfig: any = {};
+        let globalConfig: any = {};
+        let homeConfig: any = {};
+        let localConfig: any = {};
 
-        // 1. Try local dir first, then fallback to global home
-        const pathsToTry = [
-            this.configPath, // Usually ./orcbot.config.yaml
-            path.join(this.dataHome, 'orcbot.config.yaml')
-        ];
+        // 1. Search paths
+        const globalPath = path.join(this.dataHome, 'orcbot.config.yaml');
+        const homePath = path.join(os.homedir(), 'orcbot.config.yaml');
+        const localPath = path.resolve(process.cwd(), 'orcbot.config.yaml');
 
-        for (const p of pathsToTry) {
-            if (fs.existsSync(p)) {
-                try {
-                    const fileContents = fs.readFileSync(p, 'utf8');
-                    yamlConfig = yaml.parse(fileContents) || {};
-                    logger.info(`ConfigManager: Loaded config from ${p}`);
-                    break;
-                } catch (error) {
-                    logger.error(`Error loading config from ${p}: ${error}`);
-                }
-            }
+        // Load Global (~/.orcbot/orcbot.config.yaml)
+        if (fs.existsSync(globalPath)) {
+            try { globalConfig = yaml.parse(fs.readFileSync(globalPath, 'utf8')) || {}; } catch (e) { logger.warn(`Error loading global config from ${globalPath}: ${e}`); }
         }
+        // Load Home (~/orcbot.config.yaml) - Fallback where user said theirs is
+        if (fs.existsSync(homePath)) {
+            try { homeConfig = yaml.parse(fs.readFileSync(homePath, 'utf8')) || {}; } catch (e) { logger.warn(`Error loading home config from ${homePath}: ${e}`); }
+        }
+        // Load Local (./orcbot.config.yaml)
+        if (fs.existsSync(localPath)) {
+            try { localConfig = yaml.parse(fs.readFileSync(localPath, 'utf8')) || {}; } catch (e) { logger.warn(`Error loading local config from ${localPath}: ${e}`); }
+        }
+        // Load Custom
+        let customConfig: any = {};
+        if (customPath && fs.existsSync(customPath)) {
+            try { customConfig = yaml.parse(fs.readFileSync(customPath, 'utf8')) || {}; } catch (e) { logger.warn(`Error loading custom config from ${customPath}: ${e}`); }
+        }
+
+        // Set the primary configPath for saving (prioritize most local existing config)
+        this.configPath = customPath || (fs.existsSync(localPath) ? localPath : (fs.existsSync(homePath) ? homePath : globalPath));
+        logger.info(`ConfigManager: Config path set to ${this.configPath}`);
+
 
         // 2. Merge Env Vars (Highest priority for keys)
         const envConfig: Partial<AgentConfig> = {
@@ -67,7 +85,9 @@ export class ConfigManager {
             googleApiKey: process.env.GOOGLE_API_KEY,
             serperApiKey: process.env.SERPER_API_KEY,
             captchaApiKey: process.env.CAPTCHA_API_KEY,
-            telegramToken: process.env.TELEGRAM_TOKEN
+            telegramToken: process.env.TELEGRAM_TOKEN,
+            // @ts-ignore - Dynamic key support
+            MOLTBOOK_API_KEY: process.env.MOLTBOOK_API_KEY
         };
 
         // Filter out undefined env vars
@@ -77,7 +97,10 @@ export class ConfigManager {
 
         return {
             ...defaults,
-            ...yamlConfig,
+            ...globalConfig,
+            ...homeConfig,
+            ...localConfig,
+            ...customConfig,
             ...activeEnv
         };
     }
@@ -98,11 +121,11 @@ export class ConfigManager {
         };
     }
 
-    public get(key: keyof AgentConfig): any {
-        return this.config[key];
+    public get(key: string): any {
+        return (this.config as any)[key];
     }
 
-    public set(key: keyof AgentConfig, value: any) {
+    public set(key: string, value: any) {
         (this.config as any)[key] = value;
         this.saveConfig();
     }

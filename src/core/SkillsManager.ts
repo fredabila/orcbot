@@ -16,6 +16,7 @@ export interface Skill {
     usage: string;
     handler: (args: any, context?: AgentContext) => Promise<any>;
     pluginPath?: string; // Track source file for uninstallation
+    sourceUrl?: string;  // Original URL if generated from a spec
 }
 
 export class SkillsManager {
@@ -53,8 +54,9 @@ export class SkillsManager {
         try {
             // Check if we are already in a TS environment
             if (!process[Symbol.for('ts-node.register.instance')]) {
+                // eslint-disable-next-line @typescript-eslint/no-require-imports
                 require('ts-node').register({
-                    transpileOnly: true, // Speed up loading, ignore type errors
+                    transpileOnly: true, // Speed up loading
                     compilerOptions: {
                         module: 'commonjs' // Ensure we output CommonJS for require()
                     }
@@ -62,8 +64,7 @@ export class SkillsManager {
                 logger.info('SkillsManager: Registered ts-node for plugin compilation.');
             }
         } catch (e) {
-            // ts-node might not be installed or already registered
-            logger.debug(`SkillsManager: ts-node registration skipped: ${e}`);
+            logger.debug(`SkillsManager: ts-node registration skipped or failed: ${e}`);
         }
 
         const files = fs.readdirSync(this.pluginsDir);
@@ -78,26 +79,44 @@ export class SkillsManager {
 
                     logger.info(`SkillsManager: Attempting to load plugin from ${fullPath}`);
                     // eslint-disable-next-line @typescript-eslint/no-require-imports
-                    const plugin = require(fullPath);
+                    const loadedModule = require(fullPath);
 
-                    if (plugin.default && plugin.default.name) {
-                        plugin.default.pluginPath = fullPath;
-                        this.registerSkill(plugin.default);
-                        logger.info(`SkillsManager: Successfully loaded plugin (default export): ${plugin.default.name}`);
-                    } else if (plugin.name) {
-                        plugin.pluginPath = fullPath;
-                        this.registerSkill(plugin);
-                        logger.info(`SkillsManager: Successfully loaded plugin (named export): ${plugin.name}`);
+                    let registerable: any = null;
+
+                    if (loadedModule.default && loadedModule.default.name) {
+                        registerable = loadedModule.default;
+                    } else if (loadedModule.name) {
+                        registerable = loadedModule;
                     } else {
                         // Check for named export matching filename
                         const baseName = path.parse(file).name;
-                        if (plugin[baseName] && plugin[baseName].name) {
-                            plugin[baseName].pluginPath = fullPath;
-                            this.registerSkill(plugin[baseName]);
-                            logger.info(`SkillsManager: Successfully loaded plugin (matching export): ${plugin[baseName].name}`);
-                        } else {
-                            logger.warn(`SkillsManager: Plugin ${file} loaded but contains no valid skill export. Keys: ${Object.keys(plugin).join(', ')}`);
+                        if (loadedModule[baseName] && loadedModule[baseName].name) {
+                            registerable = loadedModule[baseName];
                         }
+                    }
+
+                    if (registerable) {
+                        const skillName = registerable.name;
+
+                        // Try to extract sourceUrl from comment header
+                        let sourceUrl: string | undefined;
+                        try {
+                            const content = fs.readFileSync(fullPath, 'utf8');
+                            const urlMatch = content.match(/\/\/ @source: (https?:\/\/[^\s]+)/);
+                            if (urlMatch) sourceUrl = urlMatch[1];
+                        } catch (e) { }
+
+                        this.registerSkill({
+                            name: skillName,
+                            description: registerable.description || '',
+                            usage: registerable.usage || '',
+                            handler: registerable.handler,
+                            pluginPath: fullPath,
+                            sourceUrl
+                        });
+                        logger.info(`SkillsManager: Successfully loaded plugin: ${skillName}`);
+                    } else {
+                        logger.warn(`SkillsManager: Plugin ${file} loaded but contains no valid skill export.`);
                     }
                 } catch (e) {
                     logger.error(`SkillsManager: Failed to load plugin ${file}: ${e}`);
