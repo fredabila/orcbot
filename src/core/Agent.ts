@@ -54,7 +54,10 @@ export class Agent {
         );
         this.actionQueue = new ActionQueue(this.config.get('actionQueuePath') || './actions.json');
         this.scheduler = new Scheduler();
-        this.browser = new WebBrowser(this.config.get('serperApiKey'));
+        this.browser = new WebBrowser(
+            this.config.get('serperApiKey'),
+            this.config.get('captchaApiKey')
+        );
         this.lastActionTime = Date.now();
 
         this.loadAgentIdentity();
@@ -265,7 +268,19 @@ export class Agent {
             description: 'Take a screenshot of the current browser state',
             usage: 'browser_screenshot()',
             handler: async () => {
-                return this.browser.screenshot();
+                const captcha = await this.browser.detectCaptcha();
+                const result = await this.browser.screenshot();
+                return captcha ? `${result}\n[SYSTEM ALERT: ${captcha}. You should use browser_solve_captcha() now.]` : result;
+            }
+        });
+
+        // Skill: Browser Solve CAPTCHA
+        this.skills.registerSkill({
+            name: 'browser_solve_captcha',
+            description: 'Attempt to solve a detected CAPTCHA (reCAPTCHA, hCaptcha, etc.)',
+            usage: 'browser_solve_captcha()',
+            handler: async () => {
+                return this.browser.solveCaptcha();
             }
         });
 

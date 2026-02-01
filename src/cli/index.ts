@@ -107,6 +107,7 @@ async function showMainMenu() {
                 { name: 'View Status', value: 'status' },
                 { name: 'Manage Connections', value: 'connections' },
                 { name: 'Manage AI Models', value: 'models' },
+                { name: 'Tooling & APIs', value: 'tooling' },
                 { name: 'Configure Agent', value: 'config' },
                 { name: 'Exit', value: 'exit' },
             ],
@@ -132,12 +133,50 @@ async function showMainMenu() {
         case 'models':
             await showModelsMenu();
             break;
+        case 'tooling':
+            await showToolingMenu();
+            break;
         case 'config':
             await showConfigMenu();
             break;
         case 'exit':
             process.exit(0);
     }
+}
+
+async function showToolingMenu() {
+    const { tool } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'tool',
+            message: 'Select Tool to Configure:',
+            choices: [
+                { name: 'Serper (Web Search API)', value: 'serper' },
+                { name: '2Captcha (CAPTCHA Solver)', value: 'captcha' },
+                { name: 'Back', value: 'back' }
+            ]
+        }
+    ]);
+
+    if (tool === 'back') return showMainMenu();
+
+    if (tool === 'serper') {
+        const apiKey = agent.config.get('serperApiKey') || 'Not Set';
+        const { key } = await inquirer.prompt([
+            { type: 'input', name: 'key', message: `Enter Serper API Key (current: ${apiKey.substring(0, 8)}...):` }
+        ]);
+        if (key) agent.config.set('serperApiKey', key);
+    } else if (tool === 'captcha') {
+        const apiKey = agent.config.get('captchaApiKey') || 'Not Set';
+        const { key } = await inquirer.prompt([
+            { type: 'input', name: 'key', message: `Enter CAPTCHA Solver API Key (current: ${apiKey.substring(0, 8)}...):` }
+        ]);
+        if (key) agent.config.set('captchaApiKey', key);
+    }
+
+    console.log('Tooling configuration updated!');
+    await waitKeyPress();
+    return showToolingMenu();
 }
 
 async function showModelsMenu() {
@@ -294,7 +333,7 @@ async function showConnectionsMenu() {
 async function showConfigMenu() {
     const config = agent.config.getAll();
     // Ensure we show explicit keys relative to core config
-    const keys = ['agentName', 'openaiApiKey', 'googleApiKey', 'modelName', 'autonomyInterval', 'telegramToken', 'memoryPath'] as const;
+    const keys = ['agentName', 'openaiApiKey', 'googleApiKey', 'serperApiKey', 'captchaApiKey', 'modelName', 'autonomyInterval', 'telegramToken', 'memoryPath'] as const;
 
     const choices: { name: string, value: string }[] = keys.map(key => ({
         name: `${key}: ${config[key as keyof typeof config] || '(empty)'}`,

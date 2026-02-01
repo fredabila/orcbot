@@ -10,6 +10,7 @@ export interface AgentConfig {
     openaiApiKey?: string;
     googleApiKey?: string;
     serperApiKey?: string;
+    captchaApiKey?: string;
     modelName?: string;
     autonomyInterval?: number; // In minutes, default 0 (disabled)
     memoryPath?: string;
