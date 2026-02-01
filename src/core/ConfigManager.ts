@@ -20,6 +20,7 @@ export interface AgentConfig {
     actionQueuePath?: string;
     journalPath?: string;
     learningPath?: string;
+    pluginsPath?: string;
 }
 
 export class ConfigManager {
@@ -68,7 +69,8 @@ export class ConfigManager {
             agentIdentityPath: path.join(this.dataHome, '.AI.md'),
             actionQueuePath: path.join(this.dataHome, 'actions.json'),
             journalPath: path.join(this.dataHome, 'JOURNAL.md'),
-            learningPath: path.join(this.dataHome, 'LEARNING.md')
+            learningPath: path.join(this.dataHome, 'LEARNING.md'),
+            pluginsPath: path.join(this.dataHome, 'plugins')
         };
     }
 

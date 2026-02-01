@@ -52,6 +52,33 @@ Channels are providers like Discord, Slack, or WhatsApp.
 - **MultiLLM**: Add new providers (Anthropic, Local LLMs) in `src/core/MultiLLM.ts`.
 - **DecisionEngine**: Refine the system prompt or reasoning logic.
 
+## 🔌 Dynamic Plugin System
+OrcBot now supports a hot-loadable plugin system. This allows you (and the agent!) to add powers without recompiling or editing the core source.
+
+### 1. The Plugins Directory
+By default, OrcBot scans `~/.orcbot/plugins` (global) or `./plugins` (local) for `.ts` or `.js` files.
+
+### 2. Plugin Structure
+A plugin is a simple object exported from a file:
+
+```typescript
+// ./plugins/check_price.ts
+export const check_price = {
+    name: 'check_stock_price',
+    description: 'Fetch the live price for a stock symbol',
+    usage: 'check_stock_price(symbol)',
+    handler: async ({ symbol }: { symbol: string }) => {
+        const data = await fetch(`https://api.example.com/quote/${symbol}`);
+        return `Current price for ${symbol} is $${data.price}`;
+    }
+};
+```
+
+### 3. Autonomous Skill Building
+The agent has a special skill called `create_custom_skill`. 
+- **The Loop**: If the agent is asked to do something it can't, it will search for the logic, write the code, and call `create_custom_skill` to install it.
+- **Dependencies**: Use `install_npm_dependency` if your plugin requires external libraries.
+
 ## 🧪 Testing
 - Run `npm run build` to verify type safety.
 - Use `orcbot run` to test autonomous behavior.

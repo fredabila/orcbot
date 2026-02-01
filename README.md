@@ -29,7 +29,8 @@ OrcBot is a next-generation **autonomous reasoning agent**. Unlike simple chatbo
 *   🧠 **Autonomous Learning**: Automatically updates `USER.md` (your profile) and `.AI.md` (its identity) as it learns.
 *   💓 **Autonomy Heartbeat**: Proactively wakes up to self-reflect and take action even when idle.
 *   🖥️ **Interactive TUI**: Streamlined terminal interface for high-level management.
-*   🔌 **Self-Extending Skills**: The agent can literally write and install its own skills.
+*   🔌 **Self-Learning Plugin System**: Drop `.ts` or `.js` files into the `plugins/` directory to live-load new capabilities.
+*   🧠 **Autonomous Skill Building**: The agent can autonomously research, write, and install its own skills using the `create_custom_skill` power.
 
 ---
 

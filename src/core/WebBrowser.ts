@@ -64,10 +64,17 @@ export class WebBrowser {
     public async detectCaptcha(): Promise<string | null> {
         if (!this.page) return null;
         const content = await this.page.content();
-        if (content.includes('g-recaptcha') || content.includes('recaptcha/api.js')) return 'Google reCAPTCHA Detected';
-        if (content.includes('h-captcha') || content.includes('hcaptcha.com')) return 'hCaptcha Detected';
-        if (content.includes('cf-turnstile') || content.includes('challenges.cloudflare.com')) return 'Cloudflare Turnstile Detected';
-        if (content.includes('Please verify you are a human') || content.includes('Verify you are human')) return 'Generic CAPTCHA/Verification Page Detected';
+        if (content.includes('g-recaptcha') || content.includes('recaptcha/api.js')) return 'Google reCAPTCHA';
+        if (content.includes('h-captcha') || content.includes('hcaptcha.com')) return 'hCaptcha';
+        if (content.includes('cf-turnstile') || content.includes('challenges.cloudflare.com')) return 'Cloudflare Turnstile';
+        if (content.includes('Please verify you are a human') || content.includes('Verify you are human')) {
+            // Check if there is a simple button/checkbox we can just click
+            const hasButton = await this.page.evaluate(() => {
+                const buttons = Array.from(document.querySelectorAll('button, input[type="button"], [role="button"], input[type="checkbox"]'));
+                return buttons.some(b => b.textContent?.includes('Verify') || b.textContent?.includes('human') || (b as HTMLElement).innerText?.includes('Verify'));
+            });
+            return hasButton ? 'Verification Button/Checkbox' : 'Generic CAPTCHA Page';
+        }
         return null;
     }
 
@@ -80,34 +87,84 @@ export class WebBrowser {
 
         logger.info(`Attempting to solve ${type}...`);
 
+        // Handle simple button/checkbox first
+        if (type === 'Verification Button/Checkbox') {
+            try {
+                await this.page.evaluate(() => {
+                    const buttons = Array.from(document.querySelectorAll('button, input[type="button"], [role="button"], input[type="checkbox"]')) as HTMLElement[];
+                    const target = buttons.find(b => b.textContent?.includes('Verify') || b.textContent?.includes('human') || b.innerText?.includes('Verify'));
+                    if (target) target.click();
+                });
+                await this.page.waitForTimeout(2000);
+                const stillThere = await this.detectCaptcha();
+                return stillThere ? `Clicked verification button but ${stillThere} remains.` : 'Successfully bypassed verification button.';
+            } catch (e) {
+                return `Failed to click verification button: ${e}`;
+            }
+        }
+
         try {
-            // 1. Extract SiteKey
-            const siteKey = await this.page.evaluate(() => {
+            // 1. Identify and extract SiteKey/Data
+            const taskData = await this.page.evaluate(() => {
                 const re = document.querySelector('[data-sitekey]');
-                if (re) return re.getAttribute('data-sitekey');
-                const frame = document.querySelector('iframe[src*="sitekey="]');
-                if (frame) {
-                    const url = new URL((frame as HTMLIFrameElement).src);
-                    return url.searchParams.get('sitekey');
-                }
+                if (re) return { sitekey: re.getAttribute('data-sitekey'), type: 'userrecaptcha' };
+                const h = document.querySelector('[data-sitekey][src*="hcaptcha"]');
+                if (h) return { sitekey: h.getAttribute('data-sitekey'), type: 'hcaptcha' };
                 return null;
             });
 
-            if (!siteKey) return 'Error: Could not find sitekey on page.';
+            if (!taskData || !taskData.sitekey) return `Error: Could not extract sitekey for ${type}.`;
 
-            // 2. Submit to 2Captcha (Simulated for this implementation, using standard API pattern)
-            // In a real prod environment, we would use an NPM package or axios here.
-            // For now, we'll implement the logic flow.
-
+            // 2. Submit to 2Captcha API
             const pageUrl = this.page.url();
-            logger.info(`Solving ${type} with sitekey ${siteKey} for ${pageUrl}`);
+            const submitUrl = `https://2captcha.com/in.php?key=${this.captchaApiKey}&method=${taskData.type}&googlekey=${taskData.sitekey}&pageurl=${encodeURIComponent(pageUrl)}&json=1`;
 
-            // Note: This is an architectural stub for the actual HTTP request to 2captcha.com/in.php
-            // We will return a simulated success for demonstration if the logic is correct.
+            const submitRes = await fetch(submitUrl);
+            const submitJson = await submitRes.json() as any;
 
-            return `CAPTCHA solver initiated for ${type}. (Integration active: result would be injected upon completion)`;
+            if (submitJson.status !== 1) return `2Captcha Error: ${submitJson.request}`;
+            const requestId = submitJson.request;
+
+            // 3. Poll for result
+            logger.info(`CAPTCHA submitted (ID: ${requestId}). Polling for result...`);
+            let token = '';
+            for (let i = 0; i < 20; i++) { // Max 100 seconds
+                await new Promise(r => setTimeout(r, 5000));
+                const resUrl = `https://2captcha.com/res.php?key=${this.captchaApiKey}&action=get&id=${requestId}&json=1`;
+                const resRes = await fetch(resUrl);
+                const resJson = await resRes.json() as any;
+
+                if (resJson.status === 1) {
+                    token = resJson.request;
+                    break;
+                }
+                if (resJson.request !== 'CAPCHA_NOT_READY') return `2Captcha Error: ${resJson.request}`;
+            }
+
+            if (!token) return 'Error: Timed out waiting for CAPTCHA solution.';
+
+            // 4. Inject token and submit
+            await this.page.evaluate((t) => {
+                const g = document.getElementById('g-recaptcha-response') as HTMLTextAreaElement;
+                if (g) g.innerHTML = t;
+                const h = document.querySelector('[name="h-captcha-response"]') as HTMLTextAreaElement;
+                if (h) h.innerHTML = t;
+
+                // Try to find and call the callback
+                const callback = (window as any).___grecaptcha_cfg?.clients[0]?.aa?.l?.callback;
+                if (callback) callback(t);
+
+                // Or find a submit button
+                const submit = document.querySelector('input[type="submit"], button[type="submit"]') as HTMLElement;
+                if (submit) submit.click();
+            }, token);
+
+            await this.page.waitForTimeout(3000);
+            const finalCheck = await this.detectCaptcha();
+            return finalCheck ? `Token injected but ${finalCheck} persists. Manual action may be needed.` : 'Successfully solved CAPTCHA and bypassed page.';
+
         } catch (e) {
-            return `Failed to solve CAPTCHA: ${e}`;
+            return `Failed to solve CAPTCHA via API: ${e}`;
         }
     }
 

@@ -44,7 +44,10 @@ export class Agent {
             googleApiKey: this.config.get('googleApiKey'),
             modelName: this.config.get('modelName')
         });
-        this.skills = new SkillsManager(this.config.get('skillsPath') || './SKILLS.md');
+        this.skills = new SkillsManager(
+            this.config.get('skillsPath') || './SKILLS.md',
+            this.config.get('pluginsPath') || './plugins'
+        );
         this.decisionEngine = new DecisionEngine(
             this.memory,
             this.llm,
@@ -281,6 +284,63 @@ export class Agent {
             usage: 'browser_solve_captcha()',
             handler: async () => {
                 return this.browser.solveCaptcha();
+            }
+        });
+
+        // Skill: Create Custom Skill
+        this.skills.registerSkill({
+            name: 'create_custom_skill',
+            description: 'Autonomously create a new skill for yourself. Provide name, description, usage, and valid code.',
+            usage: 'create_custom_skill({ name, description, usage, code })',
+            handler: async (args: any) => {
+                const { name, description, usage, code } = args;
+                if (!name || !code) return 'Error: Name and code are required.';
+
+                const pluginsDir = this.config.get('pluginsPath') || './plugins';
+                if (!fs.existsSync(pluginsDir)) {
+                    fs.mkdirSync(path.resolve(pluginsDir), { recursive: true });
+                }
+
+                const fileName = `${name}.ts`;
+                const filePath = path.resolve(pluginsDir, fileName);
+
+                // Ensure correct formatting for a plugin
+                const finalCode = code.includes('export') ? code : `
+export const ${name} = {
+    name: "${name}",
+    description: "${description || ''}",
+    usage: "${usage || ''}",
+    handler: async (args: any) => {
+        ${code}
+    }
+};
+`;
+
+                fs.writeFileSync(filePath, finalCode);
+                this.skills.loadPlugins();
+                return `Skill '${name}' created and registered in ${filePath}.`;
+            }
+        });
+
+        // Skill: Install NPM Dependency
+        this.skills.registerSkill({
+            name: 'install_npm_dependency',
+            description: 'Install an NPM package for use in custom skills.',
+            usage: 'install_npm_dependency(packageName)',
+            handler: async (args: any) => {
+                const pkg = args.packageName || args.package;
+                if (!pkg) return 'Error: Missing package name.';
+
+                return new Promise((resolve) => {
+                    const { exec } = require('child_process');
+                    exec(`npm install ${pkg}`, (error: any, stdout: string, stderr: string) => {
+                        if (error) {
+                            resolve(`Error: ${error.message}\n${stderr}`);
+                        } else {
+                            resolve(`Package '${pkg}' installed.\n${stdout}`);
+                        }
+                    });
+                });
             }
         });
 

@@ -1,4 +1,5 @@
 import fs from 'fs';
+import path from 'path';
 import { logger } from '../utils/logger';
 
 export interface Skill {
@@ -11,16 +12,48 @@ export interface Skill {
 export class SkillsManager {
     private skills: Map<string, Skill> = new Map();
 
-    constructor(private skillsPath: string = './SKILLS.md') {
+    constructor(private skillsPath: string = './SKILLS.md', private pluginsDir?: string) {
         this.loadSkills();
+        if (this.pluginsDir) {
+            this.loadPlugins();
+        }
     }
 
     private loadSkills() {
         if (fs.existsSync(this.skillsPath)) {
-            const content = fs.readFileSync(this.skillsPath, 'utf-8');
-            logger.info(`SkillsManager: Loaded skills definition from ${this.skillsPath}`);
-        } else {
-            logger.warn(`SkillsManager: ${this.skillsPath} not found.`);
+            // Logic for parsing SKILLS.md could go here if needed for documentation
+            logger.info(`SkillsManager: Skills definitions active from ${this.skillsPath}`);
+        }
+    }
+
+    public loadPlugins() {
+        if (!this.pluginsDir) return;
+
+        if (!fs.existsSync(this.pluginsDir)) {
+            fs.mkdirSync(this.pluginsDir, { recursive: true });
+            return;
+        }
+
+        const files = fs.readdirSync(this.pluginsDir);
+        for (const file of files) {
+            if (file.endsWith('.js') || file.endsWith('.ts')) {
+                const fullPath = path.resolve(this.pluginsDir, file);
+                try {
+                    // Note: For TS files at runtime, we assume they are either pre-compiled 
+                    // or running in a ts-node environment.
+                    // eslint-disable-next-line @typescript-eslint/no-require-imports
+                    const plugin = require(fullPath);
+                    if (plugin.default && plugin.default.name) {
+                        this.registerSkill(plugin.default);
+                        logger.info(`Loaded plugin: ${plugin.default.name} from ${file}`);
+                    } else if (plugin.name) {
+                        this.registerSkill(plugin);
+                        logger.info(`Loaded plugin: ${plugin.name} from ${file}`);
+                    }
+                } catch (e) {
+                    logger.error(`Failed to load plugin ${file}: ${e}`);
+                }
+            }
         }
     }
 
