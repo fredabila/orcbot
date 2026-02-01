@@ -553,7 +553,7 @@ async function showWhatsAppConfig() {
 async function showConfigMenu() {
     const config = agent.config.getAll();
     // Ensure we show explicit keys relative to core config
-    const keys = ['agentName', 'openaiApiKey', 'googleApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl', 'searchProviderOrder', 'captchaApiKey', 'modelName', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'whatsappAutoReplyEnabled', 'memoryPath'] as const;
+    const keys = ['agentName', 'openaiApiKey', 'googleApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl', 'searchProviderOrder', 'captchaApiKey', 'modelName', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'whatsappAutoReplyEnabled', 'memoryPath', 'commandAllowList', 'commandDenyList', 'safeMode', 'pluginAllowList', 'pluginDenyList'] as const;
 
     const choices: { name: string, value: string }[] = keys.map(key => ({
         name: `${key}: ${config[key as keyof typeof config] || '(empty)'}`,
@@ -591,9 +591,12 @@ async function showConfigMenu() {
         { type: 'input', name: 'value', message: `Enter new value for ${key}:` },
     ]);
 
-    if (key === 'searchProviderOrder') {
+    if (key === 'searchProviderOrder' || key === 'commandAllowList' || key === 'commandDenyList' || key === 'pluginAllowList' || key === 'pluginDenyList') {
         const parsed = (value || '').split(',').map((s: string) => s.trim()).filter(Boolean);
         agent.config.set(key as any, parsed);
+    } else if (key === 'safeMode') {
+        const normalized = String(value).trim().toLowerCase();
+        agent.config.set(key as any, normalized === 'true' || normalized === '1' || normalized === 'yes');
     } else {
         agent.config.set(key as any, value);
     }

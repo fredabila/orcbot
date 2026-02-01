@@ -62,6 +62,11 @@ export class SkillsManager {
     public loadPlugins() {
         if (!this.pluginsDir) return;
 
+        if (this.context?.config?.get('safeMode')) {
+            logger.warn('SkillsManager: Safe mode enabled; plugin loading is disabled.');
+            return;
+        }
+
         if (!fs.existsSync(this.pluginsDir)) {
             fs.mkdirSync(this.pluginsDir, { recursive: true });
             return;
@@ -100,6 +105,22 @@ export class SkillsManager {
 
                     if (registerable) {
                         const skillName = registerable.name;
+
+                        const allowList = (this.context?.config?.get('pluginAllowList') || []) as string[];
+                        const denyList = (this.context?.config?.get('pluginDenyList') || []) as string[];
+                        const normalized = skillName.toLowerCase();
+                        const allow = allowList.length === 0 || allowList.map(s => s.toLowerCase()).includes(normalized);
+                        const deny = denyList.map(s => s.toLowerCase()).includes(normalized);
+
+                        if (deny) {
+                            logger.warn(`SkillsManager: Plugin ${skillName} blocked by pluginDenyList.`);
+                            continue;
+                        }
+
+                        if (!allow) {
+                            logger.warn(`SkillsManager: Plugin ${skillName} not in pluginAllowList.`);
+                            continue;
+                        }
 
                         // Try to extract sourceUrl from comment header
                         let sourceUrl: string | undefined;

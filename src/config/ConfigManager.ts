@@ -43,6 +43,14 @@ export interface AgentConfig {
     maxMessagesPerAction?: number;
     maxStepsPerAction?: number;
     messageDedupWindow?: number;
+    commandTimeoutMs?: number;
+    commandRetries?: number;
+    commandWorkingDir?: string;
+    commandAllowList?: string[];
+    commandDenyList?: string[];
+    safeMode?: boolean;
+    pluginAllowList?: string[];
+    pluginDenyList?: string[];
 }
 
 export class ConfigManager {
@@ -181,6 +189,41 @@ export class ConfigManager {
             maxMessagesPerAction: 3,
             maxStepsPerAction: 30,
             messageDedupWindow: 10,
+            commandTimeoutMs: 120000,
+            commandRetries: 1,
+            commandWorkingDir: undefined,
+            commandAllowList: [
+                'npm',
+                'node',
+                'npx',
+                'git',
+                'python',
+                'pip',
+                'pip3',
+                'curl',
+                'wget',
+                'powershell',
+                'pwsh',
+                'bash'
+            ],
+            commandDenyList: [
+                'rm',
+                'rmdir',
+                'del',
+                'erase',
+                'format',
+                'mkfs',
+                'dd',
+                'shutdown',
+                'reboot',
+                'poweroff',
+                'reg',
+                'diskpart',
+                'netsh'
+            ],
+            safeMode: false,
+            pluginAllowList: [],
+            pluginDenyList: [],
             bedrockRegion: process.env.BEDROCK_REGION || process.env.AWS_REGION,
             bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
             bedrockSecretAccessKey: process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY,

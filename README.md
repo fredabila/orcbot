@@ -205,6 +205,8 @@ OrcBot supports hot-loadable skills via TypeScript or JavaScript plugins in `~/.
 - **Local-first**: memory, logs, and profiles stay on your machine
 - **No hidden uploads**: network calls only happen when a skill requires them
 - **Config isolation**: secrets are loaded from your config and environment variables
+- **Safe Mode**: disable command execution and skill creation via `safeMode: true`
+- **Plugin allow/deny**: control which plugins can load with `pluginAllowList` and `pluginDenyList`
 
 ---
 

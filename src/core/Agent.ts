@@ -59,7 +59,13 @@ export class Agent {
         });
         this.skills = new SkillsManager(
             this.config.get('skillsPath') || './SKILLS.md',
-            this.config.get('pluginsPath') || './plugins'
+            this.config.get('pluginsPath') || './plugins',
+            {
+                browser: this.browser,
+                config: this.config,
+                agent: this,
+                logger: logger
+            }
         );
         this.decisionEngine = new DecisionEngine(
             this.memory,
@@ -83,7 +89,7 @@ export class Agent {
         this.loadLastActionTime();
         this.loadLastHeartbeatTime();
 
-        // Inject Context into SkillsManager for Plugins
+        // Ensure context is up to date (supports reconfiguration)
         this.skills.setContext({
             browser: this.browser,
             config: this.config,
@@ -365,16 +371,60 @@ export class Agent {
                 const command = args.command || args.cmd || args.text;
                 if (!command) return 'Error: Missing command string.';
 
+                const trimmed = String(command).trim();
+                const firstToken = trimmed.split(/\s+/)[0]?.toLowerCase() || '';
+                const allowList = (this.config.get('commandAllowList') || []) as string[];
+                const denyList = (this.config.get('commandDenyList') || []) as string[];
+                const safeMode = this.config.get('safeMode');
+
+                if (safeMode) {
+                    return 'Error: Safe mode is enabled. run_command is disabled.';
+                }
+
+                if (denyList.map(s => s.toLowerCase()).includes(firstToken)) {
+                    return `Error: Command '${firstToken}' is blocked by commandDenyList.`;
+                }
+
+                if (allowList.length > 0 && !allowList.map(s => s.toLowerCase()).includes(firstToken)) {
+                    return `Error: Command '${firstToken}' is not in commandAllowList.`;
+                }
+
+                const timeoutMs = parseInt(args.timeoutMs || args.timeout || this.config.get('commandTimeoutMs') || 120000, 10);
+                const retries = parseInt(args.retries || this.config.get('commandRetries') || 1, 10);
+                const cwd = args.cwd || this.config.get('commandWorkingDir') || process.cwd();
+
                 const { exec } = require('child_process');
-                return new Promise((resolve) => {
-                    const child = exec(command, { timeout: 60000 }, (error: any, stdout: string, stderr: string) => {
+
+                const runOnce = () => new Promise<string>((resolve) => {
+                    const child = exec(command, { timeout: timeoutMs, cwd }, (error: any, stdout: string, stderr: string) => {
                         if (error) {
-                            if (error.killed) resolve('Error: Command timed out after 60 seconds.');
+                            if (error.killed) {
+                                resolve(`Error: Command timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
+                                return;
+                            }
                             resolve(`Error: ${error.message}\nStderr: ${stderr}`);
+                            return;
                         }
                         resolve(stdout || stderr || "Command executed successfully (no output)");
                     });
+
+                    child.on('error', (err: any) => {
+                        resolve(`Error: Failed to start command: ${err?.message || err}`);
+                    });
                 });
+
+                let attempt = 0;
+                let lastResult = '';
+                while (attempt <= retries) {
+                    lastResult = await runOnce();
+                    if (!lastResult.startsWith('Error:')) return lastResult;
+                    attempt++;
+                    if (attempt <= retries) {
+                        logger.warn(`run_command retry ${attempt}/${retries} after error: ${lastResult}`);
+                    }
+                }
+
+                return lastResult;
             }
         });
 
@@ -618,6 +668,9 @@ Output the fixed code:
             description: 'Autonomously create a new skill. The "code" argument must be the **BODY** of a Node.js async function. \n\nIMPORTANT RULES:\n1. Do NOT wrap the code in `async function() { ... }` or `() => { ... }`. Provide ONLY the inner logic.\n2. To access the browser, use `await context.browser.evaluate(() => { ... })`.\n3. Do NOT try to call other skills as functions (e.g. `send_file(...)` is NOT available directly). You must use `context.agent.skills.execute("skill_name", { args })` if you strictly need to call another skill, or better yet, implement the logic natively using `fs`, `fetch`, etc.\n4. Ensure you `return` a string at the end of the operation.',
             usage: 'create_custom_skill({ name, description, usage, code })',
             handler: async (args: any) => {
+                if (this.config.get('safeMode')) {
+                    return 'Error: Safe mode is enabled. Skill creation is disabled.';
+                }
                 const { name, description, usage, code } = args;
                 if (!name || !code) return 'Error: Name and code are required.';
 
