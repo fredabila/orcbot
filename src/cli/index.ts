@@ -340,8 +340,10 @@ async function showConnectionsMenu() {
 
 async function showTelegramConfig() {
     const currentToken = agent.config.get('telegramToken') || 'Not Set';
+    const autoReply = agent.config.get('telegramAutoReplyEnabled');
     console.log(`\n--- Telegram Settings ---`);
     console.log(`Current Token: ${currentToken}`);
+    console.log(`Auto-Reply: ${autoReply ? 'ON' : 'OFF'}`);
 
     const { action } = await inquirer.prompt([
         {
@@ -350,6 +352,7 @@ async function showTelegramConfig() {
             message: 'Telegram Options:',
             choices: [
                 { name: 'Set Token', value: 'set' },
+                { name: autoReply ? 'Disable Auto-Reply' : 'Enable Auto-Reply', value: 'toggle_auto' },
                 { name: 'Back', value: 'back' }
             ]
         }
@@ -362,8 +365,11 @@ async function showTelegramConfig() {
             { type: 'input', name: 'token', message: 'Enter Telegram Bot Token:' }
         ]);
         agent.config.set('telegramToken', token);
-        console.log('Token updated! Restart the agent to apply changes.');
+        console.log('Token updated! (Restart required for token changes)');
         await waitKeyPress();
+        return showTelegramConfig();
+    } else if (action === 'toggle_auto') {
+        agent.config.set('telegramAutoReplyEnabled', !autoReply);
         return showTelegramConfig();
     }
 }

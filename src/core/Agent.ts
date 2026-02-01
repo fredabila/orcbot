@@ -975,7 +975,7 @@ RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. we
             let loopCounter = 0;
             let deepToolExecuted = false;
 
-            const nonDeepSkills = ['send_telegram', 'update_journal', 'update_learning', 'update_user_profile', 'update_agent_identity', 'get_system_info'];
+            const nonDeepSkills = ['send_telegram', 'send_whatsapp', 'update_journal', 'update_learning', 'update_user_profile', 'update_agent_identity', 'get_system_info'];
 
             while (currentStep < MAX_STEPS) {
                 currentStep++;
@@ -1026,7 +1026,7 @@ RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. we
 
                     let forceBreak = false;
                     for (const toolCall of decision.tools) {
-                        if (toolCall.name === 'send_telegram') {
+                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp') {
                             const currentMessage = (toolCall.metadata?.message || '').trim();
 
                             // 1. Block exact duplicates across any step
@@ -1099,7 +1099,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         }
 
                         let observation = `Observation: Tool ${toolCall.name} returned: ${JSON.stringify(toolResult)}`;
-                        if (toolCall.name === 'send_telegram') {
+                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp') {
                             messagesSent++;
                         }
 

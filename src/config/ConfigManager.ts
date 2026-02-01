@@ -28,6 +28,7 @@ export interface AgentConfig {
     whatsappAutoReactEnabled?: boolean;
     whatsappContextProfilingEnabled?: boolean;
     whatsappOwnerJID?: string;
+    telegramAutoReplyEnabled?: boolean;
 }
 
 export class ConfigManager {
@@ -50,9 +51,28 @@ export class ConfigManager {
         this.configPath = customPath || (fs.existsSync(localConfigPath) ? localConfigPath : globalConfigPath);
 
         this.config = this.loadConfig(customPath);
+        this.startWatcher(customPath);
     }
 
-    private loadConfig(customPath?: string): AgentConfig {
+    private startWatcher(customPath?: string) {
+        if (!fs.existsSync(this.configPath)) return;
+
+        // Use a simple debounce to avoid double-loading on rapid saves
+        let debounceTimer: NodeJS.Timeout | null = null;
+
+        fs.watch(this.configPath, (eventType) => {
+            if (eventType === 'change') {
+                if (debounceTimer) clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => {
+                    logger.info(`ConfigManager: Config file changed on disk, reloading...`);
+                    // We load without logging the path again to keep it clean
+                    this.config = this.loadConfig(customPath, true);
+                }, 100);
+            }
+        });
+    }
+
+    private loadConfig(customPath?: string, silent: boolean = false): AgentConfig {
         const defaults = this.getStringDefaultConfig();
         let globalConfig: any = {};
         let homeConfig: any = {};
@@ -83,7 +103,7 @@ export class ConfigManager {
 
         // Set the primary configPath for saving (prioritize most local existing config)
         this.configPath = customPath || (fs.existsSync(localPath) ? localPath : (fs.existsSync(homePath) ? homePath : globalPath));
-        logger.info(`ConfigManager: Config path set to ${this.configPath}`);
+        if (!silent) logger.info(`ConfigManager: Config path set to ${this.configPath}`);
 
 
         // 2. Merge Env Vars (Highest priority for keys)
@@ -131,7 +151,8 @@ export class ConfigManager {
             whatsappStatusReplyEnabled: false,
             whatsappAutoReactEnabled: false,
             whatsappContextProfilingEnabled: false,
-            whatsappOwnerJID: undefined
+            whatsappOwnerJID: undefined,
+            telegramAutoReplyEnabled: false
         };
     }
 

@@ -32,8 +32,9 @@ export class TelegramChannel implements IChannel {
             const text = ctx.message.text;
             const userId = ctx.message.from.id.toString();
             const userName = ctx.message.from.first_name;
+            const autoReplyEnabled = this.agent.config.get('telegramAutoReplyEnabled');
 
-            logger.info(`Telegram: Message from ${userName} (${userId}): ${text}`);
+            logger.info(`Telegram: Message from ${userName} (${userId}): ${text} | autoReply=${autoReplyEnabled}`);
 
             // Store user message in memory
             this.agent.memory.saveMemory({
@@ -42,6 +43,11 @@ export class TelegramChannel implements IChannel {
                 content: `User ${userName} (Telegram ${userId}) said: ${text}`,
                 timestamp: new Date().toISOString()
             });
+
+            if (!autoReplyEnabled) {
+                logger.debug(`Telegram: Auto-reply disabled, skipping task creation.`);
+                return;
+            }
 
             // Push task to agent
             await this.agent.pushTask(

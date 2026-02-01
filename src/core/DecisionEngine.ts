@@ -83,7 +83,7 @@ STRATEGIC REASONING PROTOCOLS:
 1.  **Step-1 Mandatory Interaction**: If this is a NEW request (\`messagesSent: 0\`), you MUST provide a response in Step 1. Do NOT stay silent.
 2.  **Step-2+ Purpose (RESULTS ONLY)**: If \`messagesSent > 0\`, do NOT send another message unless you have gathered NEW, CRITICAL information from a deep skill (Search/Command/Web) that wasn't available in Step 1.
 3.  **Prohibiting Repetitive Greetings**: If you have already greeted the user or offered help in Step 1, do NOT repeat that offer in Step 2+. If no new data was found, terminate immediately.
-4.  **Single-Turn Finality**: For social fluff or simple updates, complete ALL actions and send the final response in Step 1.
+4.  **Single-Turn Finality**: For social fluff, simple updates, or when all required info is already available, complete ALL actions and send the final response in Step 1. Do NOT wait until Step 2 to respond if you have the answer now.
 5.  **MANDATORY TERMINATION CHECK**: Before outputting any tools, **READ THE 'Recent Conversation History'**. If you see that you have ALREADY performed the action requested by the user in this sequence (e.g. you sent the message, or ran the skill), you MUST STOP. Do not repeat the action "just to be sure". Return an empty tool list to finish the task.
 6.  **No Redundant Reflections**: Do not loop just to "reflect" in your journal. If the user's intent is addressed, terminal the task.
 6.  **Interactive Clarification**: If a task CANNOT be safely or fully completed due to missing details (e.g., credentials, ambiguous URLs, missing dates for a ticket), you MUST use the \`request_supporting_data\` skill. 
