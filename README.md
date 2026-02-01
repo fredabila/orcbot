@@ -1,5 +1,5 @@
 <div align="center">
-<img src="assets/banner.png" width="100%" alt="OrcBot Hero Banner">
+<img src="assets/banner.png" width="720" alt="OrcBot Hero Banner">
 
 # OrcBot v2.0
 ### The Production-Ready Strategic AI Agent
@@ -12,7 +12,7 @@
 
 **Autonomous. Strategic. Multi-Modal. Self-Healing.**
 
-[Features](#features) • [Installation](#installation) • [Quickstart](#quickstart) • [Usage](#-usage) • [Configuration](#configuration) • [Autonomy](#autonomy--heartbeat) • [Skills](#-high-power-skills) • [Plugins](#-dynamic-plugin-system) • [Security](#security--privacy)
+[Features](#features) • [Installation](#installation) • [Quickstart](#quickstart) • [Usage](#-usage) • [Configuration](#configuration) • [Autonomy](#autonomy--heartbeat) • [Skills](#-high-power-skills) • [Plugins](#-dynamic-plugin-system) • [Security](#security--privacy) • [Docs](https://fredabila.github.io/orcbot/)
 
 </div>
 
