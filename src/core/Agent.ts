@@ -54,7 +54,7 @@ export class Agent {
         );
         this.actionQueue = new ActionQueue(this.config.get('actionQueuePath') || './actions.json');
         this.scheduler = new Scheduler();
-        this.browser = new WebBrowser();
+        this.browser = new WebBrowser(this.config.get('serperApiKey'));
         this.lastActionTime = Date.now();
 
         this.loadAgentIdentity();
@@ -86,7 +86,7 @@ export class Agent {
             // Ensure file exists with default content if missing
             if (!fs.existsSync(filePath)) {
                 let defaultContent = '';
-                if (key === 'agentIdentity') defaultContent = '# .AI.md\nName: Alice\nPersonality: proactive, concise, professional\nAutonomyLevel: high\nDefaultBehavior: \n  - prioritize tasks based on user goals\n  - act proactively when deadlines are near\n  - consult SKILLS.md tools to accomplish actions\n';
+                if (key === 'agentIdentity') defaultContent = '# .AI.md\nName: OrcBot\nPersonality: proactive, concise, professional\nAutonomyLevel: high\nDefaultBehavior: \n  - prioritize tasks based on user goals\n  - act proactively when deadlines are near\n  - consult SKILLS.md tools to accomplish actions\n';
                 if (key === 'userProfile') defaultContent = '# User Profile\n\nThis file contains information about the user.\n\n## Core Identity\n- Name: Frederick\n- Preferences: None known yet\n';
                 if (key === 'journal') defaultContent = '# Agent Journal\nThis file contains self-reflections and activity logs.\n';
                 if (key === 'learning') defaultContent = '# Agent Learning Base\nThis file contains structured knowledge on various topics.\n';
@@ -143,11 +143,25 @@ export class Agent {
 
                 const { exec } = require('child_process');
                 return new Promise((resolve) => {
-                    exec(command, (error: any, stdout: string, stderr: string) => {
-                        if (error) resolve(`Error: ${error.message}\nStderr: ${stderr}`);
+                    const child = exec(command, { timeout: 60000 }, (error: any, stdout: string, stderr: string) => {
+                        if (error) {
+                            if (error.killed) resolve('Error: Command timed out after 60 seconds.');
+                            resolve(`Error: ${error.message}\nStderr: ${stderr}`);
+                        }
                         resolve(stdout || stderr || "Command executed successfully (no output)");
                     });
                 });
+            }
+        });
+
+        // Skill: Get System Info
+        this.skills.registerSkill({
+            name: 'get_system_info',
+            description: 'Get current server time, date, and OS information',
+            usage: 'get_system_info()',
+            handler: async () => {
+                const os = require('os');
+                return `Server Time: ${new Date().toLocaleString()}\nOS: ${os.platform()} ${os.release()}`;
             }
         });
 
@@ -174,19 +188,91 @@ export class Agent {
         // Skill: Browser Navigate
         this.skills.registerSkill({
             name: 'browser_navigate',
-            description: 'Navigate to a URL and get text content',
-            usage: 'browser_navigate(url)',
+            description: 'Navigate to a URL and optionally wait for specific selectors',
+            usage: 'browser_navigate(url, waitSelectors?)',
             handler: async (args: any) => {
                 const url = args.url || args.link || args.site;
+                const waitSelectors = args.waitSelectors || args.selectors || [];
                 if (!url) return 'Error: Missing url.';
-                return this.browser.navigate(url);
+                return this.browser.navigate(url, Array.isArray(waitSelectors) ? waitSelectors : [waitSelectors]);
+            }
+        });
+
+        // Skill: Browser Wait
+        this.skills.registerSkill({
+            name: 'browser_wait',
+            description: 'Wait for a specified number of milliseconds',
+            usage: 'browser_wait(ms)',
+            handler: async (args: any) => {
+                const ms = parseInt(args.ms || args.time || '1000');
+                return this.browser.wait(ms);
+            }
+        });
+
+        // Skill: Browser Wait For Selector
+        this.skills.registerSkill({
+            name: 'browser_wait_for',
+            description: 'Wait for a CSS selector to appear on the page',
+            usage: 'browser_wait_for(selector, timeout?)',
+            handler: async (args: any) => {
+                const selector = args.selector || args.css;
+                const timeout = args.timeout ? parseInt(args.timeout) : 15000;
+                if (!selector) return 'Error: Missing selector.';
+                return this.browser.waitForSelector(selector, timeout);
+            }
+        });
+
+        // Skill: Browser Click
+        this.skills.registerSkill({
+            name: 'browser_click',
+            description: 'Click an element on the current page using a CSS selector',
+            usage: 'browser_click(selector)',
+            handler: async (args: any) => {
+                const selector = args.selector || args.css;
+                if (!selector) return 'Error: Missing selector.';
+                return this.browser.click(selector);
+            }
+        });
+
+        // Skill: Browser Type
+        this.skills.registerSkill({
+            name: 'browser_type',
+            description: 'Type text into an input field using a CSS selector',
+            usage: 'browser_type(selector, text)',
+            handler: async (args: any) => {
+                const selector = args.selector || args.css;
+                const text = args.text || args.value;
+                if (!selector || !text) return 'Error: Missing selector or text.';
+                return this.browser.type(selector, text);
+            }
+        });
+
+        // Skill: Browser Press Key
+        this.skills.registerSkill({
+            name: 'browser_press',
+            description: 'Press a keyboard key (e.g. "Enter", "Tab")',
+            usage: 'browser_press(key)',
+            handler: async (args: any) => {
+                const key = args.key || args.name;
+                if (!key) return 'Error: Missing key.';
+                return this.browser.press(key);
+            }
+        });
+
+        // Skill: Browser Screenshot
+        this.skills.registerSkill({
+            name: 'browser_screenshot',
+            description: 'Take a screenshot of the current browser state',
+            usage: 'browser_screenshot()',
+            handler: async () => {
+                return this.browser.screenshot();
             }
         });
 
         // Skill: Web Search
         this.skills.registerSkill({
             name: 'web_search',
-            description: 'Search the web for information',
+            description: 'Search the web for information using multiple engines',
             usage: 'web_search(query)',
             handler: async (args: any) => {
                 const query = args.query || args.text || args.search || args.q;
@@ -302,17 +388,24 @@ Be thorough and academic.`;
         // Skill: Evolve Identity
         this.skills.registerSkill({
             name: 'update_agent_identity',
-            description: 'Update your own identity/personality',
+            description: 'Update your own identity, personality, or name. Provide a snippet or a full block.',
             usage: 'update_agent_identity(trait)',
             handler: async (args: any) => {
                 const trait = args.trait || args.info || args.text;
-                if (!trait) return 'Error: Missing trait.';
+                if (!trait) return 'Error: Missing trait information.';
 
                 const identityPath = this.config.get('agentIdentityPath');
                 try {
-                    fs.appendFileSync(identityPath, `\n- Learned Trait: ${trait}`);
-                    this.loadAgentIdentity();
-                    return `Successfully updated agent identity at ${identityPath} with: "${trait}"`;
+                    // If the trait looks like a full block or a specific name update, we overwrite/restructure.
+                    if (trait.startsWith('#') || trait.includes('Name:')) {
+                        fs.writeFileSync(identityPath, trait.trim());
+                        this.loadAgentIdentity();
+                        return `Identity completely redefined at ${identityPath}.`;
+                    } else {
+                        fs.appendFileSync(identityPath, `\n- Learned Trait: ${trait}`);
+                        this.loadAgentIdentity();
+                        return `Successfully added trait to agent identity at ${identityPath}: "${trait}"`;
+                    }
                 } catch (e) {
                     return `Failed to update identity at ${identityPath}: ${e}`;
                 }
@@ -365,7 +458,7 @@ Be thorough and academic.`;
             this.agentIdentity = fs.readFileSync(this.agentConfigFile, 'utf-8');
             logger.info(`Agent identity loaded from ${this.agentConfigFile}`);
         } else {
-            this.agentIdentity = "Your name is OrcBot. You are a professional autonomous agent.";
+            this.agentIdentity = "You are a professional autonomous agent.";
             logger.warn(`${this.agentConfigFile} not found. Using default identity.`);
         }
         this.decisionEngine.setAgentIdentity(this.agentIdentity);
@@ -494,7 +587,11 @@ If you decide no action is needed, respond with "tool": null and reasoning: "All
             const MAX_STEPS = 10;
             let currentStep = 0;
             let messagesSent = 0;
+            let lastMessageContent = '';
             let lastStepToolSignatures = '';
+            let deepToolExecuted = false;
+
+            const nonDeepSkills = ['send_telegram', 'update_journal', 'update_learning', 'update_user_profile', 'update_agent_identity', 'get_system_info'];
 
             while (currentStep < MAX_STEPS) {
                 currentStep++;
@@ -526,25 +623,43 @@ If you decide no action is needed, respond with "tool": null and reasoning: "All
                     }
                     lastStepToolSignatures = currentStepSignatures;
 
-                    let lastMessageContent = '';
                     let forceBreak = false;
                     for (const toolCall of decision.tools) {
                         if (toolCall.name === 'send_telegram') {
-                            const currentMessage = toolCall.metadata?.message || '';
+                            const currentMessage = (toolCall.metadata?.message || '').trim();
+
+                            // 1. Block exact duplicates across any step
                             if (currentMessage === lastMessageContent) {
-                                logger.warn(`Agent: Blocked redundant message in action ${action.id}.`);
+                                logger.warn(`Agent: Blocked redundant message in action ${action.id} (Exact duplicate).`);
                                 continue;
                             }
+
+                            // 2. SOCIAL COMMUNICATION LOCK: Step 2+ requires new "Deep Data"
+                            if (currentStep > 1 && !deepToolExecuted) {
+                                logger.warn(`Agent: Blocked non-essential communication in Step ${currentStep} (No Deep Data).`);
+                                this.memory.saveMemory({
+                                    id: `${action.id}-step-${currentStep}-lock`,
+                                    type: 'short',
+                                    content: `[SYSTEM LOCK: You have already communicated in Step 1. You cannot speak again in Step 2+ without presenting NEW data from a deep skill (Search/Command/Web). Purely social redirected/reflections are forbidden. Terminate now.]`
+                                });
+                                continue;
+                            }
+
                             lastMessageContent = currentMessage;
                         }
 
                         logger.info(`Executing skill: ${toolCall.name}`);
                         const toolResult = await this.skills.executeSkill(toolCall.name, toolCall.metadata || {});
 
+                        // Mark if a deep tool was successfully used
+                        if (!nonDeepSkills.includes(toolCall.name) && !JSON.stringify(toolResult).toLowerCase().includes('error')) {
+                            deepToolExecuted = true;
+                        }
+
                         let observation = `Observation: Tool ${toolCall.name} returned: ${JSON.stringify(toolResult)}`;
                         if (toolCall.name === 'send_telegram') {
                             messagesSent++;
-                            observation += `. [SYSTEM: Message Sent (#${messagesSent}). Content: "${toolCall.metadata?.message}". If this satisfies the user, terminate NOW.]`;
+                            observation += `. [SYSTEM: Message Sent (#${messagesSent}). Content Hash: ${Buffer.from(lastMessageContent).slice(0, 10).toString('hex')}... If goal is reached, terminate now.]`;
                         }
 
                         this.memory.saveMemory({

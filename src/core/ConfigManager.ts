@@ -9,6 +9,7 @@ export interface AgentConfig {
     telegramToken?: string;
     openaiApiKey?: string;
     googleApiKey?: string;
+    serperApiKey?: string;
     modelName?: string;
     autonomyInterval?: number; // In minutes, default 0 (disabled)
     memoryPath?: string;
