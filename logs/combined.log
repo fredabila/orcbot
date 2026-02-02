@@ -260,3 +260,10 @@
 2026-02-02 15:05:34 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 4318)
 2026-02-02 15:05:34 [[32minfo[39m]: PID file removed: /tmp/orcbot-daemon-test/test.pid
 2026-02-02 15:05:34 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 4318)
+2026-02-02 15:08:17 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-manual-test/test.pid (PID: 4751)
+2026-02-02 15:08:17 [[32minfo[39m]: PID file removed: /tmp/orcbot-daemon-manual-test/test.pid
+2026-02-02 15:08:18 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 4799)
+2026-02-02 15:08:18 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 4799)
+2026-02-02 15:08:18 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 4799)
+2026-02-02 15:08:18 [[32minfo[39m]: PID file removed: /tmp/orcbot-daemon-test/test.pid
+2026-02-02 15:08:18 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 4799)

@@ -100,6 +100,8 @@ export class DaemonManager {
 
     /**
      * Daemonize the current process
+     * Note: This implementation detaches the process without forking,
+     * so the PID written is for the actual daemon process.
      */
     public daemonize(): void {
         // Ensure data directory exists

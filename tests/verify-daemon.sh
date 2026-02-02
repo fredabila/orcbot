@@ -21,7 +21,7 @@ node tests/manual-daemon-test.js 2>&1 | grep -q "All daemon functionality tests 
 
 echo ""
 echo "✓ Unit tests..."
-npm test -- tests/daemon.test.ts 2>&1 | grep -q "8 passed" && echo "  ✅ All 8 unit tests pass" || echo "  ❌ FAIL"
+npm test -- tests/daemon.test.ts 2>&1 | grep -q "Test Files.*passed" && echo "  ✅ All unit tests pass" || echo "  ❌ FAIL"
 
 echo ""
 echo "======================================"

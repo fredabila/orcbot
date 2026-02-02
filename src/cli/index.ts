@@ -135,18 +135,10 @@ program
                     try {
                         process.kill(status.pid, 'SIGTERM');
                         console.log(`✅ Sent stop signal to daemon (PID: ${status.pid})`);
-                        console.log('   Waiting for process to stop...');
-                        // Wait a bit and check if it stopped
-                        setTimeout(() => {
-                            const newStatus = daemonManager.isRunning();
-                            if (!newStatus.running) {
-                                console.log('   Daemon stopped successfully');
-                            } else {
-                                console.log('   Daemon is still running. Use: kill -9 ' + status.pid);
-                            }
-                        }, 2000);
+                        console.log('   Use "orcbot daemon status" to verify it stopped');
                     } catch (error) {
                         console.error(`❌ Failed to stop daemon: ${error}`);
+                        process.exit(1);
                     }
                 } else {
                     console.log('OrcBot daemon is not running');
