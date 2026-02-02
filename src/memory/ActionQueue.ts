@@ -35,9 +35,23 @@ export class ActionQueue {
         try {
             if (!fs.existsSync(this.filePath)) return [];
             const data = fs.readFileSync(this.filePath, 'utf-8');
+            if (!data || data.trim().length === 0) {
+                return [];
+            }
             return JSON.parse(data);
         } catch (e) {
             logger.error(`Failed to read ActionQueue: ${e}`);
+            // Auto-recover from corrupt JSON by backing up and resetting
+            try {
+                const corruptPath = `${this.filePath}.corrupt.${Date.now()}`;
+                if (fs.existsSync(this.filePath)) {
+                    fs.renameSync(this.filePath, corruptPath);
+                    logger.warn(`ActionQueue: Corrupt file moved to ${corruptPath}`);
+                }
+                fs.writeFileSync(this.filePath, JSON.stringify([], null, 2));
+            } catch (recoveryError) {
+                logger.error(`ActionQueue recovery failed: ${recoveryError}`);
+            }
             return [];
         }
     }

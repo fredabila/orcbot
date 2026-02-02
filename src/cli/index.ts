@@ -94,6 +94,13 @@ program
     });
 
 program
+    .command('update')
+    .description('Update OrcBot to the latest version')
+    .action(async () => {
+        await performUpdate();
+    });
+
+program
     .command('status')
     .description('View agent memory and action queue')
     .action(() => {
@@ -140,6 +147,7 @@ async function showMainMenu() {
                 { name: 'Worker Profile (Digital Identity)', value: 'worker' },
                 { name: 'Multi-Agent Orchestration', value: 'orchestration' },
                 { name: 'Configure Agent', value: 'config' },
+                { name: '⬆️  Update OrcBot', value: 'update' },
                 { name: 'Exit', value: 'exit' },
             ],
         },
@@ -178,6 +186,10 @@ async function showMainMenu() {
             break;
         case 'config':
             await showConfigMenu();
+            break;
+        case 'update':
+            await performUpdate();
+            await showMainMenu();
             break;
         case 'exit':
             process.exit(0);
@@ -732,6 +744,7 @@ async function showOrchestrationMenu() {
     const orchestrator = agent.orchestrator;
     const status = orchestrator.getStatus();
     const runningWorkers = orchestrator.getRunningWorkers();
+    const detailedWorkers = orchestrator.getDetailedWorkerStatus();
 
     // Show current status
     console.log(`Active Agents: ${status.activeAgents}`);
@@ -750,6 +763,7 @@ async function showOrchestrationMenu() {
                 { name: '📊 View Detailed Status', value: 'status' },
                 { name: '🤖 List Active Agents', value: 'list' },
                 { name: '⚡ View Running Processes', value: 'processes' },
+                { name: '🔍 View Worker Task Details', value: 'worker_details' },
                 { name: '➕ Spawn New Agent', value: 'spawn' },
                 { name: '▶️ Start Worker Process', value: 'start_worker' },
                 { name: '⏹️ Stop Worker Process', value: 'stop_worker' },
@@ -777,6 +791,28 @@ async function showOrchestrationMenu() {
             } else {
                 runningWorkers.forEach(w => {
                     console.log(`  - ${w.name} (${w.agentId}) - PID: ${w.pid}`);
+                });
+            }
+            break;
+        }
+        case 'worker_details': {
+            console.clear();
+            console.log('🔍 Worker Task Details');
+            console.log('======================');
+            if (detailedWorkers.length === 0) {
+                console.log('No workers available.');
+            } else {
+                detailedWorkers.forEach(w => {
+                    console.log(`\n[${w.agentId.slice(0, 12)}...] ${w.name}`);
+                    console.log(`  Status: ${w.status} | Running: ${w.isRunning ? '✅ Yes' : '❌ No'}${w.pid ? ` (PID: ${w.pid})` : ''}`);
+                    console.log(`  Role: ${w.role}`);
+                    console.log(`  Last Active: ${new Date(w.lastActiveAt).toLocaleString()}`);
+                    if (w.currentTaskId) {
+                        console.log(`  Current Task ID: ${w.currentTaskId}`);
+                        console.log(`  Task Description: ${w.currentTaskDescription || '(no description)'}`);
+                    } else {
+                        console.log(`  Current Task: (none)`);
+                    }
                 });
             }
             break;
@@ -988,7 +1024,7 @@ async function showOrchestrationMenu() {
 async function showConfigMenu() {
     const config = agent.config.getAll();
     // Ensure we show explicit keys relative to core config
-    const keys = ['agentName', 'openaiApiKey', 'googleApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl', 'searchProviderOrder', 'captchaApiKey', 'modelName', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'whatsappAutoReplyEnabled', 'memoryPath', 'commandAllowList', 'commandDenyList', 'safeMode', 'pluginAllowList', 'pluginDenyList', 'browserProfileDir', 'browserProfileName'] as const;
+    const keys = ['agentName', 'openaiApiKey', 'googleApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl', 'searchProviderOrder', 'captchaApiKey', 'modelName', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'whatsappAutoReplyEnabled', 'memoryPath', 'commandAllowList', 'commandDenyList', 'safeMode', 'sudoMode', 'pluginAllowList', 'pluginDenyList', 'browserProfileDir', 'browserProfileName'] as const;
 
     const choices: { name: string, value: string }[] = keys.map(key => ({
         name: `${key}: ${config[key as keyof typeof config] || '(empty)'}`,
@@ -1029,7 +1065,7 @@ async function showConfigMenu() {
     if (key === 'searchProviderOrder' || key === 'commandAllowList' || key === 'commandDenyList' || key === 'pluginAllowList' || key === 'pluginDenyList') {
         const parsed = (value || '').split(',').map((s: string) => s.trim()).filter(Boolean);
         agent.config.set(key as any, parsed);
-    } else if (key === 'safeMode') {
+    } else if (key === 'safeMode' || key === 'sudoMode') {
         const normalized = String(value).trim().toLowerCase();
         agent.config.set(key as any, normalized === 'true' || normalized === '1' || normalized === 'yes');
     } else {
@@ -1105,6 +1141,107 @@ async function showSkillsMenu() {
     }
 
     return showSkillsMenu();
+}
+
+async function performUpdate() {
+    const { execSync, spawn } = require('child_process');
+    const fs = require('fs');
+    
+    // Determine install location
+    const orcbotDir = path.resolve(__dirname, '..', '..');
+    const isGlobalInstall = orcbotDir.includes('node_modules');
+    
+    console.log('\n🔄 Checking for OrcBot updates...\n');
+    
+    try {
+        // Check if we're in a git repo
+        const gitDir = path.join(orcbotDir, '.git');
+        const isGitRepo = fs.existsSync(gitDir);
+        
+        if (isGitRepo) {
+            console.log(`📁 OrcBot directory: ${orcbotDir}`);
+            
+            // Fetch latest changes
+            console.log('📡 Fetching latest changes from remote...');
+            execSync('git fetch origin', { cwd: orcbotDir, stdio: 'inherit' });
+            
+            // Check if updates are available
+            const localHash = execSync('git rev-parse HEAD', { cwd: orcbotDir, encoding: 'utf8' }).trim();
+            const remoteHash = execSync('git rev-parse origin/main', { cwd: orcbotDir, encoding: 'utf8' }).trim();
+            
+            if (localHash === remoteHash) {
+                console.log('\n✅ OrcBot is already up to date!');
+                console.log(`   Current version: ${localHash.substring(0, 7)}`);
+                return;
+            }
+            
+            console.log(`\n📦 Update available!`);
+            console.log(`   Current: ${localHash.substring(0, 7)}`);
+            console.log(`   Latest:  ${remoteHash.substring(0, 7)}`);
+            
+            // Show what's changing
+            console.log('\n📋 Changes to be applied:');
+            execSync('git log --oneline HEAD..origin/main', { cwd: orcbotDir, stdio: 'inherit' });
+            
+            const { confirm } = await inquirer.prompt([
+                { type: 'confirm', name: 'confirm', message: '\nProceed with update?', default: true }
+            ]);
+            
+            if (!confirm) {
+                console.log('Update cancelled.');
+                return;
+            }
+            
+            // Pull changes
+            console.log('\n⬇️  Pulling latest changes...');
+            execSync('git pull origin main', { cwd: orcbotDir, stdio: 'inherit' });
+            
+            // Install dependencies
+            console.log('\n📦 Installing dependencies...');
+            execSync('npm install', { cwd: orcbotDir, stdio: 'inherit' });
+            
+            // Rebuild
+            console.log('\n🔨 Rebuilding OrcBot...');
+            execSync('npm run build', { cwd: orcbotDir, stdio: 'inherit' });
+            
+            // Re-link globally if needed
+            const packageJson = JSON.parse(fs.readFileSync(path.join(orcbotDir, 'package.json'), 'utf8'));
+            if (packageJson.bin) {
+                console.log('\n🔗 Re-installing global command...');
+                try {
+                    execSync('npm install -g .', { cwd: orcbotDir, stdio: 'inherit' });
+                } catch (e) {
+                    // Try with sudo on Unix
+                    if (process.platform !== 'win32') {
+                        console.log('   Trying with sudo...');
+                        execSync('sudo npm install -g .', { cwd: orcbotDir, stdio: 'inherit' });
+                    }
+                }
+            }
+            
+            console.log('\n✅ OrcBot updated successfully!');
+            console.log('   Please restart OrcBot to apply changes.');
+            console.log('\n   Run: orcbot run');
+            
+        } else {
+            // Not a git repo - might be npm installed
+            console.log('⚠️  OrcBot was not installed from git.');
+            console.log('   To update, run these commands manually:');
+            console.log('\n   cd ' + orcbotDir);
+            console.log('   git pull origin main');
+            console.log('   npm install');
+            console.log('   npm run build');
+            console.log('   npm install -g .');
+        }
+    } catch (error: any) {
+        console.error('\n❌ Update failed:', error.message);
+        console.log('\n   Try updating manually:');
+        console.log('   cd ' + orcbotDir);
+        console.log('   git pull origin main');
+        console.log('   npm install');
+        console.log('   npm run build');
+        console.log('   npm install -g .');
+    }
 }
 
 function showStatus() {

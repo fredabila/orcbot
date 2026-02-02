@@ -4,12 +4,14 @@ import { ParserLayer, StandardResponse } from './ParserLayer';
 import { SkillsManager } from './SkillsManager';
 import { logger } from '../utils/logger';
 import fs from 'fs';
+import os from 'os';
 import { ConfigManager } from '../config/ConfigManager';
 import { DecisionPipeline } from './DecisionPipeline';
 
 export class DecisionEngine {
     private agentIdentity: string = '';
     private pipeline: DecisionPipeline;
+    private systemContext: string;
 
     constructor(
         private memory: MemoryManager,
@@ -20,6 +22,32 @@ export class DecisionEngine {
         private config?: ConfigManager,
     ) {
         this.pipeline = new DecisionPipeline(this.config || new ConfigManager());
+        this.systemContext = this.buildSystemContext();
+    }
+
+    private buildSystemContext(): string {
+        const isWindows = process.platform === 'win32';
+        const isMac = process.platform === 'darwin';
+        const platformName = isWindows ? 'Windows' : isMac ? 'macOS' : 'Linux';
+        
+        if (isWindows) {
+            return `- Platform: ${platformName} (${os.release()})
+- Shell: PowerShell/CMD
+- IMPORTANT: Use semicolon (;) to chain commands, NOT &&
+- IMPORTANT: Use 'write_file' skill for creating files (echo multiline doesn't work)
+- IMPORTANT: Use 'create_directory' skill for making directories
+- Path format: C:\\path\\to\\file or C:/path/to/file`;
+        } else {
+            return `- Platform: ${platformName} (${os.release()})
+- Shell: Bash/Zsh
+- Command chaining: Use && or ;
+- Standard Unix commands available (ls, cat, mkdir, echo, etc.)
+- Path format: /path/to/file`;
+        }
+    }
+
+    private getSystemContext(): string {
+        return this.systemContext;
     }
 
     public setAgentIdentity(identity: string) {
@@ -76,6 +104,9 @@ ${this.agentIdentity || 'You are a professional autonomous agent.'}
 
 ${ParserLayer.getSystemPromptSnippet()}
 
+SYSTEM ENVIRONMENT:
+${this.getSystemContext()}
+
 EXECUTION STATE:
 - messagesSent: ${metadata.messagesSent || 0}
 - Sequence Step: ${metadata.currentStep || '1'}
@@ -105,6 +136,7 @@ STRATEGIC REASONING PROTOCOLS:
     - \`analysis\`: Review the history. Did you already answer the user? Is the requested file already downloaded?
     - \`goals_met\`: Set to \`true\` if the tools you're calling in THIS response will satisfy the user's ultimate intent. Tools WILL BE EXECUTED even when goals_met is true.
     - IMPORTANT: If you include tools[] AND set goals_met: true, the tools will run and THEN the action terminates. This is the correct pattern for "send this message and we're done".
+     - If goals_met is false, you MUST include at least one tool to make progress (or request clarification with request_supporting_data).
 1.  **Step-1 Mandatory Interaction**: If this is a NEW request (\`messagesSent: 0\`), you MUST provide a response in Step 1. Do NOT stay silent.
     - **SOCIAL FINALITY**: If the user says "Hi", "Hello", or "How are you?", respond naturally and **terminate immediately** (\`goals_met: true\` with send_telegram/send_whatsapp) in Step 1. Do not look for additional work or research their profile unless specifically asked.
 2.  **Step-2+ Purpose (RESULTS ONLY)**: If \`messagesSent > 0\`, do NOT send another message unless you have gathered NEW, CRITICAL information or reached a 15-step milestone in a long process.

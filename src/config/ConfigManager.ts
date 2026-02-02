@@ -49,6 +49,7 @@ export interface AgentConfig {
     commandAllowList?: string[];
     commandDenyList?: string[];
     safeMode?: boolean;
+    sudoMode?: boolean;
     pluginAllowList?: string[];
     pluginDenyList?: string[];
     browserProfileDir?: string;
@@ -235,6 +236,7 @@ export class ConfigManager {
             bedrockRegion: process.env.BEDROCK_REGION || process.env.AWS_REGION,
             bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
             bedrockSecretAccessKey: process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY,
+            sudoMode: false,
             bedrockSessionToken: process.env.BEDROCK_SESSION_TOKEN || process.env.AWS_SESSION_TOKEN
         };
     }

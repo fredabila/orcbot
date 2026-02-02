@@ -31,6 +31,7 @@ This file lists the available skills for the agent.
 - **browser_type(selector_or_ref, text)**: Type into an element by selector or ref.
 - **browser_press(key)**: Press a keyboard key.
 - **browser_screenshot()**: Capture a screenshot.
+- **browser_vision(prompt?)**: Analyze the current page using vision.
 - **browser_solve_captcha()**: Solve detected CAPTCHA.
 - **browser_run_js(script)**: Execute custom JavaScript on the current page.
 - **switch_browser_profile(profileName, profileDir?)**: Switch to a persistent browser profile.

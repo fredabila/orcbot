@@ -61,3 +61,6 @@
 2026-02-02 00:28:57 [[32minfo[39m]: ConfigManager: Config path set to D:\orcbot\orcbot.config.yaml
 2026-02-02 00:29:15 [[32minfo[39m]: Browser: Navigating to https://docs.google.com/forms/d/e/1FAIpQLSdLhkJgAq87JztkiapzdIL8xx0k7H9NbKqmI_OVs_naghLGVQ/viewform?usp
 2026-02-02 00:30:05 [[33mwarn[39m]: Semantic snapshot: blank URL detected, reloading last URL.
+2026-02-02 12:01:08 [[32minfo[39m]: ConfigManager: Config path set to D:\orcbot\orcbot.config.yaml
+2026-02-02 12:01:09 [[32minfo[39m]: Browser: Navigating to https://chat.openai.com
+2026-02-02 12:01:26 [[33mwarn[39m]: Semantic snapshot: blank URL detected (content: 39 bytes). Attempting single reload.

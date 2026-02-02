@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import './index.css';
 
 function App() {
@@ -15,11 +16,12 @@ function App() {
     <div className="app">
       <header className="hero">
         <nav className="nav">
-          <div className="logo">OrcBot</div>
+          <Link to="/" className="logo">OrcBot</Link>
           <div className="nav-links">
             <a href="#capabilities">Capabilities</a>
             <a href="#autonomy">Autonomy</a>
             <a href="#install">Install</a>
+            <Link to="/deploy">Deploy</Link>
           </div>
           <a className="nav-cta" href="https://github.com/fredabila/orcbot">GitHub</a>
         </nav>

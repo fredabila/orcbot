@@ -297,7 +297,19 @@ export class AgentOrchestrator extends EventEmitter {
                 agent.status = 'idle';
                 agent.currentTask = null;
                 if (message.taskId) {
-                    this.completeTask(message.taskId, message.payload?.result);
+                    const result = message.payload?.result;
+                    this.completeTask(message.taskId, result);
+                    
+                    // Auto-send result message to primary agent for retrieval
+                    const task = this.tasks.get(message.taskId);
+                    if (task && agent.parentId) {
+                        this.sendMessage(agentId, agent.parentId, 'result', {
+                            taskId: message.taskId,
+                            taskDescription: task.description,
+                            result: result || 'Task completed',
+                            completedAt: new Date().toISOString()
+                        });
+                    }
                 }
                 this.emit('worker:task-completed', { agentId, taskId: message.taskId, result: message.payload?.result });
                 logger.info(`Orchestrator: Worker ${agentId} completed task ${message.taskId}`);
@@ -308,6 +320,17 @@ export class AgentOrchestrator extends EventEmitter {
                 agent.currentTask = null;
                 if (message.taskId) {
                     this.failTask(message.taskId, message.error || 'Unknown error');
+                    
+                    // Auto-send failure message to primary agent
+                    const task = this.tasks.get(message.taskId);
+                    if (task && agent.parentId) {
+                        this.sendMessage(agentId, agent.parentId, 'result', {
+                            taskId: message.taskId,
+                            taskDescription: task.description,
+                            error: message.error || 'Unknown error',
+                            failedAt: new Date().toISOString()
+                        });
+                    }
                 }
                 this.emit('worker:task-failed', { agentId, taskId: message.taskId, error: message.error });
                 logger.warn(`Orchestrator: Worker ${agentId} failed task ${message.taskId}: ${message.error}`);
@@ -754,6 +777,57 @@ export class AgentOrchestrator extends EventEmitter {
                 capabilities: a.capabilities,
                 activeTasks: a.currentTask ? 1 : 0
             }));
+    }
+
+    /**
+     * Get detailed worker info including current task description (for TUI)
+     */
+    public getDetailedWorkerStatus(): Array<{
+        agentId: string;
+        name: string;
+        pid: number | undefined;
+        status: string;
+        isRunning: boolean;
+        currentTaskId: string | null;
+        currentTaskDescription: string | null;
+        lastActiveAt: string;
+        role: string;
+    }> {
+        const results: Array<{
+            agentId: string;
+            name: string;
+            pid: number | undefined;
+            status: string;
+            isRunning: boolean;
+            currentTaskId: string | null;
+            currentTaskDescription: string | null;
+            lastActiveAt: string;
+            role: string;
+        }> = [];
+
+        for (const agent of this.agents.values()) {
+            if (agent.status === 'terminated' || agent.id === this.primaryAgentId) continue;
+
+            let taskDescription: string | null = null;
+            if (agent.currentTask) {
+                const task = this.tasks.get(agent.currentTask);
+                taskDescription = task?.description || null;
+            }
+
+            results.push({
+                agentId: agent.id,
+                name: agent.name,
+                pid: agent.pid,
+                status: agent.status,
+                isRunning: this.isWorkerRunning(agent.id),
+                currentTaskId: agent.currentTask,
+                currentTaskDescription: taskDescription,
+                lastActiveAt: agent.lastActiveAt,
+                role: agent.role
+            });
+        }
+
+        return results;
     }
 
     /**

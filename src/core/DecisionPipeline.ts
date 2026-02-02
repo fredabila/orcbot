@@ -23,6 +23,29 @@ class LastMessageCache {
         return message.trim().toLowerCase().replace(/\s+/g, ' ');
     }
 
+    /**
+     * Extract semantic fingerprint from a message for similarity matching.
+     * Strips common phrases and focuses on key content words.
+     */
+    private getSemanticFingerprint(message: string): string {
+        const normalized = this.normalize(message);
+        // Remove common filler phrases that vary between similar messages
+        const stripped = normalized
+            .replace(/excellent,?\s*(frederick!?)?/gi, '')
+            .replace(/hey\s*(frederick!?)?/gi, '')
+            .replace(/alright,?\s*(frederick!?)?/gi, '')
+            .replace(/i'm now/gi, '')
+            .replace(/i've (now|just)/gi, '')
+            .replace(/right away!?/gi, '')
+            .replace(/they'll (start|be) working/gi, 'working')
+            .replace(/they're getting to work/gi, 'working')
+            .replace(/start working on/gi, 'working')
+            .replace(/on (it|them|your)/gi, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        return stripped;
+    }
+
     public isDuplicate(channelKey: string, message: string): boolean {
         if (!message) return false;
         const normalized = this.normalize(message);
@@ -36,6 +59,45 @@ class LastMessageCache {
         const history = this.cache.get(channelKey) || [];
         if (history.length === 0) return false;
         return history[history.length - 1] === normalized;
+    }
+
+    /**
+     * Check if message is semantically similar to a recent message.
+     * Uses fingerprinting to detect messages that are essentially the same
+     * but with minor word variations.
+     */
+    public isSemanticallyDuplicate(channelKey: string, message: string): boolean {
+        if (!message) return false;
+        const fingerprint = this.getSemanticFingerprint(message);
+        if (fingerprint.length < 20) return false; // Too short to compare meaningfully
+        
+        const history = this.cache.get(channelKey) || [];
+        for (const prev of history.slice(-5)) { // Check last 5 messages
+            const prevFingerprint = this.getSemanticFingerprint(prev);
+            // Check for high similarity (common substring)
+            if (this.stringSimilarity(fingerprint, prevFingerprint) > 0.7) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private stringSimilarity(a: string, b: string): number {
+        if (a === b) return 1;
+        if (a.length === 0 || b.length === 0) return 0;
+        
+        // Simple word overlap similarity
+        const wordsA = new Set(a.split(' ').filter(w => w.length > 3));
+        const wordsB = new Set(b.split(' ').filter(w => w.length > 3));
+        
+        if (wordsA.size === 0 || wordsB.size === 0) return 0;
+        
+        let overlap = 0;
+        for (const w of wordsA) {
+            if (wordsB.has(w)) overlap++;
+        }
+        
+        return overlap / Math.max(wordsA.size, wordsB.size);
     }
 
     public record(channelKey: string, message: string) {
@@ -186,6 +248,15 @@ export class DecisionPipeline {
         const searchCounts = new Map<string, number>();
         for (const q of recentSearches) searchCounts.set(q, (searchCounts.get(q) || 0) + 1);
 
+        // Guardrail: prevent repeated distribute_tasks / orchestrator_status calls in same action
+        const orchestrationToolCalls = (ctx.recentMemories || [])
+            .filter(m => m.id && m.id.startsWith(actionPrefix) && m.metadata?.tool)
+            .map(m => m.metadata?.tool);
+        const orchestrationCallCounts = new Map<string, number>();
+        for (const t of orchestrationToolCalls) {
+            if (t) orchestrationCallCounts.set(t, (orchestrationCallCounts.get(t) || 0) + 1);
+        }
+
         // Message budget and duplicate suppression
         const maxMessages = this.config.get('maxMessagesPerAction') || 0;
         let allowedMessages = 0;
@@ -199,6 +270,18 @@ export class DecisionPipeline {
                     continue;
                 }
             }
+
+            // Suppress orchestration tools that have been called too many times (loop prevention)
+            const orchestrationLoopTools = ['distribute_tasks', 'orchestrator_status', 'list_agents', 'get_agent_messages'];
+            if (orchestrationLoopTools.includes(tool.name)) {
+                const callCount = orchestrationCallCounts.get(tool.name) || 0;
+                if (callCount >= 2) {
+                    dropped.push(`orch-loop:${tool.name}`);
+                    notes.push(`Suppressed ${tool.name}: called ${callCount} times already - likely loop`);
+                    continue;
+                }
+            }
+
             const isSend = tool.name === 'send_telegram' || tool.name === 'send_whatsapp';
             if (!isSend) {
                 filteredTools.push(tool);
@@ -215,8 +298,16 @@ export class DecisionPipeline {
             }
 
             const isImmediateDuplicate = this.messageCache.isImmediateDuplicate(channelKey, message);
+            const isSemanticallyDuplicate = this.messageCache.isSemanticallyDuplicate(channelKey, message);
             const isReassurance = this.isShortReassurance(message);
             const hasNewToolOutput = this.hasNonSendToolSinceLastSend(ctx);
+
+            // Block semantically duplicate messages (e.g., "I'm distributing tasks" repeated with slight variations)
+            if (isSemanticallyDuplicate && !hasNewToolOutput) {
+                dropped.push(`semantic-dupe:${tool.name}`);
+                notes.push('Suppressed send: semantically similar to recent message');
+                continue;
+            }
 
             if (isImmediateDuplicate && !hasNewToolOutput) {
                 if (isReassurance && this.canUseReassurance(ctx.actionId)) {

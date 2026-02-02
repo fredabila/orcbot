@@ -174,8 +174,23 @@ class AgentWorkerProcess {
         try {
             logger.info(`Worker ${this.config.agentId}: Starting task "${taskId}": ${taskDescription.slice(0, 100)}...`);
 
+            // Append instruction to report findings back and avoid polling loops
+            const isWindows = process.platform === 'win32';
+            const platformNote = isWindows 
+                ? `\n6. WINDOWS PLATFORM: Use 'write_file' and 'create_directory' skills instead of shell commands for file operations. Do NOT use echo with multiline content or && chaining.`
+                : '';
+
+            const enhancedTaskDescription = `${taskDescription}
+
+[WORKER INSTRUCTIONS]
+1. You are an INDEPENDENT worker agent. Complete this task using YOUR OWN capabilities (web_search, browser tools, write_file, create_directory, run_command, etc.).
+2. Do NOT repeatedly call 'get_agent_messages' expecting content from other agents - if content isn't there after 1-2 checks, PROCEED WITH YOUR OWN WORK.
+3. If the task mentions "content from another agent" but none exists, generate the content yourself or use placeholder content.
+4. When DONE, use 'complete_delegated_task("${taskId}", "<your_findings_summary>")' to report results.
+5. DO NOT get stuck in loops checking for external data - take action with what you have.${platformNote}`;
+
             // Push the task to the worker's action queue and process it
-            await this.agent.pushTask(taskDescription, 10); // High priority
+            await this.agent.pushTask(enhancedTaskDescription, 10); // High priority
             
             // Execute a single decision cycle to process the task
             const result = await this.agent.runOnce();

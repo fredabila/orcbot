@@ -19,6 +19,7 @@ import { logger } from '../utils/logger';
 import { ErrorHandler } from '../utils/ErrorHandler';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 
 export class Agent {
     public memory: MemoryManager;
@@ -275,6 +276,120 @@ export class Agent {
             }
         });
 
+        // Skill: Write File (cross-platform)
+        this.skills.registerSkill({
+            name: 'write_file',
+            description: 'Write content to a file. Creates parent directories if needed. Use this instead of echo/run_command for creating files.',
+            usage: 'write_file(path, content, append?)',
+            handler: async (args: any) => {
+                const filePath = args.path || args.file_path || args.file;
+                const content = args.content || args.text || args.data || '';
+                const append = args.append === true || args.append === 'true';
+
+                if (!filePath) return 'Error: Missing file path.';
+
+                try {
+                    const resolvedPath = path.resolve(filePath);
+                    const dir = path.dirname(resolvedPath);
+                    
+                    // Create parent directories if needed
+                    if (!fs.existsSync(dir)) {
+                        fs.mkdirSync(dir, { recursive: true });
+                    }
+
+                    if (append) {
+                        fs.appendFileSync(resolvedPath, content);
+                        return `Content appended to ${resolvedPath}`;
+                    } else {
+                        fs.writeFileSync(resolvedPath, content);
+                        return `File created: ${resolvedPath}`;
+                    }
+                } catch (e) {
+                    return `Error writing file: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Create Directory (cross-platform)
+        this.skills.registerSkill({
+            name: 'create_directory',
+            description: 'Create a directory (and parent directories if needed). Does not error if directory already exists.',
+            usage: 'create_directory(path)',
+            handler: async (args: any) => {
+                const dirPath = args.path || args.dir || args.directory;
+
+                if (!dirPath) return 'Error: Missing directory path.';
+
+                try {
+                    const resolvedPath = path.resolve(dirPath);
+                    
+                    if (fs.existsSync(resolvedPath)) {
+                        return `Directory already exists: ${resolvedPath}`;
+                    }
+                    
+                    fs.mkdirSync(resolvedPath, { recursive: true });
+                    return `Directory created: ${resolvedPath}`;
+                } catch (e) {
+                    return `Error creating directory: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Read File
+        this.skills.registerSkill({
+            name: 'read_file',
+            description: 'Read the contents of a file.',
+            usage: 'read_file(path)',
+            handler: async (args: any) => {
+                const filePath = args.path || args.file_path || args.file;
+
+                if (!filePath) return 'Error: Missing file path.';
+
+                try {
+                    const resolvedPath = path.resolve(filePath);
+                    
+                    if (!fs.existsSync(resolvedPath)) {
+                        return `Error: File not found: ${resolvedPath}`;
+                    }
+                    
+                    const content = fs.readFileSync(resolvedPath, 'utf8');
+                    return content.length > 10000 
+                        ? content.substring(0, 10000) + '\n\n[... truncated, file too large ...]'
+                        : content;
+                } catch (e) {
+                    return `Error reading file: ${e}`;
+                }
+            }
+        });
+
+        // Skill: List Directory
+        this.skills.registerSkill({
+            name: 'list_directory',
+            description: 'List files and subdirectories in a directory.',
+            usage: 'list_directory(path)',
+            handler: async (args: any) => {
+                const dirPath = args.path || args.dir || args.directory || '.';
+
+                try {
+                    const resolvedPath = path.resolve(dirPath);
+                    
+                    if (!fs.existsSync(resolvedPath)) {
+                        return `Error: Directory not found: ${resolvedPath}`;
+                    }
+                    
+                    const entries = fs.readdirSync(resolvedPath, { withFileTypes: true });
+                    const formatted = entries.map(e => {
+                        const indicator = e.isDirectory() ? '📁' : '📄';
+                        return `${indicator} ${e.name}`;
+                    }).join('\n');
+                    
+                    return `Contents of ${resolvedPath}:\n${formatted || '(empty directory)'}`;
+                } catch (e) {
+                    return `Error listing directory: ${e}`;
+                }
+            }
+        });
+
         // Skill: Analyze Media
         this.skills.registerSkill({
             name: 'analyze_media',
@@ -384,28 +499,46 @@ export class Agent {
         // Skill: Run Shell Command
         this.skills.registerSkill({
             name: 'run_command',
-            description: 'Execute a shell command on the server',
+            description: 'Execute a shell command on the server. IMPORTANT: On Windows, use PowerShell syntax (no && chaining, use ; instead). For file creation, use separate commands or write_file skill. Do not use Unix echo with multiline content on Windows.',
             usage: 'run_command(command)',
             handler: async (args: any) => {
                 const command = args.command || args.cmd || args.text;
                 if (!command) return 'Error: Missing command string.';
+
+                const isWindows = process.platform === 'win32';
+                const trimmedCmd = String(command).trim();
+
+                // Detect problematic Unix-style commands on Windows
+                if (isWindows) {
+                    // Check for Unix-style multiline echo
+                    if (trimmedCmd.includes("echo '") && trimmedCmd.includes("\n")) {
+                        return `Error: Multiline echo commands don't work on Windows. Use the create_custom_skill to write files, or use PowerShell's Set-Content/Out-File, or write files one line at a time.`;
+                    }
+                    // Check for && chaining (use ; in PowerShell)
+                    if (trimmedCmd.includes(' && ')) {
+                        return `Error: '&&' command chaining doesn't work reliably on Windows. Use ';' to chain commands in PowerShell, or run commands separately.`;
+                    }
+                }
 
                 const trimmed = String(command).trim();
                 const firstToken = trimmed.split(/\s+/)[0]?.toLowerCase() || '';
                 const allowList = (this.config.get('commandAllowList') || []) as string[];
                 const denyList = (this.config.get('commandDenyList') || []) as string[];
                 const safeMode = this.config.get('safeMode');
+                const sudoMode = this.config.get('sudoMode');
 
                 if (safeMode) {
                     return 'Error: Safe mode is enabled. run_command is disabled.';
                 }
 
-                if (denyList.map(s => s.toLowerCase()).includes(firstToken)) {
-                    return `Error: Command '${firstToken}' is blocked by commandDenyList.`;
-                }
+                if (!sudoMode) {
+                    if (denyList.map(s => s.toLowerCase()).includes(firstToken)) {
+                        return `Error: Command '${firstToken}' is blocked by commandDenyList.`;
+                    }
 
-                if (allowList.length > 0 && !allowList.map(s => s.toLowerCase()).includes(firstToken)) {
-                    return `Error: Command '${firstToken}' is not in commandAllowList.`;
+                    if (allowList.length > 0 && !allowList.map(s => s.toLowerCase()).includes(firstToken)) {
+                        return `Error: Command '${firstToken}' is not in commandAllowList.`;
+                    }
                 }
 
                 const timeoutMs = parseInt(args.timeoutMs || args.timeout || this.config.get('commandTimeoutMs') || 120000, 10);
@@ -450,11 +583,44 @@ export class Agent {
         // Skill: Get System Info
         this.skills.registerSkill({
             name: 'get_system_info',
-            description: 'Get current server time, date, and OS information',
+            description: 'Get comprehensive system information including OS, platform, shell, and command syntax guidance',
             usage: 'get_system_info()',
             handler: async () => {
                 const os = require('os');
-                return `Server Time: ${new Date().toLocaleString()}\nOS: ${os.platform()} ${os.release()}`;
+                const isWindows = process.platform === 'win32';
+                const isMac = process.platform === 'darwin';
+                const isLinux = process.platform === 'linux';
+                
+                const platformName = isWindows ? 'Windows' : isMac ? 'macOS' : isLinux ? 'Linux' : process.platform;
+                const shell = isWindows ? 'PowerShell/CMD' : 'Bash/Zsh';
+                
+                const commandGuidance = isWindows ? `
+📋 WINDOWS COMMAND GUIDANCE:
+- Use semicolon (;) to chain commands, NOT &&
+- Use PowerShell cmdlets when possible (Get-ChildItem, Set-Content, etc.)
+- For file creation: Use 'write_file' skill instead of echo
+- For directories: Use 'create_directory' skill instead of mkdir
+- Path separator: Use \\ or / (both work in PowerShell)
+- Environment vars: $env:VAR_NAME (PowerShell) or %VAR_NAME% (CMD)` 
+                : `
+📋 UNIX COMMAND GUIDANCE:
+- Use && to chain commands
+- Use standard Unix commands (ls, cat, mkdir, echo, etc.)
+- Path separator: /
+- Environment vars: $VAR_NAME`;
+
+                return `🖥️ SYSTEM INFORMATION
+━━━━━━━━━━━━━━━━━━━━━━
+Server Time: ${new Date().toLocaleString()}
+Platform: ${platformName}
+OS Version: ${os.release()}
+Architecture: ${os.arch()}
+Shell: ${shell}
+Hostname: ${os.hostname()}
+Home Directory: ${os.homedir()}
+Working Directory: ${process.cwd()}
+Node.js: ${process.version}
+${commandGuidance}`;
             }
         });
 
@@ -659,6 +825,32 @@ Output the fixed code:
             }
         });
 
+        // Skill: Browser Vision
+        this.skills.registerSkill({
+            name: 'browser_vision',
+            description: 'Use vision to analyze the current browser page when semantic snapshots are insufficient.',
+            usage: 'browser_vision(prompt?)',
+            handler: async (args: any) => {
+                const prompt = args.prompt || args.question || args.text || 'Describe what you see on the page.';
+
+                const screenshotResult = await this.browser.screenshot();
+                if (String(screenshotResult).startsWith('Failed')) {
+                    return screenshotResult;
+                }
+
+                const screenshotPath = path.join(os.homedir(), '.orcbot', 'screenshot.png');
+                if (!fs.existsSync(screenshotPath)) {
+                    return `Error: Screenshot file not found at ${screenshotPath}`;
+                }
+
+                try {
+                    return await this.llm.analyzeMedia(screenshotPath, prompt);
+                } catch (e) {
+                    return `Error analyzing screenshot: ${e}`;
+                }
+            }
+        });
+
         // Skill: Browser Solve CAPTCHA
         this.skills.registerSkill({
             name: 'browser_solve_captcha',
@@ -697,7 +889,7 @@ Output the fixed code:
         // Skill: Create Custom Skill
         this.skills.registerSkill({
             name: 'create_custom_skill',
-            description: 'Autonomously create a new skill. The "code" argument must be the **BODY** of a Node.js async function. \n\nIMPORTANT RULES:\n1. Do NOT wrap the code in `async function() { ... }` or `() => { ... }`. Provide ONLY the inner logic.\n2. To access the browser, use `await context.browser.evaluate(() => { ... })`.\n3. Do NOT try to call other skills as functions (e.g. `send_file(...)` is NOT available directly). You must use `context.agent.skills.execute("skill_name", { args })` if you strictly need to call another skill, or better yet, implement the logic natively using `fs`, `fetch`, etc.\n4. Ensure you `return` a string at the end of the operation.',
+            description: 'Autonomously create a new skill. The "code" argument must be the **BODY** of a Node.js async function.\n\nSYSTEM STANDARDS (MANDATORY):\n1. Do NOT wrap the code in `async function() { ... }` or `() => { ... }`. Provide ONLY the inner logic.\n2. Always `return` a string (or a value that can be safely stringified).\n3. Use `context.browser` for browser automation.\n4. Use `context.config.get(...)` for settings; never hardcode keys.\n5. To call another skill, use `await context.agent.skills.executeSkill("skill_name", { ... })` (or `execute`).\n6. Never access secrets directly; use config.\n7. Keep the plugin CommonJS-friendly and export a named skill object.',
             usage: 'create_custom_skill({ name, description, usage, code })',
             handler: async (args: any) => {
                 if (this.config.get('safeMode')) {
@@ -725,6 +917,7 @@ Output the fixed code:
 
                 // Ensure correct formatting for a plugin
                 const finalCode = code.includes('export') ? code : `
+// @source: generated-by-orcbot
 import { AgentContext } from '../src/core/SkillsManager';
 import fs from 'fs';
 import path from 'path';
@@ -738,10 +931,21 @@ export const ${name} = {
         // 1. Use 'context.browser' to access the browser (e.g. context.browser.evaluate(...))
         // 2. Use 'context.config' to access settings.
         // 3. Use standard 'fetch' for external APIs.
-        
-        ${sanitizedCode}
+        try {
+            const result = await (async () => {
+                ${sanitizedCode}
+            })();
+
+            if (typeof result === 'string') return result;
+            if (result === undefined) return 'OK';
+            return JSON.stringify(result, null, 2);
+        } catch (e: any) {
+            return \`Error: \${e?.message || e}\`;
+        }
     }
 };
+
+export default ${name};
 `;
 
                 fs.writeFileSync(filePath, finalCode);
@@ -786,8 +990,20 @@ export const ${name} = {
             description: 'Search the web for information using multiple engines (APIs + browser fallback)',
             usage: 'web_search(query)',
             handler: async (args: any) => {
-                const query = args.query || args.text || args.search || args.q;
+                let query = args.query || args.text || args.search || args.q;
                 if (!query) return 'Error: Missing search query.';
+                
+                // Handle array or object queries - convert to string
+                if (Array.isArray(query)) {
+                    query = query.join(' ');
+                } else if (typeof query === 'object') {
+                    query = JSON.stringify(query);
+                } else if (typeof query !== 'string') {
+                    query = String(query);
+                }
+                
+                query = query.trim();
+                if (!query) return 'Error: Empty search query after processing.';
                 
                 logger.info(`Searching: "${query}"`);
                 
@@ -1880,14 +2096,21 @@ Respond with a single actionable task description (one sentence):`;
             // Run simulation and decision loop for this single action
             const recentHist = this.memory.getRecentContext();
             const contextStr = recentHist.map(c => `[${c.type}] ${c.content}`).join('\n');
-            const executionPlan = await this.simulationEngine.simulate(action.payload.description, contextStr);
+            const executionPlan = await this.simulationEngine.simulate(
+                action.payload.description,
+                contextStr,
+                this.skills.getSkillsPrompt()
+            );
 
-            const MAX_STEPS = 30;
+            const MAX_STEPS = 20; // Reduced from 30 to fail faster on stuck tasks
             let currentStep = 0;
             let result = '';
+            let noToolSteps = 0; // Track steps without tool execution
+            const MAX_NO_TOOL_STEPS = 3; // Fail if 3 consecutive steps produce no tools
 
             while (currentStep < MAX_STEPS) {
                 currentStep++;
+                logger.info(`runOnce: Step ${currentStep}/${MAX_STEPS} for action ${action.id}`);
 
                 const decision = await this.decisionEngine.decide({
                     ...action,
@@ -1900,15 +2123,41 @@ Respond with a single actionable task description (one sentence):`;
 
                 // Check for termination via verification.goals_met
                 if (decision.verification?.goals_met) {
+                    logger.info(`runOnce: goals_met=true at step ${currentStep}`);
                     result = decision.content || 'Task completed';
+                    
+                    // Still execute any tools before terminating
+                    if (decision.tools && decision.tools.length > 0) {
+                        for (const tool of decision.tools) {
+                            logger.info(`runOnce: Final tool execution: ${tool.name}`);
+                            await this.skills.executeSkill(tool.name, tool.metadata || {});
+                        }
+                    }
                     break;
                 }
 
                 if (decision.tools && decision.tools.length > 0) {
+                    noToolSteps = 0; // Reset counter
                     for (const tool of decision.tools) {
+                        logger.info(`runOnce: Executing tool: ${tool.name}`);
                         await this.skills.executeSkill(tool.name, tool.metadata || {});
                     }
+                } else {
+                    noToolSteps++;
+                    logger.warn(`runOnce: Step ${currentStep} produced no tools (${noToolSteps}/${MAX_NO_TOOL_STEPS})`);
+                    
+                    if (noToolSteps >= MAX_NO_TOOL_STEPS) {
+                        logger.error(`runOnce: Aborting - ${MAX_NO_TOOL_STEPS} consecutive steps with no tools`);
+                        result = 'Task aborted: Agent stuck without producing tools. May need clearer instructions.';
+                        this.actionQueue.updateStatus(action.id, 'failed');
+                        return result;
+                    }
                 }
+            }
+            
+            if (currentStep >= MAX_STEPS) {
+                logger.warn(`runOnce: Reached max steps (${MAX_STEPS}) for action ${action.id}`);
+                result = `Task incomplete: Reached maximum steps (${MAX_STEPS})`;
             }
 
             this.actionQueue.updateStatus(action.id, 'completed');
@@ -2002,7 +2251,11 @@ Respond with a single actionable task description (one sentence):`;
             const isSocialFastPath = this.isTrivialSocialIntent(action.payload.description || '');
             const executionPlan = isSocialFastPath
                 ? 'Respond once with a brief, friendly reply and terminate immediately. Do not perform research or multi-step actions.'
-                : await this.simulationEngine.simulate(action.payload.description, contextStr);
+                : await this.simulationEngine.simulate(
+                    action.payload.description,
+                    contextStr,
+                    this.skills.getSkillsPrompt()
+                );
 
             const MAX_STEPS = isSocialFastPath ? 1 : (this.config.get('maxStepsPerAction') || 30);
             const MAX_MESSAGES = isSocialFastPath ? 1 : (this.config.get('maxMessagesPerAction') || 3);
