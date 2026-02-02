@@ -102,8 +102,17 @@ Live docs (GitHub Pages): https://fredabila.github.io/orcbot/docs/
 ## Quickstart
 
 ```bash
-# Start the autonomous loop
+# Start the autonomous loop (foreground)
 orcbot run
+
+# Start as a background daemon
+orcbot run --daemon
+
+# Check daemon status
+orcbot daemon status
+
+# Stop the daemon
+orcbot daemon stop
 
 # Open the TUI dashboard
 orcbot ui
@@ -143,12 +152,50 @@ orcbot ui
 
 ### Direct Commands
 ```bash
-# Start the autonomous reasoning loop
+# Start the autonomous reasoning loop (foreground)
 orcbot run
+
+# Start as a background daemon
+orcbot run --daemon
+
+# Check daemon status
+orcbot daemon status
+
+# Stop the daemon
+orcbot daemon stop
 
 # Push an orchestration task
 orcbot push "Find the current price of BTC and message it to Frederick on Telegram" -p 10
 ```
+
+### Daemon Mode
+
+OrcBot can run as a background daemon, allowing it to operate continuously without keeping a terminal open:
+
+```bash
+# Start in daemon mode
+orcbot run --daemon
+```
+
+When started in daemon mode:
+- The process runs in the background and detaches from the terminal
+- A PID file is written to `~/.orcbot/orcbot.pid`
+- Logs are redirected to `~/.orcbot/daemon.log`
+- The daemon will continue running even after you close the terminal
+
+**Managing the daemon:**
+```bash
+# Check if daemon is running
+orcbot daemon status
+
+# Stop the daemon
+orcbot daemon stop
+
+# View daemon logs
+tail -f ~/.orcbot/daemon.log
+```
+
+The daemon mode includes safeguards to prevent duplicate instances. If you try to start the daemon while one is already running, you'll receive an error with the existing process information.
 
 ---
 

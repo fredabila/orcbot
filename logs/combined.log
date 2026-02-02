@@ -188,3 +188,75 @@
 2026-02-02 15:02:37 [[32minfo[39m]: Skill registered: broadcast_to_agents
 2026-02-02 15:02:37 [[32minfo[39m]: Skill registered: get_agent_messages
 2026-02-02 15:02:37 [[32minfo[39m]: Skill registered: clone_self
+2026-02-02 15:04:38 [[32minfo[39m]: ConfigManager: Config path set to /home/runner/work/orcbot/orcbot/orcbot.config.yaml
+2026-02-02 15:04:38 [[32minfo[39m]: User context loaded from USER.md
+2026-02-02 15:04:38 [[32minfo[39m]: MultiLLM: Initialized with model gpt-4o
+2026-02-02 15:04:38 [[32minfo[39m]: SkillsManager: Skills definitions active from /home/runner/.orcbot/SKILLS.md
+2026-02-02 15:04:38 [[32minfo[39m]: SkillsManager: Registered ts-node for plugin compilation.
+2026-02-02 15:04:38 [[32minfo[39m]: SkillsManager: Found 0 files in /home/runner/.orcbot/plugins: 
+2026-02-02 15:04:38 [[32minfo[39m]: Orchestrator: Loaded 1 agent(s)
+2026-02-02 15:04:38 [[33mwarn[39m]: /home/runner/.orcbot/.AI.md not found. Using default identity.
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: send_telegram
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: send_whatsapp
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: download_file
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: send_file
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: write_file
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: create_directory
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: read_file
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: list_directory
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: analyze_media
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: post_whatsapp_status
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: react_whatsapp
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: reply_whatsapp_status
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: update_contact_profile
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: run_command
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: get_system_info
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: self_repair_skill
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: set_config
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: manage_skills
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: browser_navigate
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: browser_examine_page
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: browser_wait
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: browser_wait_for
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: browser_click
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: browser_type
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: browser_press
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: browser_screenshot
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: browser_vision
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: browser_solve_captcha
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: browser_run_js
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: switch_browser_profile
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: create_custom_skill
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: install_npm_dependency
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: web_search
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: youtube_trending
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: extract_article
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: schedule_task
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: deep_reason
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: update_user_profile
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: update_agent_identity
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: update_journal
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: update_learning
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: request_supporting_data
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: spawn_agent
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: list_agents
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: terminate_agent
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: delegate_task
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: distribute_tasks
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: orchestrator_status
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: complete_delegated_task
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: fail_delegated_task
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: send_agent_message
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: broadcast_to_agents
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: get_agent_messages
+2026-02-02 15:04:38 [[32minfo[39m]: Skill registered: clone_self
+2026-02-02 15:05:21 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 4194)
+2026-02-02 15:05:21 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 4194)
+2026-02-02 15:05:21 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 4194)
+2026-02-02 15:05:21 [[32minfo[39m]: PID file removed: /tmp/orcbot-daemon-test/test.pid
+2026-02-02 15:05:21 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 4194)
+2026-02-02 15:05:34 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 4318)
+2026-02-02 15:05:34 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 4318)
+2026-02-02 15:05:34 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 4318)
+2026-02-02 15:05:34 [[32minfo[39m]: PID file removed: /tmp/orcbot-daemon-test/test.pid
+2026-02-02 15:05:34 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 4318)
