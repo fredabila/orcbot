@@ -66,11 +66,12 @@ program
     .command('run')
     .description('Start the agent autonomous loop (checks for daemon conflicts)')
     .option('-d, --daemon', 'Run in background as a daemon')
+    .option('--daemon-child', 'Internal: run as daemon child', false)
     .action(async (options) => {
         const daemonManager = DaemonManager.createDefault();
         const status = daemonManager.isRunning();
 
-        if (options.daemon) {
+        if (options.daemon || options.daemonChild) {
             // Daemon mode - check already handled in daemonize() method
             daemonManager.daemonize();
             logger.info('Agent loop starting in daemon mode...');

@@ -126,6 +126,30 @@ export class DaemonManager {
      * so the PID written is for the actual daemon process.
      */
     public daemonize(): void {
+        // If not already running as the daemon child, spawn a detached child and exit parent
+        if (process.env.ORCBOT_DAEMON_CHILD !== '1') {
+            const { spawn } = require('child_process');
+            const nodePath = process.execPath;
+            const scriptPath = process.argv[1];
+
+            const child = spawn(
+                nodePath,
+                [scriptPath, 'run', '--daemon', '--daemon-child'],
+                {
+                    detached: true,
+                    stdio: 'ignore',
+                    env: { ...process.env, ORCBOT_DAEMON_CHILD: '1' }
+                }
+            );
+
+            child.unref();
+            console.log('\n✅ OrcBot daemon spawn requested.');
+            console.log(`   PID file: ${this.pidFile}`);
+            console.log(`   Log file: ${this.logFile}`);
+            console.log('   Use "orcbot daemon status" to verify it is running.');
+            process.exit(0);
+        }
+
         // Ensure data directory exists
         if (!fs.existsSync(this.dataDir)) {
             fs.mkdirSync(this.dataDir, { recursive: true });
@@ -206,7 +230,9 @@ export class DaemonManager {
         });
 
         // Unref stdin/stdout/stderr so Node doesn't wait for them
-        if (process.stdin) process.stdin.unref();
+        if (process.stdin && typeof (process.stdin as any).unref === 'function') {
+            (process.stdin as any).unref();
+        }
         if (process.stdout && typeof (process.stdout as any).unref === 'function') {
             (process.stdout as any).unref();
         }
