@@ -1756,9 +1756,13 @@ This skill should prevent future failures when ${taskDescription.slice(0, 100)}.
 
     private setupEventListeners() {
         eventBus.on('scheduler:tick', async () => {
-            await this.processNextAction();
-            await this.runPluginHealthCheck('tick');
-            this.checkHeartbeat();
+            try {
+                await this.processNextAction();
+                await this.runPluginHealthCheck('tick');
+                this.checkHeartbeat();
+            } catch (e) {
+                logger.error(`Scheduler tick error (non-fatal): ${e}`);
+            }
         });
 
         eventBus.on('action:queued', (action: Action) => {

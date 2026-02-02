@@ -16,6 +16,14 @@ import { DaemonManager } from '../utils/daemon';
 dotenv.config(); // Local .env
 dotenv.config({ path: path.join(os.homedir(), '.orcbot', '.env') }); // Global .env
 
+process.on('unhandledRejection', (reason) => {
+    logger.error(`Unhandled Promise rejection (non-fatal): ${reason}`);
+});
+
+process.on('uncaughtException', (err) => {
+    logger.error(`Uncaught exception (non-fatal): ${err?.stack || err}`);
+});
+
 const program = new Command();
 const agent = new Agent();
 const workerProfile = new WorkerProfileManager();
@@ -136,13 +144,34 @@ program
     .command('daemon')
     .description('Manage daemon process')
     .argument('[action]', 'Action: status, stop', 'status')
-    .action((action) => {
+    .action(async (action) => {
         const daemonManager = DaemonManager.createDefault();
         
         switch (action) {
             case 'status':
                 console.log(daemonManager.getStatus());
                 break;
+            case 'start':
+                daemonManager.daemonize();
+                logger.info('Agent loop starting in daemon mode...');
+                await agent.start();
+                break;
+            case 'restart': {
+                const status = daemonManager.isRunning();
+                if (status.running && status.pid) {
+                    try {
+                        process.kill(status.pid, 'SIGTERM');
+                        console.log(`✅ Sent stop signal to daemon (PID: ${status.pid})`);
+                    } catch (error) {
+                        console.error(`❌ Failed to stop daemon: ${error}`);
+                        process.exit(1);
+                    }
+                }
+                daemonManager.daemonize();
+                logger.info('Agent loop starting in daemon mode...');
+                await agent.start();
+                break;
+            }
             case 'stop':
                 const status = daemonManager.isRunning();
                 if (status.running && status.pid) {
@@ -160,7 +189,7 @@ program
                 break;
             default:
                 console.error(`Unknown action: ${action}`);
-                console.log('Available actions: status, stop');
+                console.log('Available actions: status, start, stop, restart');
                 process.exit(1);
         }
     });
