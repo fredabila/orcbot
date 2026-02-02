@@ -267,3 +267,13 @@
 2026-02-02 15:08:18 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 4799)
 2026-02-02 15:08:18 [[32minfo[39m]: PID file removed: /tmp/orcbot-daemon-test/test.pid
 2026-02-02 15:08:18 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 4799)
+2026-02-02 17:21:47 [[32minfo[39m]: DecisionPipeline: No execution plan provided; using cautious mode; Suppressed send: message cap 2 reached | dropped=dedup:send_telegram,limit:send_whatsapp
+2026-02-02 17:21:47 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 3945)
+2026-02-02 17:21:47 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 3945)
+2026-02-02 17:21:47 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 3945)
+2026-02-02 17:21:47 [[32minfo[39m]: PID file removed: /tmp/orcbot-daemon-test/test.pid
+2026-02-02 17:21:47 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 3945)
+2026-02-02 17:21:47 [[32minfo[39m]: PID file written: /tmp/orcbot-daemon-test/test.pid (PID: 3945)
+2026-02-02 17:21:47 [[32minfo[39m]: DecisionPipeline: Terminated due to max step budget | dropped=
+2026-02-02 17:21:47 [[32minfo[39m]: DecisionPipeline: No execution plan provided; using cautious mode | dropped=
+2026-02-02 17:21:47 [[32minfo[39m]: DecisionPipeline: No execution plan provided; using cautious mode | dropped=

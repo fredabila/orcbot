@@ -101,4 +101,41 @@ describe('DaemonManager', () => {
         // Just verify it creates instance successfully
         expect(defaultManager).toBeDefined();
     });
+
+    it('should expose PID file path via getter', () => {
+        const pidFile = daemonManager.getPidFile();
+        expect(pidFile).toBe(testPidFile);
+    });
+
+    it('should expose log file path via getter', () => {
+        const logFile = daemonManager.getLogFile();
+        expect(logFile).toBe(testLogFile);
+    });
+
+    it('should expose data directory path via getter', () => {
+        const dataDir = daemonManager.getDataDir();
+        expect(dataDir).toBe(testDir);
+    });
+
+    it('should detect conflict when daemon is already running', () => {
+        // Simulate a running daemon
+        daemonManager.writePidFile(process.pid);
+        
+        // Verify conflict detection
+        const status = daemonManager.isRunning();
+        expect(status.running).toBe(true);
+        expect(status.pid).toBe(process.pid);
+        
+        // This would be caught in CLI or daemonize() method
+        expect(status.running).toBe(true);
+    });
+
+    it('should allow start when no daemon is running', () => {
+        // No PID file exists
+        const status = daemonManager.isRunning();
+        expect(status.running).toBe(false);
+        
+        // This would allow the start
+        expect(status.running).toBe(false);
+    });
 });
