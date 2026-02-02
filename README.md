@@ -143,12 +143,49 @@ orcbot ui
 
 ### Direct Commands
 ```bash
-# Start the autonomous reasoning loop
+# Start the autonomous reasoning loop (foreground)
 orcbot run
+
+# Start in daemon/background mode
+orcbot run --daemon
+
+# Stop a running daemon
+orcbot stop
+
+# Check daemon and agent status
+orcbot status
 
 # Push an orchestration task
 orcbot push "Find the current price of BTC and message it to Frederick on Telegram" -p 10
 ```
+
+#### Daemon Mode
+
+OrcBot can run as a background daemon, perfect for long-running autonomous tasks without requiring a terminal session:
+
+```bash
+# Start daemon
+orcbot run --daemon
+# Output shows:
+#   PID file: ~/.orcbot/orcbot.pid
+#   Log file: ~/.orcbot/logs/orcbot.log
+
+# View logs
+tail -f ~/.orcbot/logs/orcbot.log
+
+# Stop daemon
+orcbot stop
+
+# Check if daemon is running
+orcbot status
+```
+
+**Features:**
+- Automatic PID file management in `~/.orcbot/`
+- Log output redirected to `~/.orcbot/logs/orcbot.log`
+- Duplicate instance detection
+- Clean shutdown on SIGTERM/SIGINT
+- Stale PID file cleanup
 
 ---
 
