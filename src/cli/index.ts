@@ -10,6 +10,7 @@ import qrcode from 'qrcode-terminal';
 
 import path from 'path';
 import os from 'os';
+import fs from 'fs';
 import { WorkerProfileManager } from '../core/WorkerProfile';
 import { DaemonManager } from '../utils/daemon';
 import { TokenTracker } from '../core/TokenTracker';
@@ -67,10 +68,39 @@ program
     .command('run')
     .description('Start the agent autonomous loop (checks for daemon conflicts)')
     .option('-d, --daemon', 'Run in background as a daemon')
+    .option('-b, --background', 'Run in background (nohup-style)')
     .option('--daemon-child', 'Internal: run as daemon child', false)
+    .option('--background-child', 'Internal: run as background child', false)
     .action(async (options) => {
         const daemonManager = DaemonManager.createDefault();
         const status = daemonManager.isRunning();
+
+        if (options.background && !options.backgroundChild) {
+            const { spawn } = require('child_process');
+            const nodePath = process.execPath;
+            const scriptPath = process.argv[1];
+
+            const dataDir = path.join(os.homedir(), '.orcbot');
+            if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+            const logPath = path.join(dataDir, 'foreground.log');
+            const out = fs.openSync(logPath, 'a');
+
+            const child = spawn(
+                nodePath,
+                [scriptPath, 'run', '--background-child'],
+                {
+                    detached: true,
+                    stdio: ['ignore', out, out],
+                    env: { ...process.env, ORCBOT_BACKGROUND_CHILD: '1' }
+                }
+            );
+
+            child.unref();
+            console.log('\n✅ OrcBot is running in the background.');
+            console.log(`   Log file: ${logPath}`);
+            console.log('   Stop with: pkill -f "orcbot run --background-child"');
+            return;
+        }
 
         if (options.daemon || options.daemonChild) {
             // Daemon mode - check already handled in daemonize() method

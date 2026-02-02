@@ -75,6 +75,17 @@ npm install -g .`,
       code: `orcbot setup`,
     },
     {
+      title: 'Run in background (simple option)',
+      description: 'Start OrcBot in the background without systemd:',
+      code: `orcbot run --background
+
+# View logs
+tail -f ~/.orcbot/foreground.log
+
+# Stop
+pkill -f "orcbot run --background-child"`,
+    },
+    {
       title: 'Create a systemd service (optional but recommended)',
       description: 'For auto-restart and running OrcBot as a background service:',
       code: `cat > /etc/systemd/system/orcbot.service << 'EOF'
