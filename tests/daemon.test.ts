@@ -4,6 +4,9 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
+// Magic number for testing non-existent process
+const NON_EXISTENT_PID = 99999999;
+
 describe('DaemonManager', () => {
   const testDataDir = path.join(os.tmpdir(), 'orcbot-test-daemon-' + Date.now());
   let daemonManager: DaemonManager;
@@ -19,19 +22,7 @@ describe('DaemonManager', () => {
   afterEach(() => {
     // Clean up test directory
     if (fs.existsSync(testDataDir)) {
-      const pidFile = path.join(testDataDir, 'orcbot.pid');
-      if (fs.existsSync(pidFile)) {
-        fs.unlinkSync(pidFile);
-      }
-      const logsDir = path.join(testDataDir, 'logs');
-      if (fs.existsSync(logsDir)) {
-        const logFile = path.join(logsDir, 'orcbot.log');
-        if (fs.existsSync(logFile)) {
-          fs.unlinkSync(logFile);
-        }
-        fs.rmdirSync(logsDir);
-      }
-      fs.rmdirSync(testDataDir);
+      fs.rmSync(testDataDir, { recursive: true, force: true });
     }
   });
 
@@ -61,8 +52,7 @@ describe('DaemonManager', () => {
 
   it('should clean up stale PID file for non-existent process', () => {
     const pidFile = daemonManager.getPidFile();
-    // Write a fake PID that doesn't exist (very high number unlikely to be in use)
-    fs.writeFileSync(pidFile, '99999999', 'utf8');
+    fs.writeFileSync(pidFile, NON_EXISTENT_PID.toString(), 'utf8');
     
     const status = daemonManager.isRunning();
     expect(status.running).toBe(false);

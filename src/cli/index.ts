@@ -112,7 +112,8 @@ program
 program
     .command('stop')
     .description('Stop a running daemon instance')
-    .action(() => {
+    .option('-w, --wait', 'Wait and verify the daemon stopped')
+    .action((options) => {
         const config = new ConfigManager();
         const dataHome = config.get('memoryPath') ? path.dirname(config.get('memoryPath')) : path.join(os.homedir(), '.orcbot');
         const daemonManager = new DaemonManager(dataHome);
@@ -128,18 +129,24 @@ program
         try {
             process.kill(status.pid!, 'SIGTERM');
             console.log('Stop signal sent successfully.');
-            console.log('The daemon should stop within a few seconds.');
             
-            // Wait a bit and check if it actually stopped
-            setTimeout(() => {
-                const newStatus = daemonManager.isRunning();
-                if (newStatus.running) {
-                    console.log('\nDaemon is still running. You may need to force kill it:');
-                    console.log(`  kill -9 ${status.pid}`);
-                } else {
-                    console.log('\nDaemon stopped successfully.');
-                }
-            }, 2000);
+            if (options.wait) {
+                // Wait and check if it actually stopped
+                console.log('Waiting for daemon to stop...');
+                setTimeout(() => {
+                    const newStatus = daemonManager.isRunning();
+                    if (newStatus.running) {
+                        console.log('\nDaemon is still running. You may need to force kill it:');
+                        console.log(`  kill -9 ${status.pid}`);
+                        process.exit(1);
+                    } else {
+                        console.log('\nDaemon stopped successfully.');
+                        process.exit(0);
+                    }
+                }, 2000);
+            } else {
+                console.log('Use --wait flag to verify the daemon stopped.');
+            }
         } catch (e: any) {
             if (e.code === 'ESRCH') {
                 console.error('Process not found. Cleaning up stale PID file...');

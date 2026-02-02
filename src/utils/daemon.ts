@@ -98,24 +98,46 @@ export class DaemonManager {
     public redirectLogs(): void {
         const logStream = fs.createWriteStream(this.options.logFile, { flags: 'a' });
         
-        process.stdout.write = logStream.write.bind(logStream) as any;
-        process.stderr.write = logStream.write.bind(logStream) as any;
+        // Store original write methods
+        const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+        const originalStderrWrite = process.stderr.write.bind(process.stderr);
+        
+        // Redirect stdout - preserve signature
+        process.stdout.write = ((chunk: any, encoding?: any, callback?: any): boolean => {
+            logStream.write(chunk, encoding, callback);
+            return true;
+        }) as any;
+        
+        // Redirect stderr - preserve signature
+        process.stderr.write = ((chunk: any, encoding?: any, callback?: any): boolean => {
+            logStream.write(chunk, encoding, callback);
+            return true;
+        }) as any;
 
-        // Also redirect console methods
+        // Redirect console methods with proper object handling
         const originalLog = console.log;
         const originalError = console.error;
         const originalWarn = console.warn;
 
         console.log = (...args: any[]) => {
-            logStream.write(args.join(' ') + '\n');
+            const message = args.map(arg => 
+                typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+            ).join(' ') + '\n';
+            logStream.write(message);
         };
 
         console.error = (...args: any[]) => {
-            logStream.write('[ERROR] ' + args.join(' ') + '\n');
+            const message = '[ERROR] ' + args.map(arg => 
+                typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+            ).join(' ') + '\n';
+            logStream.write(message);
         };
 
         console.warn = (...args: any[]) => {
-            logStream.write('[WARN] ' + args.join(' ') + '\n');
+            const message = '[WARN] ' + args.map(arg => 
+                typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+            ).join(' ') + '\n';
+            logStream.write(message);
         };
 
         logger.info(`Logs redirected to: ${this.options.logFile}`);
