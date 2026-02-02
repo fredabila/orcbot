@@ -56,17 +56,31 @@ program
 
 program
     .command('run')
-    .description('Start the agent autonomous loop')
+    .description('Start the agent autonomous loop (checks for daemon conflicts)')
     .option('-d, --daemon', 'Run in background as a daemon')
     .action(async (options) => {
+        const daemonManager = DaemonManager.createDefault();
+        const status = daemonManager.isRunning();
+
         if (options.daemon) {
-            // Daemon mode
-            const daemonManager = DaemonManager.createDefault();
+            // Daemon mode - check already handled in daemonize() method
             daemonManager.daemonize();
             logger.info('Agent loop starting in daemon mode...');
             await agent.start();
         } else {
-            // Foreground mode (default)
+            // Foreground mode - check if daemon is already running
+            if (status.running) {
+                console.error('\n❌ Cannot start in foreground mode: OrcBot daemon is already running');
+                console.error(`   Daemon PID: ${status.pid}`);
+                console.error(`   PID file: ${daemonManager.getPidFile()}`);
+                console.error('\n   To stop the daemon first, run:');
+                console.error(`   $ orcbot daemon stop`);
+                console.error('\n   Or to view daemon status:');
+                console.error(`   $ orcbot daemon status`);
+                console.error('');
+                process.exit(1);
+            }
+            
             console.log('Agent loop starting... (Press Ctrl+C to stop)');
             await agent.start();
         }

@@ -195,7 +195,16 @@ orcbot daemon stop
 tail -f ~/.orcbot/daemon.log
 ```
 
-The daemon mode includes safeguards to prevent duplicate instances. If you try to start the daemon while one is already running, you'll receive an error with the existing process information.
+**Conflict Prevention:**
+
+OrcBot includes built-in safeguards to prevent conflicts between daemon and non-daemon modes:
+
+- Running `orcbot run --daemon` when a daemon is already active will display an error with the existing PID and instructions to stop it first
+- Running `orcbot run` (foreground mode) when a daemon is active will prevent startup and suggest stopping the daemon first
+- Both modes detect stale PID files (when the process no longer exists) and clean them up automatically
+- Clear error messages guide you to use `orcbot daemon stop` or `orcbot daemon status` to manage conflicts
+
+This ensures you won't accidentally run multiple agent instances that could conflict with each other or duplicate channel connections.
 
 ---
 

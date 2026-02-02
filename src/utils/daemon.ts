@@ -21,6 +21,27 @@ export class DaemonManager {
     }
 
     /**
+     * Get the PID file path
+     */
+    public getPidFile(): string {
+        return this.pidFile;
+    }
+
+    /**
+     * Get the log file path
+     */
+    public getLogFile(): string {
+        return this.logFile;
+    }
+
+    /**
+     * Get the data directory path
+     */
+    public getDataDir(): string {
+        return this.dataDir;
+    }
+
+    /**
      * Check if a daemon is already running
      */
     public isRunning(): { running: boolean; pid?: number } {
@@ -112,9 +133,14 @@ export class DaemonManager {
         // Check if already running
         const status = this.isRunning();
         if (status.running) {
-            console.error(`\n❌ OrcBot daemon is already running (PID: ${status.pid})`);
+            console.error(`\n❌ Cannot start daemon: OrcBot daemon is already running`);
+            console.error(`   Daemon PID: ${status.pid}`);
             console.error(`   PID file: ${this.pidFile}`);
-            console.error(`   To stop it, run: kill ${status.pid}`);
+            console.error('\n   To stop the daemon first, run:');
+            console.error(`   $ orcbot daemon stop`);
+            console.error('\n   Or to view daemon status:');
+            console.error(`   $ orcbot daemon status`);
+            console.error('');
             process.exit(1);
         }
 
