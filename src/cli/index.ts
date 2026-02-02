@@ -204,6 +204,7 @@ async function showMainMenu() {
                 { name: 'Tooling & APIs', value: 'tooling' },
                 { name: 'Worker Profile (Digital Identity)', value: 'worker' },
                 { name: 'Multi-Agent Orchestration', value: 'orchestration' },
+                { name: '🔒 Security & Permissions', value: 'security' },
                 { name: 'Configure Agent', value: 'config' },
                 { name: '⬆️  Update OrcBot', value: 'update' },
                 { name: 'Exit', value: 'exit' },
@@ -241,6 +242,9 @@ async function showMainMenu() {
             break;
         case 'orchestration':
             await showOrchestrationMenu();
+            break;
+        case 'security':
+            await showSecurityMenu();
             break;
         case 'config':
             await showConfigMenu();
@@ -1077,6 +1081,122 @@ async function showOrchestrationMenu() {
 
     await waitKeyPress();
     return showOrchestrationMenu();
+}
+
+async function showSecurityMenu() {
+    console.clear();
+    console.log('🔐 Security & Permissions');
+    console.log('=========================');
+
+    const safeMode = agent.config.get('safeMode');
+    const sudoMode = agent.config.get('sudoMode');
+    const allowList = (agent.config.get('commandAllowList') || []) as string[];
+    const denyList = (agent.config.get('commandDenyList') || []) as string[];
+
+    console.log(`\nSafe Mode: ${safeMode ? '🔒 ON (run_command disabled)' : '🔓 OFF'}`);
+    console.log(`Sudo Mode: ${sudoMode ? '⚠️ ON (all commands allowed)' : '✅ OFF (allowList enforced)'}`);
+    console.log(`\nAllowed Commands (${allowList.length}): ${allowList.slice(0, 10).join(', ')}${allowList.length > 10 ? '...' : ''}`);
+    console.log(`Blocked Commands (${denyList.length}): ${denyList.join(', ')}`);
+    console.log('');
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: 'Security Options:',
+            choices: [
+                { name: safeMode ? '🔓 Disable Safe Mode (allow commands)' : '🔒 Enable Safe Mode (block all commands)', value: 'toggle_safe' },
+                { name: sudoMode ? '✅ Disable Sudo Mode (enforce allowList)' : '⚠️ Enable Sudo Mode (allow ALL commands)', value: 'toggle_sudo' },
+                { name: '➕ Add Command to Allow List', value: 'add_allow' },
+                { name: '➖ Remove Command from Allow List', value: 'remove_allow' },
+                { name: '➕ Add Command to Block List', value: 'add_deny' },
+                { name: '➖ Remove Command from Block List', value: 'remove_deny' },
+                { name: '📋 View Full Allow List', value: 'view_allow' },
+                { name: '📋 View Full Block List', value: 'view_deny' },
+                { name: 'Back', value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showMainMenu();
+
+    switch (action) {
+        case 'toggle_safe':
+            agent.config.set('safeMode', !safeMode);
+            console.log(safeMode ? '\n🔓 Safe Mode disabled. Agent can now run commands.' : '\n🔒 Safe Mode enabled. All commands are blocked.');
+            break;
+        case 'toggle_sudo':
+            if (!sudoMode) {
+                const { confirm } = await inquirer.prompt([
+                    { type: 'confirm', name: 'confirm', message: '⚠️ Sudo Mode allows the agent to run ANY command (including rm, format, etc). Are you sure?', default: false }
+                ]);
+                if (confirm) {
+                    agent.config.set('sudoMode', true);
+                    console.log('\n⚠️ Sudo Mode enabled. Agent can run any command.');
+                }
+            } else {
+                agent.config.set('sudoMode', false);
+                console.log('\n✅ Sudo Mode disabled. AllowList is now enforced.');
+            }
+            break;
+        case 'add_allow': {
+            const { cmd } = await inquirer.prompt([
+                { type: 'input', name: 'cmd', message: 'Enter command to allow (e.g., apt, docker):' }
+            ]);
+            if (cmd.trim()) {
+                const newList = [...allowList, cmd.trim().toLowerCase()];
+                agent.config.set('commandAllowList', [...new Set(newList)]);
+                console.log(`\n✅ '${cmd.trim()}' added to allow list.`);
+            }
+            break;
+        }
+        case 'remove_allow': {
+            if (allowList.length === 0) {
+                console.log('\nAllow list is empty.');
+                break;
+            }
+            const { cmd } = await inquirer.prompt([
+                { type: 'list', name: 'cmd', message: 'Select command to remove:', choices: allowList }
+            ]);
+            agent.config.set('commandAllowList', allowList.filter(c => c !== cmd));
+            console.log(`\n✅ '${cmd}' removed from allow list.`);
+            break;
+        }
+        case 'add_deny': {
+            const { cmd } = await inquirer.prompt([
+                { type: 'input', name: 'cmd', message: 'Enter command to block (e.g., rm, reboot):' }
+            ]);
+            if (cmd.trim()) {
+                const newList = [...denyList, cmd.trim().toLowerCase()];
+                agent.config.set('commandDenyList', [...new Set(newList)]);
+                console.log(`\n✅ '${cmd.trim()}' added to block list.`);
+            }
+            break;
+        }
+        case 'remove_deny': {
+            if (denyList.length === 0) {
+                console.log('\nBlock list is empty.');
+                break;
+            }
+            const { cmd } = await inquirer.prompt([
+                { type: 'list', name: 'cmd', message: 'Select command to unblock:', choices: denyList }
+            ]);
+            agent.config.set('commandDenyList', denyList.filter(c => c !== cmd));
+            console.log(`\n✅ '${cmd}' removed from block list.`);
+            break;
+        }
+        case 'view_allow':
+            console.log('\n📋 Full Allow List:');
+            console.log(allowList.length > 0 ? allowList.join(', ') : '(empty)');
+            break;
+        case 'view_deny':
+            console.log('\n📋 Full Block List:');
+            console.log(denyList.length > 0 ? denyList.join(', ') : '(empty)');
+            break;
+    }
+
+    await waitKeyPress();
+    return showSecurityMenu();
 }
 
 async function showConfigMenu() {
