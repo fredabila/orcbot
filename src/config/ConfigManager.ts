@@ -284,6 +284,7 @@ export class ConfigManager {
     public set(key: string, value: any) {
         (this.config as any)[key] = value;
         this.saveConfig();
+        this.syncEnvForKey(key, value);
     }
 
     public saveConfig() {
@@ -292,6 +293,44 @@ export class ConfigManager {
             logger.info(`Configuration saved to ${this.configPath}`);
         } catch (error) {
             logger.error(`Error saving config: ${error}`);
+        }
+    }
+
+    private syncEnvForKey(key: string, value: any) {
+        const envMap: Record<string, string> = {
+            openaiApiKey: 'OPENAI_API_KEY',
+            googleApiKey: 'GOOGLE_API_KEY',
+            braveSearchApiKey: 'BRAVE_SEARCH_API_KEY',
+            searxngUrl: 'SEARXNG_URL',
+            serperApiKey: 'SERPER_API_KEY',
+            captchaApiKey: 'CAPTCHA_API_KEY',
+            telegramToken: 'TELEGRAM_TOKEN',
+            bedrockRegion: 'BEDROCK_REGION',
+            bedrockAccessKeyId: 'BEDROCK_ACCESS_KEY_ID',
+            bedrockSecretAccessKey: 'BEDROCK_SECRET_ACCESS_KEY',
+            bedrockSessionToken: 'BEDROCK_SESSION_TOKEN'
+        };
+
+        const envKey = envMap[key];
+        if (!envKey) return;
+
+        const envPath = path.join(this.dataHome, '.env');
+        const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+        const lines = existing.split(/\r?\n/).filter(l => l.trim().length > 0);
+        const filtered = lines.filter(l => !l.startsWith(envKey + '='));
+
+        if (value !== undefined && value !== null && String(value).trim() !== '') {
+            filtered.push(`${envKey}=${String(value).trim()}`);
+            process.env[envKey] = String(value).trim();
+        } else {
+            delete process.env[envKey];
+        }
+
+        try {
+            fs.writeFileSync(envPath, filtered.join('\n') + (filtered.length ? '\n' : ''));
+            logger.info(`ConfigManager: Synced ${envKey} to ${envPath}`);
+        } catch (error) {
+            logger.warn(`ConfigManager: Failed to sync ${envKey} to ${envPath}: ${error}`);
         }
     }
 
