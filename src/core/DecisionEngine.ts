@@ -33,6 +33,7 @@ export class DecisionEngine {
         const userContext = this.memory.getUserContext();
         const recentContext = this.memory.getRecentContext();
         const availableSkills = this.skills.getSkillsPrompt();
+        const allowedToolNames = this.skills.getAllSkills().map(s => s.name);
 
         // Load Journal and Learning
         let journalContent = '(Journal is empty)';
@@ -98,17 +99,19 @@ DYNAMIC COMMUNICATION INTELLIGENCE:
 - **Sent Message Awareness**: BEFORE you send any message to the user (via any channel skill like \`send_telegram\`, \`send_whatsapp\`, etc.), READ the 'Recent Conversation History'. If you see ANY message observation confirming successful delivery of the requested info, DO NOT send another message.
 
 STRATEGIC REASONING PROTOCOLS:
+0.5 **TOOLING RULE**: You may ONLY call tools listed in "Available Skills". Do NOT invent or assume tools exist.
 0.  **CHAIN OF VERIFICATION (CoVe)**: Before outputting any tools, you MUST perform a verification analysis.
     - Fill out the \`verification\` block in your JSON.
     - \`analysis\`: Review the history. Did you already answer the user? Is the requested file already downloaded?
-    - \`goals_met\`: Set to \`true\` ONLY if the user's ultimate intent is satisfied. If true, you MUST NOT list any more tools (except final updates).
+    - \`goals_met\`: Set to \`true\` if the tools you're calling in THIS response will satisfy the user's ultimate intent. Tools WILL BE EXECUTED even when goals_met is true.
+    - IMPORTANT: If you include tools[] AND set goals_met: true, the tools will run and THEN the action terminates. This is the correct pattern for "send this message and we're done".
 1.  **Step-1 Mandatory Interaction**: If this is a NEW request (\`messagesSent: 0\`), you MUST provide a response in Step 1. Do NOT stay silent.
-    - **SOCIAL FINALITY**: If the user says "Hi", "Hello", or "How are you?", respond naturally and **terminate immediately** (\`goals_met: true\`) in Step 1. Do not look for additional work or research their profile unless specifically asked.
+    - **SOCIAL FINALITY**: If the user says "Hi", "Hello", or "How are you?", respond naturally and **terminate immediately** (\`goals_met: true\` with send_telegram/send_whatsapp) in Step 1. Do not look for additional work or research their profile unless specifically asked.
 2.  **Step-2+ Purpose (RESULTS ONLY)**: If \`messagesSent > 0\`, do NOT send another message unless you have gathered NEW, CRITICAL information or reached a 15-step milestone in a long process.
-3.  **Prohibiting Repetitive Greetings**: If you have already greeted the user or offered help in Step 1, do NOT repeat that offer in Step 2+. If no new data was found, terminate immediately (\`goals_met: true\`).
+3.  **Prohibiting Repetitive Greetings**: If you have already greeted the user or offered help in Step 1, do NOT repeat that offer in Step 2+. If no new data was found, terminate immediately (\`goals_met: true\` with NO tools).
 4.  **Single-Turn Finality**: For social fluff, simple updates, or when all required info is already available, complete ALL actions and send the final response in Step 1. Do NOT wait until Step 2 to respond if you have the answer now.
 5.  **MANDATORY TERMINATION CHECK (ANTI-LOOP)**: Before outputting any tools, **READ THE 'Recent Conversation History'**. 
-    - If you see a \`send_telegram\` or \`send_whatsapp\` observation that already contains the final answer/result, you MUST set \`goals_met: true\` and STOP. 
+    - If you see a \`send_telegram\` or \`send_whatsapp\` observation that already contains the final answer/result, you MUST set \`goals_met: true\` with NO tools and STOP. 
     - Do NOT repeat the message "just to be sure" or because "the user might have missed it". 
     - If your Reasoning says "I will re-send just in case", YOU ARE ALREADY IN A LOOP. BREAK IT.
 6.  **Progress Over Reflection**: Do not loop just to "reflect" in your journal or update learning. 
@@ -116,8 +119,15 @@ STRATEGIC REASONING PROTOCOLS:
     - If you cannot make objective progress, inform the user and stop. Do NOT stay in a loop just updating metadata.
 7.  **Interactive Clarification**: If a task CANNOT be safely or fully completed due to missing details, you MUST use the \`request_supporting_data\` skill. 
     - Execution will PAUSE until the user provides the answer. Do NOT guess or hallucinate missing data.
+    - IMPORTANT: If you ask a question via send_telegram/send_whatsapp, the system will AUTO-PAUSE and wait for user response. DO NOT continue working after asking a question.
+    - After asking a clarifying question, set goals_met: true to terminate. The user's reply will create a NEW action.
 
 8.  **User Correction Override**: If the user's NEW message provides corrective information (e.g., a new password after a failed login, a corrected URL, updated credentials), this is a RETRY TRIGGER. You MUST attempt the action AGAIN with the new data, even if you previously failed. The goal is always to SUCCEED, not just to try once and give up.
+
+9.  **WAITING STATE AWARENESS**: Check memory for "[SYSTEM: Sent question to user. WAITING for response]" entries.
+    - If you see this in recent memory, your previous self asked a question.
+    - The CURRENT message from the user is likely the ANSWER to that question.
+    - Use that answer to continue the task, don't re-ask the same question.
 
 7.  **Semantic Web Navigation**: When using browser tools, you will receive a "Semantic Snapshot".
     - Elements are formatted as: \`role "Label" [ref=N]\`.
@@ -162,7 +172,8 @@ ${availableSkills}
             currentStep: metadata.currentStep || 1,
             executionPlan: metadata.executionPlan,
             lane: metadata.lane,
-            recentMemories: this.memory.getRecentContext()
+            recentMemories: this.memory.getRecentContext(),
+            allowedTools: allowedToolNames
         });
 
         return piped;

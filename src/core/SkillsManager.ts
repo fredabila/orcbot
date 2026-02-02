@@ -186,6 +186,11 @@ export class SkillsManager {
         }
     }
 
+    // Compatibility alias for older plugins that call context.agent.skills.execute(...)
+    public async execute(name: string, args: any): Promise<any> {
+        return this.executeSkill(name, args);
+    }
+
     public getAllSkills(): Skill[] {
         return Array.from(this.skills.values());
     }

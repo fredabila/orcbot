@@ -144,7 +144,14 @@ export class Agent {
                 if (key === 'learning') defaultContent = '# Agent Learning Base\nThis file contains structured knowledge on various topics.\n';
                 if (key === 'actionQueue') defaultContent = '[]';
                 if (key === 'memory') defaultContent = '{"memories":[]}';
-                if (key === 'skills') defaultContent = '# Global Skills\n(Skills are loaded from SKILLS.md)\n';
+                if (key === 'skills') {
+                    const localSkillsPath = path.resolve(process.cwd(), 'SKILLS.md');
+                    if (fs.existsSync(localSkillsPath)) {
+                        defaultContent = fs.readFileSync(localSkillsPath, 'utf-8');
+                    } else {
+                        defaultContent = '# OrcBot Skills Registry\n\n(Workspace SKILLS.md not found. Populate this file manually.)\n';
+                    }
+                }
 
                 try {
                     fs.writeFileSync(filePath, defaultContent);
@@ -831,6 +838,67 @@ export const ${name} = {
             }
         });
 
+        // Skill: YouTube Trending (reliable fallback for YouTube)
+        this.skills.registerSkill({
+            name: 'youtube_trending',
+            description: 'Get trending videos from YouTube. More reliable than browser navigation for YouTube content.',
+            usage: 'youtube_trending(region?, category?)',
+            handler: async (args: any) => {
+                const region = args.region || args.country || 'US';
+                const category = args.category || 'all';
+                
+                try {
+                    // Try YouTube's public RSS/Atom feeds first (no API key needed)
+                    // These don't give "trending" but popular channels work
+                    // For trending, we need to use a different approach
+                    
+                    // Method 1: Use Invidious API (public YouTube frontend)
+                    const invidiousInstances = [
+                        'https://vid.puffyan.us',
+                        'https://invidious.snopyta.org',
+                        'https://yewtu.be',
+                        'https://invidious.kavin.rocks'
+                    ];
+                    
+                    for (const instance of invidiousInstances) {
+                        try {
+                            const response = await fetch(`${instance}/api/v1/trending?region=${region}`, {
+                                headers: { 'Accept': 'application/json' },
+                                signal: AbortSignal.timeout(10000)
+                            });
+                            
+                            if (response.ok) {
+                                const videos = await response.json() as any[];
+                                if (videos && videos.length > 0) {
+                                    const formatted = videos.slice(0, 10).map((v: any, i: number) => 
+                                        `${i + 1}. **${v.title}**\n   Channel: ${v.author}\n   Views: ${v.viewCount?.toLocaleString() || 'N/A'}\n   Link: https://youtube.com/watch?v=${v.videoId}`
+                                    ).join('\n\n');
+                                    
+                                    return `🔥 **YouTube Trending (${region})**\n\n${formatted}\n\n[via Invidious API]`;
+                                }
+                            }
+                        } catch (e) {
+                            logger.debug(`Invidious instance ${instance} failed: ${e}`);
+                            continue;
+                        }
+                    }
+                    
+                    // Method 2: Fallback to web search for "youtube trending today"
+                    logger.warn('Invidious APIs unavailable. Falling back to web search...');
+                    const searchResult = await this.browser.search(`youtube trending videos today ${region}`);
+                    
+                    if (!searchResult.includes('Error')) {
+                        return `Could not fetch direct YouTube trending data. Here are search results about trending videos:\n\n${searchResult}`;
+                    }
+                    
+                    return `Unable to fetch YouTube trending at this time. YouTube actively blocks automated access.\n\nAlternatives:\n• Visit https://www.youtube.com/feed/trending manually\n• Check social media for trending video discussions\n• Try a specific search query with web_search`;
+                    
+                } catch (e) {
+                    return `Error fetching YouTube trending: ${e}`;
+                }
+            }
+        });
+
         // Skill: Extract Article
         this.skills.registerSkill({
             name: 'extract_article',
@@ -1271,6 +1339,92 @@ Be thorough and academic.`;
         this.decisionEngine.setAgentIdentity(this.agentIdentity);
     }
 
+    /**
+     * When the agent gets stuck in a loop, this method analyzes the failure
+     * and considers creating a new skill to handle the situation better.
+     */
+    private async triggerSkillCreationForFailure(taskDescription: string, failingTool?: string, failingContext?: string) {
+        try {
+            // Don't spam skill creation - check if we recently tried
+            const recentMemories = this.memory.searchMemory('short');
+            const recentSkillCreations = recentMemories.filter(m => 
+                m.metadata?.tool === 'auto_skill_creation' && 
+                Date.now() - new Date(m.timestamp || 0).getTime() < 30 * 60 * 1000 // 30 min cooldown
+            );
+            
+            if (recentSkillCreations.length >= 2) {
+                logger.info('Agent: Skipping auto skill creation (cooldown - already tried recently)');
+                return;
+            }
+
+            logger.info(`Agent: Analyzing failure for potential skill creation. Task: "${taskDescription.slice(0, 100)}"`);
+
+            // Use LLM to analyze if a skill would help
+            const analysisPrompt = `You are an AI agent that just got stuck in a loop trying to complete a task.
+
+FAILED TASK: "${taskDescription}"
+TOOL THAT KEPT FAILING: ${failingTool || 'unknown'}
+CONTEXT: ${failingContext || 'none'}
+
+Analyze this failure and decide:
+1. Is this a recurring problem that a dedicated skill could solve?
+2. What would the skill do differently than the current approach?
+3. What APIs, RSS feeds, or alternative methods could work better?
+
+Respond in JSON:
+{
+  "should_create_skill": true/false,
+  "reason": "brief explanation",
+  "skill_name": "suggested_skill_name" (if should_create_skill is true),
+  "skill_description": "what it would do" (if should_create_skill is true),
+  "implementation_hints": ["hint1", "hint2"] (if should_create_skill is true)
+}`;
+
+            const analysis = await this.llm.call(analysisPrompt, 'You are a helpful AI assistant. Respond only with valid JSON.');
+            
+            let parsed: any;
+            try {
+                // Extract JSON from response
+                const jsonMatch = analysis.match(/\{[\s\S]*\}/);
+                parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+            } catch {
+                logger.debug('Agent: Could not parse skill creation analysis');
+                return;
+            }
+
+            if (!parsed?.should_create_skill) {
+                logger.info(`Agent: Skill creation not recommended: ${parsed?.reason || 'unknown'}`);
+                return;
+            }
+
+            // Save memory that we're attempting skill creation
+            this.memory.saveMemory({
+                id: `auto-skill-${Date.now()}`,
+                type: 'short',
+                content: `Auto skill creation triggered for: ${parsed.skill_name}. Reason: ${parsed.reason}`,
+                metadata: { tool: 'auto_skill_creation', skillName: parsed.skill_name }
+            });
+
+            // Push a high-priority task to create the skill
+            logger.info(`Agent: Queueing skill creation task for "${parsed.skill_name}"`);
+            await this.pushTask(
+                `SELF-IMPROVEMENT: Create a new skill called "${parsed.skill_name}" to handle: ${parsed.skill_description}
+
+Implementation hints:
+${parsed.implementation_hints?.map((h: string) => `- ${h}`).join('\n') || 'None'}
+
+Use manage_skills to create this skill. Research APIs and methods first if needed.
+This skill should prevent future failures when ${taskDescription.slice(0, 100)}...`,
+                9, // High priority
+                { source: 'self_improvement', skillName: parsed.skill_name, trigger: 'loop_detection' },
+                'autonomy'
+            );
+
+        } catch (e) {
+            logger.debug(`Agent: Auto skill creation analysis failed: ${e}`);
+        }
+    }
+
     private isTrivialSocialIntent(text: string): boolean {
         const normalized = (text || '').toLowerCase();
         const quotedMatch = normalized.match(/"([^"]+)"/);
@@ -1342,6 +1496,46 @@ Be thorough and academic.`;
                 );
             }
         }
+    }
+
+    /**
+     * Detects if a message contains a question that requires user input.
+     * Used to auto-pause execution and wait for user response.
+     */
+    private messageContainsQuestion(message: string): boolean {
+        const normalized = message.toLowerCase().trim();
+        
+        // Direct question indicators
+        const questionPatterns = [
+            /\?$/,  // Ends with question mark
+            /\bwould you (like|prefer|want)\b/i,
+            /\bdo you (want|need|prefer)\b/i,
+            /\bshould i\b/i,
+            /\bwhat (would|do|should)\b/i,
+            /\bwhich (one|option|would)\b/i,
+            /\bcan you (tell|provide|give|confirm|clarify)\b/i,
+            /\blet me know\b/i,
+            /\bplease (confirm|clarify|specify|tell)\b/i,
+            /\bis that (ok|okay|fine|correct|right)\b/i,
+            /\bwhat('s| is) your (preference|choice)\b/i,
+            /\b(local files?|deployable|hosted)\s*(or|vs)\b/i,  // Common clarification patterns
+            /\bclarif(y|ication)\b/i,
+            /\bprefer(ence|red)?\??\b.*\bor\b/i,
+        ];
+        
+        // Check if message contains question patterns
+        for (const pattern of questionPatterns) {
+            if (pattern.test(normalized)) {
+                return true;
+            }
+        }
+        
+        // Also check for "either...or" choice patterns
+        if (/\beither\b.*\bor\b/i.test(normalized)) {
+            return true;
+        }
+        
+        return false;
     }
 
     private setupEventListeners() {
@@ -1623,20 +1817,34 @@ Respond with a single actionable task description (one sentence):`;
 
         // Reset USER.md
         const userPath = this.config.get('userProfilePath') || './USER.md';
-        const defaultUser = '# User Profile\n\nThis file contains information about the user.\n\n## Core Identity\n- Name: Unknown\n- Preferences: None known yet\n\n## Learned Facts\n(Empty)\n';
+        const localUserPath = path.resolve(process.cwd(), 'USER.md');
+        const defaultUser = fs.existsSync(localUserPath)
+            ? fs.readFileSync(localUserPath, 'utf-8')
+            : '# User Profile\n\nThis file contains information about the user.\n';
         fs.writeFileSync(userPath, defaultUser);
 
         // Reset .AI.md
-        const defaultAI = '# .AI.md\nName: Alice\nPersonality: proactive, concise, professional\nAutonomyLevel: high\nDefaultBehavior: \n  - prioritize tasks based on user goals\n  - act proactively when deadlines are near\n  - consult SKILLS.md tools to accomplish actions\n';
+        const localAIPath = path.resolve(process.cwd(), '.AI.md');
+        const defaultAI = fs.existsSync(localAIPath)
+            ? fs.readFileSync(localAIPath, 'utf-8')
+            : '# .AI.md\nName: OrcBot\nPersonality: proactive, concise, professional\nAutonomyLevel: high\nDefaultBehavior: \n  - prioritize tasks based on user goals\n  - act proactively when deadlines are near\n  - consult SKILLS.md tools to accomplish actions\n';
         fs.writeFileSync(this.agentConfigFile, defaultAI);
 
         // Reset JOURNAL.md
         const journalPath = this.config.get('journalPath') || './JOURNAL.md';
-        fs.writeFileSync(journalPath, '# Agent Journal\nThis file contains self-reflections and activity logs.\n');
+        const localJournalPath = path.resolve(process.cwd(), 'JOURNAL.md');
+        const defaultJournal = fs.existsSync(localJournalPath)
+            ? fs.readFileSync(localJournalPath, 'utf-8')
+            : '# Agent Journal\nThis file contains self-reflections and activity logs.\n';
+        fs.writeFileSync(journalPath, defaultJournal);
 
         // Reset LEARNING.md
         const learningPath = this.config.get('learningPath') || './LEARNING.md';
-        fs.writeFileSync(learningPath, '# Agent Learning Base\nThis file contains structured knowledge on various topics.\n');
+        const localLearningPath = path.resolve(process.cwd(), 'LEARNING.md');
+        const defaultLearning = fs.existsSync(localLearningPath)
+            ? fs.readFileSync(localLearningPath, 'utf-8')
+            : '# Agent Learning Base\nThis file contains structured knowledge on various topics.\n';
+        fs.writeFileSync(learningPath, defaultLearning);
 
         // Reload managers
         this.memory = new MemoryManager(memoryPath, userPath);
@@ -1870,12 +2078,10 @@ Respond with a single actionable task description (one sentence):`;
 
                 if (decision.verification) {
                     logger.info(`Verification: [Goals Met: ${decision.verification.goals_met}] ${decision.verification.analysis}`);
-                    if (decision.verification.goals_met) {
-                        logger.info(`Agent: Strategic goal satisfied. Terminating action ${action.id}.`);
-                        break;
-                    }
                 }
 
+                // IMPORTANT: Execute tools FIRST, then check goals_met
+                // The agent might say "goals will be met after I send this message" but we must actually send it!
                 if (decision.tools && decision.tools.length > 0) {
                     // 1. INTRA-STEP DEDUPLICATION (Fixes multi-call issues on commands)
                     const uniqueTools: any[] = [];
@@ -1910,6 +2116,13 @@ Respond with a single actionable task description (one sentence):`;
                         loopCounter++;
                         if (loopCounter >= 3) {
                             logger.warn(`Agent: Detected persistent redundant logic loop (3x). Breaking action ${action.id}.`);
+                            
+                            // SELF-IMPROVEMENT: When stuck in a loop, try to build a skill to solve it
+                            const failingTool = decision.tools[0]?.name;
+                            const failingContext = JSON.stringify(decision.tools[0]?.metadata || {}).slice(0, 200);
+                            const taskDescription = typeof action.payload === 'string' ? action.payload : JSON.stringify(action.payload);
+                            await this.triggerSkillCreationForFailure(taskDescription, failingTool, failingContext);
+                            
                             break;
                         } else {
                             logger.info(`Agent: Detected potential loop (${loopCounter}/3). allowing retry...`);
@@ -1957,6 +2170,13 @@ Respond with a single actionable task description (one sentence):`;
                             hasSentMessageInThisStep = true;
                             deepToolExecutedSinceLastMessage = false; // Reset cooldown after sending
                             stepsSinceLastMessage = 0; // Reset status update timer
+                            
+                            // 4. QUESTION DETECTION: If message contains a question, pause and wait for response
+                            if (this.messageContainsQuestion(currentMessage)) {
+                                logger.info(`Agent: Message contains question. Will pause after sending to wait for user response.`);
+                                // Mark that we should break after this tool executes
+                                forceBreak = true;
+                            }
                         }
 
                         // 3. SAFETY GATING (Autonomy Lane)
@@ -2022,6 +2242,18 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         let observation = `Observation: Tool ${toolCall.name} returned: ${JSON.stringify(toolResult)}`;
                         if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp') {
                             messagesSent++;
+                            
+                            // QUESTION PAUSE: If this message asked a question, save waiting state
+                            const sentMessage = toolCall.metadata?.message || '';
+                            if (this.messageContainsQuestion(sentMessage)) {
+                                this.memory.saveMemory({
+                                    id: `${action.id}-step-${currentStep}-waiting`,
+                                    type: 'short',
+                                    content: `[SYSTEM: Sent question to user. WAITING for response. Do NOT continue until user replies. Question: "${sentMessage.slice(0, 100)}..."]`,
+                                    metadata: { waitingForResponse: true, actionId: action.id }
+                                });
+                                logger.info(`Agent: Pausing action ${action.id} - waiting for user response to question.`);
+                            }
                         }
 
                         this.memory.saveMemory({
@@ -2038,6 +2270,13 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             break;
                         }
                     }
+
+                    // NOW check goals_met AFTER tools have been executed
+                    if (decision.verification?.goals_met) {
+                        logger.info(`Agent: Strategic goal satisfied after execution. Terminating action ${action.id}.`);
+                        break;
+                    }
+
                     if (forceBreak) break;
                 } else {
                     logger.info(`Agent: Action ${action.id} reached self-termination. Reasoning: ${decision.reasoning || 'No further tools needed.'}`);

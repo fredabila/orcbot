@@ -64,20 +64,32 @@ export class ParserLayer {
     public static getSystemPromptSnippet(): string {
         return `
 IMPORTANT: You MUST always respond with a valid JSON object wrapped in code blocks.
-You can now call MULTIPLE tools in a single turn using the "tools" array.
+You can call MULTIPLE tools in a single turn using the "tools" array - use this for parallel/independent operations.
 
 JSON Format:
 \`\`\`json
 {
   "action": "THOUGHT",
-  "reasoning": "I need to research X and then message the user.",
+  "reasoning": "I need to search for info and notify the user simultaneously.",
   "verification": {
     "goals_met": false,
-    "analysis": "I have found the names but not the emails yet."
+    "analysis": "Starting research phase."
   },
   "tools": [
-    { "name": "web_search", "metadata": { "query": "robotics" } }
+    { "name": "browser_navigate", "metadata": { "query": "http://google.com" } },
+    { "name": "web_search", "metadata": { "query": "robotics breakthroughs 2026" } },
+    { "name": "send_telegram", "metadata": { "chatId": "user123", "message": "Researching now..." } }
   ],
+  "content": "..."
+}
+\`\`\`
+
+Single tool shorthand (still supported):
+\`\`\`json
+{
+  "action": "EXECUTE",
+  "tool": "web_search",
+  "metadata": { "query": "example" },
   "content": "..."
 }
 \`\`\`

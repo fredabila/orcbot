@@ -12,6 +12,7 @@ export interface PipelineContext {
     executionPlan?: string;
     lane?: 'user' | 'autonomy';
     recentMemories?: MemoryEntry[];
+    allowedTools?: string[];
 }
 
 class LastMessageCache {
@@ -148,6 +149,19 @@ export class DecisionPipeline {
         // Plan sanity
         if (!ctx.executionPlan || ctx.executionPlan.trim().length === 0) {
             notes.push('No execution plan provided; using cautious mode');
+        }
+
+        // Drop unknown tools (not in allowed list)
+        const allowedTools = new Set((ctx.allowedTools || []).map(t => t.toLowerCase()));
+        if (allowedTools.size > 0) {
+            result.tools = (result.tools || []).filter(t => {
+                const ok = allowedTools.has((t.name || '').toLowerCase());
+                if (!ok) {
+                    dropped.push(`unknown:${t.name}`);
+                    notes.push(`Suppressed unknown tool: ${t.name}`);
+                }
+                return ok;
+            });
         }
 
         // Deduplicate tool calls by signature

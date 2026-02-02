@@ -79,6 +79,36 @@ export class WebBrowser {
         }
     }
 
+    // Sites known to block headless browsers aggressively
+    private shouldUseHeadful(url: string): boolean {
+        const blockedDomains = [
+            'youtube.com',
+            'google.com/search',
+            'linkedin.com',
+            'instagram.com',
+            'facebook.com',
+            'twitter.com',
+            'x.com',
+            'tiktok.com',
+            'amazon.com',
+            'netflix.com'
+        ];
+        
+        try {
+            const hostname = new URL(url).hostname.toLowerCase();
+            const pathname = new URL(url).pathname.toLowerCase();
+            return blockedDomains.some(domain => {
+                if (domain.includes('/')) {
+                    const [domainPart, pathPart] = domain.split('/');
+                    return hostname.includes(domainPart) && pathname.includes('/' + pathPart);
+                }
+                return hostname.includes(domain);
+            });
+        } catch {
+            return false;
+        }
+    }
+
     private async waitForStablePage(timeout = 10000) {
         if (!this._page) return;
         try {
@@ -94,9 +124,10 @@ export class WebBrowser {
     public async navigate(url: string, waitSelectors: string[] = [], allowHeadfulRetry: boolean = true): Promise<string> {
         try {
             const needsGoogleForms = /docs\.google\.com\/forms/i.test(url);
-            const needsHeadful = false;
+            const needsHeadful = this.shouldUseHeadful(url);
+            
             if (needsHeadful && this.headlessMode) {
-                logger.warn('Browser: Detected Google Forms URL. Switching to headful mode for better compatibility.');
+                logger.warn(`Browser: Detected bot-protected site (${new URL(url).hostname}). Switching to headful mode.`);
                 await this.ensureBrowser(false);
             } else {
                 await this.ensureBrowser();
@@ -114,6 +145,14 @@ export class WebBrowser {
             await this.waitForStablePage();
 
             const bodyTextLength = await this._page.evaluate(() => document.body?.innerText?.trim().length ?? 0).catch(() => 0);
+            
+            // If page appears empty and we're in headless mode, retry headful
+            if (bodyTextLength < 100 && this.headlessMode && allowHeadfulRetry) {
+                logger.warn(`Browser: Page appears blocked/empty (${bodyTextLength} chars). Retrying in headful mode...`);
+                await this.ensureBrowser(false);
+                return this.navigate(url, waitSelectors, false);
+            }
+            
             if (bodyTextLength === 0) {
                 await this._page.waitForTimeout(1200);
             }
@@ -414,10 +453,17 @@ export class WebBrowser {
             let url = await this.page!.url();
             let contentLength = (await this.page!.content()).length;
 
-            if (!url || url === 'about:blank') {
+            // Track blank reload attempts to prevent infinite loops
+            const maxBlankReloads = 1;
+            let blankReloadAttempts = 0;
+
+            // For SPAs like YouTube, the URL might briefly show about:blank during navigation
+            // Only reload if we have no content AND no title AND the URL is blank
+            if ((!url || url === 'about:blank') && contentLength < 500 && blankReloadAttempts < maxBlankReloads) {
                 const fallbackUrl = this.lastNavigatedUrl;
                 if (fallbackUrl) {
-                    logger.warn('Semantic snapshot: blank URL detected, reloading last URL.');
+                    logger.warn(`Semantic snapshot: blank URL detected (content: ${contentLength} bytes). Attempting single reload.`);
+                    blankReloadAttempts++;
                     await this.page!.goto(fallbackUrl, { waitUntil: 'load', timeout: 30000 }).catch(() => { });
                     await this.waitForStablePage();
                     snapshot = await buildSnapshot();
@@ -427,15 +473,30 @@ export class WebBrowser {
                 }
             }
 
-            const looksBlank = (!title || title.trim().length === 0) && contentLength < 1200;
-            if (looksBlank) {
-                logger.warn('Semantic snapshot appears blank; attempting a reload before returning diagnostics.');
+            // If URL is still blank but we have content, use the lastNavigatedUrl for display
+            if ((!url || url === 'about:blank') && this.lastNavigatedUrl) {
+                url = `${this.lastNavigatedUrl} (SPA state)`;
+            }
+
+            // Only consider it "blank" if we have almost no content AND no snapshot elements
+            // SPAs like YouTube may have minimal HTML but rich snapshots
+            const hasSnapshotContent = snapshot && snapshot.length > 50;
+            const looksBlank = (!title || title.trim().length === 0) && contentLength < 1200 && !hasSnapshotContent;
+            
+            if (looksBlank && blankReloadAttempts < maxBlankReloads) {
+                logger.warn('Semantic snapshot appears blank; attempting a single reload before returning diagnostics.');
+                blankReloadAttempts++;
                 await this.page!.reload({ waitUntil: 'load', timeout: 30000 }).catch(() => { });
                 await this.waitForStablePage();
                 snapshot = await buildSnapshot();
                 title = await this.page!.title();
                 url = await this.page!.url();
                 contentLength = (await this.page!.content()).length;
+                
+                // Update URL display if still blank
+                if ((!url || url === 'about:blank') && this.lastNavigatedUrl) {
+                    url = `${this.lastNavigatedUrl} (SPA state)`;
+                }
             }
 
             const diagnostics = `URL: ${url}\nHTML length: ${contentLength}`;
