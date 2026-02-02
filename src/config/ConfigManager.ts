@@ -54,6 +54,8 @@ export interface AgentConfig {
     pluginDenyList?: string[];
     browserProfileDir?: string;
     browserProfileName?: string;
+    tokenUsagePath?: string;
+    tokenLogPath?: string;
 }
 
 export class ConfigManager {
@@ -269,6 +271,8 @@ export class ConfigManager {
             pluginDenyList: [],
             browserProfileDir: path.join(this.dataHome, 'browser-profiles'),
             browserProfileName: 'default',
+            tokenUsagePath: path.join(this.dataHome, 'token-usage-summary.json'),
+            tokenLogPath: path.join(this.dataHome, 'token-usage.log'),
             bedrockRegion: process.env.BEDROCK_REGION || process.env.AWS_REGION,
             bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
             bedrockSecretAccessKey: process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY,

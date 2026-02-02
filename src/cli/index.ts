@@ -12,6 +12,7 @@ import path from 'path';
 import os from 'os';
 import { WorkerProfileManager } from '../core/WorkerProfile';
 import { DaemonManager } from '../utils/daemon';
+import { TokenTracker } from '../core/TokenTracker';
 
 dotenv.config(); // Local .env
 dotenv.config({ path: path.join(os.homedir(), '.orcbot', '.env') }); // Global .env
@@ -142,6 +143,13 @@ program
     });
 
 program
+    .command('tokens')
+    .description('Show token usage summary')
+    .action(() => {
+        showTokenUsage();
+    });
+
+program
     .command('daemon')
     .description('Manage daemon process')
     .argument('[action]', 'Action: status, stop', 'status')
@@ -235,6 +243,7 @@ async function showMainMenu() {
                 { name: 'Worker Profile (Digital Identity)', value: 'worker' },
                 { name: 'Multi-Agent Orchestration', value: 'orchestration' },
                 { name: '🔒 Security & Permissions', value: 'security' },
+                { name: '📊 Token Usage', value: 'tokens' },
                 { name: 'Configure Agent', value: 'config' },
                 { name: '⬆️  Update OrcBot', value: 'update' },
                 { name: 'Exit', value: 'exit' },
@@ -275,6 +284,11 @@ async function showMainMenu() {
             break;
         case 'security':
             await showSecurityMenu();
+            break;
+        case 'tokens':
+            showTokenUsage();
+            await waitKeyPress();
+            await showMainMenu();
             break;
         case 'config':
             await showConfigMenu();
@@ -1458,6 +1472,38 @@ function showStatus() {
     console.log(`Action Queue: ${agent.actionQueue.getQueue().length} total actions`);
     console.log(`Telegram Bot: ${agent.telegram ? 'Connected' : 'Disconnected/Not Set'}`);
     console.log(`WhatsApp: ${agent.whatsapp ? 'Connected' : 'Disconnected/Disabled'}`);
+    console.log('--------------------');
+}
+
+function showTokenUsage() {
+    const tracker = new TokenTracker(
+        agent.config.get('tokenUsagePath'),
+        agent.config.get('tokenLogPath')
+    );
+    const summary = tracker.getSummary();
+
+    console.log('--- Token Usage ---');
+    console.log(`Total Prompt Tokens: ${summary.totals.promptTokens}`);
+    console.log(`Total Completion Tokens: ${summary.totals.completionTokens}`);
+    console.log(`Total Tokens: ${summary.totals.totalTokens}`);
+
+    const providers = Object.entries(summary.byProvider);
+    if (providers.length > 0) {
+        console.log('\nBy Provider:');
+        providers.forEach(([provider, totals]) => {
+            console.log(`  ${provider}: ${totals.totalTokens} (prompt ${totals.promptTokens}, completion ${totals.completionTokens})`);
+        });
+    }
+
+    const models = Object.entries(summary.byModel).slice(0, 6);
+    if (models.length > 0) {
+        console.log('\nTop Models:');
+        models.forEach(([model, totals]) => {
+            console.log(`  ${model}: ${totals.totalTokens} tokens`);
+        });
+    }
+
+    console.log(`\nLast Updated: ${summary.lastUpdated}`);
     console.log('--------------------');
 }
 

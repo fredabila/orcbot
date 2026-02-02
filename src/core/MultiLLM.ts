@@ -3,6 +3,7 @@ import { ErrorHandler } from '../utils/ErrorHandler';
 import fs from 'fs';
 import path from 'path';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import { TokenTracker } from './TokenTracker';
 
 export type LLMProvider = 'openai' | 'google' | 'bedrock';
 
@@ -19,8 +20,9 @@ export class MultiLLM {
     private bedrockAccessKeyId?: string;
     private bedrockSecretAccessKey?: string;
     private bedrockSessionToken?: string;
+    private tokenTracker?: TokenTracker;
 
-    constructor(config?: { apiKey?: string, googleApiKey?: string, modelName?: string, bedrockRegion?: string, bedrockAccessKeyId?: string, bedrockSecretAccessKey?: string, bedrockSessionToken?: string }) {
+    constructor(config?: { apiKey?: string, googleApiKey?: string, modelName?: string, bedrockRegion?: string, bedrockAccessKeyId?: string, bedrockSecretAccessKey?: string, bedrockSessionToken?: string, tokenTracker?: TokenTracker }) {
         this.openaiKey = config?.apiKey || process.env.OPENAI_API_KEY;
         this.googleKey = config?.googleApiKey || process.env.GOOGLE_API_KEY;
         this.modelName = config?.modelName || 'gpt-4o';
@@ -28,6 +30,7 @@ export class MultiLLM {
         this.bedrockAccessKeyId = config?.bedrockAccessKeyId || process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID;
         this.bedrockSecretAccessKey = config?.bedrockSecretAccessKey || process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY;
         this.bedrockSessionToken = config?.bedrockSessionToken || process.env.BEDROCK_SESSION_TOKEN || process.env.AWS_SESSION_TOKEN;
+        this.tokenTracker = config?.tokenTracker;
 
         logger.info(`MultiLLM: Initialized with model ${this.modelName}`);
     }
@@ -307,6 +310,7 @@ export class MultiLLM {
             const response = await client.send(command);
             const decoded = new TextDecoder().decode(response.body as Uint8Array);
             const data = JSON.parse(decoded);
+            this.recordUsage('bedrock', modelId, prompt, data, undefined);
 
             if (data.output?.message?.content?.length) {
                 const textPart = data.output.message.content.find((p: any) => p.text)?.text;
@@ -349,6 +353,7 @@ export class MultiLLM {
             }
 
             const data = await response.json() as any;
+            this.recordUsage('openai', model, prompt, data, data?.choices?.[0]?.message?.content);
             return data.choices[0].message.content;
         } catch (error) {
             logger.error(`MultiLLM OpenAI Error: ${error}`);
@@ -379,6 +384,8 @@ export class MultiLLM {
             }
 
             const data = await response.json() as any;
+            const textOut = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+            this.recordUsage('google', model, fullPrompt, data, textOut);
             if (data.candidates && data.candidates.length > 0 &&
                 data.candidates[0].content &&
                 data.candidates[0].content.parts &&
@@ -390,5 +397,57 @@ export class MultiLLM {
             logger.error(`MultiLLM Google Error: ${error}`);
             throw error;
         }
+    }
+
+    private recordUsage(provider: LLMProvider, model: string, prompt: string, data: any, completionText?: string) {
+        if (!this.tokenTracker) return;
+
+        const promptTokensEstimate = this.estimateTokens(prompt);
+        const completionTokensEstimate = this.estimateTokens(completionText || '');
+
+        let promptTokens = promptTokensEstimate;
+        let completionTokens = completionTokensEstimate;
+        let totalTokens = promptTokens + completionTokens;
+
+        if (provider === 'openai' && data?.usage) {
+            promptTokens = data.usage.prompt_tokens ?? promptTokens;
+            completionTokens = data.usage.completion_tokens ?? completionTokens;
+            totalTokens = data.usage.total_tokens ?? (promptTokens + completionTokens);
+        }
+
+        if (provider === 'google' && data?.usageMetadata) {
+            promptTokens = data.usageMetadata.promptTokenCount ?? promptTokens;
+            completionTokens = data.usageMetadata.candidatesTokenCount ?? completionTokens;
+            totalTokens = data.usageMetadata.totalTokenCount ?? (promptTokens + completionTokens);
+        }
+
+        if (provider === 'bedrock') {
+            const usage = data?.usage || data?.Usage || {};
+            const inputTokens = usage.input_tokens ?? usage.inputTokens ?? usage.prompt_tokens ?? usage.promptTokens;
+            const outputTokens = usage.output_tokens ?? usage.outputTokens ?? usage.completion_tokens ?? usage.completionTokens;
+            if (inputTokens !== undefined) promptTokens = inputTokens;
+            if (outputTokens !== undefined) completionTokens = outputTokens;
+            totalTokens = usage.total_tokens ?? usage.totalTokens ?? (promptTokens + completionTokens);
+        }
+
+        const estimated = (provider === 'openai' && !data?.usage) ||
+            (provider === 'google' && !data?.usageMetadata) ||
+            (provider === 'bedrock' && !data?.usage);
+
+        this.tokenTracker.record({
+            ts: new Date().toISOString(),
+            provider,
+            model,
+            promptTokens,
+            completionTokens,
+            totalTokens,
+            metadata: { estimated }
+        });
+    }
+
+    private estimateTokens(text: string): number {
+        if (!text) return 0;
+        // Rough heuristic: ~4 chars per token
+        return Math.ceil(text.length / 4);
     }
 }

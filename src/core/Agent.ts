@@ -1,4 +1,5 @@
 import { MemoryManager } from '../memory/MemoryManager';
+import { TokenTracker } from './TokenTracker';
 import { MultiLLM } from './MultiLLM';
 import { SkillsManager } from './SkillsManager';
 import { DecisionEngine } from './DecisionEngine';
@@ -45,6 +46,8 @@ export class Agent {
     private lastPluginHealthCheckAt: number = 0;
     private currentActionId: string | null = null;
     private currentActionStartAt: number | null = null;
+    private instanceLockPath: string | null = null;
+    private instanceLockAcquired: boolean = false;
 
     constructor() {
         this.config = new ConfigManager();
@@ -55,6 +58,11 @@ export class Agent {
             this.config.get('memoryPath'),
             this.config.get('userProfilePath')
         );
+        const tokenTracker = new TokenTracker(
+            this.config.get('tokenUsagePath'),
+            this.config.get('tokenLogPath')
+        );
+
         this.llm = new MultiLLM({
             apiKey: this.config.get('openaiApiKey'),
             googleApiKey: this.config.get('googleApiKey'),
@@ -62,7 +70,8 @@ export class Agent {
             bedrockRegion: this.config.get('bedrockRegion'),
             bedrockAccessKeyId: this.config.get('bedrockAccessKeyId'),
             bedrockSecretAccessKey: this.config.get('bedrockSecretAccessKey'),
-            bedrockSessionToken: this.config.get('bedrockSessionToken')
+            bedrockSessionToken: this.config.get('bedrockSessionToken'),
+            tokenTracker
         });
         this.skills = new SkillsManager(
             this.config.get('skillsPath') || './SKILLS.md',
@@ -2186,6 +2195,7 @@ Respond with a single actionable task description (one sentence):`;
     }
 
     public async start() {
+        this.acquireInstanceLock();
         logger.info('Agent is starting...');
         this.scheduler.start();
 
@@ -2211,7 +2221,71 @@ Respond with a single actionable task description (one sentence):`;
             await this.whatsapp.stop();
         }
         await this.browser.close();
+        this.releaseInstanceLock();
         logger.info('Agent stopped.');
+    }
+
+    private getInstanceLockPath(): string {
+        const actionQueuePath = this.config.get('actionQueuePath') || path.join(os.homedir(), '.orcbot', 'actions.json');
+        return path.join(path.dirname(actionQueuePath), 'orcbot.lock');
+    }
+
+    private acquireInstanceLock() {
+        if (process.env.ORCBOT_WORKER === 'true') return;
+        if (this.instanceLockAcquired) return;
+
+        const lockPath = this.getInstanceLockPath();
+        this.instanceLockPath = lockPath;
+
+        try {
+            if (fs.existsSync(lockPath)) {
+                const raw = fs.readFileSync(lockPath, 'utf8');
+                const data = JSON.parse(raw || '{}');
+                const pid = Number(data.pid);
+
+                if (pid && pid !== process.pid) {
+                    try {
+                        process.kill(pid, 0);
+                        throw new Error(`Another OrcBot instance is already running (PID: ${pid}). Stop it first.`);
+                    } catch (e: any) {
+                        if (e?.code !== 'ESRCH') {
+                            throw e;
+                        }
+                        // Stale lock; remove
+                        fs.unlinkSync(lockPath);
+                    }
+                }
+            }
+
+            const payload = {
+                pid: process.pid,
+                startedAt: new Date().toISOString(),
+                host: os.hostname(),
+                cwd: process.cwd()
+            };
+            fs.writeFileSync(lockPath, JSON.stringify(payload, null, 2));
+            this.instanceLockAcquired = true;
+
+            const cleanup = () => this.releaseInstanceLock();
+            process.once('exit', cleanup);
+            process.once('SIGINT', cleanup);
+            process.once('SIGTERM', cleanup);
+        } catch (e) {
+            logger.error(`Instance lock error: ${e}`);
+            throw e;
+        }
+    }
+
+    private releaseInstanceLock() {
+        if (!this.instanceLockPath || !this.instanceLockAcquired) return;
+        try {
+            if (fs.existsSync(this.instanceLockPath)) {
+                fs.unlinkSync(this.instanceLockPath);
+            }
+        } catch (e) {
+            logger.warn(`Failed to remove instance lock: ${e}`);
+        }
+        this.instanceLockAcquired = false;
     }
 
     public async pushTask(description: string, priority: number = 5, metadata: any = {}, lane: 'user' | 'autonomy' = 'user') {

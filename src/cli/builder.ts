@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { MultiLLM } from '../core/MultiLLM';
+import { TokenTracker } from '../core/TokenTracker';
 import { ConfigManager } from '../config/ConfigManager';
 import { logger } from '../utils/logger';
 
@@ -10,10 +11,15 @@ export class SkillBuilder {
 
     constructor() {
         this.config = new ConfigManager();
+        const tokenTracker = new TokenTracker(
+            this.config.get('tokenUsagePath'),
+            this.config.get('tokenLogPath')
+        );
         this.llm = new MultiLLM({
             apiKey: this.config.get('openaiApiKey'),
             googleApiKey: this.config.get('googleApiKey'),
-            modelName: this.config.get('modelName')
+            modelName: this.config.get('modelName'),
+            tokenTracker
         });
     }
 
