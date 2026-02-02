@@ -138,6 +138,7 @@ async function showMainMenu() {
                 { name: 'Manage AI Models', value: 'models' },
                 { name: 'Tooling & APIs', value: 'tooling' },
                 { name: 'Worker Profile (Digital Identity)', value: 'worker' },
+                { name: 'Multi-Agent Orchestration', value: 'orchestration' },
                 { name: 'Configure Agent', value: 'config' },
                 { name: 'Exit', value: 'exit' },
             ],
@@ -171,6 +172,9 @@ async function showMainMenu() {
             break;
         case 'worker':
             await showWorkerProfileMenu();
+            break;
+        case 'orchestration':
+            await showOrchestrationMenu();
             break;
         case 'config':
             await showConfigMenu();
@@ -718,6 +722,267 @@ async function showWorkerWebsitesMenu() {
 
     await waitKeyPress();
     return showWorkerWebsitesMenu();
+}
+
+async function showOrchestrationMenu() {
+    console.clear();
+    console.log('🐙 Multi-Agent Orchestration');
+    console.log('============================');
+
+    const orchestrator = agent.orchestrator;
+    const status = orchestrator.getStatus();
+    const runningWorkers = orchestrator.getRunningWorkers();
+
+    // Show current status
+    console.log(`Active Agents: ${status.activeAgents}`);
+    console.log(`Running Workers: ${runningWorkers.length} process(es)`);
+    console.log(`Pending Tasks: ${status.pendingTasks}`);
+    console.log(`Completed Tasks: ${status.completedTasks}`);
+    console.log(`Failed Tasks: ${status.failedTasks}`);
+    console.log('');
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: 'Orchestration Options:',
+            choices: [
+                { name: '📊 View Detailed Status', value: 'status' },
+                { name: '🤖 List Active Agents', value: 'list' },
+                { name: '⚡ View Running Processes', value: 'processes' },
+                { name: '➕ Spawn New Agent', value: 'spawn' },
+                { name: '▶️ Start Worker Process', value: 'start_worker' },
+                { name: '⏹️ Stop Worker Process', value: 'stop_worker' },
+                { name: '📋 Delegate Task to Agent', value: 'delegate' },
+                { name: '🔀 Distribute Tasks to All', value: 'distribute' },
+                { name: '💬 Broadcast Message', value: 'broadcast' },
+                { name: '🗑️ Terminate Agent', value: 'terminate' },
+                { name: '🧹 Terminate All Agents', value: 'terminate_all' },
+                { name: 'Back', value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showMainMenu();
+
+    switch (action) {
+        case 'status': {
+            console.clear();
+            console.log('📊 Orchestration Status');
+            console.log('=======================');
+            console.log(JSON.stringify(status, null, 2));
+            console.log('\n🔄 Running Worker Processes:');
+            if (runningWorkers.length === 0) {
+                console.log('  No worker processes running.');
+            } else {
+                runningWorkers.forEach(w => {
+                    console.log(`  - ${w.name} (${w.agentId}) - PID: ${w.pid}`);
+                });
+            }
+            break;
+        }
+        case 'list': {
+            console.clear();
+            console.log('🤖 Active Agents');
+            console.log('================');
+            const agents = orchestrator.listAgents();
+            if (agents.length === 0) {
+                console.log('No agents currently spawned.');
+            } else {
+                agents.forEach(a => {
+                    const isRunning = orchestrator.isWorkerRunning(a.id);
+                    const agentData = orchestrator.getAgent(a.id);
+                    console.log(`\n[${a.id}] ${a.name}`);
+                    console.log(`  Status: ${a.status}`);
+                    console.log(`  Worker: ${isRunning ? `✅ Running (PID: ${agentData?.pid})` : '⏸️ Not running'}`);
+                    console.log(`  Created: ${new Date(a.createdAt).toLocaleString()}`);
+                    console.log(`  Capabilities: ${a.capabilities?.join(', ') || 'none'}`);
+                    console.log(`  Active Tasks: ${a.activeTasks}`);
+                });
+            }
+            break;
+        }
+        case 'processes': {
+            console.clear();
+            console.log('⚡ Running Worker Processes');
+            console.log('===========================');
+            if (runningWorkers.length === 0) {
+                console.log('No worker processes currently running.');
+            } else {
+                runningWorkers.forEach(w => {
+                    console.log(`\n[PID ${w.pid}] ${w.name}`);
+                    console.log(`  Agent ID: ${w.agentId}`);
+                });
+            }
+            break;
+        }
+        case 'start_worker': {
+            const agents = orchestrator.listAgents().filter(a => !orchestrator.isWorkerRunning(a.id));
+            if (agents.length === 0) {
+                console.log('\n❌ No stopped agents available. All agents are either running or spawn a new one.');
+                break;
+            }
+
+            const { agentId } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'agentId',
+                    message: 'Select agent to start:',
+                    choices: agents.map(a => ({ name: `${a.name} (${a.id.slice(0, 8)}...)`, value: a.id }))
+                }
+            ]);
+
+            const agentData = orchestrator.getAgent(agentId);
+            if (agentData) {
+                const success = orchestrator.startWorkerProcess(agentData);
+                console.log(success ? '\n✅ Worker process started.' : '\n❌ Failed to start worker process.');
+            }
+            break;
+        }
+        case 'stop_worker': {
+            if (runningWorkers.length === 0) {
+                console.log('\n❌ No worker processes running.');
+                break;
+            }
+
+            const { agentId } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'agentId',
+                    message: 'Select worker to stop:',
+                    choices: runningWorkers.map(w => ({ name: `${w.name} (PID: ${w.pid})`, value: w.agentId }))
+                }
+            ]);
+
+            const success = orchestrator.stopWorkerProcess(agentId);
+            console.log(success ? '\n✅ Stop signal sent to worker.' : '\n❌ Failed to stop worker.');
+            break;
+        }
+        case 'spawn': {
+            const { name, capabilities } = await inquirer.prompt([
+                { type: 'input', name: 'name', message: 'Agent name:', validate: (v: string) => v.trim().length > 0 || 'Name required' },
+                { type: 'input', name: 'capabilities', message: 'Capabilities (comma-separated, e.g., "browser,search,code"):' }
+            ]);
+
+            const caps = capabilities.split(',').map((c: string) => c.trim()).filter((c: string) => c.length > 0);
+            const newAgent = orchestrator.spawnAgent({
+                name: name.trim(),
+                role: 'worker',
+                capabilities: caps.length > 0 ? caps : undefined
+            });
+            console.log(`\n✅ Agent spawned: ${newAgent.id} (${newAgent.name})`);
+            break;
+        }
+        case 'delegate': {
+            const agents = orchestrator.listAgents();
+            if (agents.length === 0) {
+                console.log('\n❌ No agents available. Spawn an agent first.');
+                break;
+            }
+
+            const { agentId, taskDescription, priority } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'agentId',
+                    message: 'Select agent:',
+                    choices: agents.map(a => ({ name: `${a.name} (${a.id.slice(0, 8)}...)`, value: a.id }))
+                },
+                { type: 'input', name: 'taskDescription', message: 'Task description:', validate: (v: string) => v.trim().length > 0 || 'Task required' },
+                { type: 'number', name: 'priority', message: 'Priority (1-10, higher = more urgent):', default: 5 }
+            ]);
+
+            try {
+                const task = orchestrator.delegateTask(agentId, taskDescription.trim(), Math.max(1, Math.min(10, priority)));
+                console.log(`\n✅ Task delegated: ${task.id}`);
+            } catch (err: any) {
+                console.log(`\n❌ Error: ${err.message}`);
+            }
+            break;
+        }
+        case 'distribute': {
+            const agents = orchestrator.listAgents();
+            if (agents.length === 0) {
+                console.log('\n❌ No agents available. Spawn agents first.');
+                break;
+            }
+
+            const { tasks } = await inquirer.prompt([
+                { type: 'input', name: 'tasks', message: 'Enter tasks (semicolon-separated):' }
+            ]);
+
+            const taskList = tasks.split(';').map((t: string) => t.trim()).filter((t: string) => t.length > 0);
+            if (taskList.length === 0) {
+                console.log('\n❌ No valid tasks provided.');
+                break;
+            }
+
+            const results = orchestrator.distributeTaskList(taskList);
+            console.log(`\n✅ Distributed ${results.length} tasks:`);
+            results.forEach((t: any) => {
+                const agentName = agents.find(a => a.id === t.assignedAgentId)?.name || t.assignedAgentId || 'unassigned';
+                console.log(`  - "${t.description.slice(0, 40)}..." → ${agentName}`);
+            });
+            break;
+        }
+        case 'broadcast': {
+            const agents = orchestrator.listAgents();
+            if (agents.length === 0) {
+                console.log('\n❌ No agents to broadcast to.');
+                break;
+            }
+
+            const { message } = await inquirer.prompt([
+                { type: 'input', name: 'message', message: 'Message to broadcast:', validate: (v: string) => v.trim().length > 0 || 'Message required' }
+            ]);
+
+            orchestrator.broadcast('main-agent', message.trim());
+            console.log(`\n✅ Message broadcast to ${agents.length} agents.`);
+            break;
+        }
+        case 'terminate': {
+            const agents = orchestrator.listAgents();
+            if (agents.length === 0) {
+                console.log('\n❌ No agents to terminate.');
+                break;
+            }
+
+            const { agentId } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'agentId',
+                    message: 'Select agent to terminate:',
+                    choices: agents.map(a => ({ name: `${a.name} (${a.id.slice(0, 8)}...)`, value: a.id }))
+                }
+            ]);
+
+            const success = orchestrator.terminateAgent(agentId);
+            console.log(success ? '\n✅ Agent terminated.' : '\n❌ Failed to terminate agent.');
+            break;
+        }
+        case 'terminate_all': {
+            const agents = orchestrator.listAgents();
+            if (agents.length === 0) {
+                console.log('\n❌ No agents to terminate.');
+                break;
+            }
+
+            const { confirm } = await inquirer.prompt([
+                { type: 'confirm', name: 'confirm', message: `⚠️ Terminate all ${agents.length} agents?`, default: false }
+            ]);
+
+            if (confirm) {
+                let terminated = 0;
+                agents.forEach(a => {
+                    if (orchestrator.terminateAgent(a.id)) terminated++;
+                });
+                console.log(`\n✅ Terminated ${terminated} agents.`);
+            }
+            break;
+        }
+    }
+
+    await waitKeyPress();
+    return showOrchestrationMenu();
 }
 
 async function showConfigMenu() {

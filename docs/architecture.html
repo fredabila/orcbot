@@ -32,8 +32,8 @@
       <section class="card">
         <h2>Core flow</h2>
         <div class="diagram">
-          <div>Channels → Agent Core → Skills & Tools → Providers</div>
-          <div class="diagram-note">Telegram / WhatsApp / CLI • LLMs • Search providers • Storage</div>
+          <div>Channels → Agent Core → Orchestrator → Workers → Skills & Tools → Providers</div>
+          <div class="diagram-note">Telegram / WhatsApp / CLI • Multi-Agent • LLMs • Search (API + Browser) • Storage</div>
         </div>
       </section>
 
@@ -43,33 +43,44 @@
           <p>DecisionEngine + SimulationEngine orchestrate every task with plans and guardrails.</p>
         </div>
         <div class="card">
+          <h3>AgentOrchestrator</h3>
+          <p>Spawns worker processes via Node.js fork() for parallel task execution with IPC.</p>
+        </div>
+        <div class="card">
+          <h3>Smart Heartbeat</h3>
+          <p>Context-aware scheduling with exponential backoff and productivity tracking.</p>
+        </div>
+        <div class="card">
           <h3>Memory & Queue</h3>
           <p>MemoryManager stores short/episodic context. ActionQueue persists tasks.</p>
         </div>
         <div class="card">
-          <h3>Scheduler</h3>
-          <p>Heartbeat triggers autonomy tasks and monitors for stalls.</p>
-        </div>
-        <div class="card">
-          <h3>Skills</h3>
-          <p>SkillsManager loads core tools and hot-reload plugins at runtime.</p>
-        </div>
-        <div class="card">
-          <h3>Web tools</h3>
-          <p>WebBrowser handles navigation, snapshots, and search providers.</p>
+          <h3>Web Search</h3>
+          <p>Resilient search with API providers (Serper, Brave) and browser fallback (DDG, Bing, Google).</p>
         </div>
         <div class="card">
           <h3>Providers</h3>
-          <p>MultiLLM routes to OpenAI, Gemini, or Bedrock with fallback logic.</p>
+          <p>MultiLLM routes to OpenAI, Gemini, or Bedrock with automatic fallback logic.</p>
         </div>
       </section>
 
       <section class="card">
         <h2>Data paths</h2>
         <ul>
-          <li><code>~/.orcbot</code>: memory, profiles, plugins, downloads</li>
-          <li><code>logs/</code>: runtime logs</li>
+          <li><code>~/.orcbot</code>: memory, profiles, plugins, downloads, worker configs</li>
+          <li><code>logs/</code>: runtime logs (main agent + workers)</li>
           <li><code>orcbot.config.yaml</code>: configuration source</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>Key files</h2>
+        <ul>
+          <li><code>src/core/Agent.ts</code>: Main agent with skills and heartbeat</li>
+          <li><code>src/core/AgentOrchestrator.ts</code>: Multi-agent coordination</li>
+          <li><code>src/core/AgentWorker.ts</code>: Worker process entry point</li>
+          <li><code>src/tools/WebBrowser.ts</code>: Browser automation with resilient search</li>
+          <li><code>src/core/Scheduler.ts</code>: Smart heartbeat scheduling</li>
         </ul>
       </section>
     </main>

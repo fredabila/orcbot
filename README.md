@@ -29,8 +29,10 @@ OrcBot is a next-generation **autonomous reasoning agent**. In v2.0, we've moved
 *   📸 **Multi-Modal Intelligence**: Native capability to analyze images, audio, and documents via Telegram and WhatsApp.
 *   🌐 **Context-Aware Browsing**: Strategic web navigation that handles dynamic content and bypasses anti-bot measures.
 *   🐚 **Shell Execution**: Full system access to run commands, manage files, and install dependencies.
-*   💓 **Autonomy Heartbeat**: Proactively wakes up to self-reflect and take action even when idle.
-*   🖥️ **Interactive TUI & Dashboard**: Comprehensive terminal interface and web landing page for management.
+*   💓 **Smart Heartbeat**: Context-aware autonomy with exponential backoff, productivity tracking, and action-oriented tasks.
+*   🤖 **Multi-Agent Orchestration**: Spawn worker processes to handle parallel tasks with real-time coordination.
+*   🔍 **Resilient Web Search**: Smart fallback from API providers to browser-based search when keys aren't configured.
+*   🖥️ **Interactive TUI & Dashboard**: Comprehensive terminal interface with worker process management.
 *   🔌 **Dynamic Plugin System**: Hot-loadable TypeScript plugins for limitless extensibility.
 
 ---
@@ -53,10 +55,13 @@ flowchart LR
 	Agent --> Simulation[SimulationEngine]
 	Agent --> Skills[SkillsManager]
 	Agent --> Memory[(Memory + Profiles)]
-	Agent --> Scheduler[Heartbeat Scheduler]
+	Agent --> Scheduler[Smart Heartbeat]
+	Agent --> Orchestrator[AgentOrchestrator]
+	Orchestrator -->|fork| Workers[Worker Processes]
+	Workers --> Agent
 	Skills --> Web[WebBrowser + Search Providers]
 	Skills --> Plugins[Dynamic Plugins]
-	Web -->|Serper / Brave / SearxNG / Google / Bing / DDG| SearchAPIs[(Search APIs)]
+	Web -->|API or Browser Fallback| SearchAPIs[(Search: Serper / Brave / DDG / Bing / Google)]
 	Decision --> LLM[MultiLLM]
 	LLM --> Providers[(OpenAI / Gemini / Bedrock)]
 	Scheduler --> Queue[(Action Queue)]
@@ -116,11 +121,13 @@ OrcBot comes out of the box with "God Mode" capabilities:
 | Skill | Description | Usage Example |
 |-------|-------------|---------------|
 | `run_command` | Execute any shell command | `run_command("npm test")` |
-| `web_search` | Search DuckDuckGo for info | `web_search("latest AI news")` |
+| `web_search` | Search with API + browser fallback | `web_search("latest AI news")` |
 | `browser_navigate`| Visit a URL and extract text | `browser_navigate("https://google.com")` |
 | `manage_skills` | Install/Update agent skills | `manage_skills("New Skill Definition...")` |
-| `deep_reason` | 01-style intensive analysis | `deep_reason("Ethics of AGl")` |
+| `deep_reason` | 01-style intensive analysis | `deep_reason("Ethics of AGI")` |
 | `update_user_profile`| Permanently learn about user | `update_user_profile("User likes coffee")` |
+| `spawn_worker` | Create a worker agent for parallel tasks | `spawn_worker("Research competitor pricing")` |
+| `list_workers` | View active worker processes | `list_workers()` |
 
 ---
 
@@ -165,16 +172,32 @@ You can manage settings via the TUI (`orcbot ui`) or by editing your config file
 
 ---
 
-## Autonomy & Heartbeat
+## Autonomy & Smart Heartbeat
 
-OrcBot uses a **heartbeat scheduler** to work even when you’re away:
+OrcBot uses a **smart heartbeat** system that's context-aware and action-oriented:
 
-- **Idle triggers** generate proactive tasks
-- **Backlog limits** prevent runaway queues
-- **Stall detection** fails stuck actions and recovers
-- **Stale action recovery** frees the queue if work gets stuck
+### Intelligent Scheduling
+- **Exponential Backoff**: When unproductive, heartbeat intervals automatically increase (2x, 4x, 8x) to save resources
+- **Productivity Tracking**: Measures actual work done vs. idle cycles to optimize timing
+- **Context-Aware Actions**: Analyzes recent conversations to determine relevant follow-ups
 
-Heartbeat defaults are safe for long-running sessions, but can be tuned for aggressive autonomy.
+### Action Types
+- **follow_up**: Continue conversations that need closure
+- **outreach**: Proactively check in with contacts
+- **research**: Learn about topics from recent discussions
+- **maintenance**: Journal updates, memory consolidation
+- **delegate**: Spawn worker agents for parallel tasks
+
+### Multi-Agent Orchestration
+For complex tasks, OrcBot can spawn worker processes:
+```bash
+# Workers appear in the TUI with PIDs and status
+orcbot ui  # → Workers menu shows active processes
+```
+- Real Node.js child processes via `fork()`
+- IPC communication with the main agent
+- Shared configuration and isolated execution
+- Automatic cleanup on completion
 
 ---
 

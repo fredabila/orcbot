@@ -61,7 +61,11 @@ export class ConfigManager {
     private dataHome: string;
 
     constructor(customPath?: string) {
-        this.dataHome = path.join(os.homedir(), '.orcbot');
+        // Check for environment variable override first (used by worker processes)
+        const envConfigPath = process.env.ORCBOT_CONFIG_PATH;
+        const envDataDir = process.env.ORCBOT_DATA_DIR;
+
+        this.dataHome = envDataDir || path.join(os.homedir(), '.orcbot');
         if (!fs.existsSync(this.dataHome)) {
             fs.mkdirSync(this.dataHome, { recursive: true });
         }
@@ -71,8 +75,8 @@ export class ConfigManager {
         // Local override path
         const localConfigPath = path.resolve(process.cwd(), 'orcbot.config.yaml');
 
-        // Final config location: custom > local > global
-        this.configPath = customPath || (fs.existsSync(localConfigPath) ? localConfigPath : globalConfigPath);
+        // Final config location: custom > env > local > global
+        this.configPath = customPath || envConfigPath || (fs.existsSync(localConfigPath) ? localConfigPath : globalConfigPath);
 
         this.config = this.loadConfig(customPath);
         this.startWatcher(customPath);

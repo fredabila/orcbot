@@ -8,6 +8,7 @@ export interface AgentContext {
     agent: any;   // Agent
     logger: any;  // logger
     workerProfile?: any; // WorkerProfileManager
+    orchestrator?: any;  // AgentOrchestrator
     [key: string]: any;
 }
 

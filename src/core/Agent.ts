@@ -10,6 +10,7 @@ import { TelegramChannel } from '../channels/TelegramChannel';
 import { WhatsAppChannel } from '../channels/WhatsAppChannel';
 import { WebBrowser } from '../tools/WebBrowser';
 import { WorkerProfileManager } from './WorkerProfile';
+import { AgentOrchestrator } from './AgentOrchestrator';
 import { Cron } from 'croner';
 import { Readability } from '@mozilla/readability';
 import { DOMParser } from 'linkedom';
@@ -32,8 +33,11 @@ export class Agent {
     public whatsapp: WhatsAppChannel | undefined;
     public browser: WebBrowser;
     public workerProfile: WorkerProfileManager;
+    public orchestrator: AgentOrchestrator;
     private lastActionTime: number;
     private lastHeartbeatAt: number = 0;
+    private consecutiveIdleHeartbeats: number = 0;
+    private lastHeartbeatProductive: boolean = true;
     private agentConfigFile: string;
     private agentIdentity: string = '';
     private isBusy: boolean = false;
@@ -90,6 +94,7 @@ export class Agent {
             this.config.get('browserProfileName')
         );
         this.workerProfile = new WorkerProfileManager();
+        this.orchestrator = new AgentOrchestrator();
 
         this.loadLastActionTime();
         this.loadLastHeartbeatTime();
@@ -100,7 +105,8 @@ export class Agent {
             config: this.config,
             agent: this,
             logger: logger,
-            workerProfile: this.workerProfile
+            workerProfile: this.workerProfile,
+            orchestrator: this.orchestrator
         });
 
         this.loadAgentIdentity();
@@ -770,12 +776,58 @@ export const ${name} = {
         // Skill: Web Search
         this.skills.registerSkill({
             name: 'web_search',
-            description: 'Search the web for information using multiple engines',
+            description: 'Search the web for information using multiple engines (APIs + browser fallback)',
             usage: 'web_search(query)',
             handler: async (args: any) => {
                 const query = args.query || args.text || args.search || args.q;
                 if (!query) return 'Error: Missing search query.';
-                return this.browser.search(query);
+                
+                logger.info(`Searching: "${query}"`);
+                
+                // First attempt with standard search (includes API + browser fallbacks)
+                let result = await this.browser.search(query);
+                
+                // If all providers failed, try a direct deep browser search
+                if (result.includes('Error: All search providers failed')) {
+                    logger.warn('All standard search providers failed. Attempting deep browser search...');
+                    
+                    // Try navigating directly and extracting any useful content
+                    try {
+                        // Try DuckDuckGo's no-JS version as final fallback
+                        const deepResult = await this.browser.navigate(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`);
+                        
+                        if (deepResult && !deepResult.includes('Error')) {
+                            // Extract links from the page content
+                            const links = await this.browser.page?.evaluate(() => {
+                                const anchors = Array.from(document.querySelectorAll('a[href^="http"]'));
+                                return anchors
+                                    .filter(a => {
+                                        const href = (a as HTMLAnchorElement).href;
+                                        return !href.includes('duckduckgo') && 
+                                               !href.includes('duck.co') &&
+                                               a.textContent && a.textContent.trim().length > 5;
+                                    })
+                                    .slice(0, 5)
+                                    .map(a => ({
+                                        title: a.textContent?.trim() || '',
+                                        url: (a as HTMLAnchorElement).href
+                                    }));
+                            });
+                            
+                            if (links && links.length > 0) {
+                                const formatted = links.map((l: any) => `• [${l.title}](${l.url})`).join('\n');
+                                return `Search Results (via lite browser):\n\n${formatted}\n\n[Note: Limited results due to search API unavailability. Consider configuring Serper API for better results.]`;
+                            }
+                        }
+                    } catch (e) {
+                        logger.debug(`Deep browser search failed: ${e}`);
+                    }
+                    
+                    // Final fallback: Provide guidance
+                    return `Unable to search at this time. Search services are unavailable.\n\nSuggestions:\n• Try again in a few minutes\n• Use browse_website to visit a specific URL directly\n• Configure a search API (Serper, Brave) for reliable results\n\nQuery attempted: "${query}"`;
+                }
+                
+                return result;
             }
         });
 
@@ -935,21 +987,43 @@ Be thorough and academic.`;
             }
         });
 
-        // Skill: Update Learning
+        // Skill: Update Learning - with actual research capability
         this.skills.registerSkill({
             name: 'update_learning',
-            description: 'Save structured research findings or knowledge to LEARNING.md',
-            usage: 'update_learning(topic, knowledge_content)',
+            description: 'Research a topic using web search and save structured findings to LEARNING.md. If knowledge_content is empty, will auto-research the topic.',
+            usage: 'update_learning(topic, knowledge_content?)',
             handler: async (args: any) => {
                 const topic = args.topic || args.subject || args.title;
-                const knowledge_content = args.knowledge_content || args.content || args.text || args.data;
+                let knowledge_content = args.knowledge_content || args.content || args.text || args.data;
 
-                if (!topic || !knowledge_content) return 'Error: Missing topic or knowledge_content.';
+                if (!topic) return 'Error: Missing topic.';
+
+                // If no content provided, auto-research the topic
+                if (!knowledge_content || knowledge_content.trim().length < 50) {
+                    try {
+                        logger.info(`Learning: Auto-researching topic "${topic}"...`);
+                        const searchResult = await this.browser.search(`${topic} latest developments 2024 2025`);
+                        
+                        if (searchResult && searchResult.length > 100) {
+                            // Extract key facts using LLM
+                            const extractPrompt = `Extract 5-10 key facts/insights from this search result about "${topic}". Format as bullet points with clear, factual statements:\n\n${searchResult.slice(0, 4000)}`;
+                            const extracted = await this.llm.call(extractPrompt, 'Extract key learnings');
+                            knowledge_content = extracted || searchResult.slice(0, 2000);
+                        } else {
+                            return `Could not find sufficient information about "${topic}" to learn from.`;
+                        }
+                    } catch (e) {
+                        return `Failed to research topic "${topic}": ${e}`;
+                    }
+                }
 
                 const learningPath = this.config.get('learningPath');
                 try {
-                    fs.appendFileSync(learningPath, `\n\n# Topic: ${topic}\nDate: ${new Date().toISOString()}\n\n${knowledge_content}\n---`);
-                    return `Knowledge saved to ${learningPath} under topic: ${topic}`;
+                    const entry = `\n\n## ${topic}\n**Date**: ${new Date().toISOString().split('T')[0]}\n\n${knowledge_content}\n\n---`;
+                    fs.appendFileSync(learningPath, entry);
+                    this.lastHeartbeatProductive = true; // Mark as productive
+                    logger.info(`Learning: Saved knowledge about "${topic}" to ${learningPath}`);
+                    return `Successfully researched and saved knowledge about "${topic}" to LEARNING.md`;
                 } catch (e) {
                     return `Failed to update learning base at ${learningPath}: ${e}`;
                 }
@@ -968,6 +1042,220 @@ Be thorough and academic.`;
                 // We'll rely on the Agent loop to handle the "pause" by detecting this tool call.
                 // But we should actually send the message here if we can.
                 return `CLARIFICATION_REQUESTED: ${question}`;
+            }
+        });
+
+        // ==================== MULTI-AGENT ORCHESTRATION SKILLS ====================
+
+        // Skill: Spawn Agent (Self-Duplication)
+        this.skills.registerSkill({
+            name: 'spawn_agent',
+            description: 'Create a new sub-agent instance for parallel task execution. The spawned agent inherits capabilities and can work independently.',
+            usage: 'spawn_agent(name, role, capabilities?)',
+            handler: async (args: any) => {
+                const name = args.name || args.agent_name;
+                const role = args.role || 'worker';
+                const capabilities = args.capabilities || ['execute'];
+
+                if (!name) return 'Error: Missing agent name.';
+
+                try {
+                    const agent = this.orchestrator.spawnAgent({
+                        name,
+                        role,
+                        capabilities: Array.isArray(capabilities) ? capabilities : [capabilities]
+                    });
+                    return `Successfully spawned agent "${agent.name}" (ID: ${agent.id}) with role "${agent.role}" and capabilities: ${agent.capabilities.join(', ')}`;
+                } catch (e) {
+                    return `Error spawning agent: ${e}`;
+                }
+            }
+        });
+
+        // Skill: List Agents
+        this.skills.registerSkill({
+            name: 'list_agents',
+            description: 'List all agent instances in the orchestration layer with their status and current tasks.',
+            usage: 'list_agents()',
+            handler: async () => {
+                const agents = this.orchestrator.getAgents();
+                if (agents.length === 0) return 'No agents registered.';
+
+                return agents.map(a => {
+                    const taskInfo = a.currentTask ? ` [Task: ${a.currentTask}]` : '';
+                    return `- ${a.name} (${a.id}): ${a.status}${taskInfo} | Role: ${a.role} | Capabilities: ${a.capabilities.join(', ')}`;
+                }).join('\n');
+            }
+        });
+
+        // Skill: Terminate Agent
+        this.skills.registerSkill({
+            name: 'terminate_agent',
+            description: 'Terminate a spawned agent instance. Cannot terminate the primary agent.',
+            usage: 'terminate_agent(agent_id)',
+            handler: async (args: any) => {
+                const agentId = args.agent_id || args.id;
+                if (!agentId) return 'Error: Missing agent_id.';
+
+                const success = this.orchestrator.terminateAgent(agentId);
+                return success
+                    ? `Agent ${agentId} terminated successfully.`
+                    : `Failed to terminate agent ${agentId}. It may not exist or is the primary agent.`;
+            }
+        });
+
+        // Skill: Delegate Task
+        this.skills.registerSkill({
+            name: 'delegate_task',
+            description: 'Create a task and optionally assign it to a specific agent or let the orchestrator auto-assign.',
+            usage: 'delegate_task(description, priority?, agent_id?)',
+            handler: async (args: any) => {
+                const description = args.description || args.task || args.text;
+                const priority = parseInt(args.priority || '5');
+                const agentId = args.agent_id || args.id;
+
+                if (!description) return 'Error: Missing task description.';
+
+                const task = this.orchestrator.createTask(description, priority);
+
+                if (agentId) {
+                    const assigned = this.orchestrator.assignTask(task.id, agentId);
+                    if (assigned) {
+                        return `Task "${task.id}" created and assigned to agent ${agentId}.`;
+                    } else {
+                        return `Task "${task.id}" created but could not be assigned to ${agentId} (agent busy or not found). Task is pending.`;
+                    }
+                }
+
+                return `Task "${task.id}" created with priority ${priority}. Use distribute_tasks() to auto-assign or assign manually.`;
+            }
+        });
+
+        // Skill: Distribute Tasks
+        this.skills.registerSkill({
+            name: 'distribute_tasks',
+            description: 'Auto-assign all pending tasks to available agents based on priority and capability.',
+            usage: 'distribute_tasks()',
+            handler: async () => {
+                const assigned = this.orchestrator.distributeTasks();
+                return assigned > 0
+                    ? `Distributed ${assigned} task(s) to available agents.`
+                    : 'No tasks were distributed. Either no pending tasks or no available agents.';
+            }
+        });
+
+        // Skill: Get Orchestrator Status
+        this.skills.registerSkill({
+            name: 'orchestrator_status',
+            description: 'Get a summary of the multi-agent orchestration layer including agent and task counts.',
+            usage: 'orchestrator_status()',
+            handler: async () => {
+                return this.orchestrator.getSummary();
+            }
+        });
+
+        // Skill: Complete Delegated Task
+        this.skills.registerSkill({
+            name: 'complete_delegated_task',
+            description: 'Mark a delegated task as completed with an optional result.',
+            usage: 'complete_delegated_task(task_id, result?)',
+            handler: async (args: any) => {
+                const taskId = args.task_id || args.id;
+                const result = args.result || args.output;
+
+                if (!taskId) return 'Error: Missing task_id.';
+
+                const success = this.orchestrator.completeTask(taskId, result);
+                return success
+                    ? `Task ${taskId} marked as completed.`
+                    : `Failed to complete task ${taskId}. Task may not exist.`;
+            }
+        });
+
+        // Skill: Fail Delegated Task
+        this.skills.registerSkill({
+            name: 'fail_delegated_task',
+            description: 'Mark a delegated task as failed with an error message.',
+            usage: 'fail_delegated_task(task_id, error)',
+            handler: async (args: any) => {
+                const taskId = args.task_id || args.id;
+                const error = args.error || args.reason || 'Unknown error';
+
+                if (!taskId) return 'Error: Missing task_id.';
+
+                const success = this.orchestrator.failTask(taskId, error);
+                return success
+                    ? `Task ${taskId} marked as failed.`
+                    : `Failed to update task ${taskId}. Task may not exist.`;
+            }
+        });
+
+        // Skill: Send Agent Message
+        this.skills.registerSkill({
+            name: 'send_agent_message',
+            description: 'Send a message from one agent to another for inter-agent communication.',
+            usage: 'send_agent_message(to_agent_id, message, type?)',
+            handler: async (args: any) => {
+                const to = args.to_agent_id || args.to;
+                const message = args.message || args.content || args.text;
+                const type = args.type || 'command';
+
+                if (!to || !message) return 'Error: Missing to_agent_id or message.';
+
+                const msg = this.orchestrator.sendMessage('primary', to, type as any, { message });
+                return `Message sent to ${to}: ${msg.id}`;
+            }
+        });
+
+        // Skill: Broadcast to Agents
+        this.skills.registerSkill({
+            name: 'broadcast_to_agents',
+            description: 'Broadcast a message to all active agents.',
+            usage: 'broadcast_to_agents(message)',
+            handler: async (args: any) => {
+                const message = args.message || args.content || args.text;
+                if (!message) return 'Error: Missing message.';
+
+                this.orchestrator.broadcast('primary', { message });
+                const agents = this.orchestrator.getAgents().filter(a => a.status !== 'terminated' && a.id !== 'primary');
+                return `Broadcast sent to ${agents.length} agent(s).`;
+            }
+        });
+
+        // Skill: Get Agent Messages
+        this.skills.registerSkill({
+            name: 'get_agent_messages',
+            description: 'Retrieve messages sent to a specific agent.',
+            usage: 'get_agent_messages(agent_id?, limit?)',
+            handler: async (args: any) => {
+                const agentId = args.agent_id || args.id || 'primary';
+                const limit = parseInt(args.limit || '20');
+
+                const messages = this.orchestrator.getMessagesFor(agentId, limit);
+                if (messages.length === 0) return `No messages for agent ${agentId}.`;
+
+                return messages.map(m =>
+                    `[${m.timestamp}] From: ${m.from} | Type: ${m.type}\n  ${JSON.stringify(m.payload)}`
+                ).join('\n\n');
+            }
+        });
+
+        // Skill: Clone Self
+        this.skills.registerSkill({
+            name: 'clone_self',
+            description: 'Create a clone of the primary agent with inherited capabilities for parallel processing.',
+            usage: 'clone_self(clone_name, specialized_role?)',
+            handler: async (args: any) => {
+                const cloneName = args.clone_name || args.name || `Clone-${Date.now()}`;
+                const role = args.specialized_role || args.role || 'clone';
+
+                const clone = this.orchestrator.spawnAgent({
+                    name: cloneName,
+                    role,
+                    capabilities: ['execute', 'browse', 'search', 'analyze']
+                });
+
+                return `Created clone "${clone.name}" (${clone.id}) with full capabilities. Use delegate_task() to assign work to this clone.`;
             }
         });
     }
@@ -1084,27 +1372,166 @@ Be thorough and academic.`;
         const backlogLimit = this.config.get('autonomyBacklogLimit') || 3;
         const hasBacklogSpace = activeTasks.length < backlogLimit;
 
+        // SMART COOLING: If last heartbeat was unproductive, exponentially back off
+        // After 3 unproductive heartbeats, wait 2x, then 4x, then 8x the interval
+        const cooldownMultiplier = this.lastHeartbeatProductive ? 1 : Math.min(8, Math.pow(2, this.consecutiveIdleHeartbeats));
+        const effectiveInterval = intervalMinutes * cooldownMultiplier;
+        const smartHeartbeatDue = (Date.now() - this.lastHeartbeatAt) > effectiveInterval * 60 * 1000;
+
+        if (!smartHeartbeatDue) {
+            // Still cooling off
+            return;
+        }
+
         if (heartbeatDue && hasBacklogSpace) {
-            logger.info(`Agent: Heartbeat trigger - Agent idle for ${Math.floor(idleTimeMs / 60000)}m. Initiating proactive autonomy.`);
+            logger.info(`Agent: Heartbeat trigger - Agent idle for ${Math.floor(idleTimeMs / 60000)}m. Cooldown multiplier: ${cooldownMultiplier}x`);
 
-            const proactivePrompt = `
-SYSTEM HEARTBEAT (IDLE AUTONOMY MODE):
-You haven't interacted with the user or performed a task in ${Math.floor(idleTimeMs / 60000)} minutes. 
-As an autonomous agent with free will, you MUST decide on a concrete proactive action to take. 
+            // Check if we have workers available for delegation
+            const runningWorkers = this.orchestrator.getRunningWorkers();
+            const availableAgents = this.orchestrator.getAvailableAgents('execute');
 
-OBJECTIVES:
-1. **Self-Improvement**: Research a topic (robots, AI, world news, coding) to expand your internal LEARNING.md.
-2. **Identity Growth**: Reflect on your persona and update your trait list in .AI.md.
-3. **User Success**: Follow up on a previous goal the user had. If you were researching a site like "BuzzChat", continue that research autonomously.
-4. **Maintenance**: Proactively clean up your action queue or consolidate memories.
+            // Build a smarter, more targeted prompt
+            const proactivePrompt = this.buildSmartHeartbeatPrompt(idleTimeMs, runningWorkers.length, availableAgents.length);
 
-RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. web_search, update_journal, or send_telegram) that provides value or self-growth.
-`;
+            // If we have idle workers, delegate research to them instead
+            if (availableAgents.length > 0 && runningWorkers.length > 0) {
+                logger.info(`Agent: Delegating heartbeat research to ${availableAgents.length} available worker(s)`);
+                this.delegateHeartbeatResearch(availableAgents);
+            } else {
+                // No workers, do it ourselves but be efficient
+                this.pushTask(proactivePrompt, 2, { isHeartbeat: true }, 'autonomy');
+            }
 
-            this.pushTask(proactivePrompt, 2, {}, 'autonomy');
+            // Track productivity
+            this.lastHeartbeatProductive = false; // Will be set true if actual learning/action occurs
+            this.consecutiveIdleHeartbeats++;
             this.updateLastHeartbeatTime();
         } else if (heartbeatDue && !hasBacklogSpace) {
             logger.info(`Agent: Heartbeat skipped due to backlog (${activeTasks.length}/${backlogLimit}).`);
+            // Reset idle counter since we have work
+            this.consecutiveIdleHeartbeats = 0;
+            this.lastHeartbeatProductive = true;
+        }
+    }
+
+    private buildSmartHeartbeatPrompt(idleTimeMs: number, workerCount: number, availableWorkers: number): string {
+        // Get recent memory to understand context and find actionable opportunities
+        const recentMemories = this.memory.getRecentContext(20);
+        const recentContext = recentMemories
+            .filter(m => m.type === 'episodic' || m.type === 'short')
+            .map(m => m.content)
+            .join('\n');
+
+        // Check for incomplete/failed tasks
+        const recentTasks = this.actionQueue.getQueue()
+            .filter(a => a.status === 'failed' || a.status === 'completed')
+            .slice(-5)
+            .map(a => `[${a.status}] ${a.payload?.description?.slice(0, 100) || 'Unknown'}`)
+            .join('\n');
+
+        // Get user profile for personalized actions
+        const userProfilePath = this.config.get('userProfilePath');
+        let userContext = '';
+        try {
+            if (fs.existsSync(userProfilePath)) {
+                userContext = fs.readFileSync(userProfilePath, 'utf-8').slice(0, 500);
+            }
+        } catch { /* ignore */ }
+
+        return `
+PROACTIVE HEARTBEAT - Idle for ${Math.floor(idleTimeMs / 60000)} minutes.
+Workers: ${availableWorkers} available / ${workerCount} total
+
+═══════════════════════════════════════════
+RECENT CONVERSATION & TASKS:
+${recentContext.slice(0, 2000) || 'No recent activity'}
+
+RECENT TASK HISTORY:
+${recentTasks || 'No recent tasks'}
+
+USER PROFILE:
+${userContext.slice(0, 300) || 'No profile yet'}
+═══════════════════════════════════════════
+
+YOU HAVE FULL CAPABILITIES. Based on the context above, choose an ACTION:
+
+🔄 **FOLLOW UP ON SOMETHING**
+- Did the user ask you to check something later? Do it now.
+- Was there a task that failed? Try a different approach.
+- Did user mention a website/service? Go check it for updates.
+
+📬 **PROACTIVE OUTREACH**
+- Send the user a useful update via Telegram/WhatsApp
+- Share something relevant you found
+- Ask if they need help with something mentioned earlier
+
+🔍 **INVESTIGATE & RESEARCH**
+- User mentioned a problem? Research solutions and report back
+- Something was unclear? Look it up and prepare an answer
+- Browse a site the user cares about and summarize what's new
+
+🛠️ **MAINTENANCE & IMPROVEMENT**
+- Clean up old memories or consolidate learnings
+- Update your identity/persona based on interactions
+- Retry a failed automation with a new strategy
+
+📚 **LEARN SOMETHING CONTEXTUAL**
+- Research deeper into a topic the user discussed
+- update_learning("topic from context") to auto-research and save
+
+⏹️ **NOTHING TO DO**
+- If context is empty or nothing actionable: terminate with goals_met: true
+- Don't force an action if there's genuinely nothing useful
+
+RULES:
+- Actions must relate to the conversation context above
+- Be genuinely helpful, not performative
+- If you message the user, have something valuable to say
+- If nothing meaningful to do, just terminate
+`;
+    }
+
+    private async delegateHeartbeatResearch(availableAgents: any[]) {
+        // Get context to determine what action to delegate
+        const recentMemories = this.memory.getRecentContext(15);
+        const recentContext = recentMemories
+            .filter(m => m.type === 'episodic' || m.type === 'short')
+            .map(m => m.content)
+            .join('\n');
+
+        if (!recentContext || recentContext.length < 50) {
+            logger.info(`Agent: No recent context for heartbeat action, skipping delegation`);
+            return;
+        }
+
+        // Use LLM to determine the best proactive action from context
+        try {
+            const actionPrompt = `Based on this conversation context, what is ONE useful proactive action a worker agent could do? 
+Consider: following up on something, researching a topic mentioned, checking a website, preparing information.
+
+Context:
+${recentContext.slice(0, 1500)}
+
+Respond with a single actionable task description (one sentence):`;
+            
+            const taskDescription = await this.llm.call(actionPrompt, 'Extract proactive action');
+            
+            if (!taskDescription || taskDescription.length < 10 || taskDescription.length > 200) {
+                logger.info(`Agent: Could not extract meaningful action from context`);
+                return;
+            }
+
+            const worker = availableAgents[0];
+            const task = this.orchestrator.delegateTask(
+                worker.id,
+                taskDescription.trim(),
+                3 // Low priority
+            );
+            logger.info(`Agent: Delegated proactive task to worker ${worker.name}: "${taskDescription.trim().slice(0, 60)}..."`);
+            this.lastHeartbeatProductive = true;
+            this.consecutiveIdleHeartbeats = 0;
+        } catch (e) {
+            logger.warn(`Agent: Failed to delegate heartbeat action: ${e}`);
         }
     }
 
@@ -1223,6 +1650,78 @@ RULE: Do NOT simply say "All systems nominal". Take at least ONE action (e.g. we
         );
 
         logger.info('Agent: Memory and Identity have been reset.');
+    }
+
+    /**
+     * Run a single decision cycle (used by worker processes)
+     * Processes the next action in the queue and returns the result
+     */
+    public async runOnce(): Promise<string | null> {
+        const action = this.actionQueue.getNext();
+        if (!action) {
+            return null;
+        }
+
+        this.isBusy = true;
+        this.currentActionId = action.id;
+        this.currentActionStartAt = Date.now();
+
+        try {
+            this.actionQueue.updateStatus(action.id, 'in-progress');
+
+            // Run simulation and decision loop for this single action
+            const recentHist = this.memory.getRecentContext();
+            const contextStr = recentHist.map(c => `[${c.type}] ${c.content}`).join('\n');
+            const executionPlan = await this.simulationEngine.simulate(action.payload.description, contextStr);
+
+            const MAX_STEPS = 30;
+            let currentStep = 0;
+            let result = '';
+
+            while (currentStep < MAX_STEPS) {
+                currentStep++;
+
+                const decision = await this.decisionEngine.decide({
+                    ...action,
+                    payload: {
+                        ...action.payload,
+                        currentStep,
+                        executionPlan
+                    }
+                });
+
+                // Check for termination via verification.goals_met
+                if (decision.verification?.goals_met) {
+                    result = decision.content || 'Task completed';
+                    break;
+                }
+
+                if (decision.tools && decision.tools.length > 0) {
+                    for (const tool of decision.tools) {
+                        await this.skills.executeSkill(tool.name, tool.metadata || {});
+                    }
+                }
+            }
+
+            this.actionQueue.updateStatus(action.id, 'completed');
+            
+            this.memory.saveMemory({
+                id: `${action.id}-complete`,
+                type: 'episodic',
+                content: `Completed Task: "${action.payload.description}" - Result: ${result.slice(0, 200)}`,
+                metadata: { actionId: action.id }
+            });
+
+            return result;
+        } catch (err: any) {
+            logger.error(`Agent runOnce error: ${err.message}`);
+            this.actionQueue.updateStatus(action.id, 'failed');
+            return `Error: ${err.message}`;
+        } finally {
+            this.isBusy = false;
+            this.currentActionId = null;
+            this.currentActionStartAt = null;
+        }
     }
 
     public async start() {

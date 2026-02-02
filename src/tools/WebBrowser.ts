@@ -574,9 +574,19 @@ export class WebBrowser {
             return `${cached.result}\n\n[cache]`; 
         }
 
-        const providers = this.searchProviderOrder.length > 0
+        // Check if any API keys are configured
+        const hasApiKeys = !!(this.serperApiKey || this.braveSearchApiKey || this.searxngUrl);
+        
+        // Smart provider ordering: prioritize browser-based if no API keys
+        let providers = this.searchProviderOrder.length > 0
             ? this.searchProviderOrder
-            : ['serper', 'brave', 'searxng', 'google', 'bing', 'duckduckgo'];
+            : hasApiKeys 
+                ? ['serper', 'brave', 'searxng', 'duckduckgo', 'bing', 'google']  // API-first when available
+                : ['duckduckgo', 'bing', 'google'];  // Browser-only when no APIs
+        
+        if (!hasApiKeys) {
+            logger.info('No search API keys configured. Using browser-based search providers.');
+        }
 
         for (const provider of providers) {
             let result = '';
@@ -711,16 +721,45 @@ export class WebBrowser {
             await this.page!.goto(url, { waitUntil: 'load' });
             await this.page!.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => { });
 
-            if (await this.page!.content().then(c => c.includes('recaptcha'))) {
+            const content = await this.page!.content();
+            if (content.includes('recaptcha') || content.includes('unusual traffic')) {
                 return 'Error: Blocked by Google CAPTCHA';
             }
 
+            // Try multiple selector strategies for resilience
             const results = await this.page!.evaluate(() => {
-                const items = Array.from(document.querySelectorAll('div.g'));
+                // Strategy 1: Modern Google selectors
+                let items = Array.from(document.querySelectorAll('div.g'));
+                
+                // Strategy 2: Alternative container selectors
+                if (items.length === 0) {
+                    items = Array.from(document.querySelectorAll('[data-hveid] [data-ved]')).filter(el => 
+                        el.querySelector('a[href^="http"]') && el.querySelector('h3')
+                    );
+                }
+                
+                // Strategy 3: Any element with h3 + link structure
+                if (items.length === 0) {
+                    items = Array.from(document.querySelectorAll('div')).filter(el => {
+                        const h3 = el.querySelector('h3');
+                        const link = el.querySelector('a[href^="http"]');
+                        return h3 && link && !el.closest('[role="navigation"]');
+                    });
+                }
+
                 return items.slice(0, 5).map(item => {
-                    const title = (item.querySelector('h3') as HTMLElement)?.innerText;
-                    const link = (item.querySelector('a') as HTMLAnchorElement)?.href;
-                    const snippet = (item.querySelector('div.VwiC3b') as HTMLElement)?.innerText || (item.querySelector('div.kb0Bss') as HTMLElement)?.innerText;
+                    const h3 = item.querySelector('h3');
+                    const title = h3?.textContent || h3?.innerText || '';
+                    const linkEl = item.querySelector('a[href^="http"]') as HTMLAnchorElement;
+                    const link = linkEl?.href || '';
+                    
+                    // Try multiple snippet selectors
+                    const snippetEl = item.querySelector('div.VwiC3b') 
+                        || item.querySelector('div.kb0Bss')
+                        || item.querySelector('[data-sncf]')
+                        || item.querySelector('div > div > div:nth-child(2)');
+                    const snippet = (snippetEl as HTMLElement)?.innerText || '';
+                    
                     return title && link ? { title, link, snippet } : null;
                 }).filter(Boolean);
             });
@@ -742,11 +781,35 @@ export class WebBrowser {
             await this.page!.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => { });
 
             const results = await this.page!.evaluate(() => {
-                const items = Array.from(document.querySelectorAll('li.b_algo'));
+                // Strategy 1: Standard Bing selectors
+                let items = Array.from(document.querySelectorAll('li.b_algo'));
+                
+                // Strategy 2: Alternative container
+                if (items.length === 0) {
+                    items = Array.from(document.querySelectorAll('.b_results > li')).filter(el => 
+                        el.querySelector('h2') && el.querySelector('a[href^="http"]')
+                    );
+                }
+                
+                // Strategy 3: Any list item with link structure
+                if (items.length === 0) {
+                    items = Array.from(document.querySelectorAll('li')).filter(el => {
+                        const hasTitle = el.querySelector('h2 a') || el.querySelector('a h2');
+                        return hasTitle && !el.closest('nav');
+                    });
+                }
+
                 return items.slice(0, 5).map(item => {
-                    const title = (item.querySelector('h2 a') as HTMLElement)?.innerText;
-                    const link = (item.querySelector('h2 a') as HTMLAnchorElement)?.href;
-                    const snippet = (item.querySelector('div.b_caption p') as HTMLElement)?.innerText;
+                    const titleLink = item.querySelector('h2 a') as HTMLAnchorElement 
+                        || item.querySelector('a h2')?.closest('a') as HTMLAnchorElement;
+                    const title = titleLink?.textContent || '';
+                    const link = titleLink?.href || '';
+                    
+                    const snippetEl = item.querySelector('div.b_caption p') 
+                        || item.querySelector('.b_caption')
+                        || item.querySelector('p');
+                    const snippet = (snippetEl as HTMLElement)?.innerText || '';
+                    
                     return title && link ? { title, link, snippet } : null;
                 }).filter(Boolean);
             });
@@ -761,31 +824,79 @@ export class WebBrowser {
     }
 
     private async searchDuckDuckGo(query: string): Promise<string> {
-        const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-        try {
-            await this.ensureBrowser();
-            await this.page!.goto(url, { waitUntil: 'load' });
-            await this.waitForStablePage();
+        // Try HTML version first (more reliable), then JS version as fallback
+        const urls = [
+            `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+            `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`
+        ];
+        
+        for (const url of urls) {
+            try {
+                await this.ensureBrowser();
+                await this.page!.goto(url, { waitUntil: 'load' });
+                await this.waitForStablePage();
 
-            const results = await this.page!.evaluate(() => {
-                const items = Array.from(document.querySelectorAll('.result'));
-                return items.slice(0, 5).map(item => {
-                    const titleEl = item.querySelector('.result__title a') as HTMLAnchorElement;
-                    const snippetEl = item.querySelector('.result__snippet') as HTMLElement;
-                    return titleEl ? {
-                        title: titleEl.innerText,
-                        link: titleEl.href,
-                        snippet: snippetEl?.innerText || ''
-                    } : null;
-                }).filter(Boolean);
-            });
+                const results = await this.page!.evaluate(() => {
+                    // Strategy 1: HTML version selectors
+                    let items = Array.from(document.querySelectorAll('.result, .result__body'));
+                    
+                    // Strategy 2: Lite version selectors
+                    if (items.length === 0) {
+                        items = Array.from(document.querySelectorAll('tr')).filter(el => 
+                            el.querySelector('a.result-link') || el.querySelector('a[href^="http"]')
+                        );
+                    }
+                    
+                    // Strategy 3: Generic link-based extraction
+                    if (items.length === 0) {
+                        const links = Array.from(document.querySelectorAll('a[href^="http"]')).filter(a => {
+                            const href = (a as HTMLAnchorElement).href;
+                            return !href.includes('duckduckgo.com') && 
+                                   !href.includes('duck.co') &&
+                                   a.textContent && a.textContent.length > 10;
+                        });
+                        return links.slice(0, 5).map(a => ({
+                            title: a.textContent?.trim() || '',
+                            link: (a as HTMLAnchorElement).href,
+                            snippet: ''
+                        })).filter(r => r.title && r.link);
+                    }
 
-            if (!results || results.length === 0) return 'Error: No results found on DuckDuckGo.';
+                    return items.slice(0, 5).map(item => {
+                        // HTML version extraction
+                        const titleEl = item.querySelector('.result__title a, .result__a, a.result-link') as HTMLAnchorElement;
+                        if (titleEl) {
+                            return {
+                                title: titleEl.innerText || titleEl.textContent || '',
+                                link: titleEl.href,
+                                snippet: (item.querySelector('.result__snippet, .result__body') as HTMLElement)?.innerText || ''
+                            };
+                        }
+                        
+                        // Lite version extraction
+                        const liteLink = item.querySelector('a[href^="http"]') as HTMLAnchorElement;
+                        if (liteLink) {
+                            return {
+                                title: liteLink.textContent?.trim() || '',
+                                link: liteLink.href,
+                                snippet: ''
+                            };
+                        }
+                        
+                        return null;
+                    }).filter(Boolean);
+                });
 
-            const formatted = results.map((r: any) => `[${r.title}](${r.link})\n${r.snippet}`).join('\n\n');
-            return `Search Results (via DuckDuckGo):\n\n${formatted}`;
-        } catch (e) {
-            return `DuckDuckGo Search Error: ${e}`;
+                if (results && results.length > 0) {
+                    const formatted = results.map((r: any) => `[${r.title}](${r.link})\n${r.snippet}`).join('\n\n');
+                    return `Search Results (via DuckDuckGo):\n\n${formatted}`;
+                }
+            } catch (e) {
+                logger.debug(`DuckDuckGo search failed for ${url}: ${e}`);
+                continue;
+            }
         }
+        
+        return 'Error: No results found on DuckDuckGo.';
     }
 }

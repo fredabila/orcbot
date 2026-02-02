@@ -44,7 +44,38 @@
     <main class="container">
       <section class="card">
         <h2>Core skills</h2>
-        <p>Defined in <code>src/core/Agent.ts</code>. Core skills include web search, browser automation, and channel messaging.</p>
+        <p>Defined in <code>src/core/Agent.ts</code>. Key categories:</p>
+        <ul>
+          <li><strong>Web Search</strong>: <code>web_search</code> with smart API + browser fallback</li>
+          <li><strong>Browser</strong>: <code>browse_website</code>, <code>browser_action</code>, <code>browser_type</code></li>
+          <li><strong>Messaging</strong>: <code>send_telegram</code>, <code>send_whatsapp</code>, <code>reply_to_sender</code></li>
+          <li><strong>Orchestration</strong>: <code>spawn_worker</code>, <code>list_workers</code>, <code>terminate_worker</code></li>
+          <li><strong>Learning</strong>: <code>update_learning</code>, <code>update_user_profile</code>, <code>deep_reason</code></li>
+          <li><strong>System</strong>: <code>run_command</code>, <code>schedule_task</code>, <code>manage_skills</code></li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>Search Resilience</h2>
+        <p>The <code>web_search</code> skill uses smart provider ordering:</p>
+        <ul>
+          <li><strong>With API keys</strong>: Serper → Brave → SearXNG → DuckDuckGo → Bing → Google</li>
+          <li><strong>Without API keys</strong>: DuckDuckGo → Bing → Google (browser-based only)</li>
+          <li>Multiple CSS selector strategies for each browser-based provider</li>
+          <li>Graceful fallback with actionable suggestions on total failure</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>Multi-Agent Skills</h2>
+        <p>Orchestration skills for parallel task execution:</p>
+        <ul>
+          <li><code>spawn_worker(name, task)</code>: Create a worker process for a specific task</li>
+          <li><code>list_workers()</code>: View active worker processes with PIDs and status</li>
+          <li><code>terminate_worker(name)</code>: Stop a specific worker</li>
+          <li><code>broadcast_to_workers(message)</code>: Send instructions to all workers</li>
+        </ul>
+        <p>Workers run as real Node.js child processes with IPC communication.</p>
       </section>
 
       <section class="grid">

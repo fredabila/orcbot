@@ -37,12 +37,12 @@ function App() {
             </div>
             <div className="stats">
               <div>
-                <span className="stat">24/7</span>
-                <span className="stat-label">Autonomy heartbeat</span>
+                <span className="stat">Smart</span>
+                <span className="stat-label">Heartbeat with backoff</span>
               </div>
               <div>
-                <span className="stat">3x</span>
-                <span className="stat-label">Self-repair layers</span>
+                <span className="stat">Multi</span>
+                <span className="stat-label">Agent orchestration</span>
               </div>
               <div>
                 <span className="stat">Local</span>
@@ -85,16 +85,16 @@ function App() {
               <p>OrcBot simulates tasks before execution, generating roadmaps with contingencies and loop protection.</p>
             </div>
             <div className="card">
-              <h3>Autonomous Immune System</h3>
-              <p>Plugin failed? OrcBot detects errors and invokes `self_repair_skill` to recover automatically.</p>
+              <h3>Multi-Agent Orchestration</h3>
+              <p>Spawn worker processes for parallel tasks. Real Node.js child processes with IPC coordination.</p>
             </div>
             <div className="card">
-              <h3>Multi-Modal Hub</h3>
-              <p>Telegram and WhatsApp ingest images, audio, and documents for on-the-fly analysis.</p>
+              <h3>Smart Heartbeat</h3>
+              <p>Context-aware autonomy with exponential backoff, productivity tracking, and action-oriented tasks.</p>
             </div>
             <div className="card">
-              <h3>Hybrid Execution</h3>
-              <p>Run locally for speed and privacy, or connect to cloud channels for distributed ops.</p>
+              <h3>Resilient Web Search</h3>
+              <p>Smart fallback from API providers (Serper, Brave) to browser-based search when keys aren't configured.</p>
             </div>
             <div className="card">
               <h3>Self-Evolving Skills</h3>
@@ -115,23 +115,23 @@ function App() {
           <div className="timeline">
             <div className="timeline-step">
               <span>01</span>
-              <h4>Heartbeat triggers</h4>
-              <p>When idle, OrcBot schedules proactive tasks without requiring a prompt.</p>
+              <h4>Smart heartbeat triggers</h4>
+              <p>Context-aware scheduling with exponential backoff when idle to save resources.</p>
             </div>
             <div className="timeline-step">
               <span>02</span>
-              <h4>Strategic simulation</h4>
-              <p>Plans are generated before action to reduce loops and anticipate failures.</p>
+              <h4>Action selection</h4>
+              <p>Analyzes recent conversations to choose follow-ups, research, outreach, or delegation.</p>
             </div>
             <div className="timeline-step">
               <span>03</span>
-              <h4>Execution & memory</h4>
-              <p>Tasks run with guardrails; results are logged into journals and memory.</p>
+              <h4>Multi-agent execution</h4>
+              <p>Complex tasks spawn worker processes for parallel execution with IPC coordination.</p>
             </div>
             <div className="timeline-step">
               <span>04</span>
-              <h4>Self-repair</h4>
-              <p>Broken plugins are detected, repaired, and reloaded without downtime.</p>
+              <h4>Self-repair & learning</h4>
+              <p>Broken plugins are repaired, results logged to memory, and lessons saved for future.</p>
             </div>
           </div>
         </section>
@@ -152,13 +152,14 @@ function App() {
               <h4>Core</h4>
               <div className="arch-node emphasis">Agent Core</div>
               <div className="arch-node">DecisionEngine</div>
-              <div className="arch-node">SimulationEngine</div>
-              <div className="arch-node">Heartbeat Scheduler</div>
+              <div className="arch-node">AgentOrchestrator</div>
+              <div className="arch-node">Smart Heartbeat</div>
               <div className="arch-node">Action Queue</div>
               <div className="arch-node">Memory + Profiles</div>
             </div>
             <div className="arch-column">
               <h4>Execution</h4>
+              <div className="arch-node">Worker Processes</div>
               <div className="arch-node">Skills Manager</div>
               <div className="arch-node">Web Browser</div>
               <div className="arch-node">Plugins</div>
@@ -166,7 +167,7 @@ function App() {
             <div className="arch-column">
               <h4>Providers</h4>
               <div className="arch-node">OpenAI / Gemini / Bedrock</div>
-              <div className="arch-node">Serper / Brave / SearxNG</div>
+              <div className="arch-node">Search (API + Browser)</div>
               <div className="arch-node">CAPTCHA Solver</div>
             </div>
           </div>

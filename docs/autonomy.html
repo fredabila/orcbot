@@ -23,15 +23,21 @@
           <a class="nav-cta" href="https://github.com/fredabila/orcbot">GitHub</a>
         </nav>
         <div class="badge">Autonomy</div>
-        <h1>Heartbeat-driven autonomy.</h1>
-        <p class="lead">The scheduler keeps OrcBot active even when you are away.</p>
+        <h1>Smart heartbeat-driven autonomy.</h1>
+        <p class="lead">Context-aware scheduling with exponential backoff and action-oriented tasks.</p>
       </div>
     </header>
 
     <main class="container">
       <section class="card">
-        <h2>Heartbeat loop</h2>
-        <p>Heartbeat runs on the scheduler tick and enqueues proactive tasks when idle.</p>
+        <h2>Smart Heartbeat</h2>
+        <p>The heartbeat system is now intelligent and context-aware:</p>
+        <ul>
+          <li><strong>Exponential Backoff</strong>: Intervals increase (2x, 4x, 8x) when unproductive to save resources</li>
+          <li><strong>Productivity Tracking</strong>: Measures actual work vs idle cycles</li>
+          <li><strong>Context Analysis</strong>: Examines recent conversations to determine relevant actions</li>
+          <li><strong>Action Types</strong>: follow_up, outreach, research, maintenance, delegate</li>
+        </ul>
       </section>
 
       <section class="grid">
@@ -50,11 +56,25 @@
       </section>
 
       <section class="card">
+        <h2>Multi-Agent Orchestration</h2>
+        <p>For complex tasks, OrcBot can spawn worker processes:</p>
+        <ul>
+          <li>Real Node.js child processes via <code>fork()</code></li>
+          <li>IPC communication between main agent and workers</li>
+          <li>Shared configuration with isolated execution</li>
+          <li>View workers in TUI: <code>orcbot ui</code> → Workers menu</li>
+          <li>Skills: <code>spawn_worker</code>, <code>list_workers</code>, <code>terminate_worker</code></li>
+        </ul>
+      </section>
+
+      <section class="card">
         <h2>Autonomy checklist</h2>
         <ul>
           <li>Enable <code>autonomyEnabled</code></li>
-          <li>Set a heartbeat interval that fits your workload</li>
-          <li>Monitor logs for proactive task output</li>
+          <li>Set a heartbeat interval that fits your workload (auto-adjusts with backoff)</li>
+          <li>Monitor logs for proactive task output and worker activity</li>
+          <li>Use <code>spawn_worker</code> for parallel task execution</li>
+          <li>Check TUI Workers menu for process management</li>
         </ul>
       </section>
     </main>
