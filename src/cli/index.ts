@@ -1361,18 +1361,18 @@ async function performUpdate() {
             console.log('\n📋 Changes to be applied:');
             execSync('git log --oneline HEAD..origin/main', { cwd: orcbotDir, stdio: 'inherit' });
             
-            const { confirm } = await inquirer.prompt([
-                { type: 'confirm', name: 'confirm', message: '\nProceed with update?', default: true }
-            ]);
-            
-            if (!confirm) {
-                console.log('Update cancelled.');
-                return;
+            // Force update: discard local changes and sync to origin/main
+            console.log('\n⬇️  Applying latest changes (force update)...');
+            try {
+                const status = execSync('git status --porcelain', { cwd: orcbotDir, encoding: 'utf8' }).trim();
+                if (status) {
+                    console.log('⚠️  Local changes detected. Discarding to apply updates...');
+                }
+            } catch (e) {
+                // Ignore status errors and proceed with reset/clean
             }
-            
-            // Pull changes
-            console.log('\n⬇️  Pulling latest changes...');
-            execSync('git pull origin main', { cwd: orcbotDir, stdio: 'inherit' });
+            execSync('git reset --hard origin/main', { cwd: orcbotDir, stdio: 'inherit' });
+            execSync('git clean -fd', { cwd: orcbotDir, stdio: 'inherit' });
             
             // Install dependencies
             console.log('\n📦 Installing dependencies...');
