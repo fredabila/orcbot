@@ -3,3 +3,5 @@ node_modules
 dist
 .env
 memory.json
+logs/*.log
+*.pid
