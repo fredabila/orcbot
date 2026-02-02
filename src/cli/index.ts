@@ -11,6 +11,7 @@ import qrcode from 'qrcode-terminal';
 import path from 'path';
 import os from 'os';
 import { WorkerProfileManager } from '../core/WorkerProfile';
+import { DaemonManager } from '../utils/daemon';
 
 dotenv.config(); // Local .env
 dotenv.config({ path: path.join(os.homedir(), '.orcbot', '.env') }); // Global .env
@@ -56,9 +57,19 @@ program
 program
     .command('run')
     .description('Start the agent autonomous loop')
-    .action(async () => {
-        console.log('Agent loop starting... (Press Ctrl+C to stop)');
-        await agent.start();
+    .option('-d, --daemon', 'Run in background as a daemon')
+    .action(async (options) => {
+        if (options.daemon) {
+            // Daemon mode
+            const daemonManager = DaemonManager.createDefault();
+            daemonManager.daemonize();
+            logger.info('Agent loop starting in daemon mode...');
+            await agent.start();
+        } else {
+            // Foreground mode (default)
+            console.log('Agent loop starting... (Press Ctrl+C to stop)');
+            await agent.start();
+        }
     });
 
 program
@@ -105,6 +116,47 @@ program
     .description('View agent memory and action queue')
     .action(() => {
         showStatus();
+    });
+
+program
+    .command('daemon')
+    .description('Manage daemon process')
+    .argument('[action]', 'Action: status, stop', 'status')
+    .action((action) => {
+        const daemonManager = DaemonManager.createDefault();
+        
+        switch (action) {
+            case 'status':
+                console.log(daemonManager.getStatus());
+                break;
+            case 'stop':
+                const status = daemonManager.isRunning();
+                if (status.running && status.pid) {
+                    try {
+                        process.kill(status.pid, 'SIGTERM');
+                        console.log(`✅ Sent stop signal to daemon (PID: ${status.pid})`);
+                        console.log('   Waiting for process to stop...');
+                        // Wait a bit and check if it stopped
+                        setTimeout(() => {
+                            const newStatus = daemonManager.isRunning();
+                            if (!newStatus.running) {
+                                console.log('   Daemon stopped successfully');
+                            } else {
+                                console.log('   Daemon is still running. Use: kill -9 ' + status.pid);
+                            }
+                        }, 2000);
+                    } catch (error) {
+                        console.error(`❌ Failed to stop daemon: ${error}`);
+                    }
+                } else {
+                    console.log('OrcBot daemon is not running');
+                }
+                break;
+            default:
+                console.error(`Unknown action: ${action}`);
+                console.log('Available actions: status, stop');
+                process.exit(1);
+        }
     });
 
 const configCommand = program
