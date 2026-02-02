@@ -157,14 +157,25 @@ export class ConfigManager {
             Object.entries(envConfig).filter(([_, v]) => v !== undefined)
         );
 
-        return {
+        const mergedConfig: AgentConfig = {
             ...defaults,
             ...globalConfig,
             ...homeConfig,
             ...localConfig,
-            ...customConfig,
-            ...activeEnv
+            ...customConfig
         };
+
+        // Apply env vars only as fallback when config value is missing
+        Object.entries(activeEnv).forEach(([key, value]) => {
+            const current = (mergedConfig as any)[key];
+            if (current === undefined || current === null || current === '') {
+                (mergedConfig as any)[key] = value;
+            } else if (!silent) {
+                logger.info(`ConfigManager: Ignoring env override for ${key} because config already defines a value.`);
+            }
+        });
+
+        return mergedConfig;
     }
 
     private getStringDefaultConfig(): AgentConfig {

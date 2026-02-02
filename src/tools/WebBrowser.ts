@@ -202,6 +202,16 @@ export class WebBrowser {
         const raw = String(error);
         const lower = raw.toLowerCase();
 
+        // Missing shared library / dependency (common on Linux servers)
+        const libMatch = raw.match(/error while loading shared libraries:\s*([^\s:]+)|([^\s:]+\.so\.[0-9]+)/i);
+        if (libMatch) {
+            const libName = (libMatch[1] || libMatch[2] || 'a required library').trim();
+            return {
+                raw,
+                message: `Browser dependency missing: ${libName}. Install the required system library and retry.`
+            };
+        }
+
         if (lower.includes('err_name_not_resolved')) {
             return { raw, message: 'DNS lookup failed (host not found). The URL may be incorrect.' };
         }
