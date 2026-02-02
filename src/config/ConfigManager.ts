@@ -291,8 +291,28 @@ export class ConfigManager {
         try {
             fs.writeFileSync(this.configPath, yaml.stringify(this.config));
             logger.info(`Configuration saved to ${this.configPath}`);
+            this.syncConfigAcrossPaths();
         } catch (error) {
             logger.error(`Error saving config: ${error}`);
+        }
+    }
+
+    private syncConfigAcrossPaths() {
+        const globalPath = path.join(this.dataHome, 'orcbot.config.yaml');
+        const homePath = path.join(os.homedir(), 'orcbot.config.yaml');
+        const localPath = path.resolve(process.cwd(), 'orcbot.config.yaml');
+
+        const targets = [globalPath, homePath, localPath]
+            .filter(p => p !== this.configPath);
+
+        for (const target of targets) {
+            if (!fs.existsSync(target) && target !== globalPath) continue;
+            try {
+                fs.writeFileSync(target, yaml.stringify(this.config));
+                logger.info(`Configuration synced to ${target}`);
+            } catch (error) {
+                logger.warn(`Failed to sync config to ${target}: ${error}`);
+            }
         }
     }
 
