@@ -11,6 +11,7 @@ import qrcode from 'qrcode-terminal';
 import path from 'path';
 import os from 'os';
 import { WorkerProfileManager } from '../core/WorkerProfile';
+import { DaemonManager } from '../utils/daemon';
 
 dotenv.config(); // Local .env
 dotenv.config({ path: path.join(os.homedir(), '.orcbot', '.env') }); // Global .env
@@ -56,9 +57,24 @@ program
 program
     .command('run')
     .description('Start the agent autonomous loop')
-    .action(async () => {
-        console.log('Agent loop starting... (Press Ctrl+C to stop)');
-        await agent.start();
+    .option('-d, --daemon', 'Run in background/daemon mode')
+    .action(async (options) => {
+        if (options.daemon) {
+            // Daemon mode
+            const config = new ConfigManager();
+            const dataHome = config.get('memoryPath') ? path.dirname(config.get('memoryPath')) : path.join(os.homedir(), '.orcbot');
+            const daemonManager = new DaemonManager(dataHome);
+            
+            // This will check for existing instance, write PID, redirect logs, and setup cleanup
+            daemonManager.daemonize();
+            
+            // Now start the agent
+            await agent.start();
+        } else {
+            // Foreground mode (default)
+            console.log('Agent loop starting... (Press Ctrl+C to stop)');
+            await agent.start();
+        }
     });
 
 program
@@ -90,6 +106,49 @@ program
         if (confirm) {
             await agent.resetMemory();
             console.log('Agent has been reset to factory settings.');
+        }
+    });
+
+program
+    .command('stop')
+    .description('Stop a running daemon instance')
+    .action(() => {
+        const config = new ConfigManager();
+        const dataHome = config.get('memoryPath') ? path.dirname(config.get('memoryPath')) : path.join(os.homedir(), '.orcbot');
+        const daemonManager = new DaemonManager(dataHome);
+        
+        const status = daemonManager.isRunning();
+        if (!status.running) {
+            console.log('No OrcBot daemon is currently running.');
+            console.log(`Checked PID file: ${daemonManager.getPidFile()}`);
+            return;
+        }
+
+        console.log(`Stopping OrcBot daemon (PID: ${status.pid})...`);
+        try {
+            process.kill(status.pid!, 'SIGTERM');
+            console.log('Stop signal sent successfully.');
+            console.log('The daemon should stop within a few seconds.');
+            
+            // Wait a bit and check if it actually stopped
+            setTimeout(() => {
+                const newStatus = daemonManager.isRunning();
+                if (newStatus.running) {
+                    console.log('\nDaemon is still running. You may need to force kill it:');
+                    console.log(`  kill -9 ${status.pid}`);
+                } else {
+                    console.log('\nDaemon stopped successfully.');
+                }
+            }, 2000);
+        } catch (e: any) {
+            if (e.code === 'ESRCH') {
+                console.error('Process not found. Cleaning up stale PID file...');
+                daemonManager.removePidFile();
+            } else if (e.code === 'EPERM') {
+                console.error('Permission denied. You may need sudo to stop this process.');
+            } else {
+                console.error(`Error stopping daemon: ${e.message}`);
+            }
         }
     });
 
@@ -1246,6 +1305,21 @@ async function performUpdate() {
 
 function showStatus() {
     console.log('--- Agent Status ---');
+    
+    // Check daemon status
+    const config = new ConfigManager();
+    const dataHome = config.get('memoryPath') ? path.dirname(config.get('memoryPath')) : path.join(os.homedir(), '.orcbot');
+    const daemonManager = new DaemonManager(dataHome);
+    const daemonStatus = daemonManager.isRunning();
+    
+    if (daemonStatus.running) {
+        console.log(`Daemon: Running (PID: ${daemonStatus.pid})`);
+        console.log(`  PID file: ${daemonManager.getPidFile()}`);
+        console.log(`  Log file: ${daemonManager.getLogFile()}`);
+    } else {
+        console.log('Daemon: Not running');
+    }
+    
     console.log(`Memory Entries: ${agent.memory.searchMemory('short').length} (short-term)`);
     console.log(`Action Queue: ${agent.actionQueue.getQueue().length} total actions`);
     console.log(`Telegram Bot: ${agent.telegram ? 'Connected' : 'Disconnected/Not Set'}`);
