@@ -56,7 +56,7 @@ program
 
 program
     .command('run')
-    .description('Start the agent autonomous loop')
+    .description('Start the agent autonomous loop (checks for daemon conflicts)')
     .option('-d, --daemon', 'Run in background as a daemon')
     .action(async (options) => {
         const daemonManager = DaemonManager.createDefault();
