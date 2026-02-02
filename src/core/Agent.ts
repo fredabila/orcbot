@@ -9,6 +9,7 @@ import { ConfigManager } from '../config/ConfigManager';
 import { TelegramChannel } from '../channels/TelegramChannel';
 import { WhatsAppChannel } from '../channels/WhatsAppChannel';
 import { WebBrowser } from '../tools/WebBrowser';
+import { WorkerProfileManager } from './WorkerProfile';
 import { Cron } from 'croner';
 import { Readability } from '@mozilla/readability';
 import { DOMParser } from 'linkedom';
@@ -30,6 +31,7 @@ export class Agent {
     public telegram: TelegramChannel | undefined;
     public whatsapp: WhatsAppChannel | undefined;
     public browser: WebBrowser;
+    public workerProfile: WorkerProfileManager;
     private lastActionTime: number;
     private lastHeartbeatAt: number = 0;
     private agentConfigFile: string;
@@ -83,8 +85,11 @@ export class Agent {
             this.config.get('captchaApiKey'),
             this.config.get('braveSearchApiKey'),
             this.config.get('searxngUrl'),
-            this.config.get('searchProviderOrder')
+            this.config.get('searchProviderOrder'),
+            this.config.get('browserProfileDir'),
+            this.config.get('browserProfileName')
         );
+        this.workerProfile = new WorkerProfileManager();
 
         this.loadLastActionTime();
         this.loadLastHeartbeatTime();
@@ -94,7 +99,8 @@ export class Agent {
             browser: this.browser,
             config: this.config,
             agent: this,
-            logger: logger
+            logger: logger,
+            workerProfile: this.workerProfile
         });
 
         this.loadAgentIdentity();
@@ -659,6 +665,19 @@ Output the fixed code:
                 const script = args.script || args.code || args.js;
                 if (!script) return 'Error: Missing script.';
                 return this.browser.evaluate(script);
+            }
+        });
+
+        // Skill: Switch Browser Profile
+        this.skills.registerSkill({
+            name: 'switch_browser_profile',
+            description: 'Switch to a persistent browser profile by name (and optional directory).',
+            usage: 'switch_browser_profile(profileName, profileDir?)',
+            handler: async (args: any) => {
+                const profileName = args.profileName || args.name || args.profile;
+                const profileDir = args.profileDir || args.dir;
+                if (!profileName) return 'Error: Missing profileName.';
+                return this.browser.switchProfile(profileName, profileDir);
             }
         });
 

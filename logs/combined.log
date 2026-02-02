@@ -43,3 +43,21 @@
 2026-02-01 21:06:31 [[32minfo[39m]: DecisionPipeline: No execution plan provided; using cautious mode; Suppressed send: message cap 2 reached | dropped=dedup:send_telegram,limit:send_whatsapp
 2026-02-01 21:06:31 [[32minfo[39m]: DecisionPipeline: Terminated due to max step budget | dropped=
 2026-02-01 21:06:31 [[32minfo[39m]: DecisionPipeline: No execution plan provided; using cautious mode; Suppressed send: duplicate content for channel/user | dropped=dupe:send_whatsapp
+2026-02-02 00:05:21 [[32minfo[39m]: ConfigManager: Config path set to D:\orcbot\orcbot.config.yaml
+2026-02-02 00:05:22 [[32minfo[39m]: Browser: Navigating to https://example.com
+2026-02-02 00:07:36 [[32minfo[39m]: ConfigManager: Config path set to D:\orcbot\orcbot.config.yaml
+2026-02-02 00:07:37 [[32minfo[39m]: Browser: Navigating to https://example.com
+2026-02-02 00:08:41 [[32minfo[39m]: ConfigManager: Config path set to D:\orcbot\orcbot.config.yaml
+2026-02-02 00:08:42 [[32minfo[39m]: Browser: Navigating to https://buzzchat.site
+2026-02-02 00:12:48 [[32minfo[39m]: ConfigManager: Config path set to D:\orcbot\orcbot.config.yaml
+2026-02-02 00:12:49 [[32minfo[39m]: Browser: Navigating to https://example.com
+2026-02-02 00:12:50 [[33mwarn[39m]: Semantic snapshot: blank URL detected, reloading last URL.
+2026-02-02 00:14:26 [[32minfo[39m]: ConfigManager: Config path set to D:\orcbot\orcbot.config.yaml
+2026-02-02 00:14:27 [[32minfo[39m]: Browser: Navigating to https://buzzchat.site
+2026-02-02 00:14:31 [[33mwarn[39m]: Semantic snapshot: blank URL detected, reloading last URL.
+2026-02-02 00:22:54 [[32minfo[39m]: ConfigManager: Config path set to D:\orcbot\orcbot.config.yaml
+2026-02-02 00:22:54 [[33mwarn[39m]: Browser: Detected Google Forms URL. Switching to headful mode for better compatibility.
+2026-02-02 00:22:56 [[32minfo[39m]: Browser: Navigating to https://docs.google.com/forms/d/e/1FAIpQLSdLhkJgAq87JztkiapzdIL8xx0k7H9NbKqmI_OVs_naghLGVQ/viewform?usp
+2026-02-02 00:28:57 [[32minfo[39m]: ConfigManager: Config path set to D:\orcbot\orcbot.config.yaml
+2026-02-02 00:29:15 [[32minfo[39m]: Browser: Navigating to https://docs.google.com/forms/d/e/1FAIpQLSdLhkJgAq87JztkiapzdIL8xx0k7H9NbKqmI_OVs_naghLGVQ/viewform?usp
+2026-02-02 00:30:05 [[33mwarn[39m]: Semantic snapshot: blank URL detected, reloading last URL.

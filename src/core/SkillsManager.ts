@@ -7,6 +7,7 @@ export interface AgentContext {
     config: any;  // ConfigManager
     agent: any;   // Agent
     logger: any;  // logger
+    workerProfile?: any; // WorkerProfileManager
     [key: string]: any;
 }
 

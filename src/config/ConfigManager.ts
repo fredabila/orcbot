@@ -51,6 +51,8 @@ export interface AgentConfig {
     safeMode?: boolean;
     pluginAllowList?: string[];
     pluginDenyList?: string[];
+    browserProfileDir?: string;
+    browserProfileName?: string;
 }
 
 export class ConfigManager {
@@ -224,6 +226,8 @@ export class ConfigManager {
             safeMode: false,
             pluginAllowList: [],
             pluginDenyList: [],
+            browserProfileDir: path.join(this.dataHome, 'browser-profiles'),
+            browserProfileName: 'default',
             bedrockRegion: process.env.BEDROCK_REGION || process.env.AWS_REGION,
             bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
             bedrockSecretAccessKey: process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY,

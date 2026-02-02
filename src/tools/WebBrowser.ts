@@ -1,12 +1,19 @@
-import { chromium, Browser, Page } from 'playwright';
+import { chromium, Browser, Page, BrowserContext } from 'playwright';
 import { logger } from '../utils/logger';
 import path from 'path';
 import os from 'os';
+import fs from 'fs';
 
 export class WebBrowser {
     private browser: Browser | null = null;
     private _page: Page | null = null; // Renamed from 'page' to '_page'
     private searchCache: Map<string, { ts: number; result: string }> = new Map();
+    private context: BrowserContext | null = null;
+    private profileDir?: string;
+    private profileName: string;
+    private profileHistoryPath?: string;
+    private headlessMode: boolean = true;
+    private lastNavigatedUrl?: string;
 
     public get page(): Page | null {
         return this._page;
@@ -17,28 +24,58 @@ export class WebBrowser {
         private captchaApiKey?: string,
         private braveSearchApiKey?: string,
         private searxngUrl?: string,
-        private searchProviderOrder: string[] = ['serper', 'brave', 'searxng', 'google', 'bing', 'duckduckgo']
-    ) { }
+        private searchProviderOrder: string[] = ['serper', 'brave', 'searxng', 'google', 'bing', 'duckduckgo'],
+        browserProfileDir?: string,
+        browserProfileName?: string
+    ) {
+        this.profileDir = browserProfileDir;
+        this.profileName = browserProfileName || 'default';
+    }
 
-    private async ensureBrowser() {
+    private async ensureBrowser(headlessOverride?: boolean) {
+        if (headlessOverride !== undefined && headlessOverride !== this.headlessMode) {
+            this.headlessMode = headlessOverride;
+            await this.close();
+        }
+
         if (!this.browser) {
             // Use --disable-blink-features=AutomationControlled to reduce detection
-            this.browser = await chromium.launch({
-                headless: true,
-                args: ['--disable-blink-features=AutomationControlled']
-            });
-            const context = await this.browser.newContext({
-                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            const profileRoot = this.profileDir || path.join(os.homedir(), '.orcbot', 'browser-profiles');
+            const profileName = this.profileName || 'default';
+            const userDataDir = path.join(profileRoot, profileName);
+            if (!fs.existsSync(userDataDir)) fs.mkdirSync(userDataDir, { recursive: true });
+
+            this.profileHistoryPath = path.join(userDataDir, 'history.json');
+            this.profileDir = profileRoot;
+            this.profileName = profileName;
+
+            this.context = await chromium.launchPersistentContext(userDataDir, {
+                headless: this.headlessMode,
+                args: ['--disable-blink-features=AutomationControlled'],
                 viewport: { width: 1280, height: 720 },
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 deviceScaleFactor: 1,
             });
 
             // Sneaky: Remove webdriver property
-            await context.addInitScript(() => {
+            await this.context.addInitScript(() => {
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             });
 
-            this._page = await context.newPage();
+            this._page = await this.context.newPage();
+        }
+    }
+
+    private recordProfileHistory(entry: { url: string; title?: string; timestamp: string }) {
+        if (!this.profileHistoryPath) return;
+        try {
+            const existing = fs.existsSync(this.profileHistoryPath)
+                ? JSON.parse(fs.readFileSync(this.profileHistoryPath, 'utf-8'))
+                : [];
+            existing.push(entry);
+            fs.writeFileSync(this.profileHistoryPath, JSON.stringify(existing.slice(-200), null, 2));
+        } catch (e) {
+            logger.warn(`Browser profile history write failed: ${e}`);
         }
     }
 
@@ -54,9 +91,16 @@ export class WebBrowser {
         }
     }
 
-    public async navigate(url: string, waitSelectors: string[] = []): Promise<string> {
+    public async navigate(url: string, waitSelectors: string[] = [], allowHeadfulRetry: boolean = true): Promise<string> {
         try {
-            await this.ensureBrowser();
+            const needsGoogleForms = /docs\.google\.com\/forms/i.test(url);
+            const needsHeadful = false;
+            if (needsHeadful && this.headlessMode) {
+                logger.warn('Browser: Detected Google Forms URL. Switching to headful mode for better compatibility.');
+                await this.ensureBrowser(false);
+            } else {
+                await this.ensureBrowser();
+            }
             if (!this._page) throw new Error('Failed to create page');
 
             // Auto-fix protocol if missing
@@ -69,16 +113,109 @@ export class WebBrowser {
             await this._page.goto(targetUrl, { waitUntil: 'load', timeout: 30000 });
             await this.waitForStablePage();
 
-            for (const selector of waitSelectors) {
-                await this._page.waitForSelector(selector, { timeout: 10000 });
+            const bodyTextLength = await this._page.evaluate(() => document.body?.innerText?.trim().length ?? 0).catch(() => 0);
+            if (bodyTextLength === 0) {
+                await this._page.waitForTimeout(1200);
+            }
+
+            const effectiveWaitSelectors = [...waitSelectors];
+            if (needsGoogleForms) {
+                effectiveWaitSelectors.push(
+                    'form',
+                    'div[role="list"]',
+                    'div[role="listitem"]',
+                    '.freebirdFormviewerViewFormContent'
+                );
+            }
+
+            for (const selector of effectiveWaitSelectors) {
+                await this._page.waitForSelector(selector, { timeout: 10000 }).catch(() => { });
             }
 
             const captcha = await this.detectCaptcha();
             const title = await this._page.title();
+            const content = await this._page.content();
+            const looksBlank = (!title || title.trim().length === 0) && content.replace(/\s+/g, '').length < 1200;
+
+            if (looksBlank && this.headlessMode && allowHeadfulRetry) {
+                logger.warn('Browser: Page appears blank in headless mode. Retrying headful...');
+                await this.ensureBrowser(false);
+                return this.navigate(url, waitSelectors, false);
+            }
+
+            if (looksBlank && !allowHeadfulRetry) {
+                logger.warn('Browser: Persistent profile returned blank page. Retrying with stateless context...');
+                const fallback = await this.navigateEphemeral(targetUrl, effectiveWaitSelectors);
+                if (fallback) return fallback;
+            }
+
+            this.recordProfileHistory({ url: targetUrl, title, timestamp: new Date().toISOString() });
+            this.lastNavigatedUrl = targetUrl;
             return `Page Loaded: ${title}\nURL: ${url}${captcha ? `\n[WARNING: ${captcha}]` : ''}`;
         } catch (e) {
-            logger.error(`Browser Error at ${url}: ${e}`);
-            return `Failed to navigate: ${e}`;
+            const classified = this.classifyNavigateError(e);
+            logger.error(`Browser Error at ${url}: ${classified.raw}`);
+            return `Error: ${classified.message}`;
+        }
+    }
+
+    private classifyNavigateError(error: unknown): { message: string; raw: string } {
+        const raw = String(error);
+        const lower = raw.toLowerCase();
+
+        if (lower.includes('err_name_not_resolved')) {
+            return { raw, message: 'DNS lookup failed (host not found). The URL may be incorrect.' };
+        }
+        if (lower.includes('err_connection_timed_out')) {
+            return { raw, message: 'Connection timed out. The site may be down or blocking automated access.' };
+        }
+        if (lower.includes('err_connection_refused')) {
+            return { raw, message: 'Connection refused by the host.' };
+        }
+        if (lower.includes('net::err_cert') || lower.includes('certificate')) {
+            return { raw, message: 'SSL certificate error while connecting to the site.' };
+        }
+
+        return { raw, message: `Failed to navigate: ${raw}` };
+    }
+
+    private async navigateEphemeral(targetUrl: string, waitSelectors: string[]): Promise<string | null> {
+        let tempBrowser: Browser | null = null;
+        try {
+            tempBrowser = await chromium.launch({
+                headless: true,
+                args: ['--disable-blink-features=AutomationControlled']
+            });
+
+            const context = await tempBrowser.newContext({
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                viewport: { width: 1280, height: 720 },
+                deviceScaleFactor: 1,
+            });
+
+            await context.addInitScript(() => {
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            });
+
+            const page = await context.newPage();
+            await page.goto(targetUrl, { waitUntil: 'load', timeout: 30000 });
+            await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => { });
+
+            for (const selector of waitSelectors) {
+                await page.waitForSelector(selector, { timeout: 10000 }).catch(() => { });
+            }
+
+            const title = await page.title();
+            const content = await page.content();
+            const looksBlank = (!title || title.trim().length === 0) && content.replace(/\s+/g, '').length < 1200;
+            if (looksBlank) return null;
+
+            return `Page Loaded: ${title}\nURL: ${targetUrl}\n[NOTE: Loaded via stateless context]`;
+        } catch (e) {
+            logger.warn(`Browser: Stateless context failed: ${e}`);
+            return null;
+        } finally {
+            if (tempBrowser) await tempBrowser.close();
         }
     }
 
@@ -209,54 +346,100 @@ export class WebBrowser {
             await this.ensureBrowser();
             await this.waitForStablePage();
 
-            const snapshot = await this.page!.evaluate(() => {
-                const interactiveSelectors = [
-                    'a', 'button', 'input', 'select', 'textarea',
-                    '[role="button"]', '[role="link"]', '[role="checkbox"]',
-                    '[role="menuitem"]', '[role="tab"]', '[onclick]'
-                ];
+            if (this.page?.isClosed() && this.lastNavigatedUrl) {
+                logger.warn('Semantic snapshot: page is closed, re-opening last URL.');
+                this._page = await this.context?.newPage() || this._page;
+                if (this._page) {
+                    await this._page.goto(this.lastNavigatedUrl, { waitUntil: 'load', timeout: 30000 });
+                    await this.waitForStablePage();
+                }
+            }
+            const buildSnapshot = async () => {
+                return this.page!.evaluate(() => {
+                    const interactiveSelectors = [
+                        'a', 'button', 'input', 'select', 'textarea', 'summary',
+                        '[contenteditable="true"]',
+                        '[tabindex]:not([tabindex="-1"])',
+                        '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="radio"]',
+                        '[role="switch"]', '[role="menuitem"]', '[role="menuitemcheckbox"]',
+                        '[role="menuitemradio"]', '[role="tab"]', '[role="tablist"]',
+                        '[role="combobox"]', '[role="listbox"]', '[role="option"]',
+                        '[role="textbox"]', '[role="searchbox"]', '[role="spinbutton"]',
+                        '[role="slider"]', '[role="progressbar"]', '[role="scrollbar"]',
+                        '[role="tree"]', '[role="treeitem"]', '[role="grid"]', '[role="row"]',
+                        '[role="cell"]', '[role="gridcell"]', '[role="columnheader"]', '[role="rowheader"]',
+                        '[role="dialog"]', '[role="alertdialog"]', '[role="tooltip"]',
+                        '[onclick]', '[onmousedown]', '[onmouseup]', '[onkeydown]', '[onkeyup]'
+                    ];
 
-                const elements = Array.from(document.querySelectorAll(interactiveSelectors.join(','))) as HTMLElement[];
-                const visibleElements = elements.filter(el => {
-                    const rect = el.getBoundingClientRect();
-                    const style = window.getComputedStyle(el);
-                    const isVisible = rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-                    if (!isVisible) return false;
+                    const elements = Array.from(document.querySelectorAll(interactiveSelectors.join(','))) as HTMLElement[];
+                    const visibleElements = elements.filter(el => {
+                        const rect = el.getBoundingClientRect();
+                        const style = window.getComputedStyle(el);
+                        const isVisible = rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                        if (!isVisible) return false;
+                        return true;
+                    });
 
-                    // Simple check if element is actually visible in viewport or at least has content
-                    return true;
+                    let refCounter = 1;
+                    const result: string[] = [];
+
+                    visibleElements.forEach(el => {
+                        const refId = refCounter++;
+                        el.setAttribute('data-orcbot-ref', refId.toString());
+
+                        const role = el.getAttribute('role') || el.tagName.toLowerCase();
+                        const label = el.getAttribute('aria-label') ||
+                            el.getAttribute('placeholder') ||
+                            el.getAttribute('title') ||
+                            (el as any).value ||
+                            el.innerText.trim().slice(0, 50);
+
+                        const typeAttr = (el as HTMLInputElement).type ? ` (${(el as HTMLInputElement).type})` : '';
+                        result.push(`${role}${typeAttr} "${label || '(no label)'}" [ref=${refId}]`);
+                    });
+
+                    const headings = Array.from(document.querySelectorAll('h1, h2, h3')).slice(0, 10);
+                    headings.forEach(h => {
+                        const text = (h as HTMLElement).innerText.trim();
+                        if (text) result.unshift(`heading "${text.slice(0, 100)}"`);
+                    });
+
+                    return result.join('\n');
                 });
+            };
 
-                let refCounter = 1;
-                const result: string[] = [];
+            let snapshot = await buildSnapshot();
+            let title = await this.page!.title();
+            let url = await this.page!.url();
+            let contentLength = (await this.page!.content()).length;
 
-                visibleElements.forEach(el => {
-                    const refId = refCounter++;
-                    el.setAttribute('data-orcbot-ref', refId.toString());
+            if (!url || url === 'about:blank') {
+                const fallbackUrl = this.lastNavigatedUrl;
+                if (fallbackUrl) {
+                    logger.warn('Semantic snapshot: blank URL detected, reloading last URL.');
+                    await this.page!.goto(fallbackUrl, { waitUntil: 'load', timeout: 30000 }).catch(() => { });
+                    await this.waitForStablePage();
+                    snapshot = await buildSnapshot();
+                    title = await this.page!.title();
+                    url = await this.page!.url();
+                    contentLength = (await this.page!.content()).length;
+                }
+            }
 
-                    const role = el.getAttribute('role') || el.tagName.toLowerCase();
-                    const label = el.getAttribute('aria-label') ||
-                        el.getAttribute('placeholder') ||
-                        el.getAttribute('title') ||
-                        (el as any).value ||
-                        el.innerText.trim().slice(0, 50);
+            const looksBlank = (!title || title.trim().length === 0) && contentLength < 1200;
+            if (looksBlank) {
+                logger.warn('Semantic snapshot appears blank; attempting a reload before returning diagnostics.');
+                await this.page!.reload({ waitUntil: 'load', timeout: 30000 }).catch(() => { });
+                await this.waitForStablePage();
+                snapshot = await buildSnapshot();
+                title = await this.page!.title();
+                url = await this.page!.url();
+                contentLength = (await this.page!.content()).length;
+            }
 
-                    const typeAttr = (el as HTMLInputElement).type ? ` (${(el as HTMLInputElement).type})` : '';
-                    result.push(`${role}${typeAttr} "${label || '(no label)'}" [ref=${refId}]`);
-                });
-
-                // Also include headings for context
-                const headings = Array.from(document.querySelectorAll('h1, h2, h3')).slice(0, 10);
-                headings.forEach(h => {
-                    const text = (h as HTMLElement).innerText.trim();
-                    if (text) result.unshift(`heading "${text.slice(0, 100)}"`);
-                });
-
-                return result.join('\n');
-            });
-
-            const title = await this.page!.title();
-            return `PAGE: "${title}"\n\nSEMANTIC SNAPSHOT:\n${snapshot || '(No interactive elements found)'}`;
+            const diagnostics = `URL: ${url}\nHTML length: ${contentLength}`;
+            return `PAGE: "${title}"\n${diagnostics}\n\nSEMANTIC SNAPSHOT:\n${snapshot || '(No interactive elements found)'}`;
         } catch (e) {
             return `Failed to get semantic snapshot: ${e}`;
         }
@@ -361,11 +544,27 @@ export class WebBrowser {
     }
 
     public async close() {
+        if (this.context) {
+            await this.context.close();
+            this.context = null;
+        }
         if (this.browser) {
             await this.browser.close();
             this.browser = null;
-            this._page = null;
         }
+        this._page = null;
+    }
+
+    public async switchProfile(profileName: string, profileDir?: string): Promise<string> {
+        if (!profileName) return 'Error: Missing profileName.';
+
+        this.profileName = profileName;
+        if (profileDir) this.profileDir = profileDir;
+
+        await this.close();
+        await this.ensureBrowser();
+
+        return `Browser profile switched to ${this.profileName}`;
     }
 
     public async search(query: string): Promise<string> {

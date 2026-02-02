@@ -10,12 +10,14 @@ import qrcode from 'qrcode-terminal';
 
 import path from 'path';
 import os from 'os';
+import { WorkerProfileManager } from '../core/WorkerProfile';
 
 dotenv.config(); // Local .env
 dotenv.config({ path: path.join(os.homedir(), '.orcbot', '.env') }); // Global .env
 
 const program = new Command();
 const agent = new Agent();
+const workerProfile = new WorkerProfileManager();
 
 program
     .name('orcbot')
@@ -135,6 +137,7 @@ async function showMainMenu() {
                 { name: 'Manage Connections', value: 'connections' },
                 { name: 'Manage AI Models', value: 'models' },
                 { name: 'Tooling & APIs', value: 'tooling' },
+                { name: 'Worker Profile (Digital Identity)', value: 'worker' },
                 { name: 'Configure Agent', value: 'config' },
                 { name: 'Exit', value: 'exit' },
             ],
@@ -165,6 +168,9 @@ async function showMainMenu() {
             break;
         case 'tooling':
             await showToolingMenu();
+            break;
+        case 'worker':
+            await showWorkerProfileMenu();
             break;
         case 'config':
             await showConfigMenu();
@@ -550,10 +556,174 @@ async function showWhatsAppConfig() {
     return showWhatsAppConfig();
 }
 
+async function showWorkerProfileMenu() {
+    console.clear();
+    console.log('🪪 Worker Profile (Digital Identity)');
+    console.log('=====================================');
+
+    if (!workerProfile.exists()) {
+        console.log('No worker profile exists yet.\n');
+        const { create } = await inquirer.prompt([
+            { type: 'confirm', name: 'create', message: 'Would you like to create a worker profile?', default: true }
+        ]);
+
+        if (!create) return showMainMenu();
+
+        const { handle, displayName } = await inquirer.prompt([
+            { type: 'input', name: 'handle', message: 'Enter a unique handle (username):', validate: (v: string) => v.trim().length > 0 || 'Handle is required' },
+            { type: 'input', name: 'displayName', message: 'Enter display name:', validate: (v: string) => v.trim().length > 0 || 'Display name is required' }
+        ]);
+
+        workerProfile.create(handle.trim(), displayName.trim());
+        console.log('\n✅ Worker profile created!');
+        await waitKeyPress();
+        return showWorkerProfileMenu();
+    }
+
+    // Show current profile
+    console.log(workerProfile.getSummary());
+    console.log('');
+
+    const profile = workerProfile.get()!;
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: 'Profile Options:',
+            choices: [
+                { name: 'Edit Basic Info (Handle, Name, Bio)', value: 'edit_basic' },
+                { name: `${profile.email ? 'Update' : 'Set'} Email Address`, value: 'email' },
+                { name: `${profile.password ? 'Update' : 'Set'} Password`, value: 'password' },
+                { name: 'Manage Linked Websites', value: 'websites' },
+                { name: '🗑️ Delete Worker Profile', value: 'delete' },
+                { name: 'Back', value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showMainMenu();
+
+    switch (action) {
+        case 'edit_basic': {
+            const answers = await inquirer.prompt([
+                { type: 'input', name: 'handle', message: `Handle (current: ${profile.handle}):`, default: profile.handle },
+                { type: 'input', name: 'displayName', message: `Display Name (current: ${profile.displayName}):`, default: profile.displayName },
+                { type: 'input', name: 'bio', message: `Bio (current: ${profile.bio || '(empty)'}):`, default: profile.bio || '' },
+                { type: 'input', name: 'avatarUrl', message: `Avatar URL (current: ${profile.avatarUrl || '(empty)'}):`, default: profile.avatarUrl || '' }
+            ]);
+            workerProfile.update({
+                handle: answers.handle.trim() || profile.handle,
+                displayName: answers.displayName.trim() || profile.displayName,
+                bio: answers.bio.trim() || undefined,
+                avatarUrl: answers.avatarUrl.trim() || undefined
+            });
+            console.log('✅ Profile updated!');
+            break;
+        }
+        case 'email': {
+            const { email } = await inquirer.prompt([
+                { type: 'input', name: 'email', message: 'Enter email address:', validate: (v: string) => v.includes('@') || 'Enter a valid email' }
+            ]);
+            workerProfile.setEmail(email.trim());
+            console.log('✅ Email updated!');
+            break;
+        }
+        case 'password': {
+            const { password, confirm } = await inquirer.prompt([
+                { type: 'password', name: 'password', message: 'Enter password:', mask: '*' },
+                { type: 'password', name: 'confirm', message: 'Confirm password:', mask: '*' }
+            ]);
+            if (password !== confirm) {
+                console.log('❌ Passwords do not match.');
+            } else if (password.length < 1) {
+                console.log('❌ Password cannot be empty.');
+            } else {
+                workerProfile.setPassword(password);
+                console.log('✅ Password set (encrypted locally).');
+            }
+            break;
+        }
+        case 'websites':
+            await showWorkerWebsitesMenu();
+            return; // showWorkerWebsitesMenu handles returning
+        case 'delete': {
+            const { confirm } = await inquirer.prompt([
+                { type: 'confirm', name: 'confirm', message: '⚠️ Are you sure you want to DELETE your worker profile? This cannot be undone.', default: false }
+            ]);
+            if (confirm) {
+                workerProfile.delete();
+                console.log('Worker profile deleted.');
+            }
+            break;
+        }
+    }
+
+    await waitKeyPress();
+    return showWorkerProfileMenu();
+}
+
+async function showWorkerWebsitesMenu() {
+    const profile = workerProfile.get();
+    if (!profile) return showWorkerProfileMenu();
+
+    console.clear();
+    console.log('🌐 Linked Websites');
+    console.log('==================');
+
+    if (profile.websites.length === 0) {
+        console.log('No websites linked yet.\n');
+    } else {
+        profile.websites.forEach((w, i) => {
+            console.log(`${i + 1}. ${w.name}: ${w.url}${w.username ? ` (user: ${w.username})` : ''}`);
+        });
+        console.log('');
+    }
+
+    const choices: { name: string; value: string }[] = [
+        { name: '➕ Add Website', value: 'add' }
+    ];
+
+    if (profile.websites.length > 0) {
+        choices.push({ name: '➖ Remove Website', value: 'remove' });
+    }
+
+    choices.push({ name: 'Back', value: 'back' });
+
+    const { action } = await inquirer.prompt([
+        { type: 'list', name: 'action', message: 'Website Options:', choices }
+    ]);
+
+    if (action === 'back') return showWorkerProfileMenu();
+
+    if (action === 'add') {
+        const { name, url, username } = await inquirer.prompt([
+            { type: 'input', name: 'name', message: 'Website name (e.g., GitHub, LinkedIn):', validate: (v: string) => v.trim().length > 0 || 'Name required' },
+            { type: 'input', name: 'url', message: 'Profile URL:', validate: (v: string) => v.startsWith('http') || 'Enter a valid URL' },
+            { type: 'input', name: 'username', message: 'Username on this site (optional):' }
+        ]);
+        workerProfile.addWebsite(name.trim(), url.trim(), username.trim() || undefined);
+        console.log('✅ Website added!');
+    } else if (action === 'remove') {
+        const { name } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'name',
+                message: 'Select website to remove:',
+                choices: profile.websites.map(w => ({ name: `${w.name} (${w.url})`, value: w.name }))
+            }
+        ]);
+        workerProfile.removeWebsite(name);
+        console.log('✅ Website removed!');
+    }
+
+    await waitKeyPress();
+    return showWorkerWebsitesMenu();
+}
+
 async function showConfigMenu() {
     const config = agent.config.getAll();
     // Ensure we show explicit keys relative to core config
-    const keys = ['agentName', 'openaiApiKey', 'googleApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl', 'searchProviderOrder', 'captchaApiKey', 'modelName', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'whatsappAutoReplyEnabled', 'memoryPath', 'commandAllowList', 'commandDenyList', 'safeMode', 'pluginAllowList', 'pluginDenyList'] as const;
+    const keys = ['agentName', 'openaiApiKey', 'googleApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl', 'searchProviderOrder', 'captchaApiKey', 'modelName', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'whatsappAutoReplyEnabled', 'memoryPath', 'commandAllowList', 'commandDenyList', 'safeMode', 'pluginAllowList', 'pluginDenyList', 'browserProfileDir', 'browserProfileName'] as const;
 
     const choices: { name: string, value: string }[] = keys.map(key => ({
         name: `${key}: ${config[key as keyof typeof config] || '(empty)'}`,
