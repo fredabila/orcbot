@@ -93,11 +93,12 @@ export class DaemonManager {
     /**
      * Remove the PID file
      */
-    public removePidFile(): void {
+    public removePidFile(reason?: string): void {
         try {
             if (fs.existsSync(this.pidFile)) {
                 fs.unlinkSync(this.pidFile);
-                logger.info(`PID file removed: ${this.pidFile}`);
+                const suffix = reason ? ` (reason: ${reason})` : '';
+                logger.info(`PID file removed: ${this.pidFile}${suffix}`);
             }
         } catch (error) {
             logger.error(`Failed to remove PID file: ${error}`);
@@ -157,17 +158,41 @@ export class DaemonManager {
         this.writePidFile(process.pid);
 
         // Setup cleanup on exit
-        const cleanup = () => {
-            this.removePidFile();
+        let cleaned = false;
+        let exitReason = 'unknown';
+        const cleanup = (reason?: string) => {
+            if (cleaned) return;
+            cleaned = true;
+            if (reason) exitReason = reason;
+            logger.warn(`Daemon cleanup triggered: ${exitReason}`);
+            this.removePidFile(exitReason);
         };
 
-        process.on('exit', cleanup);
+        process.on('beforeExit', (code) => {
+            cleanup(`beforeExit:${code}`);
+        });
+
+        process.on('exit', (code) => {
+            cleanup(`exit:${code}`);
+        });
+
         process.on('SIGINT', () => {
-            cleanup();
+            cleanup('SIGINT');
             process.exit(0);
         });
+
         process.on('SIGTERM', () => {
-            cleanup();
+            cleanup('SIGTERM');
+            process.exit(0);
+        });
+
+        process.on('SIGQUIT', () => {
+            cleanup('SIGQUIT');
+            process.exit(0);
+        });
+
+        process.on('SIGABRT', () => {
+            cleanup('SIGABRT');
             process.exit(0);
         });
 
