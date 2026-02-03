@@ -51,14 +51,25 @@ describe('NVIDIA Provider', () => {
     });
 
     it('should throw error when NVIDIA key is not configured', async () => {
-        const llm = new MultiLLM({ 
-            modelName: 'nvidia:test-model'
-            // No nvidiaApiKey provided
-        });
-        
-        await expect(
-            // @ts-ignore - accessing private method for testing
-            llm.callNvidia('test prompt')
-        ).rejects.toThrow('NVIDIA API key not configured');
+        const originalNvidiaKey = process.env.NVIDIA_API_KEY;
+        delete process.env.NVIDIA_API_KEY;
+
+        try {
+            const llm = new MultiLLM({ 
+                modelName: 'nvidia:test-model'
+                // No nvidiaApiKey provided
+            });
+            
+            await expect(
+                // @ts-ignore - accessing private method for testing
+                llm.callNvidia('test prompt')
+            ).rejects.toThrow('NVIDIA API key not configured');
+        } finally {
+            if (originalNvidiaKey !== undefined) {
+                process.env.NVIDIA_API_KEY = originalNvidiaKey;
+            } else {
+                delete process.env.NVIDIA_API_KEY;
+            }
+        }
     });
 });
