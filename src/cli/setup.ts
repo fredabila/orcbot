@@ -45,6 +45,12 @@ export async function runSetup() {
         },
         {
             type: 'input',
+            name: 'nvidiaApiKey',
+            message: 'NVIDIA API Key (optional):',
+            mask: '*'
+        },
+        {
+            type: 'input',
             name: 'bedrockRegion',
             message: 'AWS Bedrock Region (optional, e.g., us-east-1):'
         },

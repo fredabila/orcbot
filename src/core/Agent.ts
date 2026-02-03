@@ -83,6 +83,7 @@ export class Agent {
             openrouterReferer: this.config.get('openrouterReferer'),
             openrouterAppName: this.config.get('openrouterAppName'),
             googleApiKey: this.config.get('googleApiKey'),
+            nvidiaApiKey: this.config.get('nvidiaApiKey'),
             modelName: this.config.get('modelName'),
             llmProvider: this.config.get('llmProvider'),
             bedrockRegion: this.config.get('bedrockRegion'),

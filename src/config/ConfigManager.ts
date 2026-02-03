@@ -6,7 +6,7 @@ import { logger } from '../utils/logger';
 
 export interface AgentConfig {
     agentName: string;
-    llmProvider?: 'openai' | 'google' | 'bedrock' | 'openrouter';
+    llmProvider?: 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia';
     telegramToken?: string;
     openaiApiKey?: string;
     openrouterApiKey?: string;
@@ -14,6 +14,7 @@ export interface AgentConfig {
     openrouterReferer?: string;
     openrouterAppName?: string;
     googleApiKey?: string;
+    nvidiaApiKey?: string;
     braveSearchApiKey?: string;
     searxngUrl?: string;
     searchProviderOrder?: string[];
@@ -170,6 +171,7 @@ export class ConfigManager {
             openrouterReferer: process.env.OPENROUTER_REFERER,
             openrouterAppName: process.env.OPENROUTER_APP_NAME,
             googleApiKey: process.env.GOOGLE_API_KEY,
+            nvidiaApiKey: process.env.NVIDIA_API_KEY,
             braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY,
             searxngUrl: process.env.SEARXNG_URL,
             serperApiKey: process.env.SERPER_API_KEY,
@@ -368,6 +370,7 @@ export class ConfigManager {
             openrouterReferer: 'OPENROUTER_REFERER',
             openrouterAppName: 'OPENROUTER_APP_NAME',
             googleApiKey: 'GOOGLE_API_KEY',
+            nvidiaApiKey: 'NVIDIA_API_KEY',
             braveSearchApiKey: 'BRAVE_SEARCH_API_KEY',
             searxngUrl: 'SEARXNG_URL',
             serperApiKey: 'SERPER_API_KEY',

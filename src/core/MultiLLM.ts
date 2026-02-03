@@ -5,7 +5,7 @@ import path from 'path';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { TokenTracker } from './TokenTracker';
 
-export type LLMProvider = 'openai' | 'google' | 'bedrock' | 'openrouter';
+export type LLMProvider = 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia';
 
 export interface LLMMessage {
     role: 'system' | 'user' | 'assistant';
@@ -19,6 +19,7 @@ export class MultiLLM {
     private openrouterReferer?: string;
     private openrouterAppName?: string;
     private googleKey: string | undefined;
+    private nvidiaKey: string | undefined;
     private modelName: string;
     private bedrockRegion?: string;
     private bedrockAccessKeyId?: string;
@@ -27,13 +28,14 @@ export class MultiLLM {
     private tokenTracker?: TokenTracker;
     private preferredProvider?: LLMProvider;
 
-    constructor(config?: { apiKey?: string, googleApiKey?: string, modelName?: string, bedrockRegion?: string, bedrockAccessKeyId?: string, bedrockSecretAccessKey?: string, bedrockSessionToken?: string, tokenTracker?: TokenTracker, openrouterApiKey?: string, openrouterBaseUrl?: string, openrouterReferer?: string, openrouterAppName?: string, llmProvider?: LLMProvider }) {
+    constructor(config?: { apiKey?: string, googleApiKey?: string, nvidiaApiKey?: string, modelName?: string, bedrockRegion?: string, bedrockAccessKeyId?: string, bedrockSecretAccessKey?: string, bedrockSessionToken?: string, tokenTracker?: TokenTracker, openrouterApiKey?: string, openrouterBaseUrl?: string, openrouterReferer?: string, openrouterAppName?: string, llmProvider?: LLMProvider }) {
         this.openaiKey = config?.apiKey || process.env.OPENAI_API_KEY;
         this.openrouterKey = config?.openrouterApiKey || process.env.OPENROUTER_API_KEY;
         this.openrouterBaseUrl = config?.openrouterBaseUrl || process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
         this.openrouterReferer = config?.openrouterReferer || process.env.OPENROUTER_REFERER;
         this.openrouterAppName = config?.openrouterAppName || process.env.OPENROUTER_APP_NAME;
         this.googleKey = config?.googleApiKey || process.env.GOOGLE_API_KEY;
+        this.nvidiaKey = config?.nvidiaApiKey || process.env.NVIDIA_API_KEY;
         this.modelName = config?.modelName || 'gpt-4o';
         this.bedrockRegion = config?.bedrockRegion || process.env.BEDROCK_REGION || process.env.AWS_REGION;
         this.bedrockAccessKeyId = config?.bedrockAccessKeyId || process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID;
@@ -56,6 +58,7 @@ export class MultiLLM {
             if (p === 'google') return this.callGoogle(prompt, systemMessage, m);
             if (p === 'bedrock') return this.callBedrock(prompt, systemMessage, m);
             if (p === 'openrouter') return this.callOpenRouter(prompt, systemMessage, m);
+            if (p === 'nvidia') return this.callNvidia(prompt, systemMessage, m);
             throw new Error(`Provider ${p} not supported`);
         };
 
@@ -76,13 +79,14 @@ export class MultiLLM {
 
     private getFallbackProvider(primaryProvider: LLMProvider): LLMProvider | null {
         // Priority order for fallbacks based on what's configured
-        const fallbackOrder: LLMProvider[] = ['openai', 'google', 'openrouter', 'bedrock'];
+        const fallbackOrder: LLMProvider[] = ['openai', 'google', 'nvidia', 'openrouter', 'bedrock'];
         
         for (const provider of fallbackOrder) {
             if (provider === primaryProvider) continue;
             
             if (provider === 'openai' && this.openaiKey) return 'openai';
             if (provider === 'google' && this.googleKey) return 'google';
+            if (provider === 'nvidia' && this.nvidiaKey) return 'nvidia';
             if (provider === 'openrouter' && this.openrouterKey) return 'openrouter';
             if (provider === 'bedrock' && this.bedrockAccessKeyId) return 'bedrock';
         }
@@ -94,6 +98,7 @@ export class MultiLLM {
         switch (provider) {
             case 'openai': return 'gpt-4o';
             case 'google': return 'gemini-2.0-flash';
+            case 'nvidia': return 'moonshotai/kimi-k2.5';
             case 'openrouter': return 'google/gemini-2.0-flash-exp:free';
             case 'bedrock': return this.modelName;
             default: return this.modelName;
@@ -308,6 +313,7 @@ export class MultiLLM {
         if (lower.includes('bedrock') || lower.startsWith('br:')) return 'bedrock';
         if (lower.includes('gemini')) return 'google';
         if (lower.startsWith('openrouter:') || lower.startsWith('openrouter/') || lower.startsWith('or:')) return 'openrouter';
+        if (lower.startsWith('nvidia:') || lower.startsWith('nv:')) return 'nvidia';
         return 'openai';
     }
 
@@ -316,6 +322,12 @@ export class MultiLLM {
             .replace(/^openrouter:/i, '')
             .replace(/^openrouter\//i, '')
             .replace(/^or:/i, '');
+    }
+
+    private normalizeNvidiaModel(modelName: string): string {
+        return modelName
+            .replace(/^nvidia:/i, '')
+            .replace(/^nv:/i, '');
     }
 
     private getBedrockClient() {
@@ -488,6 +500,48 @@ export class MultiLLM {
         }
     }
 
+    private async callNvidia(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
+        if (!this.nvidiaKey) throw new Error('NVIDIA API key not configured');
+
+        const messages: LLMMessage[] = [];
+        if (systemMessage) messages.push({ role: 'system', content: systemMessage });
+        messages.push({ role: 'user', content: prompt });
+
+        const rawModel = modelOverride || this.modelName;
+        const model = this.normalizeNvidiaModel(rawModel);
+
+        try {
+            const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.nvidiaKey}`,
+                    'Accept': 'application/json',
+                },
+                body: JSON.stringify({
+                    model,
+                    messages,
+                    max_tokens: 16384,
+                    temperature: 0.7,
+                    top_p: 1.00,
+                    stream: false,
+                }),
+            });
+
+            if (!response.ok) {
+                const err = await response.text();
+                throw new Error(`NVIDIA API Error: ${response.status} ${err}`);
+            }
+
+            const data = await response.json() as any;
+            this.recordUsage('nvidia', model, prompt, data, data?.choices?.[0]?.message?.content);
+            return data.choices[0].message.content;
+        } catch (error) {
+            logger.error(`MultiLLM NVIDIA Error: ${error}`);
+            throw error;
+        }
+    }
+
     private recordUsage(provider: LLMProvider, model: string, prompt: string, data: any, completionText?: string) {
         if (!this.tokenTracker) return;
 
@@ -498,7 +552,7 @@ export class MultiLLM {
         let completionTokens = completionTokensEstimate;
         let totalTokens = promptTokens + completionTokens;
 
-        if ((provider === 'openai' || provider === 'openrouter') && data?.usage) {
+        if ((provider === 'openai' || provider === 'openrouter' || provider === 'nvidia') && data?.usage) {
             promptTokens = data.usage.prompt_tokens ?? promptTokens;
             completionTokens = data.usage.completion_tokens ?? completionTokens;
             totalTokens = data.usage.total_tokens ?? (promptTokens + completionTokens);
@@ -520,6 +574,7 @@ export class MultiLLM {
         }
 
         const estimated = (provider === 'openai' && !data?.usage) ||
+            (provider === 'nvidia' && !data?.usage) ||
             (provider === 'google' && !data?.usageMetadata) ||
             (provider === 'bedrock' && !data?.usage);
 
