@@ -312,8 +312,8 @@ export class MultiLLM {
         const lower = modelName.toLowerCase();
         if (lower.includes('bedrock') || lower.startsWith('br:')) return 'bedrock';
         if (lower.includes('gemini')) return 'google';
-        if (lower.includes('nvidia') || lower.startsWith('nv:') || lower.startsWith('nvidia:')) return 'nvidia';
         if (lower.startsWith('openrouter:') || lower.startsWith('openrouter/') || lower.startsWith('or:')) return 'openrouter';
+        if (lower.startsWith('nvidia:') || lower.startsWith('nv:')) return 'nvidia';
         return 'openai';
     }
 
