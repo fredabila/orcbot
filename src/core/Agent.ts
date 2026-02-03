@@ -48,6 +48,8 @@ export class Agent {
     private currentActionStartAt: number | null = null;
     private instanceLockPath: string | null = null;
     private instanceLockAcquired: boolean = false;
+    private heartbeatJobs: Map<string, Cron> = new Map();
+    private heartbeatSchedulePath: string;
 
     constructor() {
         this.config = new ConfigManager();
@@ -108,6 +110,8 @@ export class Agent {
 
         this.loadLastActionTime();
         this.loadLastHeartbeatTime();
+        this.heartbeatSchedulePath = path.join(path.dirname(this.config.get('actionQueuePath')), 'heartbeat-schedules.json');
+        this.loadHeartbeatSchedules();
 
         // Ensure context is up to date (supports reconfiguration)
         this.skills.setContext({
@@ -630,6 +634,82 @@ Home Directory: ${os.homedir()}
 Working Directory: ${process.cwd()}
 Node.js: ${process.version}
 ${commandGuidance}`;
+            }
+        });
+
+        // Skill: System Check
+        this.skills.registerSkill({
+            name: 'system_check',
+            description: 'Verify system dependencies like commands, shared libraries, and file paths. Useful to confirm installs after manual changes.',
+            usage: 'system_check(commands?, libraries?, paths?)',
+            handler: async (args: any) => {
+                const commands: string[] = Array.isArray(args?.commands) ? args.commands : (args?.commands ? String(args.commands).split(',') : []);
+                const libraries: string[] = Array.isArray(args?.libraries) ? args.libraries : (args?.libraries ? String(args.libraries).split(',') : []);
+                const paths: string[] = Array.isArray(args?.paths) ? args.paths : (args?.paths ? String(args.paths).split(',') : []);
+
+                const os = require('os');
+                const isWindows = process.platform === 'win32';
+                const isLinux = process.platform === 'linux';
+
+                const { exec } = require('child_process');
+                const execCmd = (cmd: string) => new Promise<{ ok: boolean; out: string }>((resolve) => {
+                    exec(cmd, { timeout: 15000 }, (error: any, stdout: string, stderr: string) => {
+                        if (error) {
+                            resolve({ ok: false, out: (stderr || stdout || error.message || '').trim() });
+                            return;
+                        }
+                        resolve({ ok: true, out: (stdout || stderr || '').trim() });
+                    });
+                });
+
+                const results: string[] = [];
+                results.push(`🧪 SYSTEM CHECK`);
+                results.push(`Platform: ${isWindows ? 'Windows' : isLinux ? 'Linux' : os.platform()}`);
+                results.push(`Hostname: ${os.hostname()}`);
+
+                if (commands.length > 0) {
+                    results.push(`\nCommands:`);
+                    for (const raw of commands.map(c => c.trim()).filter(Boolean)) {
+                        const cmd = raw;
+                        const checkCmd = isWindows ? `where ${cmd}` : `command -v ${cmd}`;
+                        const res = await execCmd(checkCmd);
+                        results.push(`- ${cmd}: ${res.ok ? '✅ found' : '❌ not found'}${res.ok && res.out ? ` (${res.out.split('\n')[0]})` : ''}`);
+                    }
+                }
+
+                if (libraries.length > 0) {
+                    results.push(`\nShared Libraries:`);
+                    for (const raw of libraries.map(l => l.trim()).filter(Boolean)) {
+                        const lib = raw;
+                        if (isLinux) {
+                            const res = await execCmd(`ldconfig -p | grep -m1 "${lib}"`);
+                            if (res.ok && res.out) {
+                                results.push(`- ${lib}: ✅ found (${res.out.split('\n')[0].trim()})`);
+                            } else {
+                                // Fallback check common locations
+                                const alt = await execCmd(`ls /lib*/*${lib}* /usr/lib*/*${lib}* 2>/dev/null`);
+                                results.push(`- ${lib}: ${alt.ok && alt.out ? '✅ found' : '❌ not found'}`);
+                            }
+                        } else {
+                            results.push(`- ${lib}: ⚠️ library checks only supported on Linux`);
+                        }
+                    }
+                }
+
+                if (paths.length > 0) {
+                    results.push(`\nPaths:`);
+                    for (const raw of paths.map(p => p.trim()).filter(Boolean)) {
+                        const p = raw;
+                        const exists = fs.existsSync(p);
+                        results.push(`- ${p}: ${exists ? '✅ exists' : '❌ missing'}`);
+                    }
+                }
+
+                if (commands.length === 0 && libraries.length === 0 && paths.length === 0) {
+                    results.push(`\nNo checks requested. Provide commands, libraries, or paths.`);
+                }
+
+                return results.join('\n');
             }
         });
 
@@ -1192,6 +1272,64 @@ export default ${name};
                 } catch (e) {
                     return `Failed to schedule task: ${e}`;
                 }
+            }
+        });
+
+        // Skill: Heartbeat Schedule
+        this.skills.registerSkill({
+            name: 'heartbeat_schedule',
+            description: 'Schedule recurring heartbeat tasks (e.g., every 2 hours) that run autonomously.',
+            usage: 'heartbeat_schedule(schedule, task_description, priority?)',
+            handler: async (args: any) => {
+                const scheduleInput = args.schedule || args.time_or_cron || args.time;
+                const task_description = args.task_description || args.task || args.description;
+                const priority = parseInt(args.priority || '6', 10);
+
+                if (!scheduleInput || !task_description) return 'Error: Missing schedule or task_description.';
+
+                try {
+                    const schedule = this.normalizeHeartbeatSchedule(String(scheduleInput));
+                    const id = `hb_${Math.random().toString(36).slice(2, 10)}`;
+
+                    const def = {
+                        id,
+                        schedule,
+                        task: task_description,
+                        priority: Math.max(1, Math.min(10, priority)),
+                        createdAt: new Date().toISOString()
+                    };
+
+                    this.registerHeartbeatSchedule(def, true);
+                    return `Heartbeat scheduled (id=${id}) at: ${schedule}`;
+                } catch (e) {
+                    return `Failed to schedule heartbeat: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Heartbeat List
+        this.skills.registerSkill({
+            name: 'heartbeat_list',
+            description: 'List all heartbeat schedules.',
+            usage: 'heartbeat_list()',
+            handler: async () => {
+                const list = Array.from(this.heartbeatJobMeta.values());
+                if (list.length === 0) return 'No heartbeat schedules found.';
+                return list.map((s: any) => `• ${s.id} → ${s.schedule} → ${s.task} (priority ${s.priority})`).join('\n');
+            }
+        });
+
+        // Skill: Heartbeat Remove
+        this.skills.registerSkill({
+            name: 'heartbeat_remove',
+            description: 'Remove a heartbeat schedule by id.',
+            usage: 'heartbeat_remove(id)',
+            handler: async (args: any) => {
+                const id = args.id || args.heartbeat_id;
+                if (!id) return 'Error: Missing id.';
+                if (!this.heartbeatJobs.has(id)) return `No heartbeat schedule found for id=${id}.`;
+                this.removeHeartbeatSchedule(String(id));
+                return `Heartbeat schedule removed: ${id}`;
             }
         });
 
@@ -2007,6 +2145,73 @@ Respond with a single actionable task description (one sentence):`;
         }
     }
 
+    private loadHeartbeatSchedules() {
+        try {
+            if (!fs.existsSync(this.heartbeatSchedulePath)) {
+                fs.writeFileSync(this.heartbeatSchedulePath, '[]', 'utf8');
+            }
+            const raw = fs.readFileSync(this.heartbeatSchedulePath, 'utf8');
+            const schedules = JSON.parse(raw || '[]');
+            if (Array.isArray(schedules)) {
+                schedules.forEach((s) => this.registerHeartbeatSchedule(s, false));
+            }
+        } catch (e) {
+            logger.warn(`Failed to load heartbeat schedules: ${e}`);
+        }
+    }
+
+    private persistHeartbeatSchedules() {
+        try {
+            const schedules = Array.from(this.heartbeatJobs.keys()).map((id) => {
+                return (this.heartbeatJobMeta.get(id) || null);
+            }).filter(Boolean);
+            fs.writeFileSync(this.heartbeatSchedulePath, JSON.stringify(schedules, null, 2));
+        } catch (e) {
+            logger.warn(`Failed to persist heartbeat schedules: ${e}`);
+        }
+    }
+
+    private heartbeatJobMeta: Map<string, any> = new Map();
+
+    private registerHeartbeatSchedule(scheduleDef: any, persist: boolean = true) {
+        if (!scheduleDef?.id || !scheduleDef?.schedule || !scheduleDef?.task) return;
+        const id = scheduleDef.id;
+        if (this.heartbeatJobs.has(id)) return;
+
+        const cron = new Cron(scheduleDef.schedule, () => {
+            logger.info(`Heartbeat Schedule Triggered: ${scheduleDef.task}`);
+            this.pushTask(`Heartbeat Task: ${scheduleDef.task}`, scheduleDef.priority || 6, { isHeartbeat: true, heartbeatId: id }, 'autonomy');
+        });
+
+        this.heartbeatJobs.set(id, cron);
+        this.heartbeatJobMeta.set(id, scheduleDef);
+
+        if (persist) this.persistHeartbeatSchedules();
+    }
+
+    private removeHeartbeatSchedule(id: string) {
+        const cron = this.heartbeatJobs.get(id);
+        if (cron) {
+            cron.stop();
+            this.heartbeatJobs.delete(id);
+            this.heartbeatJobMeta.delete(id);
+            this.persistHeartbeatSchedules();
+        }
+    }
+
+    private normalizeHeartbeatSchedule(input: string): string {
+        const raw = input.trim();
+        const everyMatch = raw.match(/every\s+(\d+)\s+(minute|hour|day)s?/i);
+        if (everyMatch) {
+            const amount = parseInt(everyMatch[1]);
+            const unit = everyMatch[2].toLowerCase();
+            if (unit.startsWith('minute')) return `*/${amount} * * * *`;
+            if (unit.startsWith('hour')) return `0 */${amount} * * *`;
+            if (unit.startsWith('day')) return `0 0 */${amount} * *`;
+        }
+        return raw; // assume cron
+    }
+
     private detectStalledAction() {
         if (!this.isBusy || !this.currentActionStartAt || !this.currentActionId) return;
         const maxMinutes = this.config.get('maxActionRunMinutes') || 10;
@@ -2355,6 +2560,7 @@ Respond with a single actionable task description (one sentence):`;
                 'update_user_profile',
                 'update_agent_identity',
                 'get_system_info',
+                'system_check',
                 'browser_examine_page', // Examining without action is low info
                 'browser_screenshot',
                 'request_supporting_data'
