@@ -869,7 +869,7 @@ async function showGeminiConfig() {
 async function showNvidiaConfig() {
     const currentModel = agent.config.get('modelName');
     const apiKey = agent.config.get('nvidiaApiKey') || 'Not Set';
-    const displayKey = apiKey === 'Not Set' ? 'Not Set' : `${apiKey.substring(0, 8)}...`;
+    const displayKey = apiKey === 'Not Set' ? 'Not Set' : `${apiKey.substring(0, Math.min(8, apiKey.length))}...`;
 
     const { action } = await inquirer.prompt([
         {
