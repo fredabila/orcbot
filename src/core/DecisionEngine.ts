@@ -96,11 +96,21 @@ ${profilingEnabled && !contactProfile ? '\n- Task: I don\'t have a profile for t
         }
 
 
+        const now = new Date();
+        const dateContext = `
+CURRENT DATE & TIME:
+- Date: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+- Time: ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}
+- Timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}
+`;
+
         const systemPrompt = `
 You are a highly intelligent, autonomous AI Agent. Your persona and identity are defined below.
         
 YOUR IDENTITY:
 ${this.agentIdentity || 'You are a professional autonomous agent.'}
+
+${dateContext}
 
 ${ParserLayer.getSystemPromptSnippet()}
 
