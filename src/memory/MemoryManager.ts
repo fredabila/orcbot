@@ -20,6 +20,12 @@ export class MemoryManager {
     private storage: JSONAdapter;
     private userContext: any = {};
     private profilesDir: string;
+    
+    // Configurable limits (can be updated via setLimits)
+    private contextLimit: number = 20;
+    private episodicLimit: number = 5;
+    private consolidationThreshold: number = 30;
+    private consolidationBatch: number = 20;
 
     constructor(dbPath: string = './memory.json', userPath: string = './USER.md') {
         this.storage = new JSONAdapter(dbPath);
@@ -31,6 +37,22 @@ export class MemoryManager {
         if (!fs.existsSync(this.profilesDir)) {
             fs.mkdirSync(this.profilesDir, { recursive: true });
         }
+    }
+
+    /**
+     * Configure memory limits. Call this after construction with config values.
+     */
+    public setLimits(options: {
+        contextLimit?: number;
+        episodicLimit?: number;
+        consolidationThreshold?: number;
+        consolidationBatch?: number;
+    }) {
+        if (options.contextLimit) this.contextLimit = options.contextLimit;
+        if (options.episodicLimit) this.episodicLimit = options.episodicLimit;
+        if (options.consolidationThreshold) this.consolidationThreshold = options.consolidationThreshold;
+        if (options.consolidationBatch) this.consolidationBatch = options.consolidationBatch;
+        logger.info(`MemoryManager limits: context=${this.contextLimit}, episodic=${this.episodicLimit}, consolidationThreshold=${this.consolidationThreshold}, consolidationBatch=${this.consolidationBatch}`);
     }
 
     public refreshUserContext(userPath: string) {
@@ -64,11 +86,11 @@ export class MemoryManager {
 
     public async consolidate(llm: MultiLLM) {
         const shortMemories = this.searchMemory('short');
-        if (shortMemories.length < 30) return;
+        if (shortMemories.length < this.consolidationThreshold) return;
 
-        logger.info('MemoryManager: Consolidation threshold reached (30). Compressing old memories...');
+        logger.info(`MemoryManager: Consolidation threshold reached (${this.consolidationThreshold}). Compressing old memories...`);
 
-        const toSummarize = shortMemories.slice(0, 20);
+        const toSummarize = shortMemories.slice(0, this.consolidationBatch);
 
         const summaryPrompt = `
 Summarize the following conversation history concisely. 
@@ -84,16 +106,16 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
         this.saveMemory({
             id: `summary-${Date.now()}`,
             type: 'episodic',
-            content: `Summary of 20 historical events: ${summary}`
+            content: `Summary of ${this.consolidationBatch} historical events: ${summary}`
         });
 
-        // Remove the 20 short-term memories
+        // Remove the consolidated short-term memories
         const allMemories = this.storage.get('memories') || [];
         const toSummarizeIds = new Set(toSummarize.map(m => m.id));
         const filtered = allMemories.filter((m: any) => !toSummarizeIds.has(m.id));
         this.storage.save('memories', filtered);
 
-        logger.info(`MemoryManager: Consolidated 20 memories into 1 episodic summary.`);
+        logger.info(`MemoryManager: Consolidated ${this.consolidationBatch} memories into 1 episodic summary.`);
     }
 
     public getMemory(id: string): MemoryEntry | null {
@@ -106,8 +128,9 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
         return memories.filter((m: MemoryEntry) => m.type === type);
     }
 
-    public getRecentContext(limit: number = 20): MemoryEntry[] {
-        const episodic = this.searchMemory('episodic').slice(-5); // Include last 5 summaries
+    public getRecentContext(limit?: number): MemoryEntry[] {
+        const effectiveLimit = limit ?? this.contextLimit;
+        const episodic = this.searchMemory('episodic').slice(-this.episodicLimit);
         const short = this.searchMemory('short');
         
         // Sort all by timestamp (most recent first)
@@ -118,7 +141,7 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
         });
         
         // Take the most recent N
-        const recentShort = sorted.slice(0, limit);
+        const recentShort = sorted.slice(0, effectiveLimit);
         
         // Return episodic summaries + recent short memories, with recent first
         return [...recentShort, ...episodic];

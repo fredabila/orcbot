@@ -71,6 +71,11 @@ export interface AgentConfig {
     autopilotNoQuestionsAllow?: string[];
     autopilotNoQuestionsDeny?: string[];
     progressFeedbackEnabled?: boolean;
+    // Memory limits
+    memoryContextLimit?: number;          // Recent memories in context (default 20)
+    memoryEpisodicLimit?: number;         // Episodic summaries to include (default 5)
+    memoryConsolidationThreshold?: number; // When to consolidate (default 30)
+    memoryConsolidationBatch?: number;    // How many to consolidate at once (default 20)
 }
 
 export class ConfigManager {
@@ -303,7 +308,11 @@ export class ConfigManager {
             autopilotNoQuestions: false,
             autopilotNoQuestionsAllow: [],
             autopilotNoQuestionsDeny: [],
-            progressFeedbackEnabled: true
+            progressFeedbackEnabled: true,
+            memoryContextLimit: 20,
+            memoryEpisodicLimit: 5,
+            memoryConsolidationThreshold: 30,
+            memoryConsolidationBatch: 20
         };
     }
 

@@ -75,6 +75,47 @@ program
         const daemonManager = DaemonManager.createDefault();
         const status = daemonManager.isRunning();
 
+        // Check for ANY existing OrcBot instance via lock file
+        const lockPath = path.join(os.homedir(), '.orcbot', 'orcbot.lock');
+        let existingInstance: { pid: number; startedAt: string; host: string } | null = null;
+        
+        if (fs.existsSync(lockPath)) {
+            try {
+                const lockData = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+                const pid = Number(lockData.pid);
+                if (pid && pid !== process.pid) {
+                    // Check if process is actually running
+                    try {
+                        process.kill(pid, 0); // Signal 0 = just check if exists
+                        existingInstance = lockData;
+                    } catch (e: any) {
+                        if (e?.code === 'ESRCH') {
+                            // Process doesn't exist, stale lock - remove it
+                            fs.unlinkSync(lockPath);
+                            console.log('🧹 Cleaned up stale lock file from previous crashed instance.');
+                        }
+                    }
+                }
+            } catch (e) {
+                // Invalid lock file, ignore
+            }
+        }
+
+        // Block if existing instance found
+        if (existingInstance && !options.daemonChild && !options.backgroundChild) {
+            console.error('\n❌ OrcBot is already running!');
+            console.error(`   PID: ${existingInstance.pid}`);
+            console.error(`   Started: ${existingInstance.startedAt}`);
+            console.error(`   Host: ${existingInstance.host}`);
+            console.error('\n   To check what\'s running:');
+            console.error(`   $ ps aux | grep orcbot`);
+            console.error('\n   To stop ALL OrcBot processes:');
+            console.error(`   $ pkill -f "orcbot"  OR  systemctl stop orcbot`);
+            console.error('\n   Then try again.');
+            console.error('');
+            process.exit(1);
+        }
+
         if (options.background && !options.backgroundChild) {
             const { spawn } = require('child_process');
             const nodePath = process.execPath;
@@ -167,8 +208,48 @@ program
 
 program
     .command('status')
-    .description('View agent memory and action queue')
+    .description('View agent status, memory and action queue')
     .action(() => {
+        // Check for running instance
+        const lockPath = path.join(os.homedir(), '.orcbot', 'orcbot.lock');
+        console.log('\n=== OrcBot Status ===\n');
+        
+        if (fs.existsSync(lockPath)) {
+            try {
+                const lockData = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+                const pid = Number(lockData.pid);
+                let isRunning = false;
+                
+                if (pid) {
+                    try {
+                        process.kill(pid, 0);
+                        isRunning = true;
+                    } catch (e) {
+                        // Process not running
+                    }
+                }
+                
+                if (isRunning) {
+                    console.log('🟢 OrcBot is RUNNING');
+                    console.log(`   PID: ${lockData.pid}`);
+                    console.log(`   Started: ${lockData.startedAt}`);
+                    console.log(`   Host: ${lockData.host}`);
+                    console.log(`   Working Dir: ${lockData.cwd}`);
+                    console.log('\n   To stop: pkill -f "orcbot" OR systemctl stop orcbot');
+                } else {
+                    console.log('🔴 OrcBot is NOT running (stale lock file found)');
+                    fs.unlinkSync(lockPath);
+                    console.log('   🧹 Cleaned up stale lock file.');
+                }
+            } catch (e) {
+                console.log('🔴 OrcBot is NOT running');
+            }
+        } else {
+            console.log('🔴 OrcBot is NOT running');
+            console.log('\n   To start: orcbot run  OR  systemctl start orcbot');
+        }
+        
+        console.log('\n--- Memory & Queue ---');
         showStatus();
     });
 

@@ -60,6 +60,15 @@ export class Agent {
             this.config.get('memoryPath'),
             this.config.get('userProfilePath')
         );
+        
+        // Configure memory limits from config
+        this.memory.setLimits({
+            contextLimit: this.config.get('memoryContextLimit'),
+            episodicLimit: this.config.get('memoryEpisodicLimit'),
+            consolidationThreshold: this.config.get('memoryConsolidationThreshold'),
+            consolidationBatch: this.config.get('memoryConsolidationBatch')
+        });
+        
         const tokenTracker = new TokenTracker(
             this.config.get('tokenUsagePath'),
             this.config.get('tokenLogPath')
