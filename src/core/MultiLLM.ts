@@ -324,6 +324,12 @@ export class MultiLLM {
             .replace(/^or:/i, '');
     }
 
+    private normalizeNvidiaModel(modelName: string): string {
+        return modelName
+            .replace(/^nvidia:/i, '')
+            .replace(/^nv:/i, '');
+    }
+
     private getBedrockClient() {
         if (!this.bedrockRegion) throw new Error('Bedrock region not configured');
         return new BedrockRuntimeClient({
@@ -501,7 +507,8 @@ export class MultiLLM {
         if (systemMessage) messages.push({ role: 'system', content: systemMessage });
         messages.push({ role: 'user', content: prompt });
 
-        const model = modelOverride || this.modelName;
+        const rawModel = modelOverride || this.modelName;
+        const model = this.normalizeNvidiaModel(rawModel);
 
         try {
             const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
@@ -515,7 +522,7 @@ export class MultiLLM {
                     model,
                     messages,
                     max_tokens: 16384,
-                    temperature: 1.00,
+                    temperature: 0.7,
                     top_p: 1.00,
                     stream: false,
                 }),

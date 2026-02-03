@@ -3,7 +3,7 @@
 // Manual test script to verify NVIDIA provider integration
 // This script demonstrates the NVIDIA provider functionality without making actual API calls
 
-import { MultiLLM } from './src/core/MultiLLM.js';
+import { MultiLLM } from '../src/core/MultiLLM.js';
 
 console.log('🧪 Testing NVIDIA Provider Integration\n');
 

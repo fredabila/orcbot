@@ -25,6 +25,20 @@ describe('NVIDIA Provider', () => {
         expect(provider).toBe('nvidia');
     });
 
+    it('should normalize NVIDIA model names', () => {
+        const llm = new MultiLLM({ 
+            modelName: 'nvidia:moonshotai/kimi-k2.5',
+            nvidiaApiKey: 'test-key'
+        });
+        
+        // @ts-ignore - accessing private method for testing
+        expect(llm.normalizeNvidiaModel('nvidia:moonshotai/kimi-k2.5')).toBe('moonshotai/kimi-k2.5');
+        // @ts-ignore - accessing private method for testing
+        expect(llm.normalizeNvidiaModel('nv:test-model')).toBe('test-model');
+        // @ts-ignore - accessing private method for testing
+        expect(llm.normalizeNvidiaModel('moonshotai/kimi-k2.5')).toBe('moonshotai/kimi-k2.5');
+    });
+
     it('should return correct default model for NVIDIA', () => {
         const llm = new MultiLLM({ 
             modelName: 'gpt-4o',
