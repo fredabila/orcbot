@@ -15,15 +15,25 @@ function App() {
   return (
     <div className="app">
       <header className="hero">
+        <div className="hero-background">
+          <div className="orb orb-1"></div>
+          <div className="orb orb-2"></div>
+          <div className="orb orb-3"></div>
+        </div>
+        
         <nav className="nav">
           <Link to="/" className="logo">OrcBot</Link>
           <div className="nav-links">
             <a href="#capabilities">Capabilities</a>
             <a href="#autonomy">Autonomy</a>
+            <a href="#documentation">Docs</a>
             <a href="#install">Install</a>
             <Link to="/deploy">Deploy</Link>
           </div>
-          <a className="nav-cta" href="https://github.com/fredabila/orcbot">GitHub</a>
+          <div className="nav-actions">
+            <a className="nav-cta secondary" href="https://fredabila.github.io/orcbot/docs/" target="_blank" rel="noopener noreferrer">Read Docs</a>
+            <a className="nav-cta" href="https://github.com/fredabila/orcbot" target="_blank" rel="noopener noreferrer">GitHub</a>
+          </div>
         </nav>
 
         <div className="hero-grid">
@@ -35,7 +45,7 @@ function App() {
             </p>
             <div className="hero-actions">
               <a className="primary-btn" href="#install">Install OrcBot</a>
-              <a className="ghost-btn" href="#capabilities">Explore Capabilities</a>
+              <a className="ghost-btn" href="https://fredabila.github.io/orcbot/docs/" target="_blank" rel="noopener noreferrer">Read the Documentation</a>
             </div>
             <div className="stats">
               <div>
@@ -193,6 +203,45 @@ function App() {
           </div>
         </section>
 
+        <section id="documentation" className="section documentation">
+          <div className="section-header">
+            <h2>Comprehensive Documentation</h2>
+            <p>Everything you need to get started, customize, and master OrcBot.</p>
+          </div>
+          <div className="grid doc-grid">
+            <a href="https://fredabila.github.io/orcbot/docs/getting-started.html" target="_blank" rel="noopener noreferrer" className="doc-card">
+              <div className="doc-icon">🚀</div>
+              <h3>Getting Started</h3>
+              <p>Quick setup guide to get OrcBot running in minutes.</p>
+            </a>
+            <a href="https://fredabila.github.io/orcbot/docs/architecture.html" target="_blank" rel="noopener noreferrer" className="doc-card">
+              <div className="doc-icon">🏗️</div>
+              <h3>Architecture</h3>
+              <p>Deep dive into OrcBot's modular design and components.</p>
+            </a>
+            <a href="https://fredabila.github.io/orcbot/docs/skills.html" target="_blank" rel="noopener noreferrer" className="doc-card">
+              <div className="doc-icon">⚡</div>
+              <h3>Skills</h3>
+              <p>Learn about core skills and how to create custom ones.</p>
+            </a>
+            <a href="https://fredabila.github.io/orcbot/docs/configuration.html" target="_blank" rel="noopener noreferrer" className="doc-card">
+              <div className="doc-icon">⚙️</div>
+              <h3>Configuration</h3>
+              <p>Configure providers, channels, and advanced settings.</p>
+            </a>
+            <a href="https://fredabila.github.io/orcbot/docs/autonomy.html" target="_blank" rel="noopener noreferrer" className="doc-card">
+              <div className="doc-icon">🤖</div>
+              <h3>Autonomy</h3>
+              <p>Understanding the autonomous loop and scheduling.</p>
+            </a>
+            <a href="https://fredabila.github.io/orcbot/docs/" target="_blank" rel="noopener noreferrer" className="doc-card featured">
+              <div className="doc-icon">📚</div>
+              <h3>Full Documentation</h3>
+              <p>Browse all guides, API references, and examples.</p>
+            </a>
+          </div>
+        </section>
+
         <section className="section cta">
           <div>
             <h2>Give your AI an operating system.</h2>
@@ -202,9 +251,9 @@ function App() {
         </section>
 
         <div className="social-links">
-          <a href="https://github.com/fredabila/orcbot">GitHub</a>
-          <a href="https://twitter.com/orcbot_ai">Twitter</a>
-          <a href="https://fredabila.github.io/orcbot/docs/">Documentation</a>
+          <a href="https://github.com/fredabila/orcbot" target="_blank" rel="noopener noreferrer">GitHub</a>
+          <a href="https://twitter.com/orcbot_ai" target="_blank" rel="noopener noreferrer">Twitter</a>
+          <a href="https://fredabila.github.io/orcbot/docs/" target="_blank" rel="noopener noreferrer" className="docs-link">📚 Documentation</a>
         </div>
       </main>
 
