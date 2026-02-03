@@ -1,3 +1,66 @@
+---
+
+## 🚨 Current Focus Areas & Known Issues
+
+We're actively working on these challenges and welcome contributions:
+
+### 🔴 High Priority
+
+#### 1. **LLM-Generated Plugin Quality**
+The agent can autonomously create plugins via `create_custom_skill`, but the LLM often generates malformed code:
+- **Await outside async**: `SyntaxError: await is only valid in async functions` - LLM creates nested non-async functions that use `await`
+- **Incomplete code**: Missing semicolons, unclosed braces/parentheses, truncated output
+- **Wrong structure**: LLM provides full module code when only the handler body is expected (or vice versa)
+- **TypeScript errors**: Invalid type annotations, missing imports
+
+**How to help:**
+- Improve the `create_custom_skill` handler in `src/core/Agent.ts` with better sanitization/validation
+- Add pre-compilation syntax checking before saving plugins
+- Improve the skill description/prompt to guide the LLM better
+- Add a "code repair" step that uses the LLM to fix syntax errors before saving
+
+#### 2. **Self-Repair Reliability**
+The `self_repair_skill` feature attempts to fix broken plugins automatically, but often fails or creates new issues:
+- Repair attempts sometimes make the code worse
+- No limit on repair attempts (can loop infinitely)
+- Doesn't always understand the root cause of the error
+
+**How to help:**
+- Add retry limits and backoff for self-repair
+- Improve error message parsing to give better context to the repair LLM
+- Add a "quarantine" system for plugins that fail repeatedly
+
+### 🟡 Medium Priority
+
+#### 3. **Memory & Context Management**
+- Consolidation sometimes loses important context
+- No semantic search for memories (just recency-based)
+- Large conversations can exceed token limits
+
+#### 4. **Multi-Provider LLM Resilience**
+- Fallback between OpenAI/Google could be smoother
+- Rate limiting handling needs improvement
+- No support for local LLMs (Ollama, LM Studio)
+
+#### 5. **Testing Coverage**
+- No automated test suite currently exists
+- Need unit tests for core components (DecisionEngine, SkillsManager, MemoryManager)
+- Need integration tests for skill execution
+
+### 🟢 Nice to Have
+
+#### 6. **New Channel Integrations**
+- Discord bot support
+- Slack integration
+- Matrix/Element support
+
+#### 7. **Web Dashboard**
+- Real-time agent status monitoring
+- Memory/conversation browser
+- Skill management UI
+
+---
+
 ## 🏗 Project Structure
 
 OrcBot is organized into modular core layers:
