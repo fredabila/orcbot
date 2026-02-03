@@ -1000,6 +1000,11 @@ Output the fixed code:
                 }
                 const { name, description, usage, code } = args;
                 if (!name || !code) return 'Error: Name and code are required.';
+                
+                // Validate skill name (alphanumeric + underscore only)
+                if (!/^[a-z][a-z0-9_]*$/i.test(name)) {
+                    return 'Error: Skill name must be alphanumeric with underscores, starting with a letter.';
+                }
 
                 const pluginsDir = this.config.get('pluginsPath') || './plugins';
                 if (!fs.existsSync(pluginsDir)) {
@@ -1009,41 +1014,141 @@ Output the fixed code:
                 const fileName = `${name}.ts`;
                 const filePath = path.resolve(pluginsDir, fileName);
 
-                // Basic Sanitization: Remove outer function wrappers if the AI messed up
+                // Sanitize code: Remove outer function wrappers if the AI messed up
                 let sanitizedCode = code.trim();
-                // Remove "async function(url, context) {" or similar prefixes
-                sanitizedCode = sanitizedCode.replace(/^(async\s+)?function\s*\([^)]*\)\s*\{/, '');
-                // Remove trailing "}"
-                if (code.includes('function') && sanitizedCode.endsWith('}')) {
-                    sanitizedCode = sanitizedCode.substring(0, sanitizedCode.lastIndexOf('}'));
+                
+                // Remove markdown code blocks if present
+                sanitizedCode = sanitizedCode.replace(/^```(?:typescript|ts|javascript|js)?\n?/gm, '');
+                sanitizedCode = sanitizedCode.replace(/```$/gm, '');
+                sanitizedCode = sanitizedCode.trim();
+                
+                // Detect if the LLM provided a FULL MODULE instead of just the handler body
+                // Signs: has `const ${name} =`, `export const`, `export default`, or multiple top-level declarations
+                const looksLikeFullModule = 
+                    sanitizedCode.includes('export const') ||
+                    sanitizedCode.includes('export default') ||
+                    sanitizedCode.match(new RegExp(`const\\s+${name}\\s*=`)) ||
+                    // Multiple const/let/var at top level suggests full module
+                    (sanitizedCode.match(/^(const|let|var)\s+\w+\s*=/gm) || []).length > 1;
+                
+                if (looksLikeFullModule) {
+                    // The LLM provided what looks like a full module - try to use it directly
+                    // but ensure it has proper exports
+                    let moduleCode = sanitizedCode;
+                    
+                    // If it doesn't have exports, try to add them
+                    if (!moduleCode.includes('export const') && !moduleCode.includes('export default')) {
+                        // Look for the main skill declaration like: const skillName = { name: "...", handler: ... }
+                        const skillDeclRegex = new RegExp(`const\\s+${name}\\s*=\\s*\\{[\\s\\S]*?handler\\s*:`);
+                        if (skillDeclRegex.test(moduleCode)) {
+                            // Add export to the skill declaration
+                            moduleCode = moduleCode.replace(
+                                new RegExp(`const\\s+${name}\\s*=`),
+                                `export const ${name} =`
+                            );
+                            moduleCode += `\n\nexport default ${name};`;
+                        } else {
+                            // Can't figure out the structure - reject it
+                            return `Error: The code looks like a full module but doesn't have the expected structure. Please provide ONLY the handler body (the code inside the handler function), not a full plugin file. The handler body should start with your logic, not with 'const' declarations for the skill itself.`;
+                        }
+                    }
+                    
+                    // Add source header
+                    const finalCode = `// @source: generated-by-orcbot\n// @generated: ${new Date().toISOString()}\n` + moduleCode;
+                    
+                    // Write and try to load
+                    fs.writeFileSync(filePath, finalCode);
+                    this.skills.clearLoadError(name);
+                    
+                    try {
+                        this.skills.loadPlugins();
+                        const loadError = this.skills.getLoadError(name);
+                        if (loadError) {
+                            try { fs.unlinkSync(filePath); } catch {}
+                            return `Error: The provided module code has errors:\n${loadError}\n\nPlease provide corrected code.`;
+                        }
+                        
+                        const loaded = this.skills.getAllSkills().find(s => s.name === name);
+                        if (!loaded) {
+                            try { fs.unlinkSync(filePath); } catch {}
+                            return `Error: The skill '${name}' failed to register. The module may be missing the required exports (name, description, usage, handler).`;
+                        }
+                        
+                        return `Skill '${name}' created from full module code at ${filePath} and registered successfully.`;
+                    } catch (loadError: any) {
+                        try { fs.unlinkSync(filePath); } catch {}
+                        return `Error: Skill '${name}' has syntax errors: ${loadError?.message || loadError}`;
+                    }
                 }
+                
+                // Standard case: LLM provided just the handler body
+                // Remove outer async function wrapper if present
+                const functionWrapperRegex = /^(async\s+)?function\s*\w*\s*\([^)]*\)\s*\{([\s\S]*)\}\s*$/;
+                const arrowWrapperRegex = /^(async\s+)?\([^)]*\)\s*=>\s*\{([\s\S]*)\}\s*$/;
+                // Also handle: const funcName = async (args) => { ... }
+                const namedArrowRegex = /^const\s+\w+\s*=\s*(async\s+)?\([^)]*\)\s*=>\s*\{([\s\S]*)\}\s*;?\s*$/;
+                
+                let match = sanitizedCode.match(functionWrapperRegex);
+                if (match) {
+                    sanitizedCode = match[2].trim();
+                } else {
+                    match = sanitizedCode.match(arrowWrapperRegex);
+                    if (match) {
+                        sanitizedCode = match[2].trim();
+                    } else {
+                        match = sanitizedCode.match(namedArrowRegex);
+                        if (match) {
+                            sanitizedCode = match[2].trim();
+                        }
+                    }
+                }
+                
+                // Check for obvious syntax issues
+                const openBraces = (sanitizedCode.match(/\{/g) || []).length;
+                const closeBraces = (sanitizedCode.match(/\}/g) || []).length;
+                const openParens = (sanitizedCode.match(/\(/g) || []).length;
+                const closeParens = (sanitizedCode.match(/\)/g) || []).length;
+                
+                if (openBraces !== closeBraces) {
+                    return `Error: Mismatched braces in code. Open: ${openBraces}, Close: ${closeBraces}. Please fix and retry.`;
+                }
+                if (openParens !== closeParens) {
+                    return `Error: Mismatched parentheses in code. Open: ${openParens}, Close: ${closeParens}. Please fix and retry.`;
+                }
+                
+                // Check for await outside async context (common LLM mistake)
+                // The handler is already async, so top-level await in the body is fine
+                // But if there's a non-async nested function with await, that's an error
+                const nonAsyncFunctionWithAwait = sanitizedCode.match(/function\s+\w+\s*\([^)]*\)\s*\{[^}]*\bawait\b/);
+                if (nonAsyncFunctionWithAwait) {
+                    return `Error: Found 'await' inside a non-async function. All functions that use 'await' must be declared as 'async'. Please fix and retry.`;
+                }
+                
+                // Escape description and usage for embedding in string
+                const safeDesc = (description || '').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+                const safeUsage = (usage || '').replace(/"/g, '\\"').replace(/\n/g, '\\n');
 
-                // Ensure correct formatting for a plugin
-                const finalCode = code.includes('export') ? code : `
+                // Build the plugin file
+                const finalCode = code.includes('export const') || code.includes('export default') ? code : `
 // @source: generated-by-orcbot
+// @generated: ${new Date().toISOString()}
 import { AgentContext } from '../src/core/SkillsManager';
 import fs from 'fs';
 import path from 'path';
 
 export const ${name} = {
     name: "${name}",
-    description: "${description || ''}",
-    usage: "${usage || ''}",
+    description: "${safeDesc}",
+    usage: "${safeUsage}",
     handler: async (args: any, context: AgentContext) => {
         // INSTRUCTIONS FOR AI: 
         // 1. Use 'context.browser' to access the browser (e.g. context.browser.evaluate(...))
         // 2. Use 'context.config' to access settings.
         // 3. Use standard 'fetch' for external APIs.
         try {
-            const result = await (async () => {
-                ${sanitizedCode}
-            })();
-
-            if (typeof result === 'string') return result;
-            if (result === undefined) return 'OK';
-            return JSON.stringify(result, null, 2);
+            ${sanitizedCode}
         } catch (e: any) {
-            return \`Error: \${e?.message || e}\`;
+            return \`Error in ${name}: \${e?.message || e}\`;
         }
     }
 };
@@ -1051,12 +1156,40 @@ export const ${name} = {
 export default ${name};
 `;
 
+                // Write the file
                 fs.writeFileSync(filePath, finalCode);
-
-                // FORCE RELOAD: Update the registry immediately
-                this.skills.loadPlugins();
-
-                return `Skill '${name}' created at ${filePath} and registered. You can use it immediately.`;
+                
+                // Clear any previous load error for this skill name
+                this.skills.clearLoadError(name);
+                
+                // Try to load it and catch errors
+                try {
+                    this.skills.loadPlugins();
+                    
+                    // Check for load error
+                    const loadError = this.skills.getLoadError(name);
+                    if (loadError) {
+                        // Skill had compilation errors - clean up
+                        try { fs.unlinkSync(filePath); } catch {}
+                        return `Error: Skill '${name}' has syntax/compilation errors and was not saved:\n${loadError}\n\nPlease fix the code and try again.`;
+                    }
+                    
+                    // Verify the skill actually loaded
+                    const allSkills = this.skills.getAllSkills();
+                    const loaded = allSkills.find(s => s.name === name);
+                    
+                    if (!loaded) {
+                        // Skill didn't load - clean up
+                        try { fs.unlinkSync(filePath); } catch {}
+                        return `Error: Skill '${name}' failed to load after creation. The code may have syntax errors or invalid exports. Please review and provide corrected code.`;
+                    }
+                    
+                    return `Skill '${name}' created at ${filePath} and registered successfully. You can use it immediately.`;
+                } catch (loadError: any) {
+                    // Delete the broken file
+                    try { fs.unlinkSync(filePath); } catch {}
+                    return `Error: Skill '${name}' has syntax errors and was not saved: ${loadError?.message || loadError}`;
+                }
             }
         });
 

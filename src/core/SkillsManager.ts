@@ -24,6 +24,7 @@ export interface Skill {
 export class SkillsManager {
     private skills: Map<string, Skill> = new Map();
     private context: AgentContext | undefined;
+    private lastLoadErrors: Map<string, string> = new Map();
 
     constructor(private skillsPath: string = './SKILLS.md', private pluginsDir?: string, context?: AgentContext) {
         this.context = context;
@@ -145,19 +146,23 @@ export class SkillsManager {
                         logger.warn(`SkillsManager: Plugin ${file} loaded but contains no valid skill export.`);
                     }
                 } catch (e: any) {
-                    logger.error(`SkillsManager: Failed to load plugin ${file}: ${e}`);
+                    const errorMsg = e?.message || String(e);
+                    logger.error(`SkillsManager: Failed to load plugin ${file}: ${errorMsg}`);
+                    
+                    // Track this error for later querying
+                    this.lastLoadErrors.set(path.parse(file).name, errorMsg);
 
                     // SELF REPAIR TRIGGER
                     // If it's a TypeScript compilation error, we can try to auto-repair it.
-                    if (e.message && e.message.includes('TSError') && this.context && this.context.agent) {
+                    if ((errorMsg.includes('TSError') || errorMsg.includes('SyntaxError') || errorMsg.includes('Unexpected')) && this.context && this.context.agent) {
                         const skillName = path.parse(file).name;
                         logger.warn(`SkillsManager: Triggering self-repair for broken plugin ${skillName}...`);
 
                         // We push a high priority task to the agent to fix this immediately
                         this.context.agent.pushTask(
-                            `System Alert: The plugin skill '${skillName}' failed to compile. Error:\n${e.message}\n\nPlease use 'self_repair_skill' to fix it immediately.`,
+                            `System Alert: The plugin skill '${skillName}' failed to compile. Error:\n${errorMsg}\n\nPlease use 'self_repair_skill' to fix it immediately.`,
                             10,
-                            { source: 'system', error: e.message, skillName }
+                            { source: 'system', error: errorMsg, skillName }
                         );
                     }
                 }
@@ -193,6 +198,27 @@ export class SkillsManager {
 
     public getAllSkills(): Skill[] {
         return Array.from(this.skills.values());
+    }
+    
+    /**
+     * Get any load errors from the last loadPlugins() call
+     */
+    public getLoadError(skillName: string): string | undefined {
+        return this.lastLoadErrors.get(skillName);
+    }
+    
+    /**
+     * Clear load error for a specific skill
+     */
+    public clearLoadError(skillName: string): void {
+        this.lastLoadErrors.delete(skillName);
+    }
+    
+    /**
+     * Get all load errors
+     */
+    public getAllLoadErrors(): Map<string, string> {
+        return new Map(this.lastLoadErrors);
     }
 
     public async checkPluginsHealth(): Promise<{ healthy: string[]; issues: { skillName: string; pluginPath: string; error: string }[] }> {
