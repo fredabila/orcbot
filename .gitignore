@@ -4,4 +4,4 @@ dist
 .env
 memory.json
 logs
-orcbot.config.yamlverify-nvidia-tui.js
+orcbot.config.yaml

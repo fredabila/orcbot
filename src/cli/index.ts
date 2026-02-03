@@ -869,6 +869,7 @@ async function showGeminiConfig() {
 async function showNvidiaConfig() {
     const currentModel = agent.config.get('modelName');
     const apiKey = agent.config.get('nvidiaApiKey') || 'Not Set';
+    const displayKey = apiKey === 'Not Set' ? 'Not Set' : `${apiKey.substring(0, 8)}...`;
 
     const { action } = await inquirer.prompt([
         {
@@ -876,7 +877,7 @@ async function showNvidiaConfig() {
             name: 'action',
             message: `NVIDIA Settings (Active Model: ${currentModel}):`,
             choices: [
-                { name: `Set API Key (current: ${apiKey.substring(0, 8)}...)`, value: 'key' },
+                { name: `Set API Key (current: ${displayKey})`, value: 'key' },
                 { name: 'Set Model Name', value: 'model' },
                 { name: 'Back', value: 'back' }
             ]
@@ -889,7 +890,7 @@ async function showNvidiaConfig() {
         const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter NVIDIA API Key:' }]);
         agent.config.set('nvidiaApiKey', val);
     } else if (action === 'model') {
-        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter Model (e.g., nvidia:moonshotai/kimi-k2.5, nv:meta/llama-3.1-8b-instruct):', default: 'nvidia:moonshotai/kimi-k2.5' }]);
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter Model (e.g., nvidia:moonshotai/kimi-k2.5):', default: 'nvidia:moonshotai/kimi-k2.5' }]);
         agent.config.set('modelName', val);
     }
 
