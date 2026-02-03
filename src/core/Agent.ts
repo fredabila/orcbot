@@ -692,10 +692,10 @@ export class Agent {
         // Skill: Run Shell Command
         this.skills.registerSkill({
             name: 'run_command',
-            description: 'Execute a shell command on the server. IMPORTANT: On Windows, use PowerShell syntax (no && chaining, use ; instead). For file creation, use separate commands or write_file skill. Do not use Unix echo with multiline content on Windows.',
-            usage: 'run_command(command)',
+            description: 'Execute a shell command on the server. For file creation, use separate commands or write_file skill. Do not use Unix echo with multiline content on Windows. To run commands in a specific directory, either use "cd /path && command" or pass cwd parameter.',
+            usage: 'run_command(command, cwd?)',
             handler: async (args: any) => {
-                const command = args.command || args.cmd || args.text;
+                let command = args.command || args.cmd || args.text;
                 if (!command) return 'Error: Missing command string.';
 
                 // Log the command being executed
@@ -710,14 +710,31 @@ export class Agent {
                     if (trimmedCmd.includes("echo '") && trimmedCmd.includes("\n")) {
                         return `Error: Multiline echo commands don't work on Windows. Use the create_custom_skill to write files, or use PowerShell's Set-Content/Out-File, or write files one line at a time.`;
                     }
-                    // Check for && chaining (use ; in PowerShell)
-                    if (trimmedCmd.includes(' && ')) {
-                        return `Error: '&&' command chaining doesn't work reliably on Windows. Use ';' to chain commands in PowerShell, or run commands separately.`;
-                    }
                 }
 
                 const trimmed = String(command).trim();
-                const firstToken = trimmed.split(/\s+/)[0]?.toLowerCase() || '';
+                
+                // Smart handling for "cd <path> ; <command>" or "cd <path> && <command>" patterns
+                // Extract the directory and convert to use cwd parameter instead
+                let workingDir = args.cwd || this.config.get('commandWorkingDir') || process.cwd();
+                let actualCommand = command;
+                
+                // Match patterns like: "cd /path/to/dir ; command" or "cd C:\path ; command"
+                const cdPattern = /^\s*cd\s+([^\s;]+)\s*[;&]+\s*(.+)$/i;
+                const cdMatch = trimmed.match(cdPattern);
+                
+                if (cdMatch) {
+                    const targetDir = cdMatch[1].trim();
+                    const remainingCmd = cdMatch[2].trim();
+                    
+                    // Use the extracted directory as cwd and run only the remaining command
+                    workingDir = targetDir;
+                    actualCommand = remainingCmd;
+                    
+                    logger.info(`run_command: Detected directory change pattern. Using cwd="${workingDir}" for command: ${actualCommand}`);
+                }
+
+                const firstToken = actualCommand.trim().split(/\s+/)[0]?.toLowerCase() || '';
                 const allowList = (this.config.get('commandAllowList') || []) as string[];
                 const denyList = (this.config.get('commandDenyList') || []) as string[];
                 const safeMode = this.config.get('safeMode');
@@ -739,12 +756,11 @@ export class Agent {
 
                 const timeoutMs = parseInt(args.timeoutMs || args.timeout || this.config.get('commandTimeoutMs') || 120000, 10);
                 const retries = parseInt(args.retries || this.config.get('commandRetries') || 1, 10);
-                const cwd = args.cwd || this.config.get('commandWorkingDir') || process.cwd();
 
                 const { exec } = require('child_process');
 
                 const runOnce = () => new Promise<string>((resolve) => {
-                    const child = exec(command, { timeout: timeoutMs, cwd }, (error: any, stdout: string, stderr: string) => {
+                    const child = exec(actualCommand, { timeout: timeoutMs, cwd: workingDir }, (error: any, stdout: string, stderr: string) => {
                         if (error) {
                             if (error.killed) {
                                 resolve(`Error: Command timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
