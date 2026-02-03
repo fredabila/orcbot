@@ -134,7 +134,10 @@ class AgentWorkerProcess {
             // Copy API keys and essential settings
             workerConfig.set('openaiApiKey', parentConfig.get('openaiApiKey'));
             workerConfig.set('googleApiKey', parentConfig.get('googleApiKey'));
+            workerConfig.set('nvidiaApiKey', parentConfig.get('nvidiaApiKey'));
+            workerConfig.set('openrouterApiKey', parentConfig.get('openrouterApiKey'));
             workerConfig.set('modelName', parentConfig.get('modelName'));
+            workerConfig.set('llmProvider', parentConfig.get('llmProvider'));
             workerConfig.set('serperApiKey', parentConfig.get('serperApiKey'));
             workerConfig.set('searchProviderOrder', parentConfig.get('searchProviderOrder'));
             workerConfig.set('braveSearchApiKey', parentConfig.get('braveSearchApiKey'));

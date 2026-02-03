@@ -126,6 +126,7 @@ export async function runSetup() {
     let envContent = '';
     if (answers.openaiApiKey) envContent += `OPENAI_API_KEY=${answers.openaiApiKey}\n`;
     if (answers.googleApiKey) envContent += `GOOGLE_API_KEY=${answers.googleApiKey}\n`;
+    if (answers.nvidiaApiKey) envContent += `NVIDIA_API_KEY=${answers.nvidiaApiKey}\n`;
     if (answers.bedrockRegion) envContent += `BEDROCK_REGION=${answers.bedrockRegion}\n`;
     if (answers.bedrockAccessKeyId) envContent += `BEDROCK_ACCESS_KEY_ID=${answers.bedrockAccessKeyId}\n`;
     if (answers.bedrockSecretAccessKey) envContent += `BEDROCK_SECRET_ACCESS_KEY=${answers.bedrockSecretAccessKey}\n`;
