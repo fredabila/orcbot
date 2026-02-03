@@ -26,6 +26,7 @@ OrcBot is a next-generation **autonomous reasoning agent**. In v2.0, we've moved
 
 *   🧠 **Strategic Simulation Layer**: Pre-task planning that anticipates errors (like CAPTCHAs or search failures) before they happen.
 *   🛡️ **Autonomous Immune System**: Automatically detects broken plugin code and uses its `self_repair_skill` to fix itself.
+*   ⚙️ **Agent-Driven Config Management**: Intelligent configuration system where agents can safely optimize settings for different tasks while security-critical configs remain protected.
 *   📸 **Multi-Modal Intelligence**: Native capability to analyze images, audio, and documents via Telegram and WhatsApp.
 *   🌐 **Context-Aware Browsing**: Strategic web navigation that handles dynamic content and bypasses anti-bot measures.
 *   🐚 **Shell Execution**: Full system access to run commands, manage files, and install dependencies.
@@ -290,6 +291,39 @@ Key settings (excerpt):
 - `autopilotNoQuestions`: Skip clarification requests in autopilot mode
 
 You can manage settings via the TUI (`orcbot ui`) or by editing your config file directly.
+
+### Agent-Driven Config Management
+
+OrcBot v2.0 introduces **intelligent configuration management** where agents can automatically optimize settings based on task requirements:
+
+#### Policy-Based Security
+- **SAFE configs** (e.g., `modelName`, `memoryContextLimit`): Agents can modify autonomously
+- **APPROVAL configs** (e.g., API keys): Agents can request changes, requires human approval
+- **LOCKED configs** (e.g., `safeMode`, security settings): Agents cannot modify
+
+#### Autonomous Optimization
+Agents intelligently adjust configuration when:
+- Code tasks need more capable models (auto-switch to GPT-4)
+- Complex tasks require more memory context
+- Multi-step workflows need higher step budgets
+- LLM provider is unavailable (auto-fallback to alternatives)
+
+#### Usage
+```javascript
+// Agent can optimize for code tasks
+manage_config({ action: "set", key: "modelName", value: "gpt-4", reason: "Code task benefits from GPT-4" })
+
+// Agent can request approval for sensitive changes
+manage_config({ action: "set", key: "openaiApiKey", value: "sk-new-key", reason: "API key rotation" })
+
+// View pending approvals
+manage_config({ action: "pending" })
+
+// Approve changes
+manage_config({ action: "approve", key: "openaiApiKey" })
+```
+
+See [Config Management Documentation](docs/CONFIG_MANAGEMENT.md) for complete details.
 
 ---
 
