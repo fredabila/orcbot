@@ -111,6 +111,19 @@
       </section>
 
       <section class="card">
+        <h2>Skill Routing Rules</h2>
+        <p>Configure intent-based skill selection via <code>skillRoutingRules</code>:</p>
+        <pre><code>skillRoutingRules:
+  - intent: "search"
+    preferSkills: ["web_search", "browser_navigate"]
+  - intent: "code"
+    preferSkills: ["run_command", "manage_skills"]
+  - intent: "messaging"
+    preferSkills: ["send_telegram", "send_whatsapp"]</code></pre>
+        <p>Routing rules help the agent select the most appropriate skills for each task type.</p>
+      </section>
+
+      <section class="card">
         <h2>Plugin contract</h2>
         <pre><code>module.exports = {
   name: 'skill_name',

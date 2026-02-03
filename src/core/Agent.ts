@@ -67,8 +67,13 @@ export class Agent {
 
         this.llm = new MultiLLM({
             apiKey: this.config.get('openaiApiKey'),
+            openrouterApiKey: this.config.get('openrouterApiKey'),
+            openrouterBaseUrl: this.config.get('openrouterBaseUrl'),
+            openrouterReferer: this.config.get('openrouterReferer'),
+            openrouterAppName: this.config.get('openrouterAppName'),
             googleApiKey: this.config.get('googleApiKey'),
             modelName: this.config.get('modelName'),
+            llmProvider: this.config.get('llmProvider'),
             bedrockRegion: this.config.get('bedrockRegion'),
             bedrockAccessKeyId: this.config.get('bedrockAccessKeyId'),
             bedrockSecretAccessKey: this.config.get('bedrockSecretAccessKey'),

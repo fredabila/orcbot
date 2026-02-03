@@ -198,7 +198,7 @@ ${availableSkills}
         const parsed = ParserLayer.normalize(rawResponse);
 
         // Run parsed response through structured pipeline guardrails
-        const piped = this.pipeline.evaluate(parsed, {
+        let piped = this.pipeline.evaluate(parsed, {
             actionId: metadata.id || metadata.actionId || 'unknown',
             source: metadata.source,
             sourceId: metadata.sourceId,
@@ -207,8 +207,61 @@ ${availableSkills}
             executionPlan: metadata.executionPlan,
             lane: metadata.lane,
             recentMemories: this.memory.getRecentContext(),
-            allowedTools: allowedToolNames
+            allowedTools: allowedToolNames,
+            taskDescription
         });
+
+        // Termination review layer (always enabled)
+        const isTerminating = piped?.verification?.goals_met === true && (!piped.tools || piped.tools.length === 0);
+        if (isTerminating) {
+            const reviewPrompt = `
+You are a termination review layer. Your job is to decide if the agent should truly terminate or continue working.
+
+RULES:
+- You MUST output a valid JSON object with "verification" and optionally "tools".
+- You may ONLY use tools from the Available Skills list.
+- If the task is TRULY complete (user got their answer, file downloaded, message sent, etc.), return goals_met=true with no tools.
+- If the task is NOT complete and the agent stopped prematurely, return goals_met=false and include the WORK tools needed to continue (e.g., browser_navigate, web_search, run_command, send_telegram, etc.).
+- Do NOT default to asking questions. Only use request_supporting_data if genuinely missing critical info that cannot be inferred.
+- Prefer ACTION over CLARIFICATION. If the agent can make progress with available context, it should.
+
+TASK:
+${taskDescription}
+
+PLAN:
+${metadata.executionPlan || 'No plan provided.'}
+
+RECENT CONTEXT:
+${contextString || 'No history for this action yet.'}
+
+PROPOSED RESPONSE (agent wanted to terminate with this):
+${JSON.stringify(piped, null, 2)}
+
+QUESTION: Was the original task completed? If not, what tools should be called next to make progress?
+
+Available Skills:
+${availableSkills}
+`;
+
+            const reviewRaw = await this.llm.call(taskDescription, reviewPrompt);
+            const reviewParsed = ParserLayer.normalize(reviewRaw);
+            const reviewed = this.pipeline.evaluate(reviewParsed, {
+                actionId: metadata.id || metadata.actionId || 'unknown',
+                source: metadata.source,
+                sourceId: metadata.sourceId,
+                messagesSent: metadata.messagesSent || 0,
+                currentStep: metadata.currentStep || 1,
+                executionPlan: metadata.executionPlan,
+                lane: metadata.lane,
+                recentMemories: this.memory.getRecentContext(),
+                allowedTools: allowedToolNames,
+                taskDescription
+            });
+
+            if (reviewed?.verification?.goals_met === false || (reviewed.tools && reviewed.tools.length > 0)) {
+                piped = reviewed;
+            }
+        }
 
         return piped;
     }

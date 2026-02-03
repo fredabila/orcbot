@@ -68,10 +68,32 @@
       </section>
 
       <section class="card">
+        <h2>Termination Review</h2>
+        <p>OrcBot includes a built-in termination review layer that prevents premature task stops:</p>
+        <ul>
+          <li>Reviews every proposed action before execution</li>
+          <li>Favors completing work over asking clarifying questions</li>
+          <li>Ensures tasks run to completion when possible</li>
+          <li>Always enabled — no configuration needed</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>Autopilot Mode</h2>
+        <p>Enable autonomous operation without human intervention:</p>
+        <ul>
+          <li><code>autopilotNoQuestions: true</code> suppresses clarification requests</li>
+          <li><code>autopilotNoQuestionsInterval</code> sets the evaluation window</li>
+          <li>Agent proceeds with best-effort actions instead of asking</li>
+        </ul>
+      </section>
+
+      <section class="card">
         <h2>Autonomy checklist</h2>
         <ul>
           <li>Enable <code>autonomyEnabled</code></li>
           <li>Set a heartbeat interval that fits your workload (auto-adjusts with backoff)</li>
+          <li>Consider enabling <code>autopilotNoQuestions</code> for fully autonomous operation</li>
           <li>Monitor logs for proactive task output and worker activity</li>
           <li>Use <code>spawn_worker</code> for parallel task execution</li>
           <li>Check TUI Workers menu for process management</li>

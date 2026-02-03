@@ -13,6 +13,7 @@ export interface PipelineContext {
     lane?: 'user' | 'autonomy';
     recentMemories?: MemoryEntry[];
     allowedTools?: string[];
+    taskDescription?: string;
 }
 
 class LastMessageCache {
@@ -226,6 +227,44 @@ export class DecisionPipeline {
             });
         }
 
+        // Skill routing rules (intent-based preferences)
+        const routingRules = (this.config.get('skillRoutingRules') || []) as Array<{
+            match: string;
+            prefer?: string[];
+            avoid?: string[];
+            requirePreferred?: boolean;
+        }>;
+        const taskText = (ctx.taskDescription || '').toString();
+        if (taskText && routingRules.length > 0 && (result.tools || []).length > 0) {
+            for (const rule of routingRules) {
+                if (!rule?.match) continue;
+                let regex: RegExp | null = null;
+                try {
+                    regex = new RegExp(rule.match, 'i');
+                } catch {
+                    notes.push(`Invalid routing rule regex: ${rule.match}`);
+                }
+                if (!regex || !regex.test(taskText)) continue;
+
+                const prefer = (rule.prefer || []).map(s => s.toLowerCase());
+                const avoid = (rule.avoid || []).map(s => s.toLowerCase());
+                const toolsLower = (result.tools || []).map(t => (t.name || '').toLowerCase());
+
+                const hasPreferred = prefer.length > 0 && toolsLower.some(t => prefer.includes(t));
+                if (hasPreferred && rule.requirePreferred) {
+                    result.tools = (result.tools || []).filter(t => prefer.includes((t.name || '').toLowerCase()));
+                    notes.push(`Applied routing rule: requirePreferred (${rule.match})`);
+                }
+
+                if (avoid.length > 0) {
+                    const beforeCount = (result.tools || []).length;
+                    result.tools = (result.tools || []).filter(t => !avoid.includes((t.name || '').toLowerCase()));
+                    const removed = beforeCount - (result.tools || []).length;
+                    if (removed > 0) notes.push(`Applied routing rule: avoid (${rule.match})`);
+                }
+            }
+        }
+
         // Deduplicate tool calls by signature
         const uniqueTools: ToolCall[] = [];
         const seenSignatures = new Set<string>();
@@ -237,6 +276,28 @@ export class DecisionPipeline {
             }
             seenSignatures.add(sig);
             uniqueTools.push(t);
+        }
+
+        // Autopilot no-questions: suppress request_supporting_data when allowed
+        const autopilotNoQuestions = !!this.config.get('autopilotNoQuestions');
+        if (autopilotNoQuestions && uniqueTools.length > 1) {
+            const allowPatterns = (this.config.get('autopilotNoQuestionsAllow') || []) as string[];
+            const denyPatterns = (this.config.get('autopilotNoQuestionsDeny') || []) as string[];
+            const allow = allowPatterns.length === 0 || allowPatterns.some(p => {
+                try { return new RegExp(p, 'i').test(taskText); } catch { return false; }
+            });
+            const deny = denyPatterns.some(p => {
+                try { return new RegExp(p, 'i').test(taskText); } catch { return false; }
+            });
+
+            if (allow && !deny) {
+                const filtered = uniqueTools.filter(t => (t.name || '').toLowerCase() !== 'request_supporting_data');
+                if (filtered.length !== uniqueTools.length) {
+                    uniqueTools.length = 0;
+                    uniqueTools.push(...filtered);
+                    notes.push('Autopilot: suppressed request_supporting_data');
+                }
+            }
         }
 
         // Guardrail: prevent repeated identical web_search queries in the same action

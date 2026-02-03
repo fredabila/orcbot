@@ -31,6 +31,9 @@ OrcBot is a next-generation **autonomous reasoning agent**. In v2.0, we've moved
 *   🐚 **Shell Execution**: Full system access to run commands, manage files, and install dependencies.
 *   💓 **Smart Heartbeat**: Context-aware autonomy with exponential backoff, productivity tracking, and action-oriented tasks.
 *   🤖 **Multi-Agent Orchestration**: Spawn worker processes to handle parallel tasks with real-time coordination.
+*   🔄 **Termination Review**: Built-in safety layer that reviews proposed actions to prevent premature task termination.
+*   🎯 **Smart Skill Routing**: Intent-based skill selection using configurable routing rules for better tool matching.
+*   🛤️ **Decision Pipeline**: Guardrails system with deduplication, safety checks, and autopilot mode.
 *   🔍 **Resilient Web Search**: Smart fallback from API providers to browser-based search when keys aren't configured.
 *   🖥️ **Interactive TUI & Dashboard**: Comprehensive terminal interface with worker process management.
 *   🔌 **Dynamic Plugin System**: Hot-loadable TypeScript plugins for limitless extensibility.
@@ -63,7 +66,7 @@ flowchart LR
 	Skills --> Plugins[Dynamic Plugins]
 	Web -->|API or Browser Fallback| SearchAPIs[(Search: Serper / Brave / DDG / Bing / Google)]
 	Decision --> LLM[MultiLLM]
-	LLM --> Providers[(OpenAI / Gemini / Bedrock)]
+	LLM --> Providers[(OpenAI / Gemini / Bedrock / OpenRouter)]
 	Scheduler --> Queue[(Action Queue)]
 	Queue --> Agent
 ```
@@ -219,10 +222,14 @@ OrcBot reads configuration in this order (highest priority first):
 
 Key settings (excerpt):
 
-- `modelName`: LLM routing (OpenAI, Gemini, or Bedrock)
+- `modelName`: LLM model to use
+- `llmProvider`: Explicit provider selection (`openai`, `google`, `bedrock`, `openrouter`)
+- `openrouterApiKey`: API key for OpenRouter (access 200+ models)
 - `telegramToken` / `whatsappEnabled`
 - `maxStepsPerAction`, `maxMessagesPerAction`, `messageDedupWindow`
 - `autonomyEnabled`, `autonomyInterval`, `autonomyBacklogLimit`
+- `skillRoutingRules`: Intent-based skill selection rules
+- `autopilotNoQuestions`: Skip clarification requests in autopilot mode
 
 You can manage settings via the TUI (`orcbot ui`) or by editing your config file directly.
 
@@ -270,7 +277,34 @@ OrcBot doesn't just give one answer. It works iteratively:
 
 ---
 
-## 🔌 Dynamic Plugin System
+## �️ Decision Pipeline & Safety
+
+OrcBot v2.0 includes a sophisticated decision pipeline that ensures reliable task execution:
+
+### Termination Review Layer
+Every proposed action is reviewed before execution to prevent premature task termination. The system favors completing work over asking clarifying questions.
+
+### Skill Routing Rules
+Configure intent-based skill selection:
+```yaml
+skillRoutingRules:
+  - intent: "search"
+    preferSkills: ["web_search", "browser_navigate"]
+  - intent: "code"
+    preferSkills: ["run_command", "manage_skills"]
+```
+
+### Autopilot Mode
+Enable `autopilotNoQuestions: true` to suppress clarification requests and keep the agent moving autonomously.
+
+### Pipeline Guardrails
+- **Deduplication**: Prevents repeated tool calls within the same action
+- **Safety Checks**: Validates tool parameters and prevents dangerous operations in safe mode
+- **Fallback Logic**: Auto-retries with alternative providers on failure
+
+---
+
+## �🔌 Dynamic Plugin System
 
 OrcBot supports hot-loadable skills via TypeScript or JavaScript plugins in `~/.orcbot/plugins` (or `./plugins`).
 
@@ -294,7 +328,7 @@ OrcBot supports hot-loadable skills via TypeScript or JavaScript plugins in `~/.
 OrcBot is built for extensibility. Contributors can add:
 - **Skills**: New tools in `src/core/Agent.ts`.
 - **Channels**: New communication platforms (Slack, Discord).
-- **Providers**: New LLM interfaces in `MultiLLM.ts`.
+- **Providers**: New LLM interfaces in `MultiLLM.ts` (supports OpenAI, Gemini, Bedrock, OpenRouter).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 

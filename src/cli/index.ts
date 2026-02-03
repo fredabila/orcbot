@@ -403,6 +403,7 @@ async function showModelsMenu() {
             message: 'Select AI Provider to Configure:',
             choices: [
                 { name: 'OpenAI (GPT-4, etc.)', value: 'openai' },
+                { name: 'OpenRouter (multi-model gateway)', value: 'openrouter' },
                 { name: 'Google (Gemini Pro/Flash)', value: 'google' },
                 { name: 'AWS Bedrock (Claude/other foundation models)', value: 'bedrock' },
                 { name: 'Back', value: 'back' }
@@ -414,11 +415,62 @@ async function showModelsMenu() {
 
     if (provider === 'openai') {
         await showOpenAIConfig();
+    } else if (provider === 'openrouter') {
+        await showOpenRouterConfig();
     } else if (provider === 'google') {
         await showGeminiConfig();
     } else if (provider === 'bedrock') {
         await showBedrockConfig();
     }
+}
+
+async function showOpenRouterConfig() {
+    const currentModel = agent.config.get('modelName');
+    const apiKey = agent.config.get('openrouterApiKey') || 'Not Set';
+    const baseUrl = agent.config.get('openrouterBaseUrl') || 'https://openrouter.ai/api/v1';
+    const referer = agent.config.get('openrouterReferer') || 'Not Set';
+    const appName = agent.config.get('openrouterAppName') || 'Not Set';
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: `OpenRouter Settings (Active Model: ${currentModel}):`,
+            choices: [
+                { name: `Set API Key (current: ${apiKey.substring(0, 8)}...)`, value: 'key' },
+                { name: `Set Base URL (current: ${baseUrl})`, value: 'base' },
+                { name: `Set Referer Header (current: ${referer})`, value: 'referer' },
+                { name: `Set App Name Header (current: ${appName})`, value: 'app' },
+                { name: 'Set Model Name (e.g., meta-llama/llama-3.3-70b-instruct:free)', value: 'model' },
+                { name: 'Back', value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showModelsMenu();
+
+    if (action === 'key') {
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter OpenRouter API Key:' }]);
+        agent.config.set('openrouterApiKey', val);
+        agent.config.set('llmProvider', 'openrouter');
+    } else if (action === 'base') {
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter OpenRouter Base URL:', default: baseUrl }]);
+        agent.config.set('openrouterBaseUrl', val);
+    } else if (action === 'referer') {
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter OpenRouter Referer (optional):', default: referer === 'Not Set' ? '' : referer }]);
+        agent.config.set('openrouterReferer', val);
+    } else if (action === 'app') {
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter OpenRouter App Name (optional):', default: appName === 'Not Set' ? '' : appName }]);
+        agent.config.set('openrouterAppName', val);
+    } else if (action === 'model') {
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter OpenRouter Model ID:', default: currentModel || 'meta-llama/llama-3.3-70b-instruct:free' }]);
+        agent.config.set('modelName', val);
+        agent.config.set('llmProvider', 'openrouter');
+    }
+
+    console.log('OpenRouter settings updated!');
+    await waitKeyPress();
+    return showOpenRouterConfig();
 }
 
 async function showOpenAIConfig() {
@@ -1276,7 +1328,7 @@ async function showSecurityMenu() {
 async function showConfigMenu() {
     const config = agent.config.getAll();
     // Ensure we show explicit keys relative to core config
-    const keys = ['agentName', 'openaiApiKey', 'googleApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl', 'searchProviderOrder', 'captchaApiKey', 'modelName', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'whatsappAutoReplyEnabled', 'memoryPath', 'commandAllowList', 'commandDenyList', 'safeMode', 'sudoMode', 'pluginAllowList', 'pluginDenyList', 'browserProfileDir', 'browserProfileName'] as const;
+    const keys = ['agentName', 'llmProvider', 'modelName', 'openaiApiKey', 'openrouterApiKey', 'openrouterBaseUrl', 'openrouterReferer', 'openrouterAppName', 'googleApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl', 'searchProviderOrder', 'captchaApiKey', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'whatsappAutoReplyEnabled', 'memoryPath', 'commandAllowList', 'commandDenyList', 'safeMode', 'sudoMode', 'pluginAllowList', 'pluginDenyList', 'browserProfileDir', 'browserProfileName'] as const;
 
     const choices: { name: string, value: string }[] = keys.map(key => ({
         name: `${key}: ${config[key as keyof typeof config] || '(empty)'}`,

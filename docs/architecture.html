@@ -55,12 +55,16 @@
           <p>MemoryManager stores short/episodic context. ActionQueue persists tasks.</p>
         </div>
         <div class="card">
+          <h3>Decision Pipeline</h3>
+          <p>Guardrails system with skill routing, termination review, and autopilot mode.</p>
+        </div>
+        <div class="card">
           <h3>Web Search</h3>
           <p>Resilient search with API providers (Serper, Brave) and browser fallback (DDG, Bing, Google).</p>
         </div>
         <div class="card">
           <h3>Providers</h3>
-          <p>MultiLLM routes to OpenAI, Gemini, or Bedrock with automatic fallback logic.</p>
+          <p>MultiLLM routes to OpenAI, Gemini, Bedrock, or OpenRouter with automatic fallback logic.</p>
         </div>
       </section>
 
@@ -79,6 +83,7 @@
           <li><code>src/core/Agent.ts</code>: Main agent with skills and heartbeat</li>
           <li><code>src/core/AgentOrchestrator.ts</code>: Multi-agent coordination</li>
           <li><code>src/core/AgentWorker.ts</code>: Worker process entry point</li>
+          <li><code>src/core/DecisionPipeline.ts</code>: Guardrails, routing rules, and safety checks</li>
           <li><code>src/tools/WebBrowser.ts</code>: Browser automation with resilient search</li>
           <li><code>src/core/Scheduler.ts</code>: Smart heartbeat scheduling</li>
         </ul>

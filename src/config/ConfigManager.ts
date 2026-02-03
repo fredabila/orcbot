@@ -6,8 +6,13 @@ import { logger } from '../utils/logger';
 
 export interface AgentConfig {
     agentName: string;
+    llmProvider?: 'openai' | 'google' | 'bedrock' | 'openrouter';
     telegramToken?: string;
     openaiApiKey?: string;
+    openrouterApiKey?: string;
+    openrouterBaseUrl?: string;
+    openrouterReferer?: string;
+    openrouterAppName?: string;
     googleApiKey?: string;
     braveSearchApiKey?: string;
     searxngUrl?: string;
@@ -56,6 +61,15 @@ export interface AgentConfig {
     browserProfileName?: string;
     tokenUsagePath?: string;
     tokenLogPath?: string;
+    skillRoutingRules?: Array<{
+        match: string;
+        prefer?: string[];
+        avoid?: string[];
+        requirePreferred?: boolean;
+    }>;
+    autopilotNoQuestions?: boolean;
+    autopilotNoQuestionsAllow?: string[];
+    autopilotNoQuestionsDeny?: string[];
 }
 
 export class ConfigManager {
@@ -140,6 +154,10 @@ export class ConfigManager {
         // 2. Merge Env Vars (Highest priority for keys)
         const envConfig: Partial<AgentConfig> = {
             openaiApiKey: process.env.OPENAI_API_KEY,
+            openrouterApiKey: process.env.OPENROUTER_API_KEY,
+            openrouterBaseUrl: process.env.OPENROUTER_BASE_URL,
+            openrouterReferer: process.env.OPENROUTER_REFERER,
+            openrouterAppName: process.env.OPENROUTER_APP_NAME,
             googleApiKey: process.env.GOOGLE_API_KEY,
             braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY,
             searxngUrl: process.env.SEARXNG_URL,
@@ -183,6 +201,7 @@ export class ConfigManager {
     private getStringDefaultConfig(): AgentConfig {
         return {
             agentName: 'OrcBot',
+            llmProvider: undefined,
             modelName: 'gpt-4o',
             searchProviderOrder: ['serper', 'brave', 'searxng', 'google', 'bing', 'duckduckgo'],
             autonomyEnabled: true,
@@ -277,7 +296,12 @@ export class ConfigManager {
             bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
             bedrockSecretAccessKey: process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY,
             sudoMode: false,
-            bedrockSessionToken: process.env.BEDROCK_SESSION_TOKEN || process.env.AWS_SESSION_TOKEN
+            bedrockSessionToken: process.env.BEDROCK_SESSION_TOKEN || process.env.AWS_SESSION_TOKEN,
+            openrouterBaseUrl: 'https://openrouter.ai/api/v1',
+            skillRoutingRules: [],
+            autopilotNoQuestions: false,
+            autopilotNoQuestionsAllow: [],
+            autopilotNoQuestionsDeny: []
         };
     }
 
@@ -323,6 +347,10 @@ export class ConfigManager {
     private syncEnvForKey(key: string, value: any) {
         const envMap: Record<string, string> = {
             openaiApiKey: 'OPENAI_API_KEY',
+            openrouterApiKey: 'OPENROUTER_API_KEY',
+            openrouterBaseUrl: 'OPENROUTER_BASE_URL',
+            openrouterReferer: 'OPENROUTER_REFERER',
+            openrouterAppName: 'OPENROUTER_APP_NAME',
             googleApiKey: 'GOOGLE_API_KEY',
             braveSearchApiKey: 'BRAVE_SEARCH_API_KEY',
             searxngUrl: 'SEARXNG_URL',

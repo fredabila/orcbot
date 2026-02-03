@@ -5,7 +5,7 @@ import path from 'path';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { TokenTracker } from './TokenTracker';
 
-export type LLMProvider = 'openai' | 'google' | 'bedrock';
+export type LLMProvider = 'openai' | 'google' | 'bedrock' | 'openrouter';
 
 export interface LLMMessage {
     role: 'system' | 'user' | 'assistant';
@@ -14,6 +14,10 @@ export interface LLMMessage {
 
 export class MultiLLM {
     private openaiKey: string | undefined;
+    private openrouterKey: string | undefined;
+    private openrouterBaseUrl: string;
+    private openrouterReferer?: string;
+    private openrouterAppName?: string;
     private googleKey: string | undefined;
     private modelName: string;
     private bedrockRegion?: string;
@@ -21,9 +25,14 @@ export class MultiLLM {
     private bedrockSecretAccessKey?: string;
     private bedrockSessionToken?: string;
     private tokenTracker?: TokenTracker;
+    private preferredProvider?: LLMProvider;
 
-    constructor(config?: { apiKey?: string, googleApiKey?: string, modelName?: string, bedrockRegion?: string, bedrockAccessKeyId?: string, bedrockSecretAccessKey?: string, bedrockSessionToken?: string, tokenTracker?: TokenTracker }) {
+    constructor(config?: { apiKey?: string, googleApiKey?: string, modelName?: string, bedrockRegion?: string, bedrockAccessKeyId?: string, bedrockSecretAccessKey?: string, bedrockSessionToken?: string, tokenTracker?: TokenTracker, openrouterApiKey?: string, openrouterBaseUrl?: string, openrouterReferer?: string, openrouterAppName?: string, llmProvider?: LLMProvider }) {
         this.openaiKey = config?.apiKey || process.env.OPENAI_API_KEY;
+        this.openrouterKey = config?.openrouterApiKey || process.env.OPENROUTER_API_KEY;
+        this.openrouterBaseUrl = config?.openrouterBaseUrl || process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
+        this.openrouterReferer = config?.openrouterReferer || process.env.OPENROUTER_REFERER;
+        this.openrouterAppName = config?.openrouterAppName || process.env.OPENROUTER_APP_NAME;
         this.googleKey = config?.googleApiKey || process.env.GOOGLE_API_KEY;
         this.modelName = config?.modelName || 'gpt-4o';
         this.bedrockRegion = config?.bedrockRegion || process.env.BEDROCK_REGION || process.env.AWS_REGION;
@@ -31,21 +40,24 @@ export class MultiLLM {
         this.bedrockSecretAccessKey = config?.bedrockSecretAccessKey || process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY;
         this.bedrockSessionToken = config?.bedrockSessionToken || process.env.BEDROCK_SESSION_TOKEN || process.env.AWS_SESSION_TOKEN;
         this.tokenTracker = config?.tokenTracker;
+        this.preferredProvider = config?.llmProvider;
 
         logger.info(`MultiLLM: Initialized with model ${this.modelName}`);
     }
 
     public async call(prompt: string, systemMessage?: string, provider?: LLMProvider, modelOverride?: string): Promise<string> {
-        const primaryProvider = provider || this.inferProvider(modelOverride || this.modelName);
+        const primaryProvider = provider || this.preferredProvider || this.inferProvider(modelOverride || this.modelName);
         const fallbackProvider: LLMProvider | null =
             (primaryProvider === 'google' && this.openaiKey) ? 'openai' :
                 (primaryProvider === 'openai' && this.googleKey) ? 'google' :
-                    (primaryProvider === 'bedrock' && this.openaiKey) ? 'openai' : null;
+                    (primaryProvider === 'bedrock' && this.openaiKey) ? 'openai' :
+                        (primaryProvider === 'openrouter' && this.openaiKey) ? 'openai' : null;
 
         const executeCall = async (p: LLMProvider, m?: string) => {
             if (p === 'openai') return this.callOpenAI(prompt, systemMessage, m);
             if (p === 'google') return this.callGoogle(prompt, systemMessage, m);
             if (p === 'bedrock') return this.callBedrock(prompt, systemMessage, m);
+            if (p === 'openrouter') return this.callOpenRouter(prompt, systemMessage, m);
             throw new Error(`Provider ${p} not supported`);
         };
 
@@ -271,7 +283,15 @@ export class MultiLLM {
         const lower = modelName.toLowerCase();
         if (lower.includes('bedrock') || lower.startsWith('br:')) return 'bedrock';
         if (lower.includes('gemini')) return 'google';
+        if (lower.startsWith('openrouter:') || lower.startsWith('openrouter/') || lower.startsWith('or:')) return 'openrouter';
         return 'openai';
+    }
+
+    private normalizeOpenRouterModel(modelName: string): string {
+        return modelName
+            .replace(/^openrouter:/i, '')
+            .replace(/^openrouter\//i, '')
+            .replace(/^or:/i, '');
     }
 
     private getBedrockClient() {
@@ -361,6 +381,51 @@ export class MultiLLM {
         }
     }
 
+    private async callOpenRouter(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
+        if (!this.openrouterKey) throw new Error('OpenRouter API key not configured');
+
+        const messages: LLMMessage[] = [];
+        if (systemMessage) messages.push({ role: 'system', content: systemMessage });
+        messages.push({ role: 'user', content: prompt });
+
+        const rawModel = modelOverride || this.modelName;
+        const model = this.normalizeOpenRouterModel(rawModel);
+        const base = this.openrouterBaseUrl.replace(/\/+$/, '');
+        const url = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`;
+
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.openrouterKey}`
+        };
+        if (this.openrouterReferer) headers['HTTP-Referer'] = this.openrouterReferer;
+        if (this.openrouterAppName) headers['X-Title'] = this.openrouterAppName;
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    model,
+                    messages,
+                    temperature: 0.7
+                })
+            });
+
+            if (!response.ok) {
+                const err = await response.text();
+                throw new Error(`OpenRouter API Error: ${response.status} ${err}`);
+            }
+
+            const data = await response.json() as any;
+            const content = data?.choices?.[0]?.message?.content;
+            this.recordUsage('openrouter', model, prompt, data, content);
+            return content || JSON.stringify(data);
+        } catch (error) {
+            logger.error(`MultiLLM OpenRouter Error: ${error}`);
+            throw error;
+        }
+    }
+
     private async callGoogle(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
         if (!this.googleKey) throw new Error('Google API key not configured');
 
@@ -409,7 +474,7 @@ export class MultiLLM {
         let completionTokens = completionTokensEstimate;
         let totalTokens = promptTokens + completionTokens;
 
-        if (provider === 'openai' && data?.usage) {
+        if ((provider === 'openai' || provider === 'openrouter') && data?.usage) {
             promptTokens = data.usage.prompt_tokens ?? promptTokens;
             completionTokens = data.usage.completion_tokens ?? completionTokens;
             totalTokens = data.usage.total_tokens ?? (promptTokens + completionTokens);

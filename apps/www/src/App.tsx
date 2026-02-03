@@ -103,6 +103,14 @@ function App() {
               <p>The agent researches, writes, and installs its own TypeScript skills when needed.</p>
             </div>
             <div className="card">
+              <h3>Termination Review</h3>
+              <p>Built-in safety layer reviews every action to prevent premature task stops.</p>
+            </div>
+            <div className="card">
+              <h3>Smart Skill Routing</h3>
+              <p>Intent-based skill selection with configurable routing rules for optimal tool matching.</p>
+            </div>
+            <div className="card">
               <h3>Privacy First</h3>
               <p>Logs, memories, and configs stay on your hardware. You own the data and identity.</p>
             </div>
@@ -154,6 +162,7 @@ function App() {
               <h4>Core</h4>
               <div className="arch-node emphasis">Agent Core</div>
               <div className="arch-node">DecisionEngine</div>
+              <div className="arch-node">Decision Pipeline</div>
               <div className="arch-node">AgentOrchestrator</div>
               <div className="arch-node">Smart Heartbeat</div>
               <div className="arch-node">Action Queue</div>
@@ -168,7 +177,7 @@ function App() {
             </div>
             <div className="arch-column">
               <h4>Providers</h4>
-              <div className="arch-node">OpenAI / Gemini / Bedrock</div>
+              <div className="arch-node">OpenAI / Gemini / Bedrock / OpenRouter</div>
               <div className="arch-node">Search (API + Browser)</div>
               <div className="arch-node">CAPTCHA Solver</div>
             </div>
