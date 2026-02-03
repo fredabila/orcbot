@@ -91,7 +91,16 @@ export class WebBrowser {
             'x.com',
             'tiktok.com',
             'amazon.com',
-            'netflix.com'
+            'netflix.com',
+            // YouTube downloader sites - heavily bot-protected
+            'y2mate',
+            'savefrom.net',
+            'ssyoutube',
+            'ytmp3',
+            'yt1s',
+            'snaptik',
+            'ssstik',
+            'turboscribe'
         ];
         
         try {
@@ -546,7 +555,11 @@ export class WebBrowser {
                 finalSelector = `[data-orcbot-ref="${selector}"]`;
             }
 
+            // Wait for element to exist first, then click
+            await this.page!.waitForSelector(finalSelector, { timeout: 10000, state: 'attached' }).catch(() => {});
+            await this.page!.waitForTimeout(300); // Small delay for dynamic elements
             await this.page!.click(finalSelector, { timeout: 15000 });
+            await this.waitForStablePage(5000); // Wait for any navigation/updates after click
             return `Successfully clicked: ${selector}`;
         } catch (e) {
             return `Failed to click ${selector}: ${e}`;
@@ -563,7 +576,18 @@ export class WebBrowser {
                 finalSelector = `[data-orcbot-ref="${selector}"]`;
             }
 
-            await this.page!.fill(finalSelector, text, { timeout: 15000 });
+            // Wait for element, focus it, then type
+            await this.page!.waitForSelector(finalSelector, { timeout: 10000, state: 'attached' }).catch(() => {});
+            await this.page!.waitForTimeout(300); // Small delay for dynamic elements
+            
+            // Try fill first, fall back to typing character by character
+            try {
+                await this.page!.fill(finalSelector, text, { timeout: 10000 });
+            } catch {
+                // Fallback: click element and type character by character (for stubborn inputs)
+                await this.page!.click(finalSelector, { timeout: 5000 });
+                await this.page!.keyboard.type(text, { delay: 50 });
+            }
             return `Successfully typed into ${selector}: "${text}"`;
         } catch (e) {
             return `Failed to type in ${selector}: ${e}`;

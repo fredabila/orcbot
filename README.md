@@ -211,6 +211,64 @@ This ensures you won't accidentally run multiple agent instances that could conf
 
 ---
 
+### Web Gateway
+
+OrcBot provides a web gateway for remote management via REST API and WebSocket:
+
+```bash
+# Start the web gateway
+orcbot gateway
+
+# Start gateway with agent loop
+orcbot gateway --with-agent
+
+# Custom port and API key
+orcbot gateway -p 8080 -k mysecretkey
+
+# Serve a dashboard
+orcbot gateway -s ./apps/dashboard
+```
+
+**API Endpoints:**
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/status` | Agent status & info |
+| GET | `/api/skills` | List all skills |
+| POST | `/api/skills/:name/execute` | Execute a skill |
+| POST | `/api/tasks` | Push a new task |
+| GET | `/api/tasks` | View task queue |
+| GET | `/api/config` | View configuration |
+| PUT | `/api/config/:key` | Update config value |
+| GET | `/api/memory` | View recent memories |
+| GET | `/api/connections` | Channel status |
+| GET | `/api/logs` | Recent log entries |
+| GET | `/api/security` | Security settings |
+| PUT | `/api/security` | Update security settings |
+
+**WebSocket Events:**
+
+Connect to `ws://host:port` for real-time events:
+- `status` - Initial agent status
+- `event` - Agent events (thinking, action, observation, etc.)
+- Actions: `pushTask`, `executeSkill`, `getStatus`, `setConfig`
+
+**Authentication:**
+
+If an API key is configured, include it in requests:
+```bash
+curl -H "X-Api-Key: yourkey" http://localhost:3100/api/status
+```
+
+Configure via TUI (`orcbot ui` → Web Gateway) or config:
+```yaml
+gatewayPort: 3100
+gatewayHost: 0.0.0.0
+gatewayApiKey: your-secret-key
+```
+
+---
+
 ## Configuration
 
 OrcBot reads configuration in this order (highest priority first):

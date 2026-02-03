@@ -2112,6 +2112,12 @@ This skill should prevent future failures when ${taskDescription.slice(0, 100)}.
         this.detectStalledAction();
         this.recoverStaleInProgressActions();
 
+        // CRITICAL: Skip heartbeat if agent is actively processing an action
+        if (this.isBusy) {
+            logger.debug('Agent: Heartbeat skipped - currently processing an action');
+            return;
+        }
+
         const autonomyEnabled = this.config.get('autonomyEnabled');
         const intervalMinutes = this.config.get('autonomyInterval') || 0;
         if (!autonomyEnabled || intervalMinutes <= 0) return;

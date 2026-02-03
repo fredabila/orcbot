@@ -76,6 +76,11 @@ export interface AgentConfig {
     memoryEpisodicLimit?: number;         // Episodic summaries to include (default 5)
     memoryConsolidationThreshold?: number; // When to consolidate (default 30)
     memoryConsolidationBatch?: number;    // How many to consolidate at once (default 20)
+    // Web Gateway
+    gatewayPort?: number;                 // Port for web gateway (default 3100)
+    gatewayHost?: string;                 // Host to bind gateway (default 0.0.0.0)
+    gatewayApiKey?: string;               // API key for gateway authentication
+    gatewayCorsOrigins?: string[];        // CORS allowed origins (default ['*'])
 }
 
 export class ConfigManager {

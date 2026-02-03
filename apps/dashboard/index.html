@@ -1,0 +1,1528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OrcBot Dashboard</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        :root {
+            --bg-dark: #0a0a0f;
+            --bg-card: #12121a;
+            --bg-hover: #1a1a25;
+            --bg-input: #0d0d12;
+            --text: #e4e4e7;
+            --text-dim: #71717a;
+            --text-muted: #52525b;
+            --accent: #22c55e;
+            --accent-dim: #16a34a;
+            --accent-glow: rgba(34, 197, 94, 0.2);
+            --blue: #3b82f6;
+            --purple: #a855f7;
+            --orange: #f97316;
+            --red: #ef4444;
+            --yellow: #eab308;
+            --border: #27272a;
+            --border-light: #3f3f46;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            position: fixed;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 240px;
+            background: var(--bg-card);
+            border-right: 1px solid var(--border);
+            padding: 20px 0;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .logo {
+            padding: 0 20px 20px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 10px;
+        }
+
+        .logo h1 {
+            font-size: 20px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo h1 span { color: var(--accent); }
+
+        .nav-section {
+            padding: 10px 12px;
+        }
+
+        .nav-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            padding: 8px;
+            margin-top: 10px;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            color: var(--text-dim);
+            cursor: pointer;
+            transition: all 0.15s;
+            font-size: 14px;
+        }
+
+        .nav-item:hover { background: var(--bg-hover); color: var(--text); }
+        .nav-item.active { background: var(--accent-glow); color: var(--accent); }
+        .nav-item i { width: 20px; text-align: center; }
+
+        .sidebar-footer {
+            margin-top: auto;
+            padding: 15px 20px;
+            border-top: 1px solid var(--border);
+        }
+
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--red);
+        }
+
+        .status-dot.connected { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+
+        /* Main Content */
+        .main {
+            margin-left: 240px;
+            min-height: 100vh;
+        }
+
+        .topbar {
+            position: sticky;
+            top: 0;
+            background: rgba(10, 10, 15, 0.8);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--border);
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 50;
+        }
+
+        .page-title {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .topbar-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.15s;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: #000;
+        }
+
+        .btn-primary:hover { background: var(--accent-dim); }
+
+        .btn-secondary {
+            background: var(--bg-hover);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover { border-color: var(--border-light); }
+
+        .btn-danger { background: var(--red); color: white; }
+        .btn-danger:hover { background: #dc2626; }
+
+        .content {
+            padding: 30px;
+        }
+
+        /* Page Sections */
+        .page { display: none; }
+        .page.active { display: block; }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .stat-card .label {
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .stat-card .value {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        .stat-card .value.accent { color: var(--accent); }
+        .stat-card .value.warning { color: var(--yellow); }
+
+        .stat-card .sub {
+            font-size: 12px;
+            color: var(--text-dim);
+            margin-top: 4px;
+        }
+
+        /* Cards */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            margin-bottom: 20px;
+        }
+
+        .card-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .card-header h3 {
+            font-size: 14px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card-header h3 i { color: var(--accent); }
+
+        .card-body { padding: 20px; }
+        .card-body.no-padding { padding: 0; }
+
+        /* Two Column Layout */
+        .two-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        @media (max-width: 1200px) {
+            .two-col { grid-template-columns: 1fr; }
+        }
+
+        /* Task Input */
+        .task-input-container {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 25px;
+        }
+
+        .task-input {
+            flex: 1;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px 18px;
+            color: var(--text);
+            font-size: 14px;
+            transition: border-color 0.15s;
+        }
+
+        .task-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .task-input::placeholder { color: var(--text-muted); }
+
+        .priority-select {
+            width: 110px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px;
+            color: var(--text);
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        /* Task Queue */
+        .task-list { list-style: none; }
+
+        .task-item {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--border);
+            transition: background 0.15s;
+        }
+
+        .task-item:hover { background: var(--bg-hover); }
+        .task-item:last-child { border-bottom: none; }
+
+        .task-priority {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 12px;
+            background: var(--bg-hover);
+        }
+
+        .task-priority.high { background: rgba(239, 68, 68, 0.2); color: var(--red); }
+        .task-priority.medium { background: rgba(234, 179, 8, 0.2); color: var(--yellow); }
+        .task-priority.low { background: rgba(34, 197, 94, 0.2); color: var(--accent); }
+
+        .task-content { flex: 1; }
+        .task-content .task-text { font-size: 14px; margin-bottom: 3px; }
+        .task-content .task-meta { font-size: 11px; color: var(--text-muted); }
+
+        .task-status {
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .task-status.pending { background: rgba(59, 130, 246, 0.2); color: var(--blue); }
+        .task-status.processing { background: rgba(168, 85, 247, 0.2); color: var(--purple); }
+        .task-status.done { background: rgba(34, 197, 94, 0.2); color: var(--accent); }
+
+        /* Skills Grid */
+        .skills-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 12px;
+            padding: 20px;
+        }
+
+        .skill-card {
+            background: var(--bg-hover);
+            border-radius: 10px;
+            padding: 16px;
+            cursor: pointer;
+            transition: all 0.15s;
+            border: 1px solid transparent;
+        }
+
+        .skill-card:hover {
+            border-color: var(--border-light);
+            transform: translateY(-2px);
+        }
+
+        .skill-card .skill-name {
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 6px;
+            color: var(--accent);
+        }
+
+        .skill-card .skill-desc {
+            font-size: 12px;
+            color: var(--text-dim);
+            line-height: 1.5;
+        }
+
+        .skill-card .skill-type {
+            margin-top: 10px;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+        }
+
+        /* Memory Timeline */
+        .memory-timeline {
+            padding: 0 20px 20px;
+        }
+
+        .memory-item {
+            display: flex;
+            gap: 15px;
+            padding: 15px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .memory-item:last-child { border-bottom: none; }
+
+        .memory-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-hover);
+            color: var(--accent);
+            flex-shrink: 0;
+        }
+
+        .memory-content { flex: 1; min-width: 0; }
+        .memory-content .type { font-size: 11px; color: var(--text-muted); text-transform: uppercase; }
+        .memory-content .text { font-size: 13px; margin-top: 4px; line-height: 1.5; }
+        .memory-content .time { font-size: 11px; color: var(--text-muted); margin-top: 6px; }
+
+        /* Logs */
+        .log-viewer {
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 12px;
+            background: var(--bg-input);
+            border-radius: 8px;
+            padding: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+            line-height: 1.8;
+        }
+
+        .log-line { white-space: pre-wrap; word-break: break-all; }
+        .log-line.error { color: var(--red); }
+        .log-line.warn { color: var(--yellow); }
+        .log-line.info { color: var(--blue); }
+        .log-line.debug { color: var(--text-muted); }
+
+        /* Config */
+        .config-section { margin-bottom: 30px; }
+
+        .config-section h4 {
+            font-size: 13px;
+            color: var(--text-dim);
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .config-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+        }
+
+        .config-row .label {
+            font-size: 14px;
+        }
+
+        .config-row .sublabel {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        .config-value {
+            font-family: 'SF Mono', monospace;
+            font-size: 13px;
+            color: var(--accent);
+            background: var(--bg-hover);
+            padding: 6px 12px;
+            border-radius: 6px;
+        }
+
+        /* Toggle */
+        .toggle {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            background: var(--bg-hover);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .toggle.active { background: var(--accent); }
+
+        .toggle::after {
+            content: '';
+            position: absolute;
+            width: 18px;
+            height: 18px;
+            background: white;
+            border-radius: 50%;
+            top: 3px;
+            left: 3px;
+            transition: transform 0.2s;
+        }
+
+        .toggle.active::after { transform: translateX(20px); }
+
+        /* Channel Cards */
+        .channel-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 16px;
+        }
+
+        .channel-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .channel-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 15px;
+        }
+
+        .channel-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+
+        .channel-icon.telegram { background: linear-gradient(135deg, #2AABEE, #229ED9); }
+        .channel-icon.whatsapp { background: linear-gradient(135deg, #25D366, #128C7E); }
+
+        .channel-info h4 { font-size: 15px; font-weight: 600; }
+        .channel-info .status { font-size: 12px; color: var(--text-muted); }
+        .channel-info .status.active { color: var(--accent); }
+
+        .channel-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid var(--border);
+        }
+
+        .channel-stat {
+            text-align: center;
+        }
+
+        .channel-stat .value { font-size: 20px; font-weight: 700; }
+        .channel-stat .label { font-size: 11px; color: var(--text-muted); }
+
+        /* Live Events Feed */
+        .events-feed {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .event-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 12px 20px;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+        }
+
+        .event-item:last-child { border-bottom: none; }
+
+        .event-time {
+            font-family: monospace;
+            font-size: 11px;
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+
+        .event-type {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .event-type.thinking { background: rgba(168, 85, 247, 0.2); color: var(--purple); }
+        .event-type.action { background: rgba(59, 130, 246, 0.2); color: var(--blue); }
+        .event-type.observation { background: rgba(34, 197, 94, 0.2); color: var(--accent); }
+        .event-type.error { background: rgba(239, 68, 68, 0.2); color: var(--red); }
+        .event-type.system { background: rgba(113, 113, 122, 0.2); color: var(--text-dim); }
+
+        .event-message { flex: 1; color: var(--text-dim); }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 200;
+        }
+
+        .modal-overlay.active { display: flex; }
+
+        .modal {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            width: 90%;
+            max-width: 500px;
+            max-height: 80vh;
+            overflow: hidden;
+        }
+
+        .modal-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h3 { font-size: 16px; }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-dim);
+            cursor: pointer;
+            font-size: 20px;
+        }
+
+        .modal-body {
+            padding: 20px;
+            overflow-y: auto;
+            max-height: 60vh;
+        }
+
+        .form-group { margin-bottom: 20px; }
+        .form-group label { display: block; font-size: 13px; margin-bottom: 8px; color: var(--text-dim); }
+
+        .form-input {
+            width: 100%;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            color: var(--text);
+            font-size: 14px;
+        }
+
+        .form-input:focus { outline: none; border-color: var(--accent); }
+
+        /* Toast */
+        .toast-container {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 300;
+        }
+
+        .toast {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px 20px;
+            margin-top: 10px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            animation: slideIn 0.3s ease;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+        }
+
+        .toast.success .toast-icon { color: var(--accent); }
+        .toast.error .toast-icon { color: var(--red); }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-muted);
+        }
+
+        .empty-state i { font-size: 48px; margin-bottom: 15px; opacity: 0.3; }
+        .empty-state p { font-size: 14px; }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .sidebar { transform: translateX(-100%); transition: transform 0.3s; }
+            .sidebar.open { transform: translateX(0); }
+            .main { margin-left: 0; }
+            .content { padding: 20px; }
+            .task-input-container { flex-direction: column; }
+            .priority-select { width: 100%; }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg-dark); }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
+    </style>
+</head>
+<body>
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+        <div class="logo">
+            <h1><span>🤖</span> OrcBot</h1>
+        </div>
+        
+        <nav class="nav-section">
+            <div class="nav-item active" data-page="dashboard">
+                <i class="fas fa-home"></i> Dashboard
+            </div>
+            <div class="nav-item" data-page="tasks">
+                <i class="fas fa-list-check"></i> Task Queue
+            </div>
+            <div class="nav-item" data-page="skills">
+                <i class="fas fa-wand-magic-sparkles"></i> Skills
+            </div>
+            <div class="nav-item" data-page="memory">
+                <i class="fas fa-brain"></i> Memory
+            </div>
+            
+            <div class="nav-label">System</div>
+            <div class="nav-item" data-page="channels">
+                <i class="fas fa-plug"></i> Channels
+            </div>
+            <div class="nav-item" data-page="logs">
+                <i class="fas fa-terminal"></i> Logs
+            </div>
+            <div class="nav-item" data-page="config">
+                <i class="fas fa-cog"></i> Configuration
+            </div>
+        </nav>
+        
+        <div class="sidebar-footer">
+            <div class="connection-status">
+                <div class="status-dot" id="wsStatusDot"></div>
+                <span id="wsStatusText">Connecting...</span>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main">
+        <div class="topbar">
+            <h2 class="page-title" id="pageTitle">Dashboard</h2>
+            <div class="topbar-actions">
+                <button class="btn btn-secondary" onclick="refreshAll()">
+                    <i class="fas fa-sync-alt"></i> Refresh
+                </button>
+                <button class="btn btn-primary" onclick="openTaskModal()">
+                    <i class="fas fa-plus"></i> New Task
+                </button>
+            </div>
+        </div>
+
+        <div class="content">
+            <!-- Dashboard Page -->
+            <div class="page active" id="page-dashboard">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="label">Agent Status</div>
+                        <div class="value" id="agentStatusValue">-</div>
+                        <div class="sub" id="agentStatusSub">Checking...</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="label">Current Model</div>
+                        <div class="value accent" id="modelValue">-</div>
+                        <div class="sub" id="providerValue">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="label">Active Skills</div>
+                        <div class="value" id="skillCountValue">-</div>
+                        <div class="sub">Core + Plugins</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="label">Tasks in Queue</div>
+                        <div class="value" id="taskCountValue">0</div>
+                        <div class="sub" id="taskQueueSub">No pending tasks</div>
+                    </div>
+                </div>
+
+                <div class="two-col">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3><i class="fas fa-bolt"></i> Quick Actions</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="task-input-container">
+                                <input type="text" class="task-input" id="quickTaskInput" placeholder="What should OrcBot do?">
+                                <button class="btn btn-primary" onclick="quickPushTask()">
+                                    <i class="fas fa-paper-plane"></i> Send
+                                </button>
+                            </div>
+                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                                <button class="btn btn-secondary" onclick="pushPreset('Check my messages and summarize')">
+                                    <i class="fas fa-envelope"></i> Check Messages
+                                </button>
+                                <button class="btn btn-secondary" onclick="pushPreset('Search the web for latest news')">
+                                    <i class="fas fa-search"></i> Web Search
+                                </button>
+                                <button class="btn btn-secondary" onclick="pushPreset('What is the current time?')">
+                                    <i class="fas fa-clock"></i> Current Time
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h3><i class="fas fa-satellite-dish"></i> Live Events</h3>
+                        </div>
+                        <div class="card-body no-padding">
+                            <div class="events-feed" id="eventsFeed">
+                                <div class="empty-state">
+                                    <i class="fas fa-wave-square"></i>
+                                    <p>Waiting for events...</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-clock-rotate-left"></i> Recent Activity</h3>
+                        <button class="btn btn-secondary" onclick="loadMemory()">
+                            <i class="fas fa-refresh"></i>
+                        </button>
+                    </div>
+                    <div class="card-body no-padding">
+                        <div class="memory-timeline" id="recentMemory">
+                            <div class="empty-state">
+                                <i class="fas fa-history"></i>
+                                <p>No recent activity</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tasks Page -->
+            <div class="page" id="page-tasks">
+                <div class="card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-list-check"></i> Task Queue</h3>
+                        <button class="btn btn-primary" onclick="openTaskModal()">
+                            <i class="fas fa-plus"></i> Add Task
+                        </button>
+                    </div>
+                    <div class="card-body no-padding">
+                        <ul class="task-list" id="taskList">
+                            <div class="empty-state">
+                                <i class="fas fa-inbox"></i>
+                                <p>No tasks in queue</p>
+                            </div>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Skills Page -->
+            <div class="page" id="page-skills">
+                <div class="card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-wand-magic-sparkles"></i> Available Skills</h3>
+                        <span id="skillsCount" style="color: var(--text-muted); font-size: 13px;">-</span>
+                    </div>
+                    <div class="card-body no-padding">
+                        <div class="skills-grid" id="skillsGrid">
+                            <div class="empty-state">
+                                <i class="fas fa-puzzle-piece"></i>
+                                <p>Loading skills...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Memory Page -->
+            <div class="page" id="page-memory">
+                <div class="stats-grid" style="margin-bottom: 20px;">
+                    <div class="stat-card">
+                        <div class="label">Total Memories</div>
+                        <div class="value" id="memoryTotal">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="label">Short-Term</div>
+                        <div class="value" id="memoryShortTerm">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="label">Episodic</div>
+                        <div class="value" id="memoryEpisodic">-</div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-brain"></i> Memory Timeline</h3>
+                        <button class="btn btn-secondary" onclick="loadFullMemory()">
+                            <i class="fas fa-refresh"></i> Refresh
+                        </button>
+                    </div>
+                    <div class="card-body no-padding">
+                        <div class="memory-timeline" id="fullMemoryList" style="max-height: 500px; overflow-y: auto;">
+                            <div class="empty-state">
+                                <i class="fas fa-brain"></i>
+                                <p>Loading memories...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Channels Page -->
+            <div class="page" id="page-channels">
+                <div class="channel-grid" id="channelsGrid">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+
+            <!-- Logs Page -->
+            <div class="page" id="page-logs">
+                <div class="card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-terminal"></i> System Logs</h3>
+                        <div style="display: flex; gap: 10px;">
+                            <select class="priority-select" id="logFilter" onchange="loadLogs()">
+                                <option value="all">All Levels</option>
+                                <option value="error">Errors</option>
+                                <option value="warn">Warnings</option>
+                                <option value="info">Info</option>
+                            </select>
+                            <button class="btn btn-secondary" onclick="loadLogs()">
+                                <i class="fas fa-refresh"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="log-viewer" id="logViewer">
+                            Loading logs...
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Config Page -->
+            <div class="page" id="page-config">
+                <div class="two-col">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3><i class="fas fa-robot"></i> Agent Settings</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="config-section">
+                                <div class="config-row">
+                                    <div>
+                                        <div class="label">Safe Mode</div>
+                                        <div class="sublabel">Require confirmation for actions</div>
+                                    </div>
+                                    <div class="toggle" id="safeModeToggle" onclick="toggleSafeMode()"></div>
+                                </div>
+                                <div class="config-row">
+                                    <div>
+                                        <div class="label">Model</div>
+                                        <div class="sublabel">Current LLM model</div>
+                                    </div>
+                                    <span class="config-value" id="configModel">-</span>
+                                </div>
+                                <div class="config-row">
+                                    <div>
+                                        <div class="label">Provider</div>
+                                        <div class="sublabel">LLM provider</div>
+                                    </div>
+                                    <span class="config-value" id="configProvider">-</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h3><i class="fas fa-shield-halved"></i> Security</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="config-section">
+                                <div class="config-row">
+                                    <div>
+                                        <div class="label">API Key</div>
+                                        <div class="sublabel">Gateway authentication</div>
+                                    </div>
+                                    <button class="btn btn-secondary" onclick="openApiKeyModal()">
+                                        <i class="fas fa-key"></i> Change
+                                    </button>
+                                </div>
+                                <div class="config-row">
+                                    <div>
+                                        <div class="label">Gateway Port</div>
+                                        <div class="sublabel">HTTP API port</div>
+                                    </div>
+                                    <span class="config-value" id="configPort">-</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-database"></i> All Configuration</h3>
+                    </div>
+                    <div class="card-body">
+                        <div id="allConfigList">Loading...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Task Modal -->
+    <div class="modal-overlay" id="taskModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>New Task</h3>
+                <button class="modal-close" onclick="closeTaskModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Task Description</label>
+                    <textarea class="form-input" id="modalTaskInput" rows="3" placeholder="Describe what OrcBot should do..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Priority (1-10)</label>
+                    <select class="form-input" id="modalPriority">
+                        <option value="10">10 - Critical</option>
+                        <option value="8">8 - High</option>
+                        <option value="5" selected>5 - Normal</option>
+                        <option value="3">3 - Low</option>
+                        <option value="1">1 - Background</option>
+                    </select>
+                </div>
+                <button class="btn btn-primary" style="width: 100%;" onclick="submitTask()">
+                    <i class="fas fa-paper-plane"></i> Push Task
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script>
+        // State
+        let apiKey = localStorage.getItem('orcbot_api_key') || '';
+        let ws = null;
+        let currentPage = 'dashboard';
+
+        // API helpers
+        const API_BASE = window.location.origin + '/api';
+        const WS_URL = `ws://${window.location.host}`;
+
+        function getHeaders() {
+            const headers = { 'Content-Type': 'application/json' };
+            if (apiKey) headers['X-Api-Key'] = apiKey;
+            return headers;
+        }
+
+        async function api(endpoint, options = {}) {
+            try {
+                const res = await fetch(API_BASE + endpoint, { ...options, headers: getHeaders() });
+                if (res.status === 401) {
+                    showToast('Authentication required', 'error');
+                    openApiKeyModal();
+                    throw new Error('Unauthorized');
+                }
+                return await res.json();
+            } catch (e) {
+                console.error('API Error:', e);
+                throw e;
+            }
+        }
+
+        // Toast notifications
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.innerHTML = `
+                <i class="fas ${type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle'} toast-icon"></i>
+                <span>${message}</span>
+            `;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 4000);
+        }
+
+        // Navigation
+        document.querySelectorAll('.nav-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const page = item.dataset.page;
+                navigateTo(page);
+            });
+        });
+
+        function navigateTo(page) {
+            currentPage = page;
+            document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+            document.querySelector(`.nav-item[data-page="${page}"]`).classList.add('active');
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.getElementById(`page-${page}`).classList.add('active');
+            document.getElementById('pageTitle').textContent = page.charAt(0).toUpperCase() + page.slice(1);
+            
+            // Load page-specific data
+            if (page === 'tasks') loadTasks();
+            if (page === 'skills') loadSkills();
+            if (page === 'memory') loadFullMemory();
+            if (page === 'channels') loadChannels();
+            if (page === 'logs') loadLogs();
+            if (page === 'config') loadConfig();
+        }
+
+        // WebSocket
+        function connectWS() {
+            if (ws) ws.close();
+            ws = new WebSocket(WS_URL);
+            
+            ws.onopen = () => {
+                document.getElementById('wsStatusDot').classList.add('connected');
+                document.getElementById('wsStatusText').textContent = 'Connected';
+                addEvent('system', 'WebSocket connected');
+            };
+            
+            ws.onclose = () => {
+                document.getElementById('wsStatusDot').classList.remove('connected');
+                document.getElementById('wsStatusText').textContent = 'Disconnected';
+                setTimeout(connectWS, 5000);
+            };
+            
+            ws.onmessage = (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    if (data.type === 'event' && data.event) {
+                        addEvent(data.event.split(':')[1] || data.event, data.data?.message || JSON.stringify(data.data || {}));
+                    }
+                    if (data.type === 'status') loadStatus();
+                } catch (err) {
+                    addEvent('system', e.data);
+                }
+            };
+        }
+
+        function addEvent(type, message) {
+            const feed = document.getElementById('eventsFeed');
+            const isEmpty = feed.querySelector('.empty-state');
+            if (isEmpty) feed.innerHTML = '';
+
+            const time = new Date().toLocaleTimeString();
+            const div = document.createElement('div');
+            div.className = 'event-item';
+            div.innerHTML = `
+                <span class="event-time">${time}</span>
+                <span class="event-type ${type}">${type}</span>
+                <span class="event-message">${escapeHtml(String(message).substring(0, 150))}</span>
+            `;
+            feed.insertBefore(div, feed.firstChild);
+            
+            // Keep only last 20 events
+            while (feed.children.length > 20) feed.removeChild(feed.lastChild);
+        }
+
+        // Data loaders
+        async function loadStatus() {
+            try {
+                const data = await api('/status');
+                
+                // Show status based on mode
+                if (data.running) {
+                    document.getElementById('agentStatusValue').textContent = '● Running';
+                    document.getElementById('agentStatusValue').classList.add('accent');
+                    document.getElementById('agentStatusSub').textContent = data.modeDescription || 'Agent loop active';
+                } else if (data.mode === 'gateway-only') {
+                    document.getElementById('agentStatusValue').textContent = '◐ Gateway Only';
+                    document.getElementById('agentStatusValue').classList.remove('accent');
+                    document.getElementById('agentStatusValue').style.color = 'var(--yellow)';
+                    document.getElementById('agentStatusSub').textContent = data.modeDescription || 'Add --with-agent to start agent loop';
+                } else {
+                    document.getElementById('agentStatusValue').textContent = '○ Stopped';
+                    document.getElementById('agentStatusValue').classList.remove('accent');
+                    document.getElementById('agentStatusSub').textContent = 'Agent stopped';
+                }
+                
+                document.getElementById('modelValue').textContent = data.model || 'Not configured';
+                document.getElementById('providerValue').textContent = data.provider || 'auto';
+                document.getElementById('skillCountValue').textContent = data.skillCount || 0;
+            } catch (e) {
+                document.getElementById('agentStatusValue').textContent = '? Unknown';
+            }
+        }
+
+        async function loadTasks() {
+            try {
+                const data = await api('/tasks');
+                const tasks = data.tasks || [];
+                document.getElementById('taskCountValue').textContent = tasks.length;
+                document.getElementById('taskQueueSub').textContent = tasks.length === 0 ? 'No pending tasks' : `${tasks.length} task(s) queued`;
+
+                const list = document.getElementById('taskList');
+                if (tasks.length === 0) {
+                    list.innerHTML = '<div class="empty-state"><i class="fas fa-inbox"></i><p>No tasks in queue</p></div>';
+                    return;
+                }
+
+                list.innerHTML = tasks.map(t => {
+                    const priClass = t.priority >= 8 ? 'high' : t.priority >= 4 ? 'medium' : 'low';
+                    const statusClass = t.status === 'done' ? 'done' : t.status === 'processing' ? 'processing' : 'pending';
+                    return `
+                        <li class="task-item">
+                            <div class="task-priority ${priClass}">${t.priority}</div>
+                            <div class="task-content">
+                                <div class="task-text">${escapeHtml(t.task)}</div>
+                                <div class="task-meta">ID: ${t.id} • Added: ${new Date(t.createdAt).toLocaleString()}</div>
+                            </div>
+                            <span class="task-status ${statusClass}">${t.status}</span>
+                        </li>
+                    `;
+                }).join('');
+            } catch (e) {
+                console.error('Failed to load tasks:', e);
+            }
+        }
+
+        async function loadSkills() {
+            try {
+                const data = await api('/skills');
+                const skills = data.skills || [];
+                document.getElementById('skillsCount').textContent = `${skills.length} skills`;
+
+                const grid = document.getElementById('skillsGrid');
+                if (skills.length === 0) {
+                    grid.innerHTML = '<div class="empty-state"><i class="fas fa-puzzle-piece"></i><p>No skills available</p></div>';
+                    return;
+                }
+
+                grid.innerHTML = skills.map(s => `
+                    <div class="skill-card" title="${escapeHtml(s.usage || '')}">
+                        <div class="skill-name">${escapeHtml(s.name)}</div>
+                        <div class="skill-desc">${escapeHtml(s.description || 'No description')}</div>
+                        <div class="skill-type">${s.source || 'core'}</div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                console.error('Failed to load skills:', e);
+            }
+        }
+
+        async function loadMemory() {
+            try {
+                const data = await api('/memory?limit=5');
+                renderMemory(data.memories || [], 'recentMemory');
+            } catch (e) {
+                console.error('Failed to load memory:', e);
+            }
+        }
+
+        async function loadFullMemory() {
+            try {
+                const data = await api('/memory');
+                const stats = await api('/memory/stats');
+                
+                document.getElementById('memoryTotal').textContent = stats.total || 0;
+                document.getElementById('memoryShortTerm').textContent = stats.shortTerm || 0;
+                document.getElementById('memoryEpisodic').textContent = stats.episodic || 0;
+                
+                renderMemory(data.memories || [], 'fullMemoryList');
+            } catch (e) {
+                console.error('Failed to load memory:', e);
+            }
+        }
+
+        function renderMemory(memories, containerId) {
+            const container = document.getElementById(containerId);
+            if (memories.length === 0) {
+                container.innerHTML = '<div class="empty-state"><i class="fas fa-brain"></i><p>No memories yet</p></div>';
+                return;
+            }
+
+            container.innerHTML = memories.slice(0, 20).map(m => {
+                const icon = m.type === 'conversation' ? 'fa-comment' : 
+                            m.type === 'task' ? 'fa-check' : 
+                            m.type === 'observation' ? 'fa-eye' : 'fa-lightbulb';
+                return `
+                    <div class="memory-item">
+                        <div class="memory-icon"><i class="fas ${icon}"></i></div>
+                        <div class="memory-content">
+                            <div class="type">${m.type || 'memory'}</div>
+                            <div class="text">${escapeHtml(String(m.content || m.text || '').substring(0, 200))}</div>
+                            <div class="time">${m.timestamp ? new Date(m.timestamp).toLocaleString() : ''}</div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function loadChannels() {
+            try {
+                const data = await api('/connections');
+                const conn = data.connections || {};
+                
+                document.getElementById('channelsGrid').innerHTML = `
+                    <div class="channel-card">
+                        <div class="channel-header">
+                            <div class="channel-icon telegram"><i class="fab fa-telegram"></i></div>
+                            <div class="channel-info">
+                                <h4>Telegram</h4>
+                                <div class="status ${conn.telegram?.configured ? 'active' : ''}">${conn.telegram?.configured ? '● Connected' : '○ Not configured'}</div>
+                            </div>
+                        </div>
+                        <div class="channel-stats">
+                            <div class="channel-stat">
+                                <div class="value">${conn.telegram?.autoReply ? 'ON' : 'OFF'}</div>
+                                <div class="label">Auto-Reply</div>
+                            </div>
+                            <div class="channel-stat">
+                                <div class="value">${conn.telegram?.configured ? '✓' : '—'}</div>
+                                <div class="label">Token</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="channel-card">
+                        <div class="channel-header">
+                            <div class="channel-icon whatsapp"><i class="fab fa-whatsapp"></i></div>
+                            <div class="channel-info">
+                                <h4>WhatsApp</h4>
+                                <div class="status ${conn.whatsapp?.enabled ? 'active' : ''}">${conn.whatsapp?.enabled ? '● Enabled' : '○ Disabled'}</div>
+                            </div>
+                        </div>
+                        <div class="channel-stats">
+                            <div class="channel-stat">
+                                <div class="value">${conn.whatsapp?.autoReply ? 'ON' : 'OFF'}</div>
+                                <div class="label">Auto-Reply</div>
+                            </div>
+                            <div class="channel-stat">
+                                <div class="value">${conn.whatsapp?.enabled ? '✓' : '—'}</div>
+                                <div class="label">Session</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } catch (e) {
+                console.error('Failed to load channels:', e);
+            }
+        }
+
+        async function loadLogs() {
+            try {
+                const filter = document.getElementById('logFilter')?.value || 'all';
+                const data = await api(`/logs?lines=100`);
+                const logs = data.logs || [];
+                
+                let filtered = logs;
+                if (filter !== 'all') {
+                    filtered = logs.filter(l => l.toLowerCase().includes(`[${filter}]`));
+                }
+
+                const viewer = document.getElementById('logViewer');
+                if (filtered.length === 0) {
+                    viewer.innerHTML = '<span style="color: var(--text-muted);">No logs matching filter</span>';
+                    return;
+                }
+
+                viewer.innerHTML = filtered.map(l => {
+                    let cls = 'log-line';
+                    if (l.includes('[error]')) cls += ' error';
+                    else if (l.includes('[warn]')) cls += ' warn';
+                    else if (l.includes('[info]')) cls += ' info';
+                    else if (l.includes('[debug]')) cls += ' debug';
+                    return `<div class="${cls}">${escapeHtml(l)}</div>`;
+                }).join('');
+                viewer.scrollTop = viewer.scrollHeight;
+            } catch (e) {
+                console.error('Failed to load logs:', e);
+            }
+        }
+
+        async function loadConfig() {
+            try {
+                const data = await api('/config');
+                const cfg = data.config || {};
+                
+                document.getElementById('configModel').textContent = cfg.modelName || 'auto';
+                document.getElementById('configProvider').textContent = cfg.provider || 'auto';
+                document.getElementById('configPort').textContent = window.location.port || '3100';
+                
+                const toggle = document.getElementById('safeModeToggle');
+                if (cfg.safeMode) toggle.classList.add('active');
+                else toggle.classList.remove('active');
+
+                // All config
+                const list = document.getElementById('allConfigList');
+                const entries = Object.entries(cfg).filter(([k]) => !k.toLowerCase().includes('key') && !k.toLowerCase().includes('token') && !k.toLowerCase().includes('secret'));
+                list.innerHTML = entries.map(([k, v]) => `
+                    <div class="config-row">
+                        <span class="label">${k}</span>
+                        <span class="config-value">${typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+                    </div>
+                `).join('');
+            } catch (e) {
+                console.error('Failed to load config:', e);
+            }
+        }
+
+        // Actions
+        async function quickPushTask() {
+            const input = document.getElementById('quickTaskInput');
+            const task = input.value.trim();
+            if (!task) return showToast('Enter a task', 'error');
+
+            try {
+                await api('/tasks', { method: 'POST', body: JSON.stringify({ task, priority: 5 }) });
+                showToast('Task pushed!');
+                input.value = '';
+                loadTasks();
+            } catch (e) {
+                showToast('Failed to push task', 'error');
+            }
+        }
+
+        function pushPreset(task) {
+            document.getElementById('quickTaskInput').value = task;
+            quickPushTask();
+        }
+
+        async function submitTask() {
+            const task = document.getElementById('modalTaskInput').value.trim();
+            const priority = parseInt(document.getElementById('modalPriority').value);
+            if (!task) return showToast('Enter a task', 'error');
+
+            try {
+                await api('/tasks', { method: 'POST', body: JSON.stringify({ task, priority }) });
+                showToast('Task pushed!');
+                closeTaskModal();
+                loadTasks();
+            } catch (e) {
+                showToast('Failed to push task', 'error');
+            }
+        }
+
+        async function toggleSafeMode() {
+            const toggle = document.getElementById('safeModeToggle');
+            const newValue = !toggle.classList.contains('active');
+            
+            try {
+                await api('/security', { method: 'PUT', body: JSON.stringify({ safeMode: newValue }) });
+                toggle.classList.toggle('active', newValue);
+                showToast(`Safe mode ${newValue ? 'enabled' : 'disabled'}`);
+            } catch (e) {
+                showToast('Failed to update', 'error');
+            }
+        }
+
+        // Modals
+        function openTaskModal() {
+            document.getElementById('taskModal').classList.add('active');
+            document.getElementById('modalTaskInput').value = '';
+            document.getElementById('modalTaskInput').focus();
+        }
+
+        function closeTaskModal() {
+            document.getElementById('taskModal').classList.remove('active');
+        }
+
+        function openApiKeyModal() {
+            const key = prompt('Enter API Key:');
+            if (key !== null) {
+                apiKey = key;
+                localStorage.setItem('orcbot_api_key', key);
+                showToast('API key saved');
+                refreshAll();
+            }
+        }
+
+        // Utils
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function refreshAll() {
+            await Promise.all([loadStatus(), loadTasks(), loadMemory()]);
+            showToast('Refreshed');
+        }
+
+        // Init
+        document.getElementById('quickTaskInput').addEventListener('keydown', e => {
+            if (e.key === 'Enter') quickPushTask();
+        });
+
+        document.getElementById('taskModal').addEventListener('click', e => {
+            if (e.target.id === 'taskModal') closeTaskModal();
+        });
+
+        // Load initial data
+        loadStatus();
+        loadTasks();
+        loadMemory();
+        connectWS();
+
+        // Auto-refresh
+        setInterval(loadStatus, 30000);
+        setInterval(() => { if (currentPage === 'logs') loadLogs(); }, 10000);
+    </script>
+</body>
+</html>

@@ -314,6 +314,97 @@ program
         }
     });
 
+program
+    .command('gateway')
+    .description('Start the web gateway server for remote management')
+    .option('-p, --port <number>', 'Port to listen on', '3100')
+    .option('-h, --host <string>', 'Host to bind to', '0.0.0.0')
+    .option('-k, --api-key <string>', 'API key for authentication')
+    .option('-s, --static <path>', 'Path to static files for dashboard')
+    .option('--with-agent', 'Also start the agent loop')
+    .option('-b, --background', 'Run gateway in background')
+    .option('--background-child', 'Internal: run as background child', false)
+    .action(async (options) => {
+        // Handle background mode
+        if (options.background && !options.backgroundChild) {
+            const { spawn } = require('child_process');
+            const nodePath = process.execPath;
+            const scriptPath = process.argv[1];
+
+            const dataDir = path.join(os.homedir(), '.orcbot');
+            if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+            const logPath = path.join(dataDir, 'gateway.log');
+            const out = fs.openSync(logPath, 'a');
+
+            // Build args preserving options
+            const args = [scriptPath, 'gateway', '--background-child'];
+            if (options.port) args.push('-p', options.port);
+            if (options.host) args.push('-h', options.host);
+            if (options.apiKey) args.push('-k', options.apiKey);
+            if (options.static) args.push('-s', options.static);
+            if (options.withAgent) args.push('--with-agent');
+
+            const child = spawn(nodePath, args, {
+                detached: true,
+                stdio: ['ignore', out, out],
+                env: { ...process.env, ORCBOT_GATEWAY_BACKGROUND: '1' }
+            });
+
+            child.unref();
+            console.log('\n✅ OrcBot Gateway is running in the background.');
+            console.log(`   Port: ${options.port || 3100}`);
+            console.log(`   Log file: ${logPath}`);
+            console.log('   Stop with: pkill -f "orcbot gateway --background-child"');
+            return;
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { GatewayServer } = require('../gateway/GatewayServer');
+        
+        const gatewayConfig = {
+            port: parseInt(options.port),
+            host: options.host,
+            apiKey: options.apiKey || agent.config.get('gatewayApiKey'),
+            staticDir: options.static
+        };
+
+        const gateway = new GatewayServer(agent, agent.config, gatewayConfig);
+        
+        console.log('\n🌐 Starting OrcBot Web Gateway...');
+        await gateway.start();
+        
+        console.log(`\n📡 Gateway is ready!`);
+        console.log(`   REST API: http://${gatewayConfig.host}:${gatewayConfig.port}/api`);
+        console.log(`   WebSocket: ws://${gatewayConfig.host}:${gatewayConfig.port}`);
+        if (gatewayConfig.apiKey) {
+            console.log(`   Auth: API key required (X-Api-Key header)`);
+        }
+        console.log('\n   API Endpoints:');
+        console.log('   GET  /api/status         - Agent status');
+        console.log('   GET  /api/skills         - List skills');
+        console.log('   POST /api/tasks          - Push task');
+        console.log('   GET  /api/config         - View config');
+        console.log('   GET  /api/memory         - View memories');
+        console.log('   GET  /api/connections    - Channel status');
+        console.log('   GET  /api/logs           - Recent logs');
+        console.log('\n   Press Ctrl+C to stop\n');
+
+        if (options.withAgent) {
+            console.log('🤖 Also starting agent loop...\n');
+            gateway.setAgentLoopStarted(true);
+            agent.start().catch(err => logger.error(`Agent error: ${err}`));
+        } else {
+            console.log('💡 Tip: Add --with-agent to also run the agent loop\n');
+        }
+
+        // Keep process running
+        process.on('SIGINT', () => {
+            console.log('\nShutting down gateway...');
+            gateway.stop();
+            process.exit(0);
+        });
+    });
+
 const configCommand = program
     .command('config')
     .description('Manage agent configuration');
@@ -351,6 +442,7 @@ async function showMainMenu() {
                 { name: 'Manage Connections', value: 'connections' },
                 { name: 'Manage AI Models', value: 'models' },
                 { name: 'Tooling & APIs', value: 'tooling' },
+                { name: '🌐 Web Gateway', value: 'gateway' },
                 { name: 'Worker Profile (Digital Identity)', value: 'worker' },
                 { name: 'Multi-Agent Orchestration', value: 'orchestration' },
                 { name: '🔒 Security & Permissions', value: 'security' },
@@ -386,6 +478,9 @@ async function showMainMenu() {
             break;
         case 'tooling':
             await showToolingMenu();
+            break;
+        case 'gateway':
+            await showGatewayMenu();
             break;
         case 'worker':
             await showWorkerProfileMenu();
@@ -474,6 +569,86 @@ async function showToolingMenu() {
     console.log('Tooling configuration updated!');
     await waitKeyPress();
     return showToolingMenu();
+}
+
+async function showGatewayMenu() {
+    const currentPort = agent.config.get('gatewayPort') || 3100;
+    const currentHost = agent.config.get('gatewayHost') || '0.0.0.0';
+    const apiKey = agent.config.get('gatewayApiKey');
+
+    console.log('\n--- Web Gateway Settings ---');
+    console.log(`Port: ${currentPort}`);
+    console.log(`Host: ${currentHost}`);
+    console.log(`API Key: ${apiKey ? '***SET***' : 'Not Set (no authentication)'}`);
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: 'Web Gateway Options:',
+            choices: [
+                { name: '🚀 Start Gateway Server', value: 'start' },
+                { name: '🚀 Start Gateway + Agent', value: 'start_with_agent' },
+                { name: `Set Port (current: ${currentPort})`, value: 'port' },
+                { name: `Set Host (current: ${currentHost})`, value: 'host' },
+                { name: apiKey ? 'Update API Key' : 'Set API Key', value: 'apikey' },
+                { name: 'Back', value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showMainMenu();
+
+    if (action === 'start' || action === 'start_with_agent') {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { GatewayServer } = require('../gateway/GatewayServer');
+        
+        const gatewayConfig = {
+            port: currentPort,
+            host: currentHost,
+            apiKey: apiKey
+        };
+
+        const gateway = new GatewayServer(agent, agent.config, gatewayConfig);
+        
+        console.log('\n🌐 Starting OrcBot Web Gateway...');
+        await gateway.start();
+        
+        console.log(`\n📡 Gateway is ready!`);
+        console.log(`   REST API: http://${currentHost}:${currentPort}/api`);
+        console.log(`   WebSocket: ws://${currentHost}:${currentPort}`);
+        if (apiKey) {
+            console.log(`   Auth: API key required (X-Api-Key header)`);
+        }
+        console.log('\n   Press Ctrl+C to stop\n');
+
+        if (action === 'start_with_agent') {
+            console.log('🤖 Also starting agent loop...\n');
+            agent.start().catch(err => logger.error(`Agent error: ${err}`));
+        }
+
+        // Keep running - don't return to menu
+        await new Promise(() => {}); // Wait forever until Ctrl+C
+    } else if (action === 'port') {
+        const { val } = await inquirer.prompt([
+            { type: 'number', name: 'val', message: 'Enter gateway port:', default: currentPort }
+        ]);
+        if (val) agent.config.set('gatewayPort', val);
+    } else if (action === 'host') {
+        const { val } = await inquirer.prompt([
+            { type: 'input', name: 'val', message: 'Enter gateway host (0.0.0.0 for all interfaces):', default: currentHost }
+        ]);
+        if (val) agent.config.set('gatewayHost', val);
+    } else if (action === 'apikey') {
+        const { val } = await inquirer.prompt([
+            { type: 'input', name: 'val', message: 'Enter API key (leave empty to disable auth):' }
+        ]);
+        agent.config.set('gatewayApiKey', val || undefined);
+        console.log(val ? 'API key set!' : 'Authentication disabled.');
+    }
+
+    await waitKeyPress();
+    return showGatewayMenu();
 }
 
 async function showModelsMenu() {
