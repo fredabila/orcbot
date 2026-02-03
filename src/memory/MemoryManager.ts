@@ -192,7 +192,18 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
             const files = fs.readdirSync(this.profilesDir);
             return files
                 .filter(f => f.endsWith('.json'))
-                .map(f => f.replace('.json', '').replace(/_/g, ''));
+                .map(f => {
+                    // Read the profile file to get the actual JID
+                    const profilePath = path.join(this.profilesDir, f);
+                    try {
+                        const content = fs.readFileSync(profilePath, 'utf-8');
+                        const profile = JSON.parse(content);
+                        return profile.jid || f.replace('.json', '');
+                    } catch (e) {
+                        // Fallback to filename if profile can't be parsed
+                        return f.replace('.json', '');
+                    }
+                });
         } catch (e) {
             logger.error(`Error listing contact profiles: ${e}`);
             return [];
