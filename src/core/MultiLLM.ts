@@ -47,11 +47,9 @@ export class MultiLLM {
 
     public async call(prompt: string, systemMessage?: string, provider?: LLMProvider, modelOverride?: string): Promise<string> {
         const primaryProvider = provider || this.preferredProvider || this.inferProvider(modelOverride || this.modelName);
-        const fallbackProvider: LLMProvider | null =
-            (primaryProvider === 'google' && this.openaiKey) ? 'openai' :
-                (primaryProvider === 'openai' && this.googleKey) ? 'google' :
-                    (primaryProvider === 'bedrock' && this.openaiKey) ? 'openai' :
-                        (primaryProvider === 'openrouter' && this.openaiKey) ? 'openai' : null;
+        
+        // Build fallback chain: try all available providers
+        const fallbackProvider = this.getFallbackProvider(primaryProvider);
 
         const executeCall = async (p: LLMProvider, m?: string) => {
             if (p === 'openai') return this.callOpenAI(prompt, systemMessage, m);
@@ -68,12 +66,38 @@ export class MultiLLM {
             async () => {
                 if (!fallbackProvider) throw new Error(`Primary provider (${primaryProvider}) failed and no fallback available.`);
 
-                const fallbackModel = (fallbackProvider === 'openai') ? 'gpt-4o' : (fallbackProvider === 'google' ? 'gemini-2.5-flash' : this.modelName);
+                const fallbackModel = this.getDefaultModelForProvider(fallbackProvider);
                 logger.info(`MultiLLM: Falling back from ${primaryProvider} to ${fallbackProvider} (Using model: ${fallbackModel})`);
 
                 return ErrorHandler.withRetry(() => executeCall(fallbackProvider, fallbackModel), { maxRetries: 1 });
             }
         );
+    }
+
+    private getFallbackProvider(primaryProvider: LLMProvider): LLMProvider | null {
+        // Priority order for fallbacks based on what's configured
+        const fallbackOrder: LLMProvider[] = ['openai', 'google', 'openrouter', 'bedrock'];
+        
+        for (const provider of fallbackOrder) {
+            if (provider === primaryProvider) continue;
+            
+            if (provider === 'openai' && this.openaiKey) return 'openai';
+            if (provider === 'google' && this.googleKey) return 'google';
+            if (provider === 'openrouter' && this.openrouterKey) return 'openrouter';
+            if (provider === 'bedrock' && this.bedrockAccessKeyId) return 'bedrock';
+        }
+        
+        return null;
+    }
+
+    private getDefaultModelForProvider(provider: LLMProvider): string {
+        switch (provider) {
+            case 'openai': return 'gpt-4o';
+            case 'google': return 'gemini-2.0-flash';
+            case 'openrouter': return 'google/gemini-2.0-flash-exp:free';
+            case 'bedrock': return this.modelName;
+            default: return this.modelName;
+        }
     }
 
     public async analyzeMedia(filePath: string, prompt: string): Promise<string> {

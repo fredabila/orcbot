@@ -396,12 +396,16 @@ async function showToolingMenu() {
 }
 
 async function showModelsMenu() {
+    const currentProvider = agent.config.get('llmProvider') || 'auto (inferred from model name)';
+    
     const { provider } = await inquirer.prompt([
         {
             type: 'list',
             name: 'provider',
-            message: 'Select AI Provider to Configure:',
+            message: `AI Provider Settings (Primary: ${currentProvider}):`,
             choices: [
+                { name: `⭐ Set Primary Provider (current: ${currentProvider})`, value: 'set_primary' },
+                { name: '─────────────────────────', value: 'sep', disabled: true },
                 { name: 'OpenAI (GPT-4, etc.)', value: 'openai' },
                 { name: 'OpenRouter (multi-model gateway)', value: 'openrouter' },
                 { name: 'Google (Gemini Pro/Flash)', value: 'google' },
@@ -413,7 +417,9 @@ async function showModelsMenu() {
 
     if (provider === 'back') return showMainMenu();
 
-    if (provider === 'openai') {
+    if (provider === 'set_primary') {
+        await showSetPrimaryProvider();
+    } else if (provider === 'openai') {
         await showOpenAIConfig();
     } else if (provider === 'openrouter') {
         await showOpenRouterConfig();
@@ -422,6 +428,64 @@ async function showModelsMenu() {
     } else if (provider === 'bedrock') {
         await showBedrockConfig();
     }
+}
+
+async function showSetPrimaryProvider() {
+    const currentProvider = agent.config.get('llmProvider');
+    const hasOpenAI = !!agent.config.get('openaiApiKey');
+    const hasGoogle = !!agent.config.get('googleApiKey');
+    const hasOpenRouter = !!agent.config.get('openrouterApiKey');
+    const hasBedrock = !!agent.config.get('bedrockAccessKeyId');
+    
+    const choices = [
+        { 
+            name: `Auto (infer from model name)${!currentProvider ? ' ✓' : ''}`, 
+            value: 'auto' 
+        },
+        { 
+            name: `OpenAI${hasOpenAI ? '' : ' (no key configured)'}${currentProvider === 'openai' ? ' ✓' : ''}`, 
+            value: 'openai',
+            disabled: !hasOpenAI
+        },
+        { 
+            name: `Google Gemini${hasGoogle ? '' : ' (no key configured)'}${currentProvider === 'google' ? ' ✓' : ''}`, 
+            value: 'google',
+            disabled: !hasGoogle
+        },
+        { 
+            name: `OpenRouter${hasOpenRouter ? '' : ' (no key configured)'}${currentProvider === 'openrouter' ? ' ✓' : ''}`, 
+            value: 'openrouter',
+            disabled: !hasOpenRouter
+        },
+        { 
+            name: `AWS Bedrock${hasBedrock ? '' : ' (no credentials configured)'}${currentProvider === 'bedrock' ? ' ✓' : ''}`, 
+            value: 'bedrock',
+            disabled: !hasBedrock
+        },
+        { name: 'Back', value: 'back' }
+    ];
+    
+    const { selected } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'selected',
+            message: 'Select Primary LLM Provider:',
+            choices
+        }
+    ]);
+    
+    if (selected === 'back') return showModelsMenu();
+    
+    if (selected === 'auto') {
+        agent.config.set('llmProvider', undefined);
+        console.log('Primary provider set to AUTO (will infer from model name)');
+    } else {
+        agent.config.set('llmProvider', selected);
+        console.log(`Primary provider set to: ${selected.toUpperCase()}`);
+    }
+    
+    await waitKeyPress();
+    return showModelsMenu();
 }
 
 async function showOpenRouterConfig() {
@@ -452,7 +516,7 @@ async function showOpenRouterConfig() {
     if (action === 'key') {
         const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter OpenRouter API Key:' }]);
         agent.config.set('openrouterApiKey', val);
-        agent.config.set('llmProvider', 'openrouter');
+        // Don't auto-switch provider - user must explicitly set primary
     } else if (action === 'base') {
         const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter OpenRouter Base URL:', default: baseUrl }]);
         agent.config.set('openrouterBaseUrl', val);
@@ -465,7 +529,7 @@ async function showOpenRouterConfig() {
     } else if (action === 'model') {
         const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter OpenRouter Model ID:', default: currentModel || 'meta-llama/llama-3.3-70b-instruct:free' }]);
         agent.config.set('modelName', val);
-        agent.config.set('llmProvider', 'openrouter');
+        // Provider will be inferred from model name if llmProvider not explicitly set
     }
 
     console.log('OpenRouter settings updated!');
