@@ -76,3 +76,21 @@ These skills allow the agent to dynamically adjust its own behavior based on wha
 
 ## Community / Plugin Skills
 Custom plugin skills are loaded from ~/.orcbot/plugins. If you add new plugins there, they will appear in the agent’s live skill registry.
+
+## Configuration Management
+Agent-driven configuration management with policy-based security. See [docs/CONFIG_MANAGEMENT.md](docs/CONFIG_MANAGEMENT.md) for complete documentation.
+
+- **manage_config({ action: "get", key })**: Get current value of a configuration setting.
+- **manage_config({ action: "set", key, value, reason? })**: Set a configuration value (respects policy: SAFE, APPROVAL, or LOCKED).
+- **manage_config({ action: "list" })**: List all configurations categorized by policy level.
+- **manage_config({ action: "policy" })**: View configuration policy descriptions.
+- **manage_config({ action: "history", limit? })**: View configuration change history.
+- **manage_config({ action: "pending" })**: View pending approval requests.
+- **manage_config({ action: "approve", key })**: Approve a pending configuration change.
+- **manage_config({ action: "reject", key })**: Reject a pending configuration change.
+- **manage_config({ action: "suggest", taskDescription })**: Get configuration optimization suggestions for a task.
+
+### Policy Levels
+- **SAFE**: Agents can modify autonomously (e.g., modelName, memoryContextLimit, maxStepsPerAction)
+- **APPROVAL**: Agents can request, requires approval (e.g., API keys, autonomy settings)
+- **LOCKED**: Agents cannot modify (e.g., security settings like safeMode, commandDenyList)

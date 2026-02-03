@@ -9,6 +9,7 @@ import { Scheduler } from './Scheduler';
 import { ConfigManager } from '../config/ConfigManager';
 import { TelegramChannel } from '../channels/TelegramChannel';
 import { WhatsAppChannel } from '../channels/WhatsAppChannel';
+import { configManagementSkill } from '../skills/configManagement';
 import { WebBrowser } from '../tools/WebBrowser';
 import { WorkerProfileManager } from './WorkerProfile';
 import { AgentOrchestrator } from './AgentOrchestrator';
@@ -1961,6 +1962,9 @@ Be thorough and academic.`;
                 return this.tuner.resetToDefaults(category);
             }
         });
+
+        // Skill: Config Management
+        this.skills.registerSkill(configManagementSkill);
     }
 
     private loadAgentIdentity() {
