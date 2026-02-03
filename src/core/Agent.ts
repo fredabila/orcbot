@@ -1793,6 +1793,50 @@ This skill should prevent future failures when ${taskDescription.slice(0, 100)}.
         }
     }
 
+    /**
+     * Send progress feedback to the user via their original channel.
+     * Respects progressFeedbackEnabled config. Uses lightweight formats to avoid clutter.
+     */
+    private async sendProgressFeedback(
+        action: Action,
+        type: 'start' | 'working' | 'error' | 'recovering',
+        details?: string
+    ): Promise<void> {
+        if (!this.config.get('progressFeedbackEnabled')) return;
+        
+        // Only send feedback for channel-sourced actions
+        const source = action.payload?.source;
+        const sourceId = action.payload?.sourceId;
+        if (!source || !sourceId) return;
+        
+        // Craft compact, non-intrusive messages
+        let message = '';
+        switch (type) {
+            case 'start':
+                message = '⏳ Working on it...';
+                break;
+            case 'working':
+                message = details ? `⚙️ ${details}` : '⚙️ Still working...';
+                break;
+            case 'error':
+                message = details ? `⚠️ Hit a snag: ${details.slice(0, 100)}... retrying` : '⚠️ Encountered an issue, retrying...';
+                break;
+            case 'recovering':
+                message = details ? `🔧 ${details}` : '🔧 Recovering from error...';
+                break;
+        }
+        
+        try {
+            if (source === 'telegram' && this.telegram) {
+                await this.telegram.sendMessage(sourceId, message);
+            } else if (source === 'whatsapp' && this.whatsapp) {
+                await this.whatsapp.sendMessage(sourceId, message);
+            }
+        } catch (e) {
+            logger.debug(`Failed to send progress feedback: ${e}`);
+        }
+    }
+
     private isTrivialSocialIntent(text: string): boolean {
         const normalized = (text || '').toLowerCase();
         const quotedMatch = normalized.match(/"([^"]+)"/);
@@ -2558,6 +2602,12 @@ Respond with a single actionable task description (one sentence):`;
             const recentHist = this.memory.getRecentContext();
             const contextStr = recentHist.map(c => `[${c.type}] ${c.content}`).join('\n');
             const isSocialFastPath = this.isTrivialSocialIntent(action.payload.description || '');
+            
+            // PROGRESS FEEDBACK: Let user know we're working on non-trivial tasks
+            if (!isSocialFastPath && action.payload.source) {
+                await this.sendProgressFeedback(action, 'start');
+            }
+            
             const executionPlan = isSocialFastPath
                 ? 'Respond once with a brief, friendly reply and terminate immediately. Do not perform research or multi-step actions.'
                 : await this.simulationEngine.simulate(
@@ -2680,6 +2730,9 @@ Respond with a single actionable task description (one sentence):`;
                         if (loopCounter >= 3) {
                             logger.warn(`Agent: Detected persistent redundant logic loop (3x). Breaking action ${action.id}.`);
                             
+                            // PROGRESS FEEDBACK: Let user know we got stuck
+                            await this.sendProgressFeedback(action, 'recovering', 'Got stuck in a loop. Learning from this to improve...');
+                            
                             // SELF-IMPROVEMENT: When stuck in a loop, try to build a skill to solve it
                             const failingTool = decision.tools[0]?.name;
                             const failingContext = JSON.stringify(decision.tools[0]?.metadata || {}).slice(0, 200);
@@ -2744,8 +2797,10 @@ Respond with a single actionable task description (one sentence):`;
 
                         // 3. SAFETY GATING (Autonomy Lane)
                         // Autonomous background tasks cannot run dangerous commands without explicit user permission.
-                        const dangerousTools = ['run_command', 'write_to_file', 'install_npm_dependency'];
-                        if (action.lane === 'autonomy' && dangerousTools.includes(toolCall.name)) {
+                        // sudoMode: true bypasses this restriction (full trust)
+                        const sudoMode = this.config.get('sudoMode');
+                        const dangerousTools = ['run_command', 'write_to_file', 'write_file', 'create_file', 'install_npm_dependency', 'delete_file', 'manage_skills'];
+                        if (!sudoMode && action.lane === 'autonomy' && dangerousTools.includes(toolCall.name)) {
                             logger.warn(`Agent: Blocked dangerous tool ${toolCall.name} in autonomy lane.`);
 
                             // If we have a Telegram, notify the user
@@ -2777,6 +2832,9 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         } catch (e) {
                             logger.error(`Skill execution failed: ${toolCall.name} - ${e}`);
                             toolResult = `Error executing skill ${toolCall.name}: ${e}`;
+                            
+                            // PROGRESS FEEDBACK: Let user know we hit an error but are recovering
+                            await this.sendProgressFeedback(action, 'error', `${toolCall.name} failed`);
                         }
 
                         // CLARIFICATION HANDLING: Break sequence if agent is asking for info

@@ -70,6 +70,7 @@ export interface AgentConfig {
     autopilotNoQuestions?: boolean;
     autopilotNoQuestionsAllow?: string[];
     autopilotNoQuestionsDeny?: string[];
+    progressFeedbackEnabled?: boolean;
 }
 
 export class ConfigManager {
@@ -301,7 +302,8 @@ export class ConfigManager {
             skillRoutingRules: [],
             autopilotNoQuestions: false,
             autopilotNoQuestionsAllow: [],
-            autopilotNoQuestionsDeny: []
+            autopilotNoQuestionsDeny: [],
+            progressFeedbackEnabled: true
         };
     }
 

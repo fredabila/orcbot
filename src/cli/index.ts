@@ -1392,7 +1392,7 @@ async function showSecurityMenu() {
 async function showConfigMenu() {
     const config = agent.config.getAll();
     // Ensure we show explicit keys relative to core config
-    const keys = ['agentName', 'llmProvider', 'modelName', 'openaiApiKey', 'openrouterApiKey', 'openrouterBaseUrl', 'openrouterReferer', 'openrouterAppName', 'googleApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl', 'searchProviderOrder', 'captchaApiKey', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'whatsappAutoReplyEnabled', 'memoryPath', 'commandAllowList', 'commandDenyList', 'safeMode', 'sudoMode', 'pluginAllowList', 'pluginDenyList', 'browserProfileDir', 'browserProfileName'] as const;
+    const keys = ['agentName', 'llmProvider', 'modelName', 'openaiApiKey', 'openrouterApiKey', 'openrouterBaseUrl', 'openrouterReferer', 'openrouterAppName', 'googleApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl', 'searchProviderOrder', 'captchaApiKey', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'whatsappAutoReplyEnabled', 'progressFeedbackEnabled', 'memoryPath', 'commandAllowList', 'commandDenyList', 'safeMode', 'sudoMode', 'pluginAllowList', 'pluginDenyList', 'browserProfileDir', 'browserProfileName'] as const;
 
     const choices: { name: string, value: string }[] = keys.map(key => ({
         name: `${key}: ${config[key as keyof typeof config] || '(empty)'}`,
@@ -1433,7 +1433,7 @@ async function showConfigMenu() {
     if (key === 'searchProviderOrder' || key === 'commandAllowList' || key === 'commandDenyList' || key === 'pluginAllowList' || key === 'pluginDenyList') {
         const parsed = (value || '').split(',').map((s: string) => s.trim()).filter(Boolean);
         agent.config.set(key as any, parsed);
-    } else if (key === 'safeMode' || key === 'sudoMode') {
+    } else if (key === 'safeMode' || key === 'sudoMode' || key === 'progressFeedbackEnabled') {
         const normalized = String(value).trim().toLowerCase();
         agent.config.set(key as any, normalized === 'true' || normalized === '1' || normalized === 'yes');
     } else {
@@ -1568,9 +1568,14 @@ async function performUpdate() {
             console.log('\n📦 Installing dependencies...');
             execSync('npm install', { cwd: orcbotDir, stdio: 'inherit' });
             
-            // Rebuild
+            // Rebuild (use fast build if available, fallback to tsc)
             console.log('\n🔨 Rebuilding OrcBot...');
-            execSync('npm run build', { cwd: orcbotDir, stdio: 'inherit' });
+            try {
+                execSync('npm run build:fast', { cwd: orcbotDir, stdio: 'inherit' });
+            } catch (e) {
+                console.log('⚠️  Fast build unavailable, using standard build...');
+                execSync('npm run build', { cwd: orcbotDir, stdio: 'inherit' });
+            }
             
             // Re-link globally if needed
             const packageJson = JSON.parse(fs.readFileSync(path.join(orcbotDir, 'package.json'), 'utf8'));
