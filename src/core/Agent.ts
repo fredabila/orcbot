@@ -541,6 +541,9 @@ export class Agent {
                 const command = args.command || args.cmd || args.text;
                 if (!command) return 'Error: Missing command string.';
 
+                // Log the command being executed
+                logger.info(`run_command: Executing command: ${command}`);
+
                 const isWindows = process.platform === 'win32';
                 const trimmedCmd = String(command).trim();
 
@@ -2627,6 +2630,39 @@ Respond with a single actionable task description (one sentence):`;
             : '# Agent Learning Base\nThis file contains structured knowledge on various topics.\n';
         fs.writeFileSync(learningPath, defaultLearning);
 
+        // Clear heartbeat data
+        const heartbeatDir = path.dirname(actionPath);
+        const lastHeartbeatPath = path.join(heartbeatDir, 'last_heartbeat');
+        const lastHeartbeatAutonomyPath = path.join(heartbeatDir, 'last_heartbeat_autonomy');
+        const heartbeatSchedulesPath = path.join(heartbeatDir, 'heartbeat-schedules.json');
+        
+        if (fs.existsSync(lastHeartbeatPath)) {
+            fs.unlinkSync(lastHeartbeatPath);
+            logger.info('Agent: Cleared last_heartbeat file');
+        }
+        if (fs.existsSync(lastHeartbeatAutonomyPath)) {
+            fs.unlinkSync(lastHeartbeatAutonomyPath);
+            logger.info('Agent: Cleared last_heartbeat_autonomy file');
+        }
+        if (fs.existsSync(heartbeatSchedulesPath)) {
+            fs.writeFileSync(heartbeatSchedulesPath, '[]', 'utf8');
+            logger.info('Agent: Cleared heartbeat schedules');
+        }
+
+        // Stop and clear all running heartbeat jobs
+        for (const [id, cron] of this.heartbeatJobs.entries()) {
+            cron.stop();
+            logger.info(`Agent: Stopped heartbeat job: ${id}`);
+        }
+        this.heartbeatJobs.clear();
+        this.heartbeatJobMeta.clear();
+
+        // Reset heartbeat tracking variables
+        this.lastHeartbeatAt = Date.now();
+        this.lastActionTime = Date.now();
+        this.consecutiveIdleHeartbeats = 0;
+        this.lastHeartbeatProductive = true;
+
         // Reload managers
         this.memory = new MemoryManager(memoryPath, userPath);
         this.actionQueue = new ActionQueue(actionPath);
@@ -3043,7 +3079,30 @@ Respond with a single actionable task description (one sentence):`;
                                 continue;
                             }
 
-                            // 2. Communication Cooldown: Block if no new deep info since last message
+                            // 2. COMPLETION MESSAGE CONTRADICTION CHECK
+                            // If the message claims completion but verification.goals_met is false, block it
+                            const completionPhrases = [
+                                'done', 'completed', 'finished', 'deployed', 'ready',
+                                'successfully', 'all set', 'live now', 'published'
+                            ];
+                            const messageIndicatesCompletion = completionPhrases.some(phrase => 
+                                currentMessage.toLowerCase().includes(phrase)
+                            );
+                            
+                            if (messageIndicatesCompletion && !decision.verification?.goals_met) {
+                                logger.warn(`Agent: Blocked premature completion message in action ${action.id}. Message claims completion but goals_met=false. Message: "${currentMessage.slice(0, 100)}..."`);
+                                
+                                // Save to memory so the agent learns not to do this
+                                this.memory.saveMemory({
+                                    id: `${action.id}-step-${currentStep}-blocked-premature-completion`,
+                                    type: 'short',
+                                    content: `[SYSTEM: BLOCKED premature completion message. You tried to tell the user the task is done, but verification.goals_met was false. This means you haven't actually completed the task yet. Continue working and only claim completion when goals_met=true.]`,
+                                    metadata: { actionId: action.id, step: currentStep }
+                                });
+                                continue;
+                            }
+
+                            // 3. Communication Cooldown: Block if no new deep info since last message
                             // Exceptions: 
                             // - Step 1 is mandatory (Greeter)
                             // - If 15+ steps have passed without an update (Status update for long tasks)
@@ -3052,7 +3111,7 @@ Respond with a single actionable task description (one sentence):`;
                                 continue;
                             }
 
-                            // 3. Block double-messages in a single step
+                            // 4. Block double-messages in a single step
                             if (hasSentMessageInThisStep) {
                                 logger.warn(`Agent: Blocked redundant message in action ${action.id} (Already sent message in this step).`);
                                 continue;
@@ -3064,7 +3123,7 @@ Respond with a single actionable task description (one sentence):`;
                             deepToolExecutedSinceLastMessage = false; // Reset cooldown after sending
                             stepsSinceLastMessage = 0; // Reset status update timer
                             
-                            // 4. QUESTION DETECTION: If message contains a question, pause and wait for response
+                            // 5. QUESTION DETECTION: If message contains a question, pause and wait for response
                             if (this.messageContainsQuestion(currentMessage)) {
                                 logger.info(`Agent: Message contains question. Will pause after sending to wait for user response.`);
                                 // Mark that we should break after this tool executes
