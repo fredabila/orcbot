@@ -1,5 +1,6 @@
 import { chromium, Browser, Page, BrowserContext } from 'playwright';
 import { logger } from '../utils/logger';
+import { RuntimeTuner } from '../core/RuntimeTuner';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
@@ -14,6 +15,7 @@ export class WebBrowser {
     private profileHistoryPath?: string;
     private headlessMode: boolean = true;
     private lastNavigatedUrl?: string;
+    private tuner?: RuntimeTuner;
 
     public get page(): Page | null {
         return this._page;
@@ -26,10 +28,12 @@ export class WebBrowser {
         private searxngUrl?: string,
         private searchProviderOrder: string[] = ['serper', 'brave', 'searxng', 'google', 'bing', 'duckduckgo'],
         browserProfileDir?: string,
-        browserProfileName?: string
+        browserProfileName?: string,
+        tuner?: RuntimeTuner
     ) {
         this.profileDir = browserProfileDir;
         this.profileName = browserProfileName || 'default';
+        this.tuner = tuner;
     }
 
     private async ensureBrowser(headlessOverride?: boolean) {
@@ -81,6 +85,12 @@ export class WebBrowser {
 
     // Sites known to block headless browsers aggressively
     private shouldUseHeadful(url: string): boolean {
+        // First check if tuner has learned this domain needs headful
+        if (this.tuner?.shouldForceHeadful(url)) {
+            logger.debug(`Browser: Tuner says ${url} requires headful mode`);
+            return true;
+        }
+
         const blockedDomains = [
             'youtube.com',
             'google.com/search',
@@ -187,6 +197,14 @@ export class WebBrowser {
 
             if (looksBlank && this.headlessMode && allowHeadfulRetry) {
                 logger.warn('Browser: Page appears blank in headless mode. Retrying headful...');
+                // Auto-learn: this domain needs headful
+                if (this.tuner) {
+                    try {
+                        const domain = new URL(url).hostname.replace('www.', '');
+                        this.tuner.markDomainAsHeadful(domain, 'Auto-learned: headless returned blank page');
+                        logger.info(`Browser: Auto-tuned ${domain} to require headful mode`);
+                    } catch {}
+                }
                 await this.ensureBrowser(false);
                 return this.navigate(url, waitSelectors, false);
             }
@@ -555,13 +573,28 @@ export class WebBrowser {
                 finalSelector = `[data-orcbot-ref="${selector}"]`;
             }
 
+            // Get tuned settings for current domain
+            const settings = this.lastNavigatedUrl 
+                ? this.tuner?.getBrowserSettingsForDomain(this.lastNavigatedUrl)
+                : null;
+            const clickTimeout = settings?.clickTimeout || 15000;
+            const waitAfterClick = settings?.waitAfterClick || 1000;
+
             // Wait for element to exist first, then click
             await this.page!.waitForSelector(finalSelector, { timeout: 10000, state: 'attached' }).catch(() => {});
             await this.page!.waitForTimeout(300); // Small delay for dynamic elements
-            await this.page!.click(finalSelector, { timeout: 15000 });
-            await this.waitForStablePage(5000); // Wait for any navigation/updates after click
+            await this.page!.click(finalSelector, { timeout: clickTimeout });
+            await this.waitForStablePage(waitAfterClick); // Wait for any navigation/updates after click
             return `Successfully clicked: ${selector}`;
         } catch (e) {
+            // Learn from failure - if timeout, increase timeout for next time
+            if (this.lastNavigatedUrl && this.tuner && String(e).includes('Timeout')) {
+                try {
+                    const domain = new URL(this.lastNavigatedUrl).hostname.replace('www.', '');
+                    this.tuner.tuneBrowserForDomain(domain, { clickTimeout: 30000, waitAfterClick: 2000 }, 'Auto-learned: click timed out');
+                    logger.info(`Browser: Auto-tuned ${domain} with increased click timeout`);
+                } catch {}
+            }
             return `Failed to click ${selector}: ${e}`;
         }
     }
@@ -576,20 +609,52 @@ export class WebBrowser {
                 finalSelector = `[data-orcbot-ref="${selector}"]`;
             }
 
+            // Get tuned settings for current domain
+            const settings = this.lastNavigatedUrl 
+                ? this.tuner?.getBrowserSettingsForDomain(this.lastNavigatedUrl)
+                : null;
+            const typeTimeout = settings?.typeTimeout || 15000;
+            const useSlowTyping = settings?.useSlowTyping || false;
+            const slowTypingDelay = settings?.slowTypingDelay || 50;
+
             // Wait for element, focus it, then type
             await this.page!.waitForSelector(finalSelector, { timeout: 10000, state: 'attached' }).catch(() => {});
             await this.page!.waitForTimeout(300); // Small delay for dynamic elements
             
-            // Try fill first, fall back to typing character by character
-            try {
-                await this.page!.fill(finalSelector, text, { timeout: 10000 });
-            } catch {
-                // Fallback: click element and type character by character (for stubborn inputs)
+            // Try fill first (fast), fall back to typing character by character
+            if (useSlowTyping) {
+                // Site requires slow typing - skip fill
                 await this.page!.click(finalSelector, { timeout: 5000 });
-                await this.page!.keyboard.type(text, { delay: 50 });
+                await this.page!.keyboard.type(text, { delay: slowTypingDelay });
+            } else {
+                try {
+                    await this.page!.fill(finalSelector, text, { timeout: typeTimeout });
+                } catch (fillError) {
+                    // Fallback: click element and type character by character (for stubborn inputs)
+                    await this.page!.click(finalSelector, { timeout: 5000 });
+                    await this.page!.keyboard.type(text, { delay: slowTypingDelay });
+                    
+                    // Auto-learn: this domain needs slow typing
+                    if (this.lastNavigatedUrl && this.tuner) {
+                        try {
+                            const domain = new URL(this.lastNavigatedUrl).hostname.replace('www.', '');
+                            this.tuner.tuneBrowserForDomain(domain, { useSlowTyping: true }, 'Auto-learned: fill() failed, slow typing worked');
+                            logger.info(`Browser: Auto-tuned ${domain} to use slow typing`);
+                        } catch {}
+                    }
+                }
             }
             return `Successfully typed into ${selector}: "${text}"`;
         } catch (e) {
+            // Learn from failure
+            if (this.lastNavigatedUrl && this.tuner && String(e).includes('Timeout')) {
+                try {
+                    const domain = new URL(this.lastNavigatedUrl).hostname.replace('www.', '');
+                    // If it timed out, try increasing the timeout for next time
+                    this.tuner.tuneBrowserForDomain(domain, { typeTimeout: 30000, useSlowTyping: true }, 'Auto-learned: type timed out');
+                    logger.info(`Browser: Auto-tuned ${domain} with increased type timeout`);
+                } catch {}
+            }
             return `Failed to type in ${selector}: ${e}`;
         }
     }

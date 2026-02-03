@@ -12,6 +12,7 @@ import { WhatsAppChannel } from '../channels/WhatsAppChannel';
 import { WebBrowser } from '../tools/WebBrowser';
 import { WorkerProfileManager } from './WorkerProfile';
 import { AgentOrchestrator } from './AgentOrchestrator';
+import { RuntimeTuner } from './RuntimeTuner';
 import { Cron } from 'croner';
 import { Readability } from '@mozilla/readability';
 import { DOMParser } from 'linkedom';
@@ -28,6 +29,7 @@ export class Agent {
     public skills: SkillsManager;
     public decisionEngine: DecisionEngine;
     public simulationEngine: SimulationEngine;
+    public tuner: RuntimeTuner;
     public actionQueue: ActionQueue;
     public scheduler: Scheduler;
     public config: ConfigManager;
@@ -110,6 +112,10 @@ export class Agent {
         this.simulationEngine = new SimulationEngine(this.llm);
         this.actionQueue = new ActionQueue(this.config.get('actionQueuePath') || './actions.json');
         this.scheduler = new Scheduler();
+        
+        // Initialize RuntimeTuner for self-tuning capabilities
+        this.tuner = new RuntimeTuner(path.dirname(this.config.get('memoryPath')));
+        
         this.browser = new WebBrowser(
             this.config.get('serperApiKey'),
             this.config.get('captchaApiKey'),
@@ -117,7 +123,8 @@ export class Agent {
             this.config.get('searxngUrl'),
             this.config.get('searchProviderOrder'),
             this.config.get('browserProfileDir'),
-            this.config.get('browserProfileName')
+            this.config.get('browserProfileName'),
+            this.tuner // Pass tuner to browser
         );
         this.workerProfile = new WorkerProfileManager();
         this.orchestrator = new AgentOrchestrator();
@@ -1834,6 +1841,123 @@ Be thorough and academic.`;
                 });
 
                 return `Created clone "${clone.name}" (${clone.id}) with full capabilities. Use delegate_task() to assign work to this clone.`;
+            }
+        });
+
+        // ============ SELF-TUNING SKILLS ============
+        
+        // Skill: Get Tunable Options
+        this.skills.registerSkill({
+            name: 'get_tuning_options',
+            description: 'Get all available settings that can be tuned. Use this to discover what you can adjust.',
+            usage: 'get_tuning_options()',
+            handler: async () => {
+                const options = this.tuner.getTunableOptions();
+                return JSON.stringify(options, null, 2);
+            }
+        });
+
+        // Skill: Tune Browser for Domain
+        this.skills.registerSkill({
+            name: 'tune_browser_domain',
+            description: 'Adjust browser settings for a specific domain. Use when a site fails with timeouts or blocks.',
+            usage: 'tune_browser_domain(domain, settings, reason)',
+            handler: async (args: any) => {
+                const domain = args.domain;
+                const reason = args.reason || 'Agent-initiated tuning';
+                
+                if (!domain) return 'Error: Missing domain (e.g., "example.com")';
+
+                const settings: any = {};
+                if (args.forceHeadful !== undefined) settings.forceHeadful = args.forceHeadful;
+                if (args.navigationTimeout !== undefined) settings.navigationTimeout = Number(args.navigationTimeout);
+                if (args.clickTimeout !== undefined) settings.clickTimeout = Number(args.clickTimeout);
+                if (args.typeTimeout !== undefined) settings.typeTimeout = Number(args.typeTimeout);
+                if (args.useSlowTyping !== undefined) settings.useSlowTyping = args.useSlowTyping;
+                if (args.slowTypingDelay !== undefined) settings.slowTypingDelay = Number(args.slowTypingDelay);
+                if (args.waitAfterClick !== undefined) settings.waitAfterClick = Number(args.waitAfterClick);
+
+                if (Object.keys(settings).length === 0) {
+                    return 'Error: No settings provided. Available: forceHeadful, navigationTimeout, clickTimeout, typeTimeout, useSlowTyping, slowTypingDelay, waitAfterClick';
+                }
+
+                return this.tuner.tuneBrowserForDomain(domain, settings, reason);
+            }
+        });
+
+        // Skill: Mark Domain as Headful
+        this.skills.registerSkill({
+            name: 'mark_headful',
+            description: 'Mark a domain as requiring visible browser (headful mode). Use when headless mode fails.',
+            usage: 'mark_headful(domain, reason?)',
+            handler: async (args: any) => {
+                const domain = args.domain;
+                const reason = args.reason || 'Headless mode detected/blocked';
+                
+                if (!domain) return 'Error: Missing domain';
+                return this.tuner.markDomainAsHeadful(domain, reason);
+            }
+        });
+
+        // Skill: Tune Workflow
+        this.skills.registerSkill({
+            name: 'tune_workflow',
+            description: 'Adjust workflow execution settings like retries, timeouts, and step limits.',
+            usage: 'tune_workflow(settings, reason)',
+            handler: async (args: any) => {
+                const reason = args.reason || 'Agent-initiated tuning';
+                const settings: any = {};
+
+                if (args.maxStepsPerAction !== undefined) settings.maxStepsPerAction = Number(args.maxStepsPerAction);
+                if (args.maxRetriesPerSkill !== undefined) settings.maxRetriesPerSkill = Number(args.maxRetriesPerSkill);
+                if (args.retryDelayMs !== undefined) settings.retryDelayMs = Number(args.retryDelayMs);
+                if (args.skillTimeoutMs !== undefined) settings.skillTimeoutMs = Number(args.skillTimeoutMs);
+
+                if (Object.keys(settings).length === 0) {
+                    return 'Error: No settings provided. Available: maxStepsPerAction, maxRetriesPerSkill, retryDelayMs, skillTimeoutMs';
+                }
+
+                return this.tuner.tuneWorkflow(settings, reason);
+            }
+        });
+
+        // Skill: Get Tuning State
+        this.skills.registerSkill({
+            name: 'get_tuning_state',
+            description: 'Get the current tuning state including all learned settings and history.',
+            usage: 'get_tuning_state()',
+            handler: async () => {
+                const state = this.tuner.getFullState();
+                return JSON.stringify(state, null, 2);
+            }
+        });
+
+        // Skill: Get Tuning History
+        this.skills.registerSkill({
+            name: 'get_tuning_history',
+            description: 'Get recent tuning changes and their outcomes.',
+            usage: 'get_tuning_history(limit?)',
+            handler: async (args: any) => {
+                const limit = args.limit ? Number(args.limit) : 20;
+                const history = this.tuner.getTuningHistory(limit);
+                if (history.length === 0) return 'No tuning history yet.';
+                return history.map(h => 
+                    `[${h.timestamp}] ${h.domain ? `Domain: ${h.domain} | ` : ''}${h.setting}: ${JSON.stringify(h.oldValue)} → ${JSON.stringify(h.newValue)}\n  Reason: ${h.reason}${h.success !== undefined ? ` | Success: ${h.success}` : ''}`
+                ).join('\n\n');
+            }
+        });
+
+        // Skill: Reset Tuning
+        this.skills.registerSkill({
+            name: 'reset_tuning',
+            description: 'Reset tuning to defaults. Use if tuning caused problems.',
+            usage: 'reset_tuning(category?)',
+            handler: async (args: any) => {
+                const category = args.category;
+                if (category && !['browser', 'workflow', 'llm'].includes(category)) {
+                    return 'Error: Invalid category. Valid: browser, workflow, llm (or omit for all)';
+                }
+                return this.tuner.resetToDefaults(category);
             }
         });
     }

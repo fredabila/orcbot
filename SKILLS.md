@@ -63,5 +63,16 @@ This file lists the available skills for the agent.
 - **get_agent_messages(agent_id?, limit?)**: Retrieve agent messages.
 - **clone_self(clone_name, specialized_role?)**: Create a full-capability clone.
 
+## Self-Tuning & Adaptation
+These skills allow the agent to dynamically adjust its own behavior based on what's working.
+
+- **get_tuning_options()**: Discover all available tunable settings (browser, workflow, LLM).
+- **tune_browser_domain(domain, settings, reason)**: Adjust browser settings for a specific domain (e.g., forceHeadful, clickTimeout, useSlowTyping).
+- **mark_headful(domain, reason?)**: Mark a domain as requiring visible browser mode.
+- **tune_workflow(settings, reason)**: Adjust workflow settings (maxStepsPerAction, maxRetriesPerSkill, retryDelayMs).
+- **get_tuning_state()**: View current tuning configuration and learned settings.
+- **get_tuning_history(limit?)**: See recent tuning changes and their outcomes.
+- **reset_tuning(category?)**: Reset tuning to defaults (browser, workflow, llm, or all).
+
 ## Community / Plugin Skills
 Custom plugin skills are loaded from ~/.orcbot/plugins. If you add new plugins there, they will appear in the agent’s live skill registry.
