@@ -665,6 +665,7 @@ async function showModelsMenu() {
                 { name: 'OpenAI (GPT-4, etc.)', value: 'openai' },
                 { name: 'OpenRouter (multi-model gateway)', value: 'openrouter' },
                 { name: 'Google (Gemini Pro/Flash)', value: 'google' },
+                { name: 'NVIDIA (AI models)', value: 'nvidia' },
                 { name: 'AWS Bedrock (Claude/other foundation models)', value: 'bedrock' },
                 { name: 'Back', value: 'back' }
             ]
@@ -681,6 +682,8 @@ async function showModelsMenu() {
         await showOpenRouterConfig();
     } else if (provider === 'google') {
         await showGeminiConfig();
+    } else if (provider === 'nvidia') {
+        await showNvidiaConfig();
     } else if (provider === 'bedrock') {
         await showBedrockConfig();
     }
@@ -691,6 +694,7 @@ async function showSetPrimaryProvider() {
     const hasOpenAI = !!agent.config.get('openaiApiKey');
     const hasGoogle = !!agent.config.get('googleApiKey');
     const hasOpenRouter = !!agent.config.get('openrouterApiKey');
+    const hasNvidia = !!agent.config.get('nvidiaApiKey');
     const hasBedrock = !!agent.config.get('bedrockAccessKeyId');
     
     const choices = [
@@ -712,6 +716,11 @@ async function showSetPrimaryProvider() {
             name: `OpenRouter${hasOpenRouter ? '' : ' (no key configured)'}${currentProvider === 'openrouter' ? ' ✓' : ''}`, 
             value: 'openrouter',
             disabled: !hasOpenRouter
+        },
+        { 
+            name: `NVIDIA${hasNvidia ? '' : ' (no key configured)'}${currentProvider === 'nvidia' ? ' ✓' : ''}`, 
+            value: 'nvidia',
+            disabled: !hasNvidia
         },
         { 
             name: `AWS Bedrock${hasBedrock ? '' : ' (no credentials configured)'}${currentProvider === 'bedrock' ? ' ✓' : ''}`, 
@@ -855,6 +864,39 @@ async function showGeminiConfig() {
     console.log('Gemini settings updated!');
     await waitKeyPress();
     return showGeminiConfig();
+}
+
+async function showNvidiaConfig() {
+    const currentModel = agent.config.get('modelName');
+    const apiKey = agent.config.get('nvidiaApiKey') || 'Not Set';
+    const displayKey = apiKey === 'Not Set' ? 'Not Set' : `${apiKey.substring(0, Math.min(8, apiKey.length))}...`;
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: `NVIDIA Settings (Active Model: ${currentModel}):`,
+            choices: [
+                { name: `Set API Key (current: ${displayKey})`, value: 'key' },
+                { name: 'Set Model Name', value: 'model' },
+                { name: 'Back', value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showModelsMenu();
+
+    if (action === 'key') {
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter NVIDIA API Key:' }]);
+        agent.config.set('nvidiaApiKey', val);
+    } else if (action === 'model') {
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter Model (e.g., nvidia:moonshotai/kimi-k2.5):', default: 'nvidia:moonshotai/kimi-k2.5' }]);
+        agent.config.set('modelName', val);
+    }
+
+    console.log('NVIDIA settings updated!');
+    await waitKeyPress();
+    return showNvidiaConfig();
 }
 
 async function showBedrockConfig() {
