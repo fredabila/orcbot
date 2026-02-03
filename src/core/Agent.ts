@@ -720,18 +720,26 @@ export class Agent {
                 let actualCommand = command;
                 
                 // Match patterns like: "cd /path/to/dir ; command" or "cd C:\path ; command"
-                const cdPattern = /^\s*cd\s+([^\s;]+)\s*[;&]+\s*(.+)$/i;
+                // Supports paths with or without quotes
+                const cdPattern = /^\s*cd\s+([^\s;&]+|'[^']+'|"[^"]+"|`[^`]+`)\s*[;&]+\s*(.+)$/i;
                 const cdMatch = trimmed.match(cdPattern);
                 
                 if (cdMatch) {
-                    const targetDir = cdMatch[1].trim();
+                    let targetDir = cdMatch[1].trim();
                     const remainingCmd = cdMatch[2].trim();
+                    
+                    // Remove surrounding quotes if present
+                    if ((targetDir.startsWith('"') && targetDir.endsWith('"')) ||
+                        (targetDir.startsWith("'") && targetDir.endsWith("'")) ||
+                        (targetDir.startsWith('`') && targetDir.endsWith('`'))) {
+                        targetDir = targetDir.slice(1, -1);
+                    }
                     
                     // Use the extracted directory as cwd and run only the remaining command
                     workingDir = targetDir;
                     actualCommand = remainingCmd;
                     
-                    logger.info(`run_command: Detected directory change pattern. Using cwd="${workingDir}" for command: ${actualCommand}`);
+                    logger.debug(`run_command: Detected directory change pattern. Using cwd for command execution.`);
                 }
 
                 const firstToken = actualCommand.trim().split(/\s+/)[0]?.toLowerCase() || '';
