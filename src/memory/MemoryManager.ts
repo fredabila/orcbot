@@ -108,8 +108,20 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
 
     public getRecentContext(limit: number = 20): MemoryEntry[] {
         const episodic = this.searchMemory('episodic').slice(-5); // Include last 5 summaries
-        const short = this.searchMemory('short').slice(-limit);
-        return [...episodic, ...short];
+        const short = this.searchMemory('short');
+        
+        // Sort all by timestamp (most recent first)
+        const sorted = [...short].sort((a, b) => {
+            const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+            const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+            return tb - ta; // Descending (newest first)
+        });
+        
+        // Take the most recent N
+        const recentShort = sorted.slice(0, limit);
+        
+        // Return episodic summaries + recent short memories, with recent first
+        return [...recentShort, ...episodic];
     }
 
     public getContactProfile(jid: string): string | null {

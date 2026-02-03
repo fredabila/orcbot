@@ -1983,9 +1983,22 @@ This skill should prevent future failures when ${taskDescription.slice(0, 100)}.
     private buildSmartHeartbeatPrompt(idleTimeMs: number, workerCount: number, availableWorkers: number): string {
         // Get recent memory to understand context and find actionable opportunities
         const recentMemories = this.memory.getRecentContext(20);
+        const now = Date.now();
+        
+        // Format memories with relative time for recency awareness
         const recentContext = recentMemories
             .filter(m => m.type === 'episodic' || m.type === 'short')
-            .map(m => m.content)
+            .map(m => {
+                const ts = m.timestamp ? new Date(m.timestamp).getTime() : 0;
+                const ageMs = now - ts;
+                const ageMinutes = Math.floor(ageMs / 60000);
+                const ageStr = ageMinutes < 60 
+                    ? `${ageMinutes}m ago` 
+                    : ageMinutes < 1440 
+                        ? `${Math.floor(ageMinutes / 60)}h ago`
+                        : `${Math.floor(ageMinutes / 1440)}d ago`;
+                return `[${ageStr}] ${m.content}`;
+            })
             .join('\n');
 
         // Check for incomplete/failed tasks
@@ -2007,9 +2020,10 @@ This skill should prevent future failures when ${taskDescription.slice(0, 100)}.
         return `
 PROACTIVE HEARTBEAT - Idle for ${Math.floor(idleTimeMs / 60000)} minutes.
 Workers: ${availableWorkers} available / ${workerCount} total
+Current Time: ${new Date().toLocaleString()}
 
 ═══════════════════════════════════════════
-RECENT CONVERSATION & TASKS:
+RECENT CONVERSATION & TASKS (sorted by recency):
 ${recentContext.slice(0, 2000) || 'No recent activity'}
 
 RECENT TASK HISTORY:
@@ -2020,6 +2034,12 @@ ${userContext.slice(0, 300) || 'No profile yet'}
 ═══════════════════════════════════════════
 
 YOU HAVE FULL CAPABILITIES. Based on the context above, choose an ACTION:
+
+⚡ **PRIORITIZATION RULES**:
+- PRIORITIZE items from the last few minutes/hours over older items
+- Items marked "Xm ago" or "Xh ago" are NEWER and should take priority
+- Items marked "Xd ago" (days) are OLDER - only act on these if nothing recent is actionable
+- If the user asked you to do something recently, that takes priority over old tasks
 
 🔄 **FOLLOW UP ON SOMETHING**
 - Did the user ask you to check something later? Do it now.
@@ -2050,6 +2070,7 @@ YOU HAVE FULL CAPABILITIES. Based on the context above, choose an ACTION:
 - Don't force an action if there's genuinely nothing useful
 
 RULES:
+- RECENT actions (minutes/hours ago) take priority over OLD ones (days ago)
 - Actions must relate to the conversation context above
 - Be genuinely helpful, not performative
 - If you message the user, have something valuable to say
