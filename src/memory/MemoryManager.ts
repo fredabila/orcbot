@@ -163,10 +163,39 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
     public saveContactProfile(jid: string, content: string) {
         const profilePath = path.join(this.profilesDir, `${jid.replace(/[^a-zA-Z0-9]/g, '_')}.json`);
         try {
-            fs.writeFileSync(profilePath, content);
+            // If content is a JSON string, parse and enhance it with metadata
+            let profileData: any;
+            try {
+                profileData = JSON.parse(content);
+            } catch {
+                // If not JSON, wrap it in a simple structure
+                profileData = { notes: content };
+            }
+            
+            // Add/update metadata
+            profileData.jid = jid;
+            profileData.lastUpdated = new Date().toISOString();
+            if (!profileData.createdAt) {
+                profileData.createdAt = new Date().toISOString();
+            }
+            
+            // Save as formatted JSON
+            fs.writeFileSync(profilePath, JSON.stringify(profileData, null, 2));
             logger.info(`Contact profile saved for ${jid}`);
         } catch (e) {
             logger.error(`Error saving contact profile for ${jid}: ${e}`);
+        }
+    }
+
+    public listContactProfiles(): string[] {
+        try {
+            const files = fs.readdirSync(this.profilesDir);
+            return files
+                .filter(f => f.endsWith('.json'))
+                .map(f => f.replace('.json', '').replace(/_/g, ''));
+        } catch (e) {
+            logger.error(`Error listing contact profiles: ${e}`);
+            return [];
         }
     }
 }

@@ -532,6 +532,163 @@ export class Agent {
             }
         });
 
+        // Skill: Get Contact Profile
+        this.skills.registerSkill({
+            name: 'get_contact_profile',
+            description: 'Retrieve the stored profile/context for a specific WhatsApp contact.',
+            usage: 'get_contact_profile(jid)',
+            handler: async (args: any) => {
+                const jid = args.jid || args.to || args.id;
+
+                if (!jid) return 'Error: Missing jid.';
+
+                try {
+                    const profile = this.memory.getContactProfile(jid);
+                    if (!profile) {
+                        return `No profile found for ${jid}. You can create one using 'update_contact_profile'.`;
+                    }
+                    return `Profile for ${jid}:\n${profile}`;
+                } catch (e) {
+                    return `Error retrieving profile: ${e}`;
+                }
+            }
+        });
+
+        // Skill: List WhatsApp Contacts
+        this.skills.registerSkill({
+            name: 'list_whatsapp_contacts',
+            description: 'List recent WhatsApp contacts that have interacted with the bot. Returns contact JIDs from recent memory.',
+            usage: 'list_whatsapp_contacts(limit?)',
+            handler: async (args: any) => {
+                const limit = parseInt(args.limit || '20', 10);
+
+                try {
+                    // Get recent WhatsApp messages from memory
+                    const memories = this.memory.searchMemory('short');
+                    const whatsappMessages = memories.filter((m: any) => 
+                        m.metadata?.source === 'whatsapp' && 
+                        m.metadata?.senderId && 
+                        m.metadata?.senderId !== 'status@broadcast'
+                    );
+
+                    // Extract unique contacts with their last interaction
+                    const contactMap = new Map<string, { jid: string; name: string; lastMessage: string; timestamp: string }>();
+                    
+                    for (const msg of whatsappMessages) {
+                        const jid = msg.metadata.senderId;
+                        const name = msg.metadata.senderName || jid;
+                        if (!contactMap.has(jid)) {
+                            contactMap.set(jid, {
+                                jid,
+                                name,
+                                lastMessage: msg.content.substring(0, 100),
+                                timestamp: msg.timestamp
+                            });
+                        }
+                    }
+
+                    const contacts = Array.from(contactMap.values())
+                        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+                        .slice(0, limit);
+
+                    if (contacts.length === 0) {
+                        return 'No recent WhatsApp contacts found in memory.';
+                    }
+
+                    const formatted = contacts.map((c, i) => 
+                        `${i + 1}. ${c.name} (${c.jid})\n   Last: ${c.lastMessage.substring(0, 60)}...\n   Time: ${c.timestamp}`
+                    ).join('\n\n');
+
+                    return `Recent WhatsApp Contacts (${contacts.length}):\n\n${formatted}`;
+                } catch (e) {
+                    return `Error listing contacts: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Search Chat History
+        this.skills.registerSkill({
+            name: 'search_chat_history',
+            description: 'Search chat history with a specific WhatsApp contact. Returns recent messages from memory.',
+            usage: 'search_chat_history(jid, limit?)',
+            handler: async (args: any) => {
+                const jid = args.jid || args.to || args.id;
+                const limit = parseInt(args.limit || '10', 10);
+
+                if (!jid) return 'Error: Missing jid.';
+
+                try {
+                    const memories = this.memory.searchMemory('short');
+                    const chatHistory = memories
+                        .filter((m: any) => 
+                            m.metadata?.source === 'whatsapp' && 
+                            m.metadata?.senderId === jid
+                        )
+                        .slice(-limit)
+                        .reverse();
+
+                    if (chatHistory.length === 0) {
+                        return `No chat history found for ${jid}.`;
+                    }
+
+                    const formatted = chatHistory.map((m: any, i: number) => 
+                        `[${m.timestamp}] ${m.content}`
+                    ).join('\n\n');
+
+                    return `Chat history with ${jid} (${chatHistory.length} messages):\n\n${formatted}`;
+                } catch (e) {
+                    return `Error searching chat history: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Get WhatsApp Chat Context
+        this.skills.registerSkill({
+            name: 'get_whatsapp_context',
+            description: 'Get comprehensive context about a WhatsApp contact including their profile, recent chat history, and relationship notes.',
+            usage: 'get_whatsapp_context(jid)',
+            handler: async (args: any) => {
+                const jid = args.jid || args.to || args.id;
+
+                if (!jid) return 'Error: Missing jid.';
+
+                try {
+                    // Get profile
+                    const profile = this.memory.getContactProfile(jid);
+                    
+                    // Get recent chat history
+                    const memories = this.memory.searchMemory('short');
+                    const chatHistory = memories
+                        .filter((m: any) => 
+                            m.metadata?.source === 'whatsapp' && 
+                            m.metadata?.senderId === jid
+                        )
+                        .slice(-5);
+
+                    let context = `=== WhatsApp Context for ${jid} ===\n\n`;
+                    
+                    if (profile) {
+                        context += `📋 PROFILE:\n${profile}\n\n`;
+                    } else {
+                        context += `📋 PROFILE: No profile stored yet.\n\n`;
+                    }
+
+                    if (chatHistory.length > 0) {
+                        context += `💬 RECENT MESSAGES (${chatHistory.length}):\n`;
+                        chatHistory.forEach((m: any) => {
+                            context += `[${m.timestamp}] ${m.content}\n`;
+                        });
+                    } else {
+                        context += `💬 RECENT MESSAGES: No recent messages found.\n`;
+                    }
+
+                    return context;
+                } catch (e) {
+                    return `Error getting context: ${e}`;
+                }
+            }
+        });
+
         // Skill: Run Shell Command
         this.skills.registerSkill({
             name: 'run_command',
@@ -2237,6 +2394,46 @@ This skill should prevent future failures when ${taskDescription.slice(0, 100)}.
 
         eventBus.on('action:queued', (action: Action) => {
             logger.info(`Agent: Noticed new action ${action.id} in queue`);
+        });
+
+        // Listen for config changes and reload relevant components
+        eventBus.on('config:changed', async (data: any) => {
+            try {
+                logger.info('Agent: Config changed, reloading affected components...');
+                const { oldConfig, newConfig } = data;
+                
+                // Reload WhatsApp channel if settings changed
+                const whatsappChanged = 
+                    oldConfig.whatsappEnabled !== newConfig.whatsappEnabled ||
+                    oldConfig.whatsappAutoReplyEnabled !== newConfig.whatsappAutoReplyEnabled ||
+                    oldConfig.whatsappStatusReplyEnabled !== newConfig.whatsappStatusReplyEnabled ||
+                    oldConfig.whatsappAutoReactEnabled !== newConfig.whatsappAutoReactEnabled ||
+                    oldConfig.whatsappContextProfilingEnabled !== newConfig.whatsappContextProfilingEnabled;
+                
+                if (whatsappChanged && this.whatsapp) {
+                    logger.info('Agent: WhatsApp config changed, notifying channel...');
+                    eventBus.emit('whatsapp:config-changed', newConfig);
+                }
+                
+                // Reload memory limits if changed
+                const memoryChanged = 
+                    oldConfig.memoryContextLimit !== newConfig.memoryContextLimit ||
+                    oldConfig.memoryEpisodicLimit !== newConfig.memoryEpisodicLimit ||
+                    oldConfig.memoryConsolidationThreshold !== newConfig.memoryConsolidationThreshold ||
+                    oldConfig.memoryConsolidationBatch !== newConfig.memoryConsolidationBatch;
+                
+                if (memoryChanged) {
+                    this.memory.setLimits({
+                        contextLimit: newConfig.memoryContextLimit,
+                        episodicLimit: newConfig.memoryEpisodicLimit,
+                        consolidationThreshold: newConfig.memoryConsolidationThreshold,
+                        consolidationBatch: newConfig.memoryConsolidationBatch
+                    });
+                    logger.info('Agent: Memory limits reloaded');
+                }
+            } catch (e) {
+                logger.error(`Agent: Error handling config change: ${e}`);
+            }
         });
     }
 

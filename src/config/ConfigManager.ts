@@ -3,6 +3,7 @@ import yaml from 'yaml';
 import path from 'path';
 import os from 'os';
 import { logger } from '../utils/logger';
+import { eventBus } from '../core/EventBus';
 
 export interface AgentConfig {
     agentName: string;
@@ -122,8 +123,12 @@ export class ConfigManager {
                 if (debounceTimer) clearTimeout(debounceTimer);
                 debounceTimer = setTimeout(() => {
                     logger.info(`ConfigManager: Config file changed on disk, reloading...`);
+                    const oldConfig = { ...this.config };
                     // We load without logging the path again to keep it clean
                     this.config = this.loadConfig(customPath, true);
+                    // Emit event for components to react to config changes
+                    eventBus.emit('config:changed', { oldConfig, newConfig: this.config });
+                    logger.info(`ConfigManager: Config reloaded and config:changed event emitted`);
                 }, 100);
             }
         });
@@ -328,9 +333,13 @@ export class ConfigManager {
     }
 
     public set(key: string, value: any) {
+        const oldConfig = { ...this.config };
         (this.config as any)[key] = value;
         this.saveConfig();
         this.syncEnvForKey(key, value);
+        // Emit event for components to react to config changes
+        eventBus.emit('config:changed', { oldConfig, newConfig: this.config });
+        logger.info(`ConfigManager: Config key '${key}' updated and config:changed event emitted`);
     }
 
     public saveConfig() {

@@ -25,11 +25,37 @@ export class WhatsAppChannel implements IChannel {
     private sessionPath: string;
     private store: any;
     private contactJids: Set<string> = new Set();
+    // Cache config values to avoid repeated lookups
+    private autoReplyEnabled: boolean = false;
+    private statusReplyEnabled: boolean = false;
+    private autoReactEnabled: boolean = false;
+    private profilingEnabled: boolean = false;
 
     constructor(agent: Agent) {
         this.agent = agent;
         this.sessionPath = agent.config.get('whatsappSessionPath') || './whatsapp-session';
         this.store = null; // Removed makeInMemoryStore due to library issues
+        this.loadConfigSettings();
+        this.setupConfigListener();
+    }
+
+    private loadConfigSettings() {
+        this.autoReplyEnabled = this.agent.config.get('whatsappAutoReplyEnabled') || false;
+        this.statusReplyEnabled = this.agent.config.get('whatsappStatusReplyEnabled') || false;
+        this.autoReactEnabled = this.agent.config.get('whatsappAutoReactEnabled') || false;
+        this.profilingEnabled = this.agent.config.get('whatsappContextProfilingEnabled') || false;
+        logger.info(`WhatsAppChannel: Settings loaded - autoReply=${this.autoReplyEnabled}, statusReply=${this.statusReplyEnabled}, autoReact=${this.autoReactEnabled}, profiling=${this.profilingEnabled}`);
+    }
+
+    private setupConfigListener() {
+        eventBus.on('whatsapp:config-changed', (newConfig: any) => {
+            logger.info('WhatsAppChannel: Config changed, reloading settings...');
+            this.autoReplyEnabled = newConfig.whatsappAutoReplyEnabled || false;
+            this.statusReplyEnabled = newConfig.whatsappStatusReplyEnabled || false;
+            this.autoReactEnabled = newConfig.whatsappAutoReactEnabled || false;
+            this.profilingEnabled = newConfig.whatsappContextProfilingEnabled || false;
+            logger.info(`WhatsAppChannel: Settings reloaded - autoReply=${this.autoReplyEnabled}, statusReply=${this.statusReplyEnabled}, autoReact=${this.autoReactEnabled}, profiling=${this.profilingEnabled}`);
+        });
     }
 
     private recordContactJid(jid?: string) {
@@ -141,14 +167,11 @@ export class WhatsAppChannel implements IChannel {
                         const isGroup = senderId?.endsWith('@g.us');
                         const isStatus = senderId === 'status@broadcast';
                         const isFromOwner = senderId === ownerJid;
-                        const autoReplyEnabled = this.agent.config.get('whatsappAutoReplyEnabled');
-                        const statusReplyEnabled = this.agent.config.get('whatsappStatusReplyEnabled');
-                        const autoReactEnabled = this.agent.config.get('whatsappAutoReactEnabled');
-                        const profilingEnabled = this.agent.config.get('whatsappContextProfilingEnabled');
 
-                        // Download Media if present
+                        // Download Media if present - BUT skip status media unless explicitly enabled
                         let mediaPath = '';
-                        if (imageMsg || audioMsg || docMsg || videoMsg) {
+                        const shouldDownloadMedia = !isStatus || this.statusReplyEnabled;
+                        if (shouldDownloadMedia && (imageMsg || audioMsg || docMsg || videoMsg)) {
                             try {
                                 const buffer = await downloadMediaMessage(msg, 'buffer', {});
                                 const downloadsDir = path.join(os.homedir(), '.orcbot', 'downloads');
@@ -161,6 +184,8 @@ export class WhatsAppChannel implements IChannel {
                             } catch (e) {
                                 logger.error(`Failed to download media: ${e}`);
                             }
+                        } else if (isStatus && (imageMsg || audioMsg || docMsg || videoMsg)) {
+                            logger.info(`WhatsApp: Skipping status media download (statusReplyEnabled=${this.statusReplyEnabled})`);
                         }
 
                         // Skip group chats for now unless mentioned or requested (simpler for now)
@@ -170,7 +195,7 @@ export class WhatsAppChannel implements IChannel {
                         // Special handling for Status Updates
                         if (isStatus && text) {
                             const participant = msg.key.participant || msg.participant;
-                            logger.info(`WhatsApp Status: ${participant} posted: ${text}`);
+                            logger.info(`WhatsApp Status: ${participant} posted: ${text} | statusReplyEnabled=${this.statusReplyEnabled}`);
                             this.recordContactJid(participant);
 
                             // Record it in memory so the agent knows.
@@ -183,12 +208,14 @@ export class WhatsAppChannel implements IChannel {
                             });
 
                             // Only trigger a task if Status Interactions are enabled
-                            if (statusReplyEnabled) {
+                            if (this.statusReplyEnabled) {
                                 await this.agent.pushTask(
                                     `WhatsApp STATUS update from ${participant} (ID: ${messageId}): "${text}". \n\nGoal: Decide if you should reply to this status. If yes, use 'reply_whatsapp_status'.`,
                                     3,
                                     { source: 'whatsapp', sourceId: participant, senderName: participant, type: 'status', messageId }
                                 );
+                            } else {
+                                logger.info(`WhatsApp: Status reply skipped - statusReplyEnabled is false`);
                             }
                             return;
                         }
@@ -196,7 +223,7 @@ export class WhatsAppChannel implements IChannel {
                         // Skip if no text AND no media (e.g. some system msg)
                         if (!text && !mediaPath) return;
 
-                        logger.info(`WhatsApp Msg: ${senderName} (${senderId}): ${text || '[Media]'} [ID: ${messageId}] | autoReply=${autoReplyEnabled}`);
+                        logger.info(`WhatsApp Msg: ${senderName} (${senderId}): ${text || '[Media]'} [ID: ${messageId}] | autoReply=${this.autoReplyEnabled}`);
 
                         // Save to memory for context
                         this.agent.memory.saveMemory({
@@ -207,8 +234,8 @@ export class WhatsAppChannel implements IChannel {
                             metadata: { source: 'whatsapp', messageId, senderId, senderName }
                         });
 
-                        const reactInstruction = autoReactEnabled ? " or 'react_whatsapp'" : "";
-                        const profileInstruction = profilingEnabled ? "\n- Also, evaluate if you've learned something new about this person and update their profile using 'update_contact_profile' if needed." : "";
+                        const reactInstruction = this.autoReactEnabled ? " or 'react_whatsapp'" : "";
+                        const profileInstruction = this.profilingEnabled ? "\n- Also, evaluate if you've learned something new about this person and update their profile using 'update_contact_profile' if needed." : "";
 
                         // Treat as Command if from Owner
                         if (isFromOwner || isToMe) {
@@ -217,13 +244,15 @@ export class WhatsAppChannel implements IChannel {
                                 10,
                                 { source: 'whatsapp', sourceId: senderId, senderName: senderName, isOwner: true, messageId }
                             );
-                        } else if (autoReplyEnabled) {
+                        } else if (this.autoReplyEnabled) {
                             // Treat as External Interaction for AI to decide on
                             await this.agent.pushTask(
                                 `EXTERNAL WHATSAPP MESSAGE from ${senderName} (ID: ${messageId}): "${text}". \n\nGoal: Decide if you should respond${reactInstruction} to this person on my behalf based on our history and my persona. If yes, use 'send_whatsapp'${reactInstruction}.${profileInstruction}`,
                                 5,
                                 { source: 'whatsapp', sourceId: senderId, senderName: senderName, isExternal: true, messageId }
                             );
+                        } else {
+                            logger.info(`WhatsApp: External message from ${senderName} not queued - autoReplyEnabled is false`);
                         }
                     }
                 }
