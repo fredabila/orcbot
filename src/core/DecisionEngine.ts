@@ -10,6 +10,7 @@ import { DecisionPipeline } from './DecisionPipeline';
 import { ErrorClassifier, ErrorType } from './ErrorClassifier';
 import { ExecutionStateManager } from './ExecutionState';
 import { ContextCompactor } from './ContextCompactor';
+import { ResponseValidator } from './ResponseValidator';
 
 export class DecisionEngine {
     private agentIdentity: string = '';
@@ -354,6 +355,23 @@ ${otherContextString ? `RECENT BACKGROUND CONTEXT:\n${otherContextString}` : ''}
         // Use retry wrapper for main LLM call
         const rawResponse = await this.callLLMWithRetry(taskDescription, systemPrompt, actionId);
         const parsed = ParserLayer.normalize(rawResponse);
+
+        // Validate response before processing
+        const validation = ResponseValidator.validateResponse(parsed, allowedToolNames);
+        ResponseValidator.logValidation(validation, `action ${actionId}`);
+        
+        // Filter out invalid tools if validation found errors
+        if (!validation.valid && parsed.tools) {
+            const validTools = parsed.tools.filter(tool => {
+                const toolValidation = ResponseValidator.validateResponse(
+                    { ...parsed, tools: [tool] },
+                    allowedToolNames
+                );
+                return toolValidation.valid;
+            });
+            parsed.tools = validTools;
+            logger.warn(`DecisionEngine: Filtered ${parsed.tools.length} invalid tool(s) from response`);
+        }
 
         // Run parsed response through structured pipeline guardrails
         let piped = this.pipeline.evaluate(parsed, {
