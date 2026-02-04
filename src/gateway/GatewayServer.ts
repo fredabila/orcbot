@@ -424,7 +424,7 @@ export class GatewayServer {
 
         // ===== LOGS =====
         router.get('/logs', (req: Request, res: Response) => {
-            const lines = parseInt(req.query.lines as string) || 100;
+            const lines = parseInt(req.query.lines as string) || 200;
             const level = req.query.level as string; // Filter by log level (info, error, warn, debug)
             const search = req.query.search as string; // Search term
             const dataDir = this.config.get('dataDir') || path.join(process.env.HOME || '', '.orcbot');

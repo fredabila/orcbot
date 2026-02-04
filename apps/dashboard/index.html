@@ -438,6 +438,7 @@
         .log-line.warn { color: var(--yellow); }
         .log-line.info { color: var(--blue); }
         .log-line.debug { color: var(--text-muted); }
+        .log-filter-info { padding: 10px; color: var(--text-dim); border-bottom: 1px solid var(--border); }
 
         /* Config */
         .config-section { margin-bottom: 30px; }
@@ -1712,6 +1713,14 @@
                 const data = await api('/connections');
                 const conn = data.connections || {};
                 
+                // Helper to get Discord status
+                const getDiscordStatus = () => {
+                    if (conn.discord?.connected) return { text: '● Connected', active: true };
+                    if (conn.discord?.configured) return { text: '○ Configured', active: false };
+                    return { text: '○ Not configured', active: false };
+                };
+                const discordStatus = getDiscordStatus();
+                
                 document.getElementById('channelsGrid').innerHTML = `
                     <div class="channel-card">
                         <div class="channel-header">
@@ -1756,7 +1765,7 @@
                             <div class="channel-icon discord"><i class="fab fa-discord"></i></div>
                             <div class="channel-info">
                                 <h4>Discord</h4>
-                                <div class="status ${conn.discord?.connected ? 'active' : ''}">${conn.discord?.connected ? '● Connected' : (conn.discord?.configured ? '○ Configured' : '○ Not configured')}</div>
+                                <div class="status ${discordStatus.active ? 'active' : ''}">${discordStatus.text}</div>
                             </div>
                         </div>
                         <div class="channel-stats">
@@ -1790,7 +1799,7 @@
                 }
 
                 // Show total count if filtered
-                const headerInfo = data.filtered ? `<div style="padding: 10px; color: var(--text-dim); border-bottom: 1px solid var(--border);">Showing ${logs.length} of ${data.total} logs</div>` : '';
+                const headerInfo = data.filtered ? `<div class="log-filter-info">Showing ${logs.length} of ${data.total} logs</div>` : '';
                 
                 const logLines = logs.map(l => {
                     let cls = 'log-line';
