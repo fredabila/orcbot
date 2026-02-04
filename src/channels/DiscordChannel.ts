@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, Message, Partials, AttachmentBuilder, BaseChannel } from 'discord.js';
+import { Client, GatewayIntentBits, Message, Partials, AttachmentBuilder } from 'discord.js';
 import { IChannel } from './IChannel';
 import { logger } from '../utils/logger';
 import fs from 'fs';
