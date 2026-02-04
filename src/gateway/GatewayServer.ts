@@ -324,14 +324,13 @@ export class GatewayServer {
                     autoReply: this.config.get('telegramAutoReplyEnabled') || false
                 },
                 whatsapp: {
-                    enabled: this.config.get('whatsappEnabled') || false,
+                    configured: !!this.config.get('whatsappEnabled'),
                     autoReply: this.config.get('whatsappAutoReplyEnabled') || false,
                     linkedAccount: this.config.get('whatsappOwnerJID') || null
                 },
                 discord: {
                     configured: !!this.config.get('discordToken'),
-                    autoReply: this.config.get('discordAutoReplyEnabled') || false,
-                    connected: !!this.agent.discord
+                    autoReply: this.config.get('discordAutoReplyEnabled') || false
                 }
             };
             res.json({ connections });
@@ -446,7 +445,8 @@ export class GatewayServer {
                 
                 // Search filter if provided
                 if (search) {
-                    const searchPattern = new RegExp(search, 'i');
+                    const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const searchPattern = new RegExp(escapedSearch, 'i');
                     logLines = logLines.filter(line => searchPattern.test(line));
                 }
                 

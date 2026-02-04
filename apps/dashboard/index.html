@@ -1713,21 +1713,13 @@
                 const data = await api('/connections');
                 const conn = data.connections || {};
                 
-                // Helper to get Discord status
-                const getDiscordStatus = () => {
-                    if (conn.discord?.connected) return { text: '● Connected', active: true };
-                    if (conn.discord?.configured) return { text: '○ Configured', active: false };
-                    return { text: '○ Not configured', active: false };
-                };
-                const discordStatus = getDiscordStatus();
-                
                 document.getElementById('channelsGrid').innerHTML = `
                     <div class="channel-card">
                         <div class="channel-header">
                             <div class="channel-icon telegram"><i class="fab fa-telegram"></i></div>
                             <div class="channel-info">
                                 <h4>Telegram</h4>
-                                <div class="status ${conn.telegram?.configured ? 'active' : ''}">${conn.telegram?.configured ? '● Connected' : '○ Not configured'}</div>
+                                <div class="status ${conn.telegram?.configured ? 'active' : ''}">${conn.telegram?.configured ? '● Configured' : '○ Not configured'}</div>
                             </div>
                         </div>
                         <div class="channel-stats">
@@ -1746,7 +1738,7 @@
                             <div class="channel-icon whatsapp"><i class="fab fa-whatsapp"></i></div>
                             <div class="channel-info">
                                 <h4>WhatsApp</h4>
-                                <div class="status ${conn.whatsapp?.enabled ? 'active' : ''}">${conn.whatsapp?.enabled ? '● Enabled' : '○ Disabled'}</div>
+                                <div class="status ${conn.whatsapp?.configured ? 'active' : ''}">${conn.whatsapp?.configured ? '● Configured' : '○ Not configured'}</div>
                             </div>
                         </div>
                         <div class="channel-stats">
@@ -1755,8 +1747,8 @@
                                 <div class="label">Auto-Reply</div>
                             </div>
                             <div class="channel-stat">
-                                <div class="value">${conn.whatsapp?.enabled ? '✓' : '—'}</div>
-                                <div class="label">Session</div>
+                                <div class="value">${conn.whatsapp?.configured ? '✓' : '—'}</div>
+                                <div class="label">Config</div>
                             </div>
                         </div>
                     </div>
@@ -1765,7 +1757,7 @@
                             <div class="channel-icon discord"><i class="fab fa-discord"></i></div>
                             <div class="channel-info">
                                 <h4>Discord</h4>
-                                <div class="status ${discordStatus.active ? 'active' : ''}">${discordStatus.text}</div>
+                                <div class="status ${conn.discord?.configured ? 'active' : ''}">${conn.discord?.configured ? '● Configured' : '○ Not configured'}</div>
                             </div>
                         </div>
                         <div class="channel-stats">
@@ -1803,10 +1795,11 @@
                 
                 const logLines = logs.map(l => {
                     let cls = 'log-line';
-                    if (l.includes('[error]') || l.toLowerCase().includes('error')) cls += ' error';
-                    else if (l.includes('[warn]') || l.toLowerCase().includes('warn')) cls += ' warn';
-                    else if (l.includes('[info]') || l.toLowerCase().includes('info')) cls += ' info';
-                    else if (l.includes('[debug]') || l.toLowerCase().includes('debug')) cls += ' debug';
+                    const levelMatch = l.match(/\[(error|warn|info|debug)\]/i);
+                    if (levelMatch) {
+                        const level = levelMatch[1].toLowerCase();
+                        cls += ' ' + level;
+                    }
                     return `<div class="${cls}">${escapeHtml(l)}</div>`;
                 }).join('');
                 
