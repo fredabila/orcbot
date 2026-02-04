@@ -99,7 +99,7 @@ STRATEGIC REASONING PROTOCOLS:
     - If you cannot make objective progress, inform the user and stop. Do NOT stay in a loop just updating metadata.
 9.  **Interactive Clarification**: If a task CANNOT be safely or fully completed due to missing details, you MUST use the \`request_supporting_data\` skill. 
     - Execution will PAUSE until the user provides the answer. Do NOT guess or hallucinate missing data.
-    - IMPORTANT: If you ask a question via send_telegram/send_whatsapp/send_discord, the system will AUTO-PAUSE and wait for user response. DO NOT continue working after asking a question.
+    - IMPORTANT: If you ask a question via send_telegram/send_whatsapp/send_discord/send_gateway_chat, the system will AUTO-PAUSE and wait for user response. DO NOT continue working after asking a question.
     - After asking a clarifying question, set goals_met: true to terminate. The user's reply will create a NEW action.
 10. **User Correction Override**: If the user's NEW message provides corrective information (e.g., a new password after a failed login, a corrected URL, updated credentials), this is a RETRY TRIGGER. You MUST attempt the action AGAIN with the new data, even if you previously failed. The goal is always to SUCCEED, not just to try once and give up.
 11. **WAITING STATE AWARENESS**: Check memory for "[SYSTEM: Sent question to user. WAITING for response]" entries.
@@ -118,7 +118,7 @@ DYNAMIC COMMUNICATION INTELLIGENCE:
 - **Logical Finality**: Once the goal is reached (e.g., results found and sent), provide a final comprehensive report IF NOT SENT ALREADY, and terminate immediately.
 - **No Redundancy**: Do not send "Acknowledgment" messages if you are about to provide the result in the same step. Do NOT send "Consolidated" summaries of information you just sent in the previous step.
 - **Status Presence**: If you are in the middle of a multi-step task (e.g., downloading a large file, scanning multiple pages), providing a progress update is encouraged once every ~15 steps to keep the user in the loop.
-- **Sent Message Awareness**: BEFORE you send any message to the user (via any channel skill like \`send_telegram\`, \`send_whatsapp\`, \`send_discord\`, etc.), READ the 'Recent Conversation History'. If you see ANY message observation confirming successful delivery of the requested info, DO NOT send another message.
+- **Sent Message Awareness**: BEFORE you send any message to the user (via any channel skill like \`send_telegram\`, \`send_whatsapp\`, \`send_discord\`, \`send_gateway_chat\`, etc.), READ the 'Recent Conversation History'. If you see ANY message observation confirming successful delivery of the requested info, DO NOT send another message.
 
 HUMAN-LIKE COLLABORATION:
 - Combined multiple confirmations into one natural response.
@@ -183,6 +183,12 @@ ACTIVE CHANNEL CONTEXT:
 - Channel: Discord
 - Channel ID: "${metadata.sourceId}" (User: ${metadata.senderName})
 - Rule: To message this user, you MUST use the "send_discord" skill with channel_id="${metadata.sourceId}".
+`;
+        } else if (metadata.source === 'gateway-chat') {
+            channelInstructions = `
+ACTIVE CHANNEL CONTEXT:
+- Channel: Gateway Chat (Web Interface)
+- Rule: To respond to this user, you MUST use the "send_gateway_chat" skill.
 `;
         }
 

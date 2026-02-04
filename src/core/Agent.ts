@@ -308,6 +308,39 @@ export class Agent {
             }
         });
 
+        // Skill: Send Gateway Chat
+        this.skills.registerSkill({
+            name: 'send_gateway_chat',
+            description: 'Send a message to the Gateway Chat interface',
+            usage: 'send_gateway_chat(message)',
+            handler: async (args: any) => {
+                const message = args.message || args.content || args.text;
+
+                if (!message) return 'Error: Missing message content.';
+
+                // Save assistant message to memory with proper metadata
+                const messageId = `gateway-chat-response-${Date.now()}`;
+                this.memory.saveMemory({
+                    id: messageId,
+                    type: 'short',
+                    content: message,
+                    timestamp: new Date().toISOString(),
+                    metadata: { source: 'gateway-chat', role: 'assistant' }
+                });
+
+                // Broadcast via event bus so GatewayServer can forward to WebSocket clients
+                eventBus.emit('gateway:chat:response', {
+                    type: 'chat:message',
+                    role: 'assistant',
+                    content: message,
+                    timestamp: new Date().toISOString(),
+                    messageId
+                });
+
+                return `Message sent to Gateway Chat`;
+            }
+        });
+
         // Skill: Get Discord Guilds
         this.skills.registerSkill({
             name: 'get_discord_guilds',
@@ -3544,6 +3577,7 @@ Respond with a single actionable task description (one sentence):`;
             const nonDeepSkills = [
                 'send_telegram',
                 'send_whatsapp',
+                'send_gateway_chat',
                 'update_journal',
                 'update_learning',
                 'update_user_profile',
@@ -3677,7 +3711,7 @@ Respond with a single actionable task description (one sentence):`;
                             deepToolExecutedSinceLastMessage = true;
                         }
 
-                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp') {
+                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_gateway_chat') {
                             const currentMessage = (toolCall.metadata?.message || '').trim();
 
                             // 1. Block exact duplicates across any step in this action
@@ -3804,7 +3838,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         }
 
                         let observation = `Observation: Tool ${toolCall.name} returned: ${JSON.stringify(toolResult)}`;
-                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp') {
+                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_gateway_chat') {
                             messagesSent++;
                             
                             // QUESTION PAUSE: If this message asked a question, save waiting state

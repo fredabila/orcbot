@@ -11,6 +11,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { Agent } from '../core/Agent';
 import { ConfigManager } from '../config/ConfigManager';
 import { logger } from '../utils/logger';
@@ -58,6 +59,79 @@ export class GatewayServer {
         this.setupRoutes();
         this.setupWebSocket();
         this.setupEventForwarding();
+    }
+
+    /**
+     * Generate a unique message ID
+     */
+    private generateMessageId(): string {
+        return `gateway-chat-${crypto.randomUUID()}`;
+    }
+
+    /**
+     * Save a chat message to memory and broadcast it
+     */
+    private async handleChatMessage(message: string, metadata: any = {}): Promise<string> {
+        const messageId = this.generateMessageId();
+        
+        // Save user message to memory
+        this.agent.memory.saveMemory({
+            id: messageId,
+            type: 'short',
+            content: `User (Gateway Chat): ${message}`,
+            timestamp: new Date().toISOString(),
+            metadata: { source: 'gateway-chat', role: 'user', ...metadata }
+        });
+
+        // Push task to agent to respond
+        await this.agent.pushTask(
+            `Gateway chat message: "${message}"`,
+            10,
+            {
+                source: 'gateway-chat',
+                expectResponse: true,
+                messageId,
+                ...metadata
+            }
+        );
+
+        // Broadcast message to WebSocket clients
+        this.broadcast({
+            type: 'chat:message',
+            role: 'user',
+            content: message,
+            timestamp: new Date().toISOString(),
+            messageId
+        });
+
+        return messageId;
+    }
+
+    /**
+     * Retrieve chat history from memory
+     */
+    private getChatHistory(): any[] {
+        const allMemories = this.agent.memory?.getRecentContext(100) || [];
+        return allMemories
+            .filter((m: any) => m.metadata?.source === 'gateway-chat')
+            .map((m: any) => {
+                let content = m.content;
+                if (typeof content === 'string') {
+                    const userPrefix = 'User (Gateway Chat): ';
+                    if (content.startsWith(userPrefix)) {
+                        content = content.slice(userPrefix.length);
+                    }
+                }
+
+                return {
+                    id: m.id,
+                    content,
+                    timestamp: m.timestamp,
+                    role: m.metadata?.role ?? 'assistant',
+                    metadata: m.metadata,
+                    messageId: m.id
+                };
+            });
     }
 
     private setupMiddleware() {
@@ -388,6 +462,48 @@ export class GatewayServer {
             }
         });
 
+        // ===== CHAT =====
+        router.post('/chat/send', async (req: Request, res: Response) => {
+            try {
+                const { message, metadata = {} } = req.body;
+                if (!message) {
+                    return res.status(400).json({ error: 'Message is required' });
+                }
+
+                const messageId = await this.handleChatMessage(message, metadata);
+                res.json({ success: true, messageId });
+            } catch (error: any) {
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        router.get('/chat/history', (_req: Request, res: Response) => {
+            try {
+                const chatMessages = this.getChatHistory();
+                res.json({ messages: chatMessages });
+            } catch (error: any) {
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        router.post('/chat/clear', (_req: Request, res: Response) => {
+            try {
+                // Note: This broadcasts a cleared event but doesn't remove messages from memory storage.
+                // Chat history will still be available if the page is refreshed.
+                // Full message deletion would require memory manager enhancements.
+                this.broadcast({
+                    type: 'chat:cleared',
+                    timestamp: new Date().toISOString()
+                });
+                res.json({ 
+                    success: true, 
+                    message: 'Chat display cleared (note: history persists in memory storage)' 
+                });
+            } catch (error: any) {
+                res.status(500).json({ error: error.message });
+            }
+        });
+
         this.app.use('/api', router);
 
         // Catch-all for SPA routing (if dashboard is served)
@@ -490,6 +606,32 @@ export class GatewayServer {
                 ws.send(JSON.stringify({ type: 'configUpdated', key: payload.key }));
                 break;
 
+            case 'sendChatMessage': {
+                try {
+                    const { message, metadata = {} } = payload;
+                    if (!message) {
+                        ws.send(JSON.stringify({ type: 'error', error: 'Message is required' }));
+                        break;
+                    }
+
+                    const messageId = await this.handleChatMessage(message, metadata);
+                    ws.send(JSON.stringify({ type: 'chatMessageSent', success: true, messageId }));
+                } catch (error: any) {
+                    ws.send(JSON.stringify({ type: 'error', error: error.message }));
+                }
+                break;
+            }
+
+            case 'getChatHistory': {
+                try {
+                    const chatMessages = this.getChatHistory();
+                    ws.send(JSON.stringify({ type: 'chatHistory', messages: chatMessages }));
+                } catch (error: any) {
+                    ws.send(JSON.stringify({ type: 'error', error: error.message }));
+                }
+                break;
+            }
+
             default:
                 ws.send(JSON.stringify({ type: 'error', error: `Unknown action: ${action}` }));
         }
@@ -518,6 +660,11 @@ export class GatewayServer {
                     timestamp: new Date().toISOString()
                 });
             });
+        });
+
+        // Listen for gateway chat responses from the agent
+        eventBus.on('gateway:chat:response', (data: any) => {
+            this.broadcast(data);
         });
     }
 
