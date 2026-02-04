@@ -6,9 +6,11 @@ import { DecisionEngine } from './DecisionEngine';
 import { SimulationEngine } from './SimulationEngine';
 import { ActionQueue, Action } from '../memory/ActionQueue';
 import { Scheduler } from './Scheduler';
+import { PollingManager } from './PollingManager';
 import { ConfigManager } from '../config/ConfigManager';
 import { TelegramChannel } from '../channels/TelegramChannel';
 import { WhatsAppChannel } from '../channels/WhatsAppChannel';
+import { DiscordChannel } from '../channels/DiscordChannel';
 import { configManagementSkill } from '../skills/configManagement';
 import { WebBrowser } from '../tools/WebBrowser';
 import { WorkerProfileManager } from './WorkerProfile';
@@ -33,9 +35,11 @@ export class Agent {
     public tuner: RuntimeTuner;
     public actionQueue: ActionQueue;
     public scheduler: Scheduler;
+    public pollingManager: PollingManager;
     public config: ConfigManager;
     public telegram: TelegramChannel | undefined;
     public whatsapp: WhatsAppChannel | undefined;
+    public discord: DiscordChannel | undefined;
     public browser: WebBrowser;
     public workerProfile: WorkerProfileManager;
     public orchestrator: AgentOrchestrator;
@@ -114,6 +118,7 @@ export class Agent {
         this.simulationEngine = new SimulationEngine(this.llm);
         this.actionQueue = new ActionQueue(this.config.get('actionQueuePath') || './actions.json');
         this.scheduler = new Scheduler();
+        this.pollingManager = new PollingManager();
         
         // Initialize RuntimeTuner for self-tuning capabilities
         this.tuner = new RuntimeTuner(path.dirname(this.config.get('memoryPath')));
@@ -212,6 +217,12 @@ export class Agent {
             this.whatsapp = new WhatsAppChannel(this);
             logger.info('Agent: WhatsApp channel configured');
         }
+
+        const discordToken = this.config.get('discordToken');
+        if (discordToken) {
+            this.discord = new DiscordChannel(discordToken, this);
+            logger.info('Agent: Discord channel configured');
+        }
     }
 
     private registerInternalSkills() {
@@ -252,6 +263,87 @@ export class Agent {
                     return `Message sent to ${jid} via WhatsApp`;
                 }
                 return 'WhatsApp channel not available';
+            }
+        });
+
+        // Skill: Send Discord
+        this.skills.registerSkill({
+            name: 'send_discord',
+            description: 'Send a message to a Discord channel',
+            usage: 'send_discord(channel_id, message)',
+            handler: async (args: any) => {
+                const channel_id = args.channel_id || args.channelId || args.id || args.to;
+                const message = args.message || args.content || args.text;
+
+                if (!channel_id) return 'Error: Missing channel_id. Use the Discord channel ID.';
+                if (!message) return 'Error: Missing message content.';
+
+                if (this.discord) {
+                    await this.discord.sendMessage(channel_id, message);
+                    return `Message sent to Discord channel ${channel_id}`;
+                }
+                return 'Discord channel not available';
+            }
+        });
+
+        // Skill: Send Discord File
+        this.skills.registerSkill({
+            name: 'send_discord_file',
+            description: 'Send a file to a Discord channel with optional caption',
+            usage: 'send_discord_file(channel_id, file_path, caption?)',
+            handler: async (args: any) => {
+                const channel_id = args.channel_id || args.channelId || args.id || args.to;
+                const file_path = args.file_path || args.filePath || args.path;
+                const caption = args.caption || args.message;
+
+                if (!channel_id) return 'Error: Missing channel_id.';
+                if (!file_path) return 'Error: Missing file_path.';
+
+                if (this.discord) {
+                    await this.discord.sendFile(channel_id, file_path, caption);
+                    return `File sent to Discord channel ${channel_id}`;
+                }
+                return 'Discord channel not available';
+            }
+        });
+
+        // Skill: Get Discord Guilds
+        this.skills.registerSkill({
+            name: 'get_discord_guilds',
+            description: 'Get list of Discord servers (guilds) the bot is in',
+            usage: 'get_discord_guilds()',
+            handler: async (args: any) => {
+                if (this.discord) {
+                    const guilds = await this.discord.getGuilds();
+                    if (guilds.length === 0) {
+                        return 'Bot is not in any Discord servers';
+                    }
+                    return `Discord servers (${guilds.length}):\n` + 
+                        guilds.map(g => `- ${g.name} (ID: ${g.id})`).join('\n');
+                }
+                return 'Discord channel not available';
+            }
+        });
+
+        // Skill: Get Discord Channels
+        this.skills.registerSkill({
+            name: 'get_discord_channels',
+            description: 'Get list of text channels in a Discord server',
+            usage: 'get_discord_channels(guild_id)',
+            handler: async (args: any) => {
+                const guild_id = args.guild_id || args.guildId || args.server_id;
+                
+                if (!guild_id) return 'Error: Missing guild_id (server ID).';
+
+                if (this.discord) {
+                    const channels = await this.discord.getTextChannels(guild_id);
+                    if (channels.length === 0) {
+                        return `No text channels found in server ${guild_id}`;
+                    }
+                    return `Text channels in server ${guild_id} (${channels.length}):\n` + 
+                        channels.map(c => `- #${c.name} (ID: ${c.id})`).join('\n');
+                }
+                return 'Discord channel not available';
             }
         });
 
@@ -2164,6 +2256,145 @@ Be thorough and academic.`;
 
         // Skill: Config Management
         this.skills.registerSkill(configManagementSkill);
+
+        // Skill: Register Polling Job
+        this.skills.registerSkill({
+            name: 'register_polling_job',
+            description: 'Register a polling job to check a condition periodically. Supports condition types: file_exists, memory_contains, task_status, custom_check',
+            usage: 'register_polling_job(job_id, description, condition_type, condition_params, interval_ms, max_attempts?)',
+            handler: async (args: any) => {
+                const jobId = args.job_id || args.id;
+                const description = args.description;
+                const conditionType = args.condition_type || args.type;
+                const conditionParams = args.condition_params || args.params || {};
+                const intervalMs = parseInt(args.interval_ms || args.interval || '5000', 10);
+                const maxAttempts = args.max_attempts ? parseInt(args.max_attempts, 10) : undefined;
+
+                if (!jobId || !description) {
+                    return 'Error: Missing job_id or description';
+                }
+
+                if (!conditionType) {
+                    return 'Error: Missing condition_type. Supported types: file_exists, memory_contains, task_status, custom_check';
+                }
+
+                // Create the check function based on condition type
+                let checkFn: () => Promise<boolean>;
+
+                switch (conditionType) {
+                    case 'file_exists':
+                        const filePath = conditionParams.path || conditionParams.file_path;
+                        if (!filePath) {
+                            return 'Error: file_exists condition requires path parameter';
+                        }
+                        checkFn = async () => {
+                            return fs.existsSync(filePath);
+                        };
+                        break;
+
+                    case 'memory_contains':
+                        const searchText = conditionParams.text || conditionParams.search;
+                        if (!searchText) {
+                            return 'Error: memory_contains condition requires text parameter';
+                        }
+                        checkFn = async () => {
+                            const recentMemories = this.memory.getRecentContext(10);
+                            return recentMemories.some(m => 
+                                m.content.toLowerCase().includes(searchText.toLowerCase())
+                            );
+                        };
+                        break;
+
+                    case 'task_status':
+                        const taskId = conditionParams.task_id || conditionParams.id;
+                        const expectedStatus = conditionParams.status || 'completed';
+                        if (!taskId) {
+                            return 'Error: task_status condition requires task_id parameter';
+                        }
+                        checkFn = async () => {
+                            const action = this.actionQueue.getAction(taskId);
+                            return action ? action.status === expectedStatus : false;
+                        };
+                        break;
+
+                    case 'custom_check':
+                        // For custom checks, look for a stored condition in memory
+                        const checkKey = conditionParams.check_key || conditionParams.key;
+                        if (!checkKey) {
+                            return 'Error: custom_check condition requires check_key parameter';
+                        }
+                        checkFn = async () => {
+                            // Look for a custom check result in memory
+                            const memories = this.memory.getRecentContext(5);
+                            return memories.some(m => 
+                                m.content.includes(`${checkKey}:true`) || 
+                                m.content.includes(`${checkKey}: true`)
+                            );
+                        };
+                        break;
+
+                    default:
+                        return `Error: Unknown condition_type '${conditionType}'. Supported: file_exists, memory_contains, task_status, custom_check`;
+                }
+
+                this.pollingManager.registerJob({
+                    id: jobId,
+                    description: description,
+                    checkFn,
+                    intervalMs,
+                    maxAttempts,
+                    onSuccess: (id: string) => {
+                        this.pushTask(`Polling job ${id} completed: ${description}`, 7);
+                    },
+                    onFailure: (id: string, reason: string) => {
+                        logger.warn(`Polling job ${id} failed: ${reason}`);
+                    }
+                });
+
+                return `Polling job '${jobId}' registered with ${intervalMs}ms interval (condition: ${conditionType})`;
+            }
+        });
+
+        // Skill: Cancel Polling Job
+        this.skills.registerSkill({
+            name: 'cancel_polling_job',
+            description: 'Cancel an active polling job',
+            usage: 'cancel_polling_job(job_id)',
+            handler: async (args: any) => {
+                const jobId = args.job_id || args.id;
+                if (!jobId) return 'Error: Missing job_id';
+
+                const cancelled = this.pollingManager.cancelJob(jobId);
+                return cancelled 
+                    ? `Polling job '${jobId}' cancelled successfully`
+                    : `Polling job '${jobId}' not found`;
+            }
+        });
+
+        // Skill: Get Polling Job Status
+        this.skills.registerSkill({
+            name: 'get_polling_status',
+            description: 'Get the status of a polling job or list all active jobs',
+            usage: 'get_polling_status(job_id?)',
+            handler: async (args: any) => {
+                const jobId = args.job_id || args.id;
+
+                if (jobId) {
+                    const status = this.pollingManager.getJobStatus(jobId);
+                    if (!status.exists) {
+                        return `Polling job '${jobId}' not found`;
+                    }
+                    return `Job '${jobId}': ${status.description}\nAttempts: ${status.attempts}\nDuration: ${Math.round(status.duration! / 1000)}s`;
+                } else {
+                    const jobs = this.pollingManager.getActiveJobs();
+                    if (jobs.length === 0) {
+                        return 'No active polling jobs';
+                    }
+                    return `Active polling jobs (${jobs.length}):\n` + 
+                        jobs.map(j => `- ${j.id}: ${j.description} (${j.attempts} attempts, ${Math.round(j.duration / 1000)}s)`).join('\n');
+                }
+            }
+        });
     }
 
     private loadAgentIdentity() {
@@ -3022,6 +3253,7 @@ Respond with a single actionable task description (one sentence):`;
         this.acquireInstanceLock();
         logger.info('Agent is starting...');
         this.scheduler.start();
+        this.pollingManager.start();
 
         const startupPromises: Promise<void>[] = [];
         if (this.telegram) {
@@ -3029,6 +3261,9 @@ Respond with a single actionable task description (one sentence):`;
         }
         if (this.whatsapp) {
             startupPromises.push(this.whatsapp.start());
+        }
+        if (this.discord) {
+            startupPromises.push(this.discord.start());
         }
 
         await Promise.all(startupPromises);
@@ -3038,11 +3273,15 @@ Respond with a single actionable task description (one sentence):`;
 
     public async stop() {
         this.scheduler.stop();
+        this.pollingManager.stop();
         if (this.telegram) {
             await this.telegram.stop();
         }
         if (this.whatsapp) {
             await this.whatsapp.stop();
+        }
+        if (this.discord) {
+            await this.discord.stop();
         }
         await this.browser.close();
         this.releaseInstanceLock();
