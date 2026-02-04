@@ -33,10 +33,11 @@ export class DecisionEngine {
         if (isWindows) {
             return `- Platform: ${platformName} (${os.release()})
 - Shell: PowerShell/CMD
-- IMPORTANT: Use semicolon (;) to chain commands, NOT &&
+- IMPORTANT: To run commands in a specific directory, you can either (a) use "cd /path && command" or "cd /path ; command" (the cd will be automatically extracted and used as the cwd while only the remaining command is executed), or (b) pass the cwd parameter directly to run_command
 - IMPORTANT: Use 'write_file' skill for creating files (echo multiline doesn't work)
 - IMPORTANT: Use 'create_directory' skill for making directories
-- Path format: C:\\path\\to\\file or C:/path/to/file`;
+- Path format: C:\\path\\to\\file or C:/path/to/file
+- Command chaining: Both && and ; work, but && ensures previous command succeeds`;
         } else {
             return `- Platform: ${platformName} (${os.release()})
 - Shell: Bash/Zsh

@@ -14,7 +14,7 @@ This file lists the available skills for the agent.
 - **update_contact_profile(jid, profile_json)**: Persist a WhatsApp contact profile.
 
 ## System & Configuration
-- **run_command(command)**: Execute shell commands (subject to allow/deny lists).
+- **run_command(command, cwd?)**: Execute shell commands (subject to allow/deny lists). Automatically extracts directory from "cd /path && command" or "cd /path ; command" patterns and uses as working directory.
 - **get_system_info()**: Return server time/date and OS info.
 - **set_config(key, value)**: Persist configuration values.
 - **manage_skills(skill_definition)**: Append new skill definitions to SKILLS.md.
