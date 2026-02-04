@@ -438,6 +438,7 @@
         .log-line.warn { color: var(--yellow); }
         .log-line.info { color: var(--blue); }
         .log-line.debug { color: var(--text-muted); }
+        .log-filter-info { padding: 10px; color: var(--text-dim); border-bottom: 1px solid var(--border); }
 
         /* Config */
         .config-section { margin-bottom: 30px; }
@@ -536,6 +537,7 @@
 
         .channel-icon.telegram { background: linear-gradient(135deg, #2AABEE, #229ED9); }
         .channel-icon.whatsapp { background: linear-gradient(135deg, #25D366, #128C7E); }
+        .channel-icon.discord { background: linear-gradient(135deg, #5865F2, #4752C4); }
 
         .channel-info h4 { font-size: 15px; font-weight: 600; }
         .channel-info .status { font-size: 12px; color: var(--text-muted); }
@@ -1717,7 +1719,7 @@
                             <div class="channel-icon telegram"><i class="fab fa-telegram"></i></div>
                             <div class="channel-info">
                                 <h4>Telegram</h4>
-                                <div class="status ${conn.telegram?.configured ? 'active' : ''}">${conn.telegram?.configured ? '● Connected' : '○ Not configured'}</div>
+                                <div class="status ${conn.telegram?.configured ? 'active' : ''}">${conn.telegram?.configured ? '● Configured' : '○ Not configured'}</div>
                             </div>
                         </div>
                         <div class="channel-stats">
@@ -1736,7 +1738,7 @@
                             <div class="channel-icon whatsapp"><i class="fab fa-whatsapp"></i></div>
                             <div class="channel-info">
                                 <h4>WhatsApp</h4>
-                                <div class="status ${conn.whatsapp?.enabled ? 'active' : ''}">${conn.whatsapp?.enabled ? '● Enabled' : '○ Disabled'}</div>
+                                <div class="status ${conn.whatsapp?.configured ? 'active' : ''}">${conn.whatsapp?.configured ? '● Configured' : '○ Not configured'}</div>
                             </div>
                         </div>
                         <div class="channel-stats">
@@ -1745,8 +1747,27 @@
                                 <div class="label">Auto-Reply</div>
                             </div>
                             <div class="channel-stat">
-                                <div class="value">${conn.whatsapp?.enabled ? '✓' : '—'}</div>
-                                <div class="label">Session</div>
+                                <div class="value">${conn.whatsapp?.configured ? '✓' : '—'}</div>
+                                <div class="label">Config</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="channel-card">
+                        <div class="channel-header">
+                            <div class="channel-icon discord"><i class="fab fa-discord"></i></div>
+                            <div class="channel-info">
+                                <h4>Discord</h4>
+                                <div class="status ${conn.discord?.configured ? 'active' : ''}">${conn.discord?.configured ? '● Configured' : '○ Not configured'}</div>
+                            </div>
+                        </div>
+                        <div class="channel-stats">
+                            <div class="channel-stat">
+                                <div class="value">${conn.discord?.autoReply ? 'ON' : 'OFF'}</div>
+                                <div class="label">Auto-Reply</div>
+                            </div>
+                            <div class="channel-stat">
+                                <div class="value">${conn.discord?.configured ? '✓' : '—'}</div>
+                                <div class="label">Token</div>
                             </div>
                         </div>
                     </div>
@@ -1759,28 +1780,30 @@
         async function loadLogs() {
             try {
                 const filter = document.getElementById('logFilter')?.value || 'all';
-                const data = await api(`/logs?lines=100`);
+                const levelParam = filter !== 'all' ? `&level=${filter}` : '';
+                const data = await api(`/logs?lines=200${levelParam}`);
                 const logs = data.logs || [];
                 
-                let filtered = logs;
-                if (filter !== 'all') {
-                    filtered = logs.filter(l => l.toLowerCase().includes(`[${filter}]`));
-                }
-
                 const viewer = document.getElementById('logViewer');
-                if (filtered.length === 0) {
+                if (logs.length === 0) {
                     viewer.innerHTML = '<span style="color: var(--text-muted);">No logs matching filter</span>';
                     return;
                 }
 
-                viewer.innerHTML = filtered.map(l => {
+                // Show total count if filtered
+                const headerInfo = data.filtered ? `<div class="log-filter-info">Showing ${logs.length} of ${data.total} logs</div>` : '';
+                
+                const logLines = logs.map(l => {
                     let cls = 'log-line';
-                    if (l.includes('[error]')) cls += ' error';
-                    else if (l.includes('[warn]')) cls += ' warn';
-                    else if (l.includes('[info]')) cls += ' info';
-                    else if (l.includes('[debug]')) cls += ' debug';
+                    const levelMatch = l.match(/\[(error|warn|info|debug)\]/i);
+                    if (levelMatch) {
+                        const level = levelMatch[1].toLowerCase();
+                        cls += ' ' + level;
+                    }
                     return `<div class="${cls}">${escapeHtml(l)}</div>`;
                 }).join('');
+                
+                viewer.innerHTML = headerInfo + logLines;
                 viewer.scrollTop = viewer.scrollHeight;
             } catch (e) {
                 console.error('Failed to load logs:', e);
