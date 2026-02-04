@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import { MultiLLM } from '../core/MultiLLM';
 import path from 'path';
 import os from 'os';
+import { DailyMemory } from './DailyMemory';
 
 dotenv.config();
 
@@ -20,12 +21,16 @@ export class MemoryManager {
     private storage: JSONAdapter;
     private userContext: any = {};
     private profilesDir: string;
+    private dailyMemory: DailyMemory;
+    private lastMemoryFlushAt: number = 0;
+    private memoryFlushEnabled: boolean = true;
     
     // Configurable limits (can be updated via setLimits)
     private contextLimit: number = 20;
     private episodicLimit: number = 5;
     private consolidationThreshold: number = 30;
     private consolidationBatch: number = 20;
+    private memoryFlushSoftThreshold: number = 25; // Trigger flush at this many memories
 
     constructor(dbPath: string = './memory.json', userPath: string = './USER.md') {
         this.storage = new JSONAdapter(dbPath);
@@ -37,6 +42,9 @@ export class MemoryManager {
         if (!fs.existsSync(this.profilesDir)) {
             fs.mkdirSync(this.profilesDir, { recursive: true });
         }
+
+        // Initialize daily memory system
+        this.dailyMemory = new DailyMemory(dataHome);
     }
 
     /**
@@ -47,12 +55,16 @@ export class MemoryManager {
         episodicLimit?: number;
         consolidationThreshold?: number;
         consolidationBatch?: number;
+        memoryFlushSoftThreshold?: number;
+        memoryFlushEnabled?: boolean;
     }) {
         if (options.contextLimit) this.contextLimit = options.contextLimit;
         if (options.episodicLimit) this.episodicLimit = options.episodicLimit;
         if (options.consolidationThreshold) this.consolidationThreshold = options.consolidationThreshold;
         if (options.consolidationBatch) this.consolidationBatch = options.consolidationBatch;
-        logger.info(`MemoryManager limits: context=${this.contextLimit}, episodic=${this.episodicLimit}, consolidationThreshold=${this.consolidationThreshold}, consolidationBatch=${this.consolidationBatch}`);
+        if (options.memoryFlushSoftThreshold) this.memoryFlushSoftThreshold = options.memoryFlushSoftThreshold;
+        if (typeof options.memoryFlushEnabled === 'boolean') this.memoryFlushEnabled = options.memoryFlushEnabled;
+        logger.info(`MemoryManager limits: context=${this.contextLimit}, episodic=${this.episodicLimit}, consolidationThreshold=${this.consolidationThreshold}, consolidationBatch=${this.consolidationBatch}, memoryFlush=${this.memoryFlushEnabled}`);
     }
 
     public refreshUserContext(userPath: string) {
@@ -82,11 +94,88 @@ export class MemoryManager {
         memories.push({ ...entry, timestamp: new Date().toISOString() });
         this.storage.save('memories', memories);
         logger.info(`Memory saved: [${entry.type}] ${entry.id}`);
+
+        // Also save important memories to daily log
+        if (entry.type === 'long' || entry.metadata?.important) {
+            const category = entry.metadata?.category || 'Important';
+            this.dailyMemory.appendToDaily(entry.content, category);
+        }
+    }
+
+    /**
+     * Memory flush - reminds agent to write important memories before consolidation
+     * Inspired by OpenClaw's automatic memory flush system
+     */
+    public async memoryFlush(llm: MultiLLM): Promise<boolean> {
+        if (!this.memoryFlushEnabled) return false;
+
+        const shortMemories = this.searchMemory('short');
+        
+        // Check if we're approaching consolidation threshold
+        if (shortMemories.length < this.memoryFlushSoftThreshold) {
+            return false;
+        }
+
+        // Prevent frequent flushes (at most once per 30 minutes)
+        const now = Date.now();
+        if (now - this.lastMemoryFlushAt < 30 * 60 * 1000) {
+            return false;
+        }
+
+        this.lastMemoryFlushAt = now;
+        logger.info('MemoryManager: Triggering memory flush - approaching consolidation threshold');
+
+        try {
+            // Get recent context for the flush
+            const recentContext = shortMemories
+                .slice(-10)
+                .map(m => `[${m.timestamp}] ${m.content}`)
+                .join('\n');
+
+            const flushPrompt = `
+# Memory Flush Reminder
+
+The conversation history is approaching the consolidation threshold. Please review recent context and identify any important information that should be stored in long-term memory.
+
+## Recent Context:
+${recentContext}
+
+## Instructions:
+1. Identify key facts, preferences, or decisions that should be remembered long-term
+2. If there are important items, use memory_write to store them
+3. Focus on durable information (user preferences, important decisions, learned facts)
+4. Ignore temporary conversation context
+
+If there's nothing important to remember, reply with: NO_MEMORY_TO_STORE
+Otherwise, write the important information to memory and confirm.
+`;
+
+            const response = await llm.call(
+                flushPrompt,
+                "You are a memory management assistant. Your job is to identify and store important information before it's consolidated."
+            );
+
+            logger.info(`Memory flush response: ${response.substring(0, 100)}...`);
+            
+            // Store the flush event in daily log
+            this.dailyMemory.appendToDaily(
+                `Memory flush triggered. Response: ${response.substring(0, 200)}...`,
+                'System'
+            );
+
+            return true;
+        } catch (error) {
+            logger.error(`Memory flush failed: ${error}`);
+            return false;
+        }
     }
 
     public async consolidate(llm: MultiLLM) {
         const shortMemories = this.searchMemory('short');
         if (shortMemories.length < this.consolidationThreshold) return;
+
+        // Try to flush memory before consolidation
+        await this.memoryFlush(llm);
 
         logger.info(`MemoryManager: Consolidation threshold reached (${this.consolidationThreshold}). Compressing old memories...`);
 
@@ -102,12 +191,18 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
 `;
         const summary = await llm.call(summaryPrompt, "You are a memory consolidation engine.");
 
-        // Save episodic summary
+        // Save episodic summary to both JSON and daily log
         this.saveMemory({
             id: `summary-${Date.now()}`,
             type: 'episodic',
             content: `Summary of ${this.consolidationBatch} historical events: ${summary}`
         });
+
+        // Also store in daily log
+        this.dailyMemory.appendToDaily(
+            `Consolidated ${this.consolidationBatch} memories:\n\n${summary}`,
+            'Consolidation'
+        );
 
         // Remove the consolidated short-term memories
         const allMemories = this.storage.get('memories') || [];
@@ -208,5 +303,33 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
             logger.error(`Error listing contact profiles: ${e}`);
             return [];
         }
+    }
+
+    /**
+     * Get daily memory instance for direct access
+     */
+    public getDailyMemory(): DailyMemory {
+        return this.dailyMemory;
+    }
+
+    /**
+     * Get context including daily memory for agent prompts
+     */
+    public getExtendedContext(): string {
+        const parts: string[] = [];
+
+        // Add recent daily memory context
+        const dailyContext = this.dailyMemory.readRecentContext();
+        if (dailyContext) {
+            parts.push('## Recent Daily Memory\n\n' + dailyContext);
+        }
+
+        // Add long-term memory
+        const longTerm = this.dailyMemory.readLongTerm();
+        if (longTerm) {
+            parts.push('## Long-Term Memory\n\n' + longTerm.substring(0, 2000)); // Limit size
+        }
+
+        return parts.length > 0 ? parts.join('\n\n---\n\n') : '';
     }
 }
