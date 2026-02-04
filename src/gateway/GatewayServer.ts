@@ -95,14 +95,8 @@ export class GatewayServer {
             }
         );
 
-        // Broadcast message to WebSocket clients
-        this.broadcast({
-            type: 'chat:message',
-            role: 'user',
-            content: message,
-            timestamp: new Date().toISOString(),
-            messageId
-        });
+        // Note: User message is not broadcast here - the client already shows it locally.
+        // Only assistant responses are broadcast via the gateway:chat:response event.
 
         return messageId;
     }
@@ -333,6 +327,11 @@ export class GatewayServer {
                     enabled: this.config.get('whatsappEnabled') || false,
                     autoReply: this.config.get('whatsappAutoReplyEnabled') || false,
                     linkedAccount: this.config.get('whatsappOwnerJID') || null
+                },
+                discord: {
+                    configured: !!this.config.get('discordToken'),
+                    autoReply: this.config.get('discordAutoReplyEnabled') || false,
+                    connected: !!this.agent.discord
                 }
             };
             res.json({ connections });
@@ -351,6 +350,9 @@ export class GatewayServer {
                     if (settings.autoReply !== undefined) this.config.set('whatsappAutoReplyEnabled', settings.autoReply);
                     if (settings.statusReply !== undefined) this.config.set('whatsappStatusReplyEnabled', settings.statusReply);
                     if (settings.autoReact !== undefined) this.config.set('whatsappAutoReactEnabled', settings.autoReact);
+                } else if (channel === 'discord') {
+                    if (settings.token !== undefined) this.config.set('discordToken', settings.token);
+                    if (settings.autoReply !== undefined) this.config.set('discordAutoReplyEnabled', settings.autoReply);
                 } else {
                     return res.status(400).json({ error: 'Unknown channel' });
                 }
@@ -423,17 +425,39 @@ export class GatewayServer {
         // ===== LOGS =====
         router.get('/logs', (req: Request, res: Response) => {
             const lines = parseInt(req.query.lines as string) || 100;
+            const level = req.query.level as string; // Filter by log level (info, error, warn, debug)
+            const search = req.query.search as string; // Search term
             const dataDir = this.config.get('dataDir') || path.join(process.env.HOME || '', '.orcbot');
             const logPath = path.join(dataDir, 'foreground.log');
 
             if (!fs.existsSync(logPath)) {
-                return res.json({ logs: [] });
+                return res.json({ logs: [], total: 0 });
             }
 
             try {
                 const content = fs.readFileSync(logPath, 'utf8');
-                const logLines = content.split('\n').filter(Boolean).slice(-lines);
-                res.json({ logs: logLines });
+                let logLines = content.split('\n').filter(Boolean);
+                
+                // Filter by level if provided
+                if (level) {
+                    const levelPattern = new RegExp(`\\b${level}\\b`, 'i');
+                    logLines = logLines.filter(line => levelPattern.test(line));
+                }
+                
+                // Search filter if provided
+                if (search) {
+                    const searchPattern = new RegExp(search, 'i');
+                    logLines = logLines.filter(line => searchPattern.test(line));
+                }
+                
+                const total = logLines.length;
+                const recentLogs = logLines.slice(-lines);
+                
+                res.json({ 
+                    logs: recentLogs, 
+                    total,
+                    filtered: !!level || !!search
+                });
             } catch (error: any) {
                 res.status(500).json({ error: error.message });
             }
@@ -729,7 +753,7 @@ export class GatewayServer {
 
     private getSafeConfig(): Record<string, any> {
         const sensitiveKeys = [
-            'openaiApiKey', 'googleApiKey', 'openrouterApiKey', 'telegramToken',
+            'openaiApiKey', 'googleApiKey', 'openrouterApiKey', 'telegramToken', 'discordToken',
             'serperApiKey', 'braveSearchApiKey', 'captchaApiKey', 'gatewayApiKey',
             'bedrockAccessKeyId', 'bedrockSecretAccessKey', 'bedrockSessionToken',
             'nvidiaApiKey'
@@ -740,6 +764,7 @@ export class GatewayServer {
             'modelName', 'llmProvider', 'safeMode', 'autoExecuteCommands',
             'telegramAutoReplyEnabled', 'whatsappEnabled', 'whatsappAutoReplyEnabled',
             'whatsappStatusReplyEnabled', 'whatsappAutoReactEnabled', 'whatsappContextProfilingEnabled',
+            'discordAutoReplyEnabled',
             'memoryContextLimit', 'memoryEpisodicLimit', 'memoryConsolidationThreshold',
             'progressFeedbackEnabled', 'gatewayPort', 'gatewayHost',
             ...sensitiveKeys
