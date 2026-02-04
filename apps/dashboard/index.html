@@ -1502,13 +1502,20 @@
                     if (data.type === 'event' && data.event) {
                         addEvent(data.event.split(':')[1] || data.event, data.data?.message || JSON.stringify(data.data || {}));
                         
-                        // Handle chat events
+                        // Handle chat events (wrapped in event envelope)
                         if (data.event === 'chat:message' && data.data) {
                             handleIncomingChatMessage(data.data);
                         }
                         if (data.event === 'chat:cleared') {
                             handleChatCleared();
                         }
+                    }
+                    // Handle chat messages sent directly as { type: 'chat:message', ... }
+                    if (data.type === 'chat:message') {
+                        handleIncomingChatMessage(data);
+                    }
+                    if (data.type === 'chat:cleared') {
+                        handleChatCleared();
                     }
                     if (data.type === 'status') loadStatus();
                 } catch (err) {
@@ -2083,19 +2090,6 @@
             input.disabled = true;
             document.getElementById('chatSendBtn').disabled = true;
 
-            // Add user message
-            const userMsg = {
-                role: 'user',
-                content: message,
-                timestamp: new Date().toISOString()
-            };
-            chatMessages.push(userMsg);
-            input.value = '';
-            
-            // Show user message and typing indicator
-            isTyping = true;
-            renderChatMessages();
-
             try {
                 // Send via REST API
                 const data = await api('/chat/send', {
@@ -2103,19 +2097,22 @@
                     body: JSON.stringify({ message })
                 });
 
+                // Add user message with messageId returned from server
+                const userMsg = {
+                    role: 'user',
+                    content: message,
+                    timestamp: new Date().toISOString(),
+                    messageId: data.messageId
+                };
+                chatMessages.push(userMsg);
+                input.value = '';
+                
+                // Show user message and typing indicator
+                isTyping = true;
+                renderChatMessages();
+
                 // Remove typing indicator
                 isTyping = false;
-
-                // Add assistant response
-                if (data.response) {
-                    const assistantMsg = {
-                        role: 'assistant',
-                        content: data.response,
-                        timestamp: new Date().toISOString()
-                    };
-                    chatMessages.push(assistantMsg);
-                }
-
                 renderChatMessages();
             } catch (e) {
                 console.error('Failed to send message:', e);
@@ -2142,7 +2139,7 @@
                         role: data.role,
                         content: data.content,
                         timestamp: data.timestamp || new Date().toISOString(),
-                        messageId: data.messageId
+                        messageId: data.messageId || `local-${Date.now()}`
                     });
                     
                     // Remove typing indicator if assistant message
