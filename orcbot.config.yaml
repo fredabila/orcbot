@@ -1,3 +1,106 @@
 agentName: OrcBot
+modelName: gpt-4o
+searchProviderOrder:
+  - serper
+  - brave
+  - searxng
+  - google
+  - bing
+  - duckduckgo
+autonomyEnabled: true
 autonomyInterval: 15
-# All paths resolved to ~/.orcbot automatically
+autonomyBacklogLimit: 3
+maxActionRunMinutes: 10
+maxStaleActionMinutes: 30
+memoryPath: /home/runner/.orcbot/memory.json
+skillsPath: /home/runner/.orcbot/SKILLS.md
+userProfilePath: /home/runner/.orcbot/USER.md
+agentIdentityPath: /home/runner/.orcbot/.AI.md
+actionQueuePath: /home/runner/.orcbot/actions.json
+journalPath: /home/runner/.orcbot/JOURNAL.md
+learningPath: /home/runner/.orcbot/LEARNING.md
+pluginsPath: /home/runner/.orcbot/plugins
+whatsappEnabled: false
+whatsappSessionPath: /home/runner/.orcbot/whatsapp-session
+whatsappAutoReplyEnabled: false
+whatsappStatusReplyEnabled: false
+whatsappAutoReactEnabled: false
+whatsappContextProfilingEnabled: false
+telegramAutoReplyEnabled: false
+maxMessagesPerAction: 3
+maxStepsPerAction: 30
+messageDedupWindow: 10
+commandTimeoutMs: 120000
+commandRetries: 1
+commandAllowList:
+  - npm
+  - node
+  - npx
+  - git
+  - python
+  - pip
+  - pip3
+  - curl
+  - wget
+  - powershell
+  - pwsh
+  - bash
+  - apt
+  - apt-get
+  - yum
+  - dnf
+  - pacman
+  - brew
+  - sudo
+  - systemctl
+  - service
+  - cat
+  - ls
+  - dir
+  - echo
+  - mkdir
+  - touch
+  - cp
+  - mv
+  - head
+  - tail
+  - grep
+  - find
+  - which
+  - whoami
+  - uname
+  - hostname
+commandDenyList:
+  - rm
+  - rmdir
+  - del
+  - erase
+  - format
+  - mkfs
+  - dd
+  - shutdown
+  - reboot
+  - poweroff
+  - reg
+  - diskpart
+  - netsh
+safeMode: false
+pluginAllowList: []
+pluginDenyList: []
+browserProfileDir: /home/runner/.orcbot/browser-profiles
+browserProfileName: default
+tokenUsagePath: /home/runner/.orcbot/token-usage-summary.json
+tokenLogPath: /home/runner/.orcbot/token-usage.log
+sudoMode: false
+openrouterBaseUrl: https://openrouter.ai/api/v1
+skillRoutingRules: []
+autopilotNoQuestions: false
+autopilotNoQuestionsAllow: []
+autopilotNoQuestionsDeny: []
+progressFeedbackEnabled: true
+memoryContextLimit: 20
+memoryEpisodicLimit: 5
+memoryConsolidationThreshold: 30
+memoryConsolidationBatch: 20
+discordToken: test-token
+discordAutoReplyEnabled: true
