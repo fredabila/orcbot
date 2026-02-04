@@ -294,4 +294,34 @@ export class SkillsManager {
         const skillsList = this.getAllSkills().map(s => `- ${s.name}: ${s.description} (Usage: ${s.usage})`).join('\n');
         return `Available Skills:\n${skillsList}`;
     }
+
+    /**
+     * Get a compact skills list with just names and brief descriptions (for token saving)
+     */
+    public getCompactSkillsPrompt(): string {
+        const skillsList = this.getAllSkills().map(s => `${s.name}(${s.usage.replace(/^[^(]*\(/, '').replace(/\)$/, '')})`).join(', ');
+        return `Tools: ${skillsList}`;
+    }
+
+    /**
+     * Get skills filtered by relevance to a task (for token saving)
+     */
+    public getRelevantSkillsPrompt(taskKeywords: string[]): string {
+        const allSkills = this.getAllSkills();
+        const keywords = taskKeywords.map(k => k.toLowerCase());
+        
+        // Always include core skills
+        const coreSkills = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_gateway_chat', 'web_search', 'run_command', 'request_supporting_data'];
+        
+        const relevant = allSkills.filter(s => {
+            // Include if it's a core skill
+            if (coreSkills.includes(s.name)) return true;
+            // Include if name or description matches any keyword
+            const text = `${s.name} ${s.description}`.toLowerCase();
+            return keywords.some(k => text.includes(k));
+        });
+        
+        const skillsList = relevant.map(s => `- ${s.name}: ${s.description} (Usage: ${s.usage})`).join('\n');
+        return `Available Skills:\n${skillsList}`;
+    }
 }

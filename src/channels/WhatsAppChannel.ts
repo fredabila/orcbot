@@ -25,6 +25,8 @@ export class WhatsAppChannel implements IChannel {
     private sessionPath: string;
     private store: any;
     private contactJids: Set<string> = new Set();
+    // Prefix used to identify agent-sent messages (for self-chat distinction)
+    private readonly AGENT_MESSAGE_PREFIX = '🤖 ';
     // Cache config values to avoid repeated lookups
     private autoReplyEnabled: boolean = false;
     private statusReplyEnabled: boolean = false;
@@ -158,27 +160,64 @@ export class WhatsAppChannel implements IChannel {
                     const senderId = msg.key.remoteJid;
                     const ownerJid = this.agent.config.get('whatsappOwnerJID');
                     const isFromMe = msg.key.fromMe;
-                    const isToMe = senderId === ownerJid;
+                    const isSelfChat = senderId === ownerJid;
 
                     logger.info(`WhatsApp Msg: ${senderId} | fromMe=${isFromMe} | owner=${ownerJid} | type=${Object.keys(msg.message || {})}`);
 
-                    // Only process messages that are NOT from me, 
-                    // OR are from me but sent TO me (self-messaging commands)
-                    if (msg.message && (!isFromMe || isToMe)) {
+                    // For self-chat: We need to distinguish between:
+                    // 1. Messages the AGENT sent (should skip) - identified by agent prefix
+                    // 2. Messages the USER sent as commands (should process)
+                    // For non-self-chat: Skip all fromMe messages (they're agent replies)
+                    if (isFromMe) {
+                        if (isSelfChat) {
+                            // In self-chat, check if this is an agent message by looking for the prefix
+                            const msgText = msg.message?.conversation || 
+                                msg.message?.extendedTextMessage?.text || '';
+                            if (msgText.startsWith(this.AGENT_MESSAGE_PREFIX)) {
+                                logger.debug(`WhatsApp: Skipping agent's own message in self-chat (has prefix)`);
+                                continue;
+                            }
+                            // Otherwise, this is a user command in self-chat - let it through!
+                            logger.info(`WhatsApp: Processing self-chat command (no agent prefix)`);
+                        } else {
+                            // Not self-chat, skip all fromMe messages
+                            logger.debug(`WhatsApp: Skipping own outgoing message (fromMe=true)`);
+                            continue;
+                        }
+                    }
+
+                    // Only process incoming messages (fromMe=false)
+                    if (msg.message) {
                         const messageId = msg.key.id;
                         const imageMsg = msg.message.imageMessage;
                         const audioMsg = msg.message.audioMessage;
                         const docMsg = msg.message.documentMessage;
                         const videoMsg = msg.message.videoMessage;
+                        const extendedText = msg.message.extendedTextMessage;
 
                         const text = msg.message.conversation ||
-                            msg.message.extendedTextMessage?.text ||
+                            extendedText?.text ||
                             imageMsg?.caption || docMsg?.caption || videoMsg?.caption || '';
 
                         const senderName = msg.pushName || 'WhatsApp User';
                         const isGroup = senderId?.endsWith('@g.us');
                         const isStatus = senderId === 'status@broadcast';
-                        const isFromOwner = senderId === ownerJid;
+
+                        // Extract reply/quote context if this message is a reply
+                        let replyContext = '';
+                        let quotedMessageId: string | undefined;
+                        const contextInfo = extendedText?.contextInfo || imageMsg?.contextInfo || videoMsg?.contextInfo || docMsg?.contextInfo;
+                        if (contextInfo?.quotedMessage) {
+                            quotedMessageId = contextInfo.stanzaId;
+                            const quotedText = contextInfo.quotedMessage.conversation || 
+                                contextInfo.quotedMessage.extendedTextMessage?.text ||
+                                contextInfo.quotedMessage.imageMessage?.caption ||
+                                '[Media/Sticker]';
+                            const quotedParticipant = contextInfo.participant || 'Unknown';
+                            // Extract just the phone number for cleaner display
+                            const quotedName = quotedParticipant.split('@')[0];
+                            replyContext = `[Replying to ${quotedName}'s message: \"${quotedText.substring(0, 200)}${quotedText.length > 200 ? '...' : ''}\"]`;
+                        }
 
                         // Download Media if present - BUT skip status media unless explicitly enabled
                         let mediaPath = '';
@@ -241,27 +280,36 @@ export class WhatsAppChannel implements IChannel {
                         this.agent.memory.saveMemory({
                             id: `wa-${messageId}`,
                             type: 'short',
-                            content: `User ${senderName} (${senderId}) said on WhatsApp: ${text}`,
+                            content: `User ${senderName} (${senderId}) said on WhatsApp: ${text}${replyContext ? ' ' + replyContext : ''}`,
                             timestamp: new Date().toISOString(),
-                            metadata: { source: 'whatsapp', messageId, senderId, senderName }
+                            metadata: { 
+                                source: 'whatsapp', 
+                                messageId, 
+                                senderId, 
+                                senderName,
+                                quotedMessageId,
+                                replyContext: replyContext || undefined
+                            }
                         });
 
                         const reactInstruction = this.autoReactEnabled ? " or 'react_whatsapp'" : "";
                         const profileInstruction = this.profilingEnabled ? "\n- Also, evaluate if you've learned something new about this person and update their profile using 'update_contact_profile' if needed." : "";
+                        const replyNote = replyContext ? ` ${replyContext}` : '';
 
-                        // Treat as Command if from Owner
-                        if (isFromOwner || isToMe) {
+                        // Treat as Command if from Owner (self-chat - message from yourself on another device)
+                        // Note: isSelfChat means the remoteJid equals owner's JID (messaging yourself)
+                        if (isSelfChat) {
                             await this.agent.pushTask(
-                                `WhatsApp command from yourself (ID: ${messageId}): "${text}"${profileInstruction}`,
+                                `WhatsApp command from yourself (ID: ${messageId}): "${text}"${replyNote}${profileInstruction}`,
                                 10,
-                                { source: 'whatsapp', sourceId: senderId, senderName: senderName, isOwner: true, messageId }
+                                { source: 'whatsapp', sourceId: senderId, senderName: senderName, isOwner: true, messageId, quotedMessageId, replyContext: replyContext || undefined }
                             );
                         } else if (this.autoReplyEnabled) {
                             // Treat as External Interaction for AI to decide on
                             await this.agent.pushTask(
-                                `EXTERNAL WHATSAPP MESSAGE from ${senderName} (ID: ${messageId}): "${text}". \n\nGoal: Decide if you should respond${reactInstruction} to this person on my behalf based on our history and my persona. If yes, use 'send_whatsapp'${reactInstruction}.${profileInstruction}`,
+                                `EXTERNAL WHATSAPP MESSAGE from ${senderName} (ID: ${messageId}): "${text}"${replyNote}. \n\nGoal: Decide if you should respond${reactInstruction} to this person on my behalf based on our history and my persona. If yes, use 'send_whatsapp'${reactInstruction}.${profileInstruction}`,
                                 5,
-                                { source: 'whatsapp', sourceId: senderId, senderName: senderName, isExternal: true, messageId }
+                                { source: 'whatsapp', sourceId: senderId, senderName: senderName, isExternal: true, messageId, quotedMessageId, replyContext: replyContext || undefined }
                             );
                         } else {
                             logger.info(`WhatsApp: External message from ${senderName} not queued - autoReplyEnabled is false`);
@@ -289,7 +337,9 @@ export class WhatsAppChannel implements IChannel {
             // If it's a group, ensure it ends with @g.us
             // (Basic check, user should usually provide correct ID for groups)
 
-            await this.sock.sendMessage(jid, { text: message });
+            // Add agent prefix to distinguish agent messages from user self-chat commands
+            const prefixedMessage = `${this.AGENT_MESSAGE_PREFIX}${message}`;
+            await this.sock.sendMessage(jid, { text: prefixedMessage });
             logger.info(`WhatsAppChannel: Sent message to ${to} (as ${jid})`);
         } catch (error) {
             logger.error(`WhatsAppChannel: Error sending message to ${to}: ${error}`);

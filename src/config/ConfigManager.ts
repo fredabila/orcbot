@@ -81,6 +81,9 @@ export interface AgentConfig {
     memoryEpisodicLimit?: number;         // Episodic summaries to include (default 5)
     memoryConsolidationThreshold?: number; // When to consolidate (default 30)
     memoryConsolidationBatch?: number;    // How many to consolidate at once (default 20)
+    // Token optimization
+    skipSimulationForSimpleTasks?: boolean; // Skip planning step for simple tasks (default true)
+    compactSkillsPrompt?: boolean;          // Use compact skills format (default false)
     // Web Gateway
     gatewayPort?: number;                 // Port for web gateway (default 3100)
     gatewayHost?: string;                 // Host to bind gateway (default 0.0.0.0)
@@ -246,7 +249,7 @@ export class ConfigManager {
             whatsappContextProfilingEnabled: false,
             whatsappOwnerJID: undefined,
             telegramAutoReplyEnabled: false,
-            maxMessagesPerAction: 3,
+            maxMessagesPerAction: 10,
             maxStepsPerAction: 30,
             messageDedupWindow: 10,
             commandTimeoutMs: 120000,
@@ -327,7 +330,9 @@ export class ConfigManager {
             memoryContextLimit: 20,
             memoryEpisodicLimit: 5,
             memoryConsolidationThreshold: 30,
-            memoryConsolidationBatch: 20
+            memoryConsolidationBatch: 20,
+            skipSimulationForSimpleTasks: true,
+            compactSkillsPrompt: false
         };
     }
 

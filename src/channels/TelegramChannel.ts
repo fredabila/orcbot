@@ -38,6 +38,17 @@ export class TelegramChannel implements IChannel {
             const autoReplyEnabled = this.agent.config.get('telegramAutoReplyEnabled');
 
             let text = message.text || message.caption || '';
+
+            // Extract reply context if this message is a reply to another message
+            let replyContext = '';
+            let replyToMessageId: number | undefined;
+            if (message.reply_to_message) {
+                const replied = message.reply_to_message;
+                replyToMessageId = replied.message_id;
+                const repliedText = replied.text || replied.caption || '[Media/Sticker]';
+                const repliedUser = replied.from?.first_name || 'Unknown';
+                replyContext = `[Replying to ${repliedUser}'s message: "${repliedText.substring(0, 200)}${repliedText.length > 200 ? '...' : ''}"]`;
+            }
             let mediaPath = '';
 
             // Handle Media
@@ -75,7 +86,9 @@ export class TelegramChannel implements IChannel {
 
             logger.info(`Telegram: Message from ${userName} (${userId}): ${text || '[Media]'} | autoReply=${autoReplyEnabled}`);
 
-            const content = text ? `User ${userName} (Telegram ${userId}) said: ${text}` : `User ${userName} (Telegram ${userId}) sent a file: ${path.basename(mediaPath)}`;
+            const content = text 
+                ? `User ${userName} (Telegram ${userId}) said: ${text}${replyContext ? ' ' + replyContext : ''}`
+                : `User ${userName} (Telegram ${userId}) sent a file: ${path.basename(mediaPath)}${replyContext ? ' ' + replyContext : ''}`;
 
             // Store user message in memory
             this.agent.memory.saveMemory({
@@ -83,7 +96,15 @@ export class TelegramChannel implements IChannel {
                 type: 'short',
                 content: content,
                 timestamp: new Date().toISOString(),
-                metadata: { source: 'telegram', messageId: message.message_id, userId, userName, mediaPath }
+                metadata: { 
+                    source: 'telegram', 
+                    messageId: message.message_id, 
+                    userId, 
+                    userName, 
+                    mediaPath,
+                    replyToMessageId,
+                    replyContext: replyContext || undefined
+                }
             });
 
             if (!autoReplyEnabled) {
@@ -92,14 +113,21 @@ export class TelegramChannel implements IChannel {
             }
 
             // Push task to agent
+            const taskDescription = replyContext
+                ? `Telegram message from ${userName}: "${text || '[Media]'}" ${replyContext}${mediaPath ? ` (File stored at: ${mediaPath})` : ''}`
+                : `Telegram message from ${userName}: "${text || '[Media]'}"${mediaPath ? ` (File stored at: ${mediaPath})` : ''}`;
+            
             await this.agent.pushTask(
-                `Telegram message from ${userName}: "${text || '[Media]'}"${mediaPath ? ` (File stored at: ${mediaPath})` : ''}`,
+                taskDescription,
                 10,
                 {
                     source: 'telegram',
                     sourceId: userId,
                     senderName: userName,
-                    mediaPath
+                    messageId: message.message_id,  // For deduplication
+                    mediaPath,
+                    replyToMessageId,
+                    replyContext: replyContext || undefined
                 }
             );
 

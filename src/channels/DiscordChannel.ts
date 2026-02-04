@@ -82,12 +82,31 @@ export class DiscordChannel implements IChannel {
             ? 'DM'
             : ('name' in message.channel ? message.channel.name : 'Unknown');
 
-        logger.info(`Discord message from ${username} (${userId}) in ${channelName}: ${content.substring(0, 100)}`);
+        // Extract reply context if this message is a reply to another message
+        let replyContext = '';
+        let replyToMessageId: string | undefined;
+        if (message.reference?.messageId) {
+            replyToMessageId = message.reference.messageId;
+            try {
+                const repliedMessage = await message.fetchReference();
+                const repliedText = repliedMessage.content || '[Media/Embed]';
+                const repliedUser = repliedMessage.author?.username || 'Unknown';
+                replyContext = `[Replying to ${repliedUser}'s message: "${repliedText.substring(0, 200)}${repliedText.length > 200 ? '...' : ''}"]`;
+            } catch (e) {
+                // Could not fetch the referenced message, just note the reference exists
+                replyContext = `[Replying to message ID: ${replyToMessageId}]`;
+            }
+        }
 
-        // Save message to memory with metadata
-        await this.agent.memory.saveMemory(
-            `Discord message from ${username}: ${content}`,
-            {
+        logger.info(`Discord message from ${username} (${userId}) in ${channelName}: ${content.substring(0, 100)}${replyContext ? ' ' + replyContext : ''}`);
+
+        // Save message to memory with metadata (using proper MemoryEntry format)
+        this.agent.memory.saveMemory({
+            id: `discord-${messageId}`,
+            type: 'short',
+            content: `Discord message from ${username}: ${content}${replyContext ? ' ' + replyContext : ''}`,
+            timestamp: new Date().toISOString(),
+            metadata: {
                 source: 'discord',
                 channelId,
                 userId,
@@ -95,9 +114,10 @@ export class DiscordChannel implements IChannel {
                 messageId,
                 guildId,
                 channelName,
-                timestamp: new Date().toISOString()
+                replyToMessageId,
+                replyContext: replyContext || undefined
             }
-        );
+        });
 
         // Handle attachments
         if (message.attachments.size > 0) {
@@ -107,20 +127,22 @@ export class DiscordChannel implements IChannel {
                 
                 logger.info(`Discord attachment: ${fileName} from ${username}`);
                 
-                await this.agent.memory.saveMemory(
-                    `Discord attachment from ${username}: ${fileName} (${fileUrl})`,
-                    {
+                this.agent.memory.saveMemory({
+                    id: `discord-attach-${messageId}-${fileName}`,
+                    type: 'short',
+                    content: `Discord attachment from ${username}: ${fileName} (${fileUrl})`,
+                    timestamp: new Date().toISOString(),
+                    metadata: {
                         source: 'discord',
-                        type: 'attachment',
+                        attachmentType: 'attachment',
                         channelId,
                         userId,
                         username,
                         fileName,
                         fileUrl,
-                        messageId,
-                        timestamp: new Date().toISOString()
+                        messageId
                     }
-                );
+                });
             }
         }
 
@@ -134,15 +156,23 @@ export class DiscordChannel implements IChannel {
             }
 
             const priority = 10; // High priority for user messages (same as Telegram)
+            const taskDescription = replyContext
+                ? `Respond to Discord message from ${username} in ${channelName}: "${content}" ${replyContext}`
+                : `Respond to Discord message from ${username} in ${channelName}: "${content}"`;
+            
             await this.agent.pushTask(
-                `Respond to Discord message from ${username} in ${channelName}: "${content}"`,
+                taskDescription,
                 priority,
                 {
                     source: 'discord',
+                    sourceId: channelId,  // Use channelId as sourceId (where to reply)
+                    senderName: username,  // Use username as senderName for DecisionEngine
                     channelId,
                     userId,
                     username,
                     messageId,
+                    replyToMessageId,
+                    replyContext: replyContext || undefined,
                     requiresResponse: true
                 }
             );

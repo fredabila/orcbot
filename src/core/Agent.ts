@@ -58,6 +58,10 @@ export class Agent {
     private instanceLockAcquired: boolean = false;
     private heartbeatJobs: Map<string, Cron> = new Map();
     private heartbeatSchedulePath: string;
+    
+    // Track processed messages to prevent duplicates
+    private processedMessages: Set<string> = new Set();
+    private processedMessagesMaxSize: number = 1000;
 
     constructor() {
         this.config = new ConfigManager();
@@ -2712,6 +2716,49 @@ This skill should prevent future failures when ${taskDescription.slice(0, 100)}.
         return payload.length <= 80 && patterns.some(p => p.test(payload));
     }
 
+    /**
+     * Detect simple response tasks that don't need simulation planning (token saving)
+     * Simple tasks: short questions, acknowledgments, single-step requests
+     */
+    private isSimpleResponseTask(text: string): boolean {
+        const normalized = (text || '').toLowerCase();
+        const quotedMatch = normalized.match(/"([^"]+)"/);
+        const payload = (quotedMatch?.[1] || normalized).trim();
+        
+        // Very short messages are usually simple
+        if (payload.length <= 50) return true;
+        
+        // Questions that can be answered directly
+        const simplePatterns = [
+            /^what('s| is) (your|the) (name|time|date)\b/,
+            /^who are you\b/,
+            /^can you\b.*\?$/,
+            /^do you\b.*\?$/,
+            /^are you\b.*\?$/,
+            /^tell me about yourself\b/,
+            /^what can you do\b/,
+            /\b(yes|no|ok|okay|sure|alright|fine|great|cool|nice|awesome)\b/,
+            /^(👍|👎|🙏|😊|😀|🤔|❤️|✅|❌)/  // Emoji-only or emoji-start responses
+        ];
+        
+        // Complex keywords that indicate multi-step tasks
+        const complexPatterns = [
+            /\b(search|find|look up|research)\b/,
+            /\b(download|install|setup|configure)\b/,
+            /\b(create|build|make|generate)\b.*(file|project|app)/,
+            /\b(analyze|investigate|debug)\b/,
+            /\b(run|execute|deploy)\b/,
+            /\bstep.?by.?step\b/,
+            /\bmultiple\b/
+        ];
+        
+        const isComplex = complexPatterns.some(p => p.test(payload));
+        if (isComplex) return false;
+        
+        const isSimple = payload.length <= 100 || simplePatterns.some(p => p.test(payload));
+        return isSimple;
+    }
+
     private getPluginHealthCheckIntervalMs(): number {
         const minutes = this.config.get('pluginHealthCheckIntervalMinutes') || 15;
         return Math.max(1, minutes) * 60 * 1000;
@@ -2876,10 +2923,15 @@ This skill should prevent future failures when ${taskDescription.slice(0, 100)}.
         // Check for ACTIVE tasks only (pending or in-progress)
         const activeTasks = this.actionQueue.getQueue().filter(a => a.status === 'pending' || a.status === 'in-progress');
 
+        // CRITICAL: Skip heartbeat if there are ANY pending/in-progress tasks
+        // This prevents heartbeat from disrupting ongoing work
+        if (activeTasks.length > 0) {
+            logger.debug(`Agent: Heartbeat skipped - ${activeTasks.length} active task(s) in queue`);
+            return;
+        }
+
         const idleTimeMs = Date.now() - this.lastActionTime;
         const heartbeatDue = (Date.now() - this.lastHeartbeatAt) > intervalMinutes * 60 * 1000;
-        const backlogLimit = this.config.get('autonomyBacklogLimit') || 3;
-        const hasBacklogSpace = activeTasks.length < backlogLimit;
 
         // SMART COOLING: If last heartbeat was unproductive, exponentially back off
         // After 3 unproductive heartbeats, wait 2x, then 4x, then 8x the interval
@@ -2892,7 +2944,7 @@ This skill should prevent future failures when ${taskDescription.slice(0, 100)}.
             return;
         }
 
-        if (heartbeatDue && hasBacklogSpace) {
+        if (heartbeatDue) {
             logger.info(`Agent: Heartbeat trigger - Agent idle for ${Math.floor(idleTimeMs / 60000)}m. Cooldown multiplier: ${cooldownMultiplier}x`);
 
             // Check if we have workers available for delegation
@@ -2915,11 +2967,6 @@ This skill should prevent future failures when ${taskDescription.slice(0, 100)}.
             this.lastHeartbeatProductive = false; // Will be set true if actual learning/action occurs
             this.consecutiveIdleHeartbeats++;
             this.updateLastHeartbeatTime();
-        } else if (heartbeatDue && !hasBacklogSpace) {
-            logger.info(`Agent: Heartbeat skipped due to backlog (${activeTasks.length}/${backlogLimit}).`);
-            // Reset idle counter since we have work
-            this.consecutiveIdleHeartbeats = 0;
-            this.lastHeartbeatProductive = true;
         }
     }
 
@@ -3518,6 +3565,35 @@ Respond with a single actionable task description (one sentence):`;
     }
 
     public async pushTask(description: string, priority: number = 5, metadata: any = {}, lane: 'user' | 'autonomy' = 'user') {
+        // Deduplication: If this message was already processed, skip
+        const messageId = metadata.messageId;
+        if (messageId) {
+            const dedupKey = `${metadata.source || 'unknown'}:${messageId}`;
+            if (this.processedMessages.has(dedupKey)) {
+                logger.debug(`Agent: Skipping duplicate message ${dedupKey}`);
+                return;
+            }
+            
+            // Also check if there's already a pending/in-progress task for this message
+            const existingTask = this.actionQueue.getQueue().find(a => 
+                (a.status === 'pending' || a.status === 'in-progress') && 
+                a.payload?.messageId === messageId
+            );
+            if (existingTask) {
+                logger.debug(`Agent: Task already exists for message ${messageId} (action ${existingTask.id})`);
+                return;
+            }
+            
+            // Mark as processed
+            this.processedMessages.add(dedupKey);
+            
+            // Prevent unbounded growth
+            if (this.processedMessages.size > this.processedMessagesMaxSize) {
+                const entries = Array.from(this.processedMessages);
+                entries.slice(0, 100).forEach(e => this.processedMessages.delete(e));
+            }
+        }
+        
         const action: Action = {
             id: Math.random().toString(36).substring(7),
             type: 'TASK',
@@ -3607,18 +3683,25 @@ Respond with a single actionable task description (one sentence):`;
             const recentHist = this.memory.getRecentContext();
             const contextStr = recentHist.map(c => `[${c.type}] ${c.content}`).join('\n');
             const isSocialFastPath = this.isTrivialSocialIntent(action.payload.description || '');
+            const skipSimulation = this.config.get('skipSimulationForSimpleTasks');
+            
+            // Detect simple tasks that don't need simulation (token saving)
+            const isSimpleTask = isSocialFastPath || 
+                (skipSimulation && this.isSimpleResponseTask(action.payload.description || ''));
             
             // PROGRESS FEEDBACK: Let user know we're working on non-trivial tasks
-            if (!isSocialFastPath && action.payload.source) {
+            if (!isSimpleTask && action.payload.source) {
                 await this.sendProgressFeedback(action, 'start');
             }
             
-            const executionPlan = isSocialFastPath
-                ? 'Respond once with a brief, friendly reply and terminate immediately. Do not perform research or multi-step actions.'
+            const executionPlan = isSimpleTask
+                ? 'Simple task: Respond directly and terminate. No multi-step planning needed.'
                 : await this.simulationEngine.simulate(
                     action.payload.description,
-                    contextStr,
-                    this.skills.getSkillsPrompt()
+                    contextStr.slice(-1000), // Limit context for simulation to save tokens
+                    this.config.get('compactSkillsPrompt') 
+                        ? this.skills.getCompactSkillsPrompt() 
+                        : this.skills.getSkillsPrompt()
                 );
 
             const MAX_STEPS = isSocialFastPath ? 1 : (this.config.get('maxStepsPerAction') || 30);
@@ -3631,6 +3714,7 @@ Respond with a single actionable task description (one sentence):`;
             let deepToolExecutedSinceLastMessage = true; // Start true to allow Step 1 message
             let stepsSinceLastMessage = 0;
             let consecutiveNonDeepTurns = 0;
+            let waitingForClarification = false; // Track if we're paused for user input
             const sentMessagesInAction: string[] = [];
 
             const nonDeepSkills = [
@@ -3876,17 +3960,31 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         // CLARIFICATION HANDLING: Break sequence if agent is asking for info
                         if (toolCall.name === 'request_supporting_data') {
                             const question = toolCall.metadata?.question || toolCall.metadata?.text || 'I need more information to proceed.';
+                            
+                            // Send clarification to appropriate channel
                             if (this.telegram && action.payload.source === 'telegram') {
                                 await this.telegram.sendMessage(action.payload.sourceId, `❓ *Clarification Needed*: ${question}`);
+                            } else if (this.whatsapp && action.payload.source === 'whatsapp') {
+                                await this.whatsapp.sendMessage(action.payload.sourceId, `❓ Clarification Needed: ${question}`);
+                            } else if (this.discord && action.payload.source === 'discord') {
+                                await this.discord.sendMessage(action.payload.sourceId, `❓ **Clarification Needed**: ${question}`);
                             }
-                            logger.info(`Agent: Clarification requested. Pausing action ${action.id}.`);
-                            forceBreak = true;
-
+                            
+                            logger.info(`Agent: Clarification requested. Pausing action ${action.id} - waiting for user response.`);
+                            
+                            // Mark action as waiting (not completed) so user reply can resume it
+                            this.actionQueue.updateStatus(action.id, 'pending');
+                            
                             this.memory.saveMemory({
                                 id: `${action.id}-step-${currentStep}-clarification`,
                                 type: 'short',
-                                content: `[SYSTEM: Agent requested clarification: "${question}". Pausing sequence.]`
+                                content: `[SYSTEM: Agent requested clarification: "${question}". Action PAUSED. Waiting for user response.]`,
+                                metadata: { waitingForClarification: true, actionId: action.id, question }
                             });
+                            
+                            // Set a flag to skip the normal completion logic
+                            waitingForClarification = true;
+                            forceBreak = true;
                             break;
                         }
 
@@ -3897,10 +3995,10 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         }
 
                         let observation = `Observation: Tool ${toolCall.name} returned: ${JSON.stringify(toolResult)}`;
-                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_gateway_chat') {
+                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_gateway_chat' || toolCall.name === 'send_discord') {
                             messagesSent++;
                             
-                            // QUESTION PAUSE: If this message asked a question, save waiting state
+                            // QUESTION PAUSE: If this message asked a question, pause and wait for response
                             const sentMessage = toolCall.metadata?.message || '';
                             if (this.messageContainsQuestion(sentMessage)) {
                                 this.memory.saveMemory({
@@ -3910,6 +4008,10 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                     metadata: { waitingForResponse: true, actionId: action.id }
                                 });
                                 logger.info(`Agent: Pausing action ${action.id} - waiting for user response to question.`);
+                                
+                                // Actually pause - set flags to break loop and skip completion
+                                waitingForClarification = true;
+                                forceBreak = true;
                             }
                         }
 
@@ -3923,6 +4025,19 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         // HARD BREAK after scheduling to prevent loops
                         if (toolCall.name === 'schedule_task') {
                             logger.info(`Agent: Task scheduled for action ${action.id}. Terminating sequence.`);
+                            forceBreak = true;
+                            break;
+                        }
+
+                        // HARD BREAK after successful channel message send for "respond to" tasks
+                        // This prevents duplicate messages when the LLM doesn't set goals_met correctly
+                        const isChannelSend = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_gateway_chat'].includes(toolCall.name);
+                        const isResponseTask = action.payload?.description?.toLowerCase().includes('respond to') ||
+                                               action.payload?.requiresResponse === true;
+                        const wasSuccessful = toolResult && !JSON.stringify(toolResult).toLowerCase().includes('error');
+                        
+                        if (isChannelSend && isResponseTask && wasSuccessful) {
+                            logger.info(`Agent: Channel message sent for response task ${action.id}. Terminating to prevent duplicates.`);
                             forceBreak = true;
                             break;
                         }
@@ -3944,6 +4059,13 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
             if (finalStatus === 'failed') {
                 return;
             }
+            
+            // If we're waiting for clarification, don't mark as completed
+            if (waitingForClarification) {
+                logger.info(`Agent: Action ${action.id} paused awaiting user clarification. Will resume when user responds.`);
+                return; // Skip the completion logic - action stays pending
+            }
+            
             // Record Final Response/Reasoning in Memory upon completion
             this.memory.saveMemory({
                 id: `${action.id}-conclusion`,

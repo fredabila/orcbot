@@ -55,7 +55,7 @@ export class DecisionEngine {
      * Builds the core system instructions that should be present in ALL LLM calls.
      * This ensures the agent always remembers its identity, capabilities, and protocols.
      */
-    private buildCoreInstructions(availableSkills: string, agentIdentity: string): string {
+    private buildCoreInstructions(availableSkills: string, agentIdentity: string, isFirstStep: boolean = true): string {
         const now = new Date();
         const dateContext = `
 CURRENT DATE & TIME:
@@ -72,6 +72,13 @@ ${agentIdentity || 'You are a professional autonomous agent.'}
 
 ${dateContext}
 
+ACCOUNT OWNERSHIP CLARITY:
+- You operate the user's messaging accounts (WhatsApp, Telegram, Discord) ON THEIR BEHALF.
+- When the user says "post on my status" or "send from my account", they mean the account YOU control - which IS their account.
+- Your WhatsApp status IS the user's WhatsApp status. Your Telegram IS their Telegram. There is no separation.
+- If you have a skill like \`post_whatsapp_status\`, that posts to the user's status (the one you control).
+- Do NOT ask for clarification about "your status vs my status" - they are the same thing.
+
 ${ParserLayer.getSystemPromptSnippet()}
 
 SYSTEM ENVIRONMENT:
@@ -84,7 +91,7 @@ STRATEGIC REASONING PROTOCOLS:
     - \`analysis\`: Review the history. Did you already answer the user? Is the requested file already downloaded?
     - \`goals_met\`: Set to \`true\` if the tools you're calling in THIS response will satisfy the user's ultimate intent. Tools WILL BE EXECUTED even when goals_met is true.
     - IMPORTANT: If you include tools[] AND set goals_met: true, the tools will run and THEN the action terminates. This is the correct pattern for "send this message and we're done".
-     - If goals_met is false, you MUST include at least one tool to make progress (or request clarification with request_supporting_data).
+    - If goals_met is false, you MUST include at least one tool to make progress (or request clarification with request_supporting_data).
 3.  **Step-1 Mandatory Interaction**: If this is a NEW request (\`messagesSent: 0\`), you MUST provide a response in Step 1. Do NOT stay silent.
     - **SOCIAL FINALITY**: If the user says "Hi", "Hello", or "How are you?", respond naturally and **terminate immediately** (\`goals_met: true\` with send_telegram/send_whatsapp/send_discord) in Step 1. Do not look for additional work or research their profile unless specifically asked.
 4.  **Step-2+ Purpose (RESULTS ONLY)**: If \`messagesSent > 0\`, do NOT send another message unless you have gathered NEW, CRITICAL information or reached a 15-step milestone in a long process.
@@ -94,6 +101,7 @@ STRATEGIC REASONING PROTOCOLS:
     - If you see a \`send_telegram\`, \`send_whatsapp\`, or \`send_discord\` observation that already contains the final answer/result, you MUST set \`goals_met: true\` with NO tools and STOP. 
     - Do NOT repeat the message "just to be sure" or because "the user might have missed it". 
     - If your Reasoning says "I will re-send just in case", YOU ARE ALREADY IN A LOOP. BREAK IT.
+    - **SUCCESS CHECK**: If a previous step shows a tool SUCCEEDED (e.g., "Posted status update to 3 contacts"), the task is DONE. Do NOT then send a message saying you can't do it or asking for clarification. CHECK YOUR HISTORY before claiming inability.
 8.  **Progress Over Reflection**: Do not loop just to "reflect" in your journal or update learning. 
     - You are limited to **3 total steps** of internal reflection (Journal/Learning) without a "Deep Action" (Search/Command/Web).
     - If you cannot make objective progress, inform the user and stop. Do NOT stay in a loop just updating metadata.
@@ -112,6 +120,13 @@ STRATEGIC REASONING PROTOCOLS:
     - Example: \`browser_click("1")\` to click a button labeled \`button "Sign In" [ref=1]\`.
     - This is more reliable than CSS selectors.
 
+TASK PERSISTENCE & COMPLETION:
+- **Complete The Job**: If you started a multi-step task (account creation, file download, research), you MUST continue until genuine completion or a genuine blocker (not just "I've done a few steps").
+- **No Premature Termination**: Do NOT stop mid-task because you've "made progress". The goal is COMPLETION, not partial work. If you can take another step, take it.
+- **Blocker Definition**: A "blocker" is: (1) Missing credentials/info from user, (2) CAPTCHA you cannot solve, (3) Rate-limited/blocked by website, (4) Permission denied errors. Normal page loads, form fills, and navigation are NOT blockers.
+- **Session Continuity**: You have memory of previous steps. Use it. Don't restart from scratch or forget what you've accomplished.
+- **Failure Recovery**: If one approach fails (e.g., a button doesn't work), try an alternative: different selector, keyboard navigation, direct URL, etc. Exhaust options before giving up.
+
 DYNAMIC COMMUNICATION INTELLIGENCE:
 - **Expressive Decisiveness**: Communicate as much as is logically necessary to satisfy the user's request. There is NO hard message limit.
 - **Informative Updates**: If a task is complex (e.g., long web search), providing a status update IS encouraged.
@@ -119,6 +134,7 @@ DYNAMIC COMMUNICATION INTELLIGENCE:
 - **No Redundancy**: Do not send "Acknowledgment" messages if you are about to provide the result in the same step. Do NOT send "Consolidated" summaries of information you just sent in the previous step.
 - **Status Presence**: If you are in the middle of a multi-step task (e.g., downloading a large file, scanning multiple pages), providing a progress update is encouraged once every ~15 steps to keep the user in the loop.
 - **Sent Message Awareness**: BEFORE you send any message to the user (via any channel skill like \`send_telegram\`, \`send_whatsapp\`, \`send_discord\`, \`send_gateway_chat\`, etc.), READ the 'Recent Conversation History'. If you see ANY message observation confirming successful delivery of the requested info, DO NOT send another message.
+- **Message Economy**: While you have ample room to work (typically 10+ steps per action), don't send messages frivolously. Reserve messages for: (1) Initial acknowledgment, (2) Critical blockers requiring user input, (3) Significant milestone updates on long tasks, (4) Final completion report. Silent work in between is preferred.
 
 HUMAN-LIKE COLLABORATION:
 - Combined multiple confirmations into one natural response.
@@ -141,21 +157,45 @@ ${availableSkills}
     public async decide(action: any): Promise<StandardResponse> {
         const taskDescription = action.payload.description;
         const metadata = action.payload;
+        const actionId = action.id;
 
         const userContext = this.memory.getUserContext();
         const recentContext = this.memory.getRecentContext();
         const availableSkills = this.skills.getSkillsPrompt();
         const allowedToolNames = this.skills.getAllSkills().map(s => s.name);
 
-        // Load Journal and Learning
-        let journalContent = '(Journal is empty)';
-        let learningContent = '(Learning base is empty)';
+        // Load Journal and Learning - keep meaningful context
+        const isFirstStep = (metadata.currentStep || 1) === 1;
+        const journalLimit = 1500;  // Recent reflections
+        const learningLimit = 1500; // Knowledge base
+        
+        let journalContent = '';
+        let learningContent = '';
         try {
-            if (fs.existsSync(this.journalPath)) journalContent = fs.readFileSync(this.journalPath, 'utf-8').slice(-2000);
-            if (fs.existsSync(this.learningPath)) learningContent = fs.readFileSync(this.learningPath, 'utf-8').slice(-2000);
+            if (fs.existsSync(this.journalPath)) {
+                const full = fs.readFileSync(this.journalPath, 'utf-8');
+                journalContent = full.length > journalLimit ? full.slice(-journalLimit) : full;
+            }
+            if (fs.existsSync(this.learningPath)) {
+                const full = fs.readFileSync(this.learningPath, 'utf-8');
+                learningContent = full.length > learningLimit ? full.slice(-learningLimit) : full;
+            }
         } catch (e) { }
 
-        const contextString = recentContext.map(c => `[${c.type}] ${c.content}`).join('\n');
+        // Filter context to only include memories for THIS action (step observations)
+        const actionPrefix = `${actionId}-step-`;
+        const actionMemories = recentContext.filter(c => c.id && c.id.startsWith(actionPrefix));
+        const otherMemories = recentContext.filter(c => !c.id || !c.id.startsWith(actionPrefix)).slice(0, 5);
+        
+        // Build step history specific to this action
+        const stepHistoryString = actionMemories.length > 0 
+            ? actionMemories.map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${c.content}`).join('\n')
+            : 'No previous steps taken yet.';
+        
+        // Include limited other context for background awareness
+        const otherContextString = otherMemories.length > 0
+            ? otherMemories.map(c => `[${c.type}] ${c.content}`).join('\n')
+            : '';
 
         let channelInstructions = '';
         if (metadata.source === 'telegram') {
@@ -194,38 +234,40 @@ ACTIVE CHANNEL CONTEXT:
 
 
         // Build core instructions that ALL LLM calls should have
-        const coreInstructions = this.buildCoreInstructions(availableSkills, this.agentIdentity);
+        // isFirstStep already declared above
+        const coreInstructions = this.buildCoreInstructions(availableSkills, this.agentIdentity, isFirstStep);
 
+        // User context - limit only if very large (>2000 chars)
+        const userContextStr = userContext.raw || '';
+        const trimmedUserContext = userContextStr.length > 2000 
+            ? userContextStr.slice(0, 2000) + '...[truncated]' 
+            : userContextStr;
+
+        // Full prompt for all steps - don't risk losing context
         const systemPrompt = `
 ${coreInstructions}
 
 EXECUTION STATE:
+- Action ID: ${actionId}
 - messagesSent: ${metadata.messagesSent || 0}
 - Sequence Step: ${metadata.currentStep || '1'}
 
-SIMULATION / EXECUTION PLAN (STRATEGIC GUIDE):
-"""
-${metadata.executionPlan || 'No specific plan provided. Proceed with standard reasoning.'}
-"""
-INSTRUCTIONS:
-- Review the plan above. It was generated by your planning subsystem.
-- Try to follow the steps in the plan if they make logical sense.
-- If a step fails, use the contingency/fallback mentioned in the plan.
-- If the plan is clearly wrong or blocked, you may deviate, but explain why in your reasoning.
+EXECUTION PLAN:
+${metadata.executionPlan || 'Proceed with standard reasoning.'}
 
 ${channelInstructions}
 
 User Context (Long-term profile):
-${userContext.raw || 'No user information available.'}
+${trimmedUserContext || 'No user information available.'}
 
-Agent Journal (Recent Reflections):
-${journalContent}
+${journalContent ? `Agent Journal (Recent Reflections):\n${journalContent}` : ''}
 
-Agent Learning Base (Knowledge):
-${learningContent}
+${learningContent ? `Agent Learning Base (Knowledge):\n${learningContent}` : ''}
 
-Recent Conversation History (LOG OF PREVIOUS STEPS IN THIS ACTION):
-${contextString || 'No history for this action yet.'}
+STEP HISTORY FOR THIS ACTION (Action ${actionId}):
+${stepHistoryString}
+
+${otherContextString ? `RECENT BACKGROUND CONTEXT:\n${otherContextString}` : ''}
 `;
 
         logger.info(`DecisionEngine: Deliberating on task: "${taskDescription}"`);
@@ -268,8 +310,8 @@ ${taskDescription}
 EXECUTION PLAN:
 ${metadata.executionPlan || 'No plan provided.'}
 
-Recent Conversation History (LOG OF PREVIOUS STEPS IN THIS ACTION):
-${contextString || 'No history for this action yet.'}
+STEP HISTORY FOR THIS ACTION (Action ${actionId}):
+${stepHistoryString}
 
 PROPOSED RESPONSE (agent wanted to terminate with this):
 ${JSON.stringify(piped, null, 2)}
