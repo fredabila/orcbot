@@ -228,7 +228,13 @@ export class PollingManager {
         duration: number;
         intervalMs: number;
     }> {
-        const jobs: Array<any> = [];
+        const jobs: Array<{
+            id: string;
+            description: string;
+            attempts: number;
+            duration: number;
+            intervalMs: number;
+        }> = [];
         
         for (const [id, jobData] of this.jobs.entries()) {
             jobs.push({

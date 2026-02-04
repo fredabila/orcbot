@@ -256,10 +256,10 @@ export class DiscordChannel implements IChannel {
             const channels = await guild.channels.fetch();
             
             return Array.from(channels.values())
-                .filter(channel => channel && channel.isTextBased())
+                .filter((channel): channel is NonNullable<typeof channel> => channel !== null && channel.isTextBased())
                 .map(channel => ({
-                    id: channel!.id,
-                    name: channel!.name
+                    id: channel.id,
+                    name: channel.name
                 }));
         } catch (error: any) {
             logger.error(`Failed to get Discord channels: ${error.message}`);

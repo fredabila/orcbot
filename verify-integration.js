@@ -16,7 +16,7 @@ async function main() {
     const { DiscordChannel } = require('./dist/channels/DiscordChannel.js');
 
     console.log('🧪 Running Integration Verification\n');
-    console.log('=' .repeat(50));
+    console.log('='.repeat(50));
 
     // Test 1: PollingManager
     console.log('\n📊 Test 1: PollingManager');
