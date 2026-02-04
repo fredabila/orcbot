@@ -7,11 +7,19 @@ import fs from 'fs';
 import os from 'os';
 import { ConfigManager } from '../config/ConfigManager';
 import { DecisionPipeline } from './DecisionPipeline';
+import { ErrorClassifier, ErrorType } from './ErrorClassifier';
+import { ExecutionStateManager } from './ExecutionState';
+import { ContextCompactor } from './ContextCompactor';
+import { ResponseValidator } from './ResponseValidator';
 
 export class DecisionEngine {
     private agentIdentity: string = '';
     private pipeline: DecisionPipeline;
     private systemContext: string;
+    private executionStateManager: ExecutionStateManager;
+    private contextCompactor: ContextCompactor;
+    private maxRetries: number;
+    private enableAutoCompaction: boolean;
 
     constructor(
         private memory: MemoryManager,
@@ -23,6 +31,10 @@ export class DecisionEngine {
     ) {
         this.pipeline = new DecisionPipeline(this.config || new ConfigManager());
         this.systemContext = this.buildSystemContext();
+        this.executionStateManager = new ExecutionStateManager();
+        this.contextCompactor = new ContextCompactor(this.llm);
+        this.maxRetries = this.config?.get('decisionEngineMaxRetries') || 3;
+        this.enableAutoCompaction = this.config?.get('decisionEngineAutoCompaction') !== false;
     }
 
     private buildSystemContext(): string {
@@ -154,6 +166,74 @@ ${availableSkills}
         this.agentIdentity = identity;
     }
 
+    /**
+     * Make an LLM call with retry logic and error handling
+     */
+    private async callLLMWithRetry(
+        prompt: string,
+        systemPrompt: string,
+        actionId: string,
+        attemptNumber: number = 1
+    ): Promise<string> {
+        const state = this.executionStateManager.getState(actionId);
+
+        try {
+            const response = await this.llm.call(prompt, systemPrompt);
+            state.recordAttempt({
+                response: { success: true, content: response },
+                contextSize: systemPrompt.length + prompt.length
+            });
+            return response;
+        } catch (error) {
+            const classified = ErrorClassifier.classify(error);
+            state.recordAttempt({
+                error: classified,
+                contextSize: systemPrompt.length + prompt.length
+            });
+
+            logger.warn(`DecisionEngine: LLM call failed (attempt ${attemptNumber}): ${classified.type} - ${classified.message}`);
+
+            // Handle context overflow with compaction
+            if (classified.type === ErrorType.CONTEXT_OVERFLOW && this.enableAutoCompaction) {
+                if (state.shouldTryCompaction()) {
+                    logger.info('DecisionEngine: Attempting context compaction...');
+                    state.markCompactionAttempted();
+                    
+                    // Compact the system prompt (usually the largest part)
+                    const compacted = await this.contextCompactor.compact(systemPrompt, {
+                        targetLength: Math.floor(systemPrompt.length * 0.6),
+                        strategy: 'truncate' // Fast truncation for retry
+                    });
+
+                    // Retry with compacted context
+                    return this.callLLMWithRetry(prompt, compacted, actionId, attemptNumber + 1);
+                }
+            }
+
+            // Retry on retryable errors
+            if (ErrorClassifier.shouldRetry(classified, attemptNumber, this.maxRetries)) {
+                const backoff = ErrorClassifier.getBackoffDelay(attemptNumber - 1);
+                
+                // Apply cooldown if specified
+                const delay = classified.cooldownMs || backoff;
+                logger.info(`DecisionEngine: Retrying after ${delay}ms (attempt ${attemptNumber + 1}/${this.maxRetries})`);
+                
+                await this.sleep(delay);
+                return this.callLLMWithRetry(prompt, systemPrompt, actionId, attemptNumber + 1);
+            }
+
+            // Non-retryable or max retries reached
+            throw error;
+        }
+    }
+
+    /**
+     * Sleep utility for retry delays
+     */
+    private sleep(ms: number): Promise<void> {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
     public async decide(action: any): Promise<StandardResponse> {
         const taskDescription = action.payload.description;
         const metadata = action.payload;
@@ -271,8 +351,28 @@ ${otherContextString ? `RECENT BACKGROUND CONTEXT:\n${otherContextString}` : ''}
 `;
 
         logger.info(`DecisionEngine: Deliberating on task: "${taskDescription}"`);
-        const rawResponse = await this.llm.call(taskDescription, systemPrompt);
+        
+        // Use retry wrapper for main LLM call
+        const rawResponse = await this.callLLMWithRetry(taskDescription, systemPrompt, actionId);
         const parsed = ParserLayer.normalize(rawResponse);
+
+        // Validate response before processing
+        const validation = ResponseValidator.validateResponse(parsed, allowedToolNames);
+        ResponseValidator.logValidation(validation, `action ${actionId}`);
+        
+        // Filter out invalid tools if validation found errors
+        if (!validation.valid && parsed.tools) {
+            const originalCount = parsed.tools.length;
+            const validTools = parsed.tools.filter(tool => {
+                const toolValidation = ResponseValidator.validateResponse(
+                    { ...parsed, tools: [tool] },
+                    allowedToolNames
+                );
+                return toolValidation.valid;
+            });
+            parsed.tools = validTools;
+            logger.warn(`DecisionEngine: Filtered out ${originalCount - parsed.tools.length} invalid tool(s) from response`);
+        }
 
         // Run parsed response through structured pipeline guardrails
         let piped = this.pipeline.evaluate(parsed, {
@@ -319,7 +419,7 @@ ${JSON.stringify(piped, null, 2)}
 QUESTION: Was the original task completed? If not, what tools should be called next to make progress?
 `;
 
-            const reviewRaw = await this.llm.call(taskDescription, reviewPrompt);
+            const reviewRaw = await this.callLLMWithRetry(taskDescription, reviewPrompt, actionId);
             const reviewParsed = ParserLayer.normalize(reviewRaw);
             const reviewed = this.pipeline.evaluate(reviewParsed, {
                 actionId: metadata.id || metadata.actionId || 'unknown',
@@ -339,6 +439,24 @@ QUESTION: Was the original task completed? If not, what tools should be called n
             }
         }
 
+        // Log execution summary
+        const state = this.executionStateManager.getState(actionId);
+        if (state.attempts.length > 1) {
+            logger.info(`DecisionEngine: ${state.getSummary()}`);
+        }
+
+        // Clean up state if action is terminating
+        if (piped?.verification?.goals_met === true && (!piped.tools || piped.tools.length === 0)) {
+            this.executionStateManager.removeState(actionId);
+        }
+
         return piped;
+    }
+
+    /**
+     * Get execution statistics for monitoring
+     */
+    public getExecutionStats() {
+        return this.executionStateManager.getStats();
     }
 }
