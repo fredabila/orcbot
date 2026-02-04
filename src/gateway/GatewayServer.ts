@@ -396,15 +396,15 @@ export class GatewayServer {
                     return res.status(400).json({ error: 'Message is required' });
                 }
 
-                // Save user message to memory
-                const messageId = `gateway-chat-${Date.now()}`;
-                this.agent.memory.saveMemory({
-                    id: messageId,
-                    type: 'short',
-                    content: `User (Gateway Chat): ${message}`,
-                    timestamp: new Date().toISOString(),
-                    metadata: { source: 'gateway-chat', ...metadata }
-                });
+                    // Save user message to memory
+                    const messageId = `gateway-chat-${Date.now()}`;
+                    this.agent.memory.saveMemory({
+                        id: messageId,
+                        type: 'short',
+                        content: `User (Gateway Chat): ${message}`,
+                        timestamp: new Date().toISOString(),
+                        metadata: { source: 'gateway-chat', role: 'user', ...metadata }
+                    });
 
                 // Push task to agent to respond
                 await this.agent.pushTask(
@@ -438,13 +438,14 @@ export class GatewayServer {
                 // Get recent chat messages from memory
                 const allMemories = this.agent.memory?.getRecentContext(100) || [];
                 const chatMessages = allMemories
-                    .filter((m: any) => m.metadata?.source === 'gateway-chat' || m.content?.includes('Gateway chat'))
+                    .filter((m: any) => m.metadata?.source === 'gateway-chat')
                     .map((m: any) => ({
                         id: m.id,
                         content: m.content,
                         timestamp: m.timestamp,
-                        role: m.content.startsWith('User') ? 'user' : 'assistant',
-                        metadata: m.metadata
+                        role: m.metadata?.role || (m.content.startsWith('User') ? 'user' : 'assistant'),
+                        metadata: m.metadata,
+                        messageId: m.id
                     }));
 
                 res.json({ messages: chatMessages });
@@ -455,13 +456,17 @@ export class GatewayServer {
 
         router.post('/chat/clear', (_req: Request, res: Response) => {
             try {
-                // Note: This doesn't actually remove from memory, just acknowledges
-                // In a production system, you'd want to implement proper message deletion
+                // Note: This broadcasts a cleared event but doesn't remove messages from memory storage.
+                // Chat history will still be available if the page is refreshed.
+                // Full message deletion would require memory manager enhancements.
                 this.broadcast({
                     type: 'chat:cleared',
                     timestamp: new Date().toISOString()
                 });
-                res.json({ success: true, message: 'Chat history cleared' });
+                res.json({ 
+                    success: true, 
+                    message: 'Chat display cleared (note: history persists in memory storage)' 
+                });
             } catch (error: any) {
                 res.status(500).json({ error: error.message });
             }
@@ -584,7 +589,7 @@ export class GatewayServer {
                         type: 'short',
                         content: `User (Gateway Chat): ${message}`,
                         timestamp: new Date().toISOString(),
-                        metadata: { source: 'gateway-chat', ...metadata }
+                        metadata: { source: 'gateway-chat', role: 'user', ...metadata }
                     });
 
                     // Push task to agent to respond
@@ -619,13 +624,14 @@ export class GatewayServer {
                 try {
                     const allMemories = this.agent.memory?.getRecentContext(100) || [];
                     const chatMessages = allMemories
-                        .filter((m: any) => m.metadata?.source === 'gateway-chat' || m.content?.includes('Gateway chat'))
+                        .filter((m: any) => m.metadata?.source === 'gateway-chat')
                         .map((m: any) => ({
                             id: m.id,
                             content: m.content,
                             timestamp: m.timestamp,
-                            role: m.content.startsWith('User') ? 'user' : 'assistant',
-                            metadata: m.metadata
+                            role: m.metadata?.role || (m.content.startsWith('User') ? 'user' : 'assistant'),
+                            metadata: m.metadata,
+                            messageId: m.id
                         }));
 
                     ws.send(JSON.stringify({ type: 'chatHistory', messages: chatMessages }));

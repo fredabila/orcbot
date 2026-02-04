@@ -1981,7 +1981,7 @@
         async function loadChatHistory() {
             try {
                 const data = await api('/chat/history');
-                chatMessages = data.history || [];
+                chatMessages = data.messages || [];
                 renderChatMessages();
             } catch (e) {
                 console.error('Failed to load chat history:', e);
@@ -2025,13 +2025,29 @@
             const avatar = role === 'user' ? '👤' : '🤖';
             const time = timestamp ? new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
             
-            messageDiv.innerHTML = `
-                <div class="chat-message-avatar">${avatar}</div>
-                <div class="chat-message-content">
-                    <div class="chat-message-bubble">${escapeHtml(content)}</div>
-                    ${time ? `<div class="chat-message-time">${time}</div>` : ''}
-                </div>
-            `;
+            // Create elements to avoid XSS
+            const avatarDiv = document.createElement('div');
+            avatarDiv.className = 'chat-message-avatar';
+            avatarDiv.textContent = avatar;
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'chat-message-content';
+            
+            const bubbleDiv = document.createElement('div');
+            bubbleDiv.className = 'chat-message-bubble';
+            bubbleDiv.textContent = content; // Use textContent to avoid XSS
+            
+            contentDiv.appendChild(bubbleDiv);
+            
+            if (time) {
+                const timeDiv = document.createElement('div');
+                timeDiv.className = 'chat-message-time';
+                timeDiv.textContent = time;
+                contentDiv.appendChild(timeDiv);
+            }
+            
+            messageDiv.appendChild(avatarDiv);
+            messageDiv.appendChild(contentDiv);
             
             return messageDiv;
         }
@@ -2115,19 +2131,18 @@
         }
 
         function handleIncomingChatMessage(data) {
-            // Only add if not already in our messages array (avoid duplicates)
+            // Only add if not already in our messages array (use messageId for precise duplicate detection)
             if (data.role && data.content) {
-                const exists = chatMessages.some(msg => 
-                    msg.content === data.content && 
-                    msg.role === data.role &&
-                    Math.abs(new Date(msg.timestamp) - new Date(data.timestamp)) < 1000
+                const exists = data.messageId && chatMessages.some(msg => 
+                    msg.messageId === data.messageId
                 );
                 
                 if (!exists) {
                     chatMessages.push({
                         role: data.role,
                         content: data.content,
-                        timestamp: data.timestamp || new Date().toISOString()
+                        timestamp: data.timestamp || new Date().toISOString(),
+                        messageId: data.messageId
                     });
                     
                     // Remove typing indicator if assistant message
