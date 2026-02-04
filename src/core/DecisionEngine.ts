@@ -33,7 +33,7 @@ export class DecisionEngine {
         if (isWindows) {
             return `- Platform: ${platformName} (${os.release()})
 - Shell: PowerShell/CMD
-- IMPORTANT: To run commands in a specific directory, use "cd /path && command" format or pass cwd parameter to run_command
+- IMPORTANT: To run commands in a specific directory, you can either (a) use "cd /path && command" or "cd /path ; command" (the cd will be automatically extracted and used as the cwd while only the remaining command is executed), or (b) pass the cwd parameter directly to run_command
 - IMPORTANT: Use 'write_file' skill for creating files (echo multiline doesn't work)
 - IMPORTANT: Use 'create_directory' skill for making directories
 - Path format: C:\\path\\to\\file or C:/path/to/file

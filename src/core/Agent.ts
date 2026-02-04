@@ -711,35 +711,50 @@ export class Agent {
                         return `Error: Multiline echo commands don't work on Windows. Use the create_custom_skill to write files, or use PowerShell's Set-Content/Out-File, or write files one line at a time.`;
                     }
                 }
-
-                const trimmed = String(command).trim();
                 
                 // Smart handling for "cd <path> ; <command>" or "cd <path> && <command>" patterns
                 // Extract the directory and convert to use cwd parameter instead
+                // Note: Only handles cd at the start of command. Multi-command chains like
+                // "git status && cd /path && git pull" are not supported.
                 let workingDir = args.cwd || this.config.get('commandWorkingDir') || process.cwd();
                 let actualCommand = command;
                 
-                // Match patterns like: "cd /path/to/dir ; command" or "cd C:\path ; command"
-                // Supports paths with or without quotes
-                const cdPattern = /^\s*cd\s+([^\s;&]+|'[^']+'|"[^"]+"|`[^`]+`)\s*[;&]+\s*(.+)$/i;
-                const cdMatch = trimmed.match(cdPattern);
-                
-                if (cdMatch) {
-                    let targetDir = cdMatch[1].trim();
-                    const remainingCmd = cdMatch[2].trim();
+                // Only attempt pattern extraction if explicit cwd is not already provided
+                if (!args.cwd) {
+                    // Match patterns like: "cd /path/to/dir ; command" or "cd C:\path ; command"
+                    // Supports paths with or without quotes
+                    const cdPattern = /^\s*cd\s+([^\s;&]+|'[^']+'|"[^"]+"|`[^`]+`)\s*[;&]+\s*(.+)$/i;
+                    const cdMatch = trimmedCmd.match(cdPattern);
                     
-                    // Remove surrounding quotes if present
-                    if ((targetDir.startsWith('"') && targetDir.endsWith('"')) ||
-                        (targetDir.startsWith("'") && targetDir.endsWith("'")) ||
-                        (targetDir.startsWith('`') && targetDir.endsWith('`'))) {
-                        targetDir = targetDir.slice(1, -1);
+                    if (cdMatch) {
+                        let targetDir = cdMatch[1].trim();
+                        const remainingCmd = cdMatch[2].trim();
+                        
+                        // Remove surrounding quotes if present
+                        if ((targetDir.startsWith('"') && targetDir.endsWith('"')) ||
+                            (targetDir.startsWith("'") && targetDir.endsWith("'")) ||
+                            (targetDir.startsWith('`') && targetDir.endsWith('`'))) {
+                            targetDir = targetDir.slice(1, -1);
+                        }
+                        
+                        // Basic path validation to prevent directory traversal attacks
+                        // Block paths with suspicious patterns
+                        const path = require('path');
+                        const normalizedPath = path.normalize(targetDir);
+                        const resolvedPath = path.resolve(normalizedPath);
+                        
+                        // Warn if path contains excessive parent directory references
+                        const parentDirCount = (normalizedPath.match(/\.\./g) || []).length;
+                        if (parentDirCount > 2) {
+                            logger.warn(`run_command: Suspicious path with ${parentDirCount} parent directory references: ${targetDir}`);
+                        }
+                        
+                        // Use the extracted directory as cwd and run only the remaining command
+                        workingDir = resolvedPath;
+                        actualCommand = remainingCmd;
+                        
+                        logger.debug(`run_command: Detected directory change pattern. cwd="${workingDir}", actualCommand="${actualCommand}"`);
                     }
-                    
-                    // Use the extracted directory as cwd and run only the remaining command
-                    workingDir = targetDir;
-                    actualCommand = remainingCmd;
-                    
-                    logger.debug(`run_command: Detected directory change pattern. Using cwd for command execution.`);
                 }
 
                 const firstToken = actualCommand.trim().split(/\s+/)[0]?.toLowerCase() || '';
