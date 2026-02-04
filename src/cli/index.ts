@@ -970,6 +970,7 @@ async function showConnectionsMenu() {
             choices: [
                 { name: 'Telegram Bot', value: 'telegram' },
                 { name: 'WhatsApp (Baileys)', value: 'whatsapp' },
+                { name: 'Discord Bot', value: 'discord' },
                 { name: 'Back', value: 'back' },
             ]
         }
@@ -981,6 +982,8 @@ async function showConnectionsMenu() {
         await showTelegramConfig();
     } else if (channel === 'whatsapp') {
         await showWhatsAppConfig();
+    } else if (channel === 'discord') {
+        await showDiscordConfig();
     }
 }
 
@@ -1120,6 +1123,58 @@ async function showWhatsAppConfig() {
     console.log('WhatsApp settings updated!');
     await waitKeyPress();
     return showWhatsAppConfig();
+}
+
+async function showDiscordConfig() {
+    const currentToken = agent.config.get('discordToken') || 'Not Set';
+    const autoReply = agent.config.get('discordAutoReplyEnabled');
+    console.log(`\n--- Discord Settings ---`);
+    console.log(`Current Token: ${currentToken === 'Not Set' ? currentToken : '***' + currentToken.slice(-8)}`);
+    console.log(`Auto-Reply: ${autoReply ? 'ON' : 'OFF'}`);
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: 'Discord Options:',
+            choices: [
+                { name: 'Set Bot Token', value: 'set' },
+                { name: autoReply ? 'Disable Auto-Reply' : 'Enable Auto-Reply', value: 'toggle_auto' },
+                { name: 'Test Connection', value: 'test' },
+                { name: 'Back', value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showConnectionsMenu();
+
+    if (action === 'set') {
+        const { token } = await inquirer.prompt([
+            { type: 'input', name: 'token', message: 'Enter Discord Bot Token:' }
+        ]);
+        agent.config.set('discordToken', token);
+        console.log('Token updated! (Restart required for token changes)');
+        await waitKeyPress();
+        return showDiscordConfig();
+    } else if (action === 'toggle_auto') {
+        agent.config.set('discordAutoReplyEnabled', !autoReply);
+        return showDiscordConfig();
+    } else if (action === 'test') {
+        if (!agent.discord) {
+            console.log('Discord channel not initialized. Please set a token and restart.');
+        } else {
+            console.log('Testing Discord connection...');
+            try {
+                const guilds = await agent.discord.getGuilds();
+                console.log(`Connected! Bot is in ${guilds.length} server(s):`);
+                guilds.forEach(g => console.log(`  - ${g.name} (${g.id})`));
+            } catch (error: any) {
+                console.log(`Connection test failed: ${error.message}`);
+            }
+        }
+        await waitKeyPress();
+        return showDiscordConfig();
+    }
 }
 
 async function showWorkerProfileMenu() {
