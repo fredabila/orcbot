@@ -58,11 +58,11 @@ export class MemoryManager {
         memoryFlushSoftThreshold?: number;
         memoryFlushEnabled?: boolean;
     }) {
-        if (options.contextLimit) this.contextLimit = options.contextLimit;
-        if (options.episodicLimit) this.episodicLimit = options.episodicLimit;
-        if (options.consolidationThreshold) this.consolidationThreshold = options.consolidationThreshold;
-        if (options.consolidationBatch) this.consolidationBatch = options.consolidationBatch;
-        if (options.memoryFlushSoftThreshold) this.memoryFlushSoftThreshold = options.memoryFlushSoftThreshold;
+        if (typeof options.contextLimit === 'number') this.contextLimit = options.contextLimit;
+        if (typeof options.episodicLimit === 'number') this.episodicLimit = options.episodicLimit;
+        if (typeof options.consolidationThreshold === 'number') this.consolidationThreshold = options.consolidationThreshold;
+        if (typeof options.consolidationBatch === 'number') this.consolidationBatch = options.consolidationBatch;
+        if (typeof options.memoryFlushSoftThreshold === 'number') this.memoryFlushSoftThreshold = options.memoryFlushSoftThreshold;
         if (typeof options.memoryFlushEnabled === 'boolean') this.memoryFlushEnabled = options.memoryFlushEnabled;
         logger.info(`MemoryManager limits: context=${this.contextLimit}, episodic=${this.episodicLimit}, consolidationThreshold=${this.consolidationThreshold}, consolidationBatch=${this.consolidationBatch}, memoryFlush=${this.memoryFlushEnabled}`);
     }

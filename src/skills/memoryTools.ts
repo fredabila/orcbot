@@ -199,9 +199,10 @@ function findMatches(content: string, query: string, fileName: string): Array<{
             const end = Math.min(lines.length, i + 3);
             const context = lines.slice(start, end);
             
-            // Highlight the match
+            // Highlight the match - ensure we're highlighting the correct line
             const highlightedContext = context.map((l, idx) => {
-                if (idx === i - start) {
+                const actualLineIdx = start + idx;
+                if (actualLineIdx === i) {
                     return `**>>> ${l}**`; // Highlight matched line
                 }
                 return `    ${l}`;

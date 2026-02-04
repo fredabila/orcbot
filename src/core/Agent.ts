@@ -17,6 +17,7 @@ import { WorkerProfileManager } from './WorkerProfile';
 import { AgentOrchestrator } from './AgentOrchestrator';
 import { RuntimeTuner } from './RuntimeTuner';
 import { BootstrapManager } from './BootstrapManager';
+import { memoryToolsSkills } from '../skills/memoryTools';
 import { Cron } from 'croner';
 import { Readability } from '@mozilla/readability';
 import { DOMParser } from 'linkedom';
@@ -2560,10 +2561,7 @@ Be thorough and academic.`;
         });
 
         // Memory Tools - Inspired by OpenClaw
-        // Import memory tools
-        const { memoryToolsSkills } = require('../skills/memoryTools');
-        
-        // Register each memory tool
+        // Register memory tools
         for (const skill of memoryToolsSkills) {
             this.skills.registerSkill(skill);
             logger.info(`Registered memory tool: ${skill.name}`);
