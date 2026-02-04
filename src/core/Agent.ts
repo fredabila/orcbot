@@ -738,13 +738,13 @@ export class Agent {
                         }
                         
                         // Basic path validation to prevent directory traversal attacks
-                        // Block paths with suspicious patterns
-                        const path = require('path');
-                        const normalizedPath = path.normalize(targetDir);
-                        const resolvedPath = path.resolve(normalizedPath);
+                        // Resolve to absolute path and check for suspicious patterns
+                        const resolvedPath = path.resolve(targetDir);
                         
                         // Warn if path contains excessive parent directory references
-                        const parentDirCount = (normalizedPath.match(/\.\./g) || []).length;
+                        // Note: This is a heuristic check; the command will still execute
+                        // but administrators are alerted to review potentially suspicious activity
+                        const parentDirCount = (targetDir.match(/\.\./g) || []).length;
                         if (parentDirCount > 2) {
                             logger.warn(`run_command: Suspicious path with ${parentDirCount} parent directory references: ${targetDir}`);
                         }
