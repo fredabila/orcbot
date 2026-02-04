@@ -1930,6 +1930,24 @@ async function performUpdate() {
             console.log('\n📦 Installing dependencies...');
             execSync('npm install', { cwd: orcbotDir, stdio: 'inherit' });
             
+            // Install dependencies for subdirectories (apps/www, apps/dashboard)
+            const appsDir = path.join(orcbotDir, 'apps');
+            if (fs.existsSync(appsDir)) {
+                const subdirs = ['www', 'dashboard'];
+                for (const subdir of subdirs) {
+                    const subdirPath = path.join(appsDir, subdir);
+                    const packageJsonPath = path.join(subdirPath, 'package.json');
+                    if (fs.existsSync(packageJsonPath)) {
+                        console.log(`\n📦 Installing dependencies for apps/${subdir}...`);
+                        try {
+                            execSync('npm install', { cwd: subdirPath, stdio: 'inherit' });
+                        } catch (e) {
+                            console.log(`⚠️  Failed to install dependencies for apps/${subdir}, continuing...`);
+                        }
+                    }
+                }
+            }
+            
             // Rebuild (use fast build if available, fallback to tsc)
             console.log('\n🔨 Rebuilding OrcBot...');
             try {
