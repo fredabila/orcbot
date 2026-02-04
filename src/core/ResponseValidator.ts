@@ -165,7 +165,7 @@ export class ResponseValidator {
                     if (!tool.metadata?.selector) {
                         errors.push(`${tool.name} missing required 'selector' metadata`);
                     }
-                    if (!tool.metadata?.text && tool.metadata?.text !== '') {
+                    if (tool.metadata?.text === undefined) {
                         errors.push(`${tool.name} missing required 'text' metadata`);
                     }
                 }
@@ -177,7 +177,7 @@ export class ResponseValidator {
                     errors.push(`${tool.name} missing required 'path' metadata`);
                 }
 
-                if (toolName === 'write_file' && !tool.metadata?.content && tool.metadata?.content !== '') {
+                if (toolName === 'write_file' && tool.metadata?.content === undefined) {
                     errors.push(`${tool.name} missing required 'content' metadata`);
                 }
             }

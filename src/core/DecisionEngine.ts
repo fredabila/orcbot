@@ -362,6 +362,7 @@ ${otherContextString ? `RECENT BACKGROUND CONTEXT:\n${otherContextString}` : ''}
         
         // Filter out invalid tools if validation found errors
         if (!validation.valid && parsed.tools) {
+            const originalCount = parsed.tools.length;
             const validTools = parsed.tools.filter(tool => {
                 const toolValidation = ResponseValidator.validateResponse(
                     { ...parsed, tools: [tool] },
@@ -370,7 +371,7 @@ ${otherContextString ? `RECENT BACKGROUND CONTEXT:\n${otherContextString}` : ''}
                 return toolValidation.valid;
             });
             parsed.tools = validTools;
-            logger.warn(`DecisionEngine: Filtered ${parsed.tools.length} invalid tool(s) from response`);
+            logger.warn(`DecisionEngine: Filtered out ${originalCount - parsed.tools.length} invalid tool(s) from response`);
         }
 
         // Run parsed response through structured pipeline guardrails

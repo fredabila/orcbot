@@ -261,12 +261,27 @@ describe('ResponseValidator', () => {
                 tools: [
                     { name: 'send_telegram', metadata: { chatId: '123', message: 'Hello!' } }
                 ],
-                verification: { goals_met: true, analysis: 'Message sent successfully' }
+                verification: { goals_met: false, analysis: 'Sending message' }
             };
 
             const validation = ResponseValidator.validateResponse(response, allowedTools);
             expect(validation.valid).toBe(true);
             expect(validation.errors.length).toBe(0);
+        });
+
+        it('should warn about goals_met with tools but still be valid', () => {
+            const response: StandardResponse = {
+                success: true,
+                reasoning: 'User requested a greeting',
+                tools: [
+                    { name: 'send_telegram', metadata: { chatId: '123', message: 'Hello!' } }
+                ],
+                verification: { goals_met: true, analysis: 'Message sent successfully' }
+            };
+
+            const validation = ResponseValidator.validateResponse(response, allowedTools);
+            expect(validation.valid).toBe(true);
+            expect(validation.warnings.some(w => w.includes('goals_met=true but also includes tools'))).toBe(true);
         });
     });
 });
