@@ -91,27 +91,42 @@ export class WebBrowser {
      * Lightpanda must be running: ./lightpanda serve --host 127.0.0.1 --port 9222
      */
     private async connectToLightpanda(): Promise<void> {
+        // Clean up any existing connections first
+        if (this._page) {
+            try { await this._page.close(); } catch {}
+            this._page = null;
+        }
+        if (this.context) {
+            try { await this.context.close(); } catch {}
+            this.context = null;
+        }
+        if (this.browser) {
+            try { await this.browser.close(); } catch {}
+            this.browser = null;
+        }
+
         try {
             logger.info(`Browser: Connecting to Lightpanda at ${this.lightpandaEndpoint}`);
             
             // Connect via CDP websocket endpoint
             this.browser = await chromium.connectOverCDP(this.lightpandaEndpoint);
             
-            // Get existing contexts or create new one
-            const contexts = this.browser.contexts();
-            if (contexts.length > 0) {
-                this.context = contexts[0];
-            } else {
-                this.context = await this.browser.newContext();
+            // Always create a fresh context and page for stability
+            // Close any existing pages/contexts from previous sessions
+            const existingContexts = this.browser.contexts();
+            for (const ctx of existingContexts) {
+                const pages = ctx.pages();
+                for (const page of pages) {
+                    try { await page.close(); } catch {}
+                }
             }
             
-            // Get existing page or create new one
-            const pages = this.context.pages();
-            if (pages.length > 0) {
-                this._page = pages[0];
-            } else {
-                this._page = await this.context.newPage();
-            }
+            // Create fresh context and page
+            this.context = await this.browser.newContext({
+                viewport: { width: 1280, height: 720 },
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            });
+            this._page = await this.context.newPage();
             
             logger.info('Browser: Connected to Lightpanda successfully');
         } catch (error: any) {
@@ -209,6 +224,18 @@ export class WebBrowser {
                 await this.ensureBrowser();
             }
             if (!this._page) throw new Error('Failed to create page');
+
+            // Check if page is still valid (not detached)
+            try {
+                await this._page.evaluate(() => true);
+            } catch (e: any) {
+                if (e.message?.includes('detached') || e.message?.includes('Target closed')) {
+                    logger.warn('Browser: Page is detached, reinitializing...');
+                    await this.close();
+                    await this.ensureBrowser();
+                    if (!this._page) throw new Error('Failed to reinitialize page');
+                }
+            }
 
             // Auto-fix protocol if missing
             let targetUrl = url;

@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Build output (we build inside container)
+dist/
+
+# Local data files
+*.log
+logs/
+memory.json
+action-queue.json
+.orcbot/
+
+# Development files
+.git/
+.gitignore
+.env
+.env.*
+*.md
+!README.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test files
+tests/
+*.test.ts
+*.test.js
+coverage/
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,53 @@
+# OrcBot Docker Compose Configuration
+# Run: docker compose up -d
+
+services:
+  # Main OrcBot service
+  orcbot:
+    build: .
+    container_name: orcbot
+    restart: unless-stopped
+    ports:
+      - "3100:3100"  # Gateway API & Dashboard
+    volumes:
+      # Persist data outside container
+      - orcbot-data:/root/.orcbot
+      # Mount local config (optional - create this file first)
+      # - ./orcbot.config.yaml:/root/.orcbot/orcbot.config.yaml:ro
+    environment:
+      # Required: Set your API keys
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      # Optional: Channel tokens
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      # Optional: Browser settings
+      - LIGHTPANDA_ENDPOINT=${LIGHTPANDA_ENDPOINT:-}
+    networks:
+      - orcbot-network
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:3100/api/status"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+
+  # Optional: Lightpanda browser (lightweight alternative to Playwright)
+  lightpanda:
+    image: lightpanda/browser:nightly
+    container_name: orcbot-lightpanda
+    restart: unless-stopped
+    ports:
+      - "9222:9222"
+    command: ["serve", "--host", "0.0.0.0", "--port", "9222"]
+    networks:
+      - orcbot-network
+    profiles:
+      - lightpanda  # Only starts with: docker compose --profile lightpanda up
+
+networks:
+  orcbot-network:
+    driver: bridge
+
+volumes:
+  orcbot-data:
+    name: orcbot-data

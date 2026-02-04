@@ -1,0 +1,41 @@
+# OrcBot Minimal Setup with Lightpanda
+# Smaller footprint, uses Lightpanda for browser automation
+# Run: docker compose -f docker-compose.minimal.yml up -d
+
+services:
+  orcbot:
+    build:
+      context: .
+      dockerfile: Dockerfile.minimal
+    container_name: orcbot
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - orcbot-data:/root/.orcbot
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      # Connect to Lightpanda container
+      - LIGHTPANDA_ENDPOINT=ws://lightpanda:9222
+    depends_on:
+      - lightpanda
+    networks:
+      - orcbot-network
+
+  lightpanda:
+    image: lightpanda/browser:nightly
+    container_name: orcbot-lightpanda
+    restart: unless-stopped
+    command: ["serve", "--host", "0.0.0.0", "--port", "9222"]
+    networks:
+      - orcbot-network
+
+networks:
+  orcbot-network:
+    driver: bridge
+
+volumes:
+  orcbot-data:

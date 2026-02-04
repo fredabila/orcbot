@@ -1,0 +1,39 @@
+# OrcBot Minimal Docker Image
+# Without Playwright browser dependencies (use with Lightpanda)
+
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci
+
+COPY tsconfig.json ./
+COPY src/ ./src/
+
+RUN npm run build
+
+# ============ Production Stage ============
+FROM node:20-alpine AS production
+
+WORKDIR /app
+
+COPY package*.json ./
+
+# Install production dependencies
+RUN npm ci --omit=dev --ignore-scripts
+
+# Copy built files
+COPY --from=builder /app/dist ./dist
+COPY apps/ ./apps/
+COPY docs/ ./docs/
+
+# Create data directory
+RUN mkdir -p /root/.orcbot
+
+ENV NODE_ENV=production
+ENV ORCBOT_DATA_DIR=/root/.orcbot
+
+EXPOSE 3100
+
+CMD ["node", "dist/cli/index.js", "gateway", "--with-agent", "-s", "./apps/dashboard"]

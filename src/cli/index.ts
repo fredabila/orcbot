@@ -564,6 +564,7 @@ lightpandaCommand
     .description('Start Lightpanda browser server')
     .option('-p, --port <number>', 'Port to listen on', '9222')
     .option('-H, --host <string>', 'Host to bind to', '127.0.0.1')
+    .option('-t, --timeout <number>', 'Inactivity timeout in seconds (0 = no timeout)', '300')
     .option('-b, --background', 'Run in background')
     .action(async (options) => {
         const lightpandaPath = agent.config.get('lightpandaPath') || path.join(os.homedir(), '.orcbot', 'lightpanda', 'lightpanda');
@@ -574,7 +575,7 @@ lightpandaCommand
         }
         
         const { spawn } = require('child_process');
-        const args = ['serve', '--host', options.host, '--port', options.port];
+        const args = ['serve', '--host', options.host, '--port', options.port, '--timeout', options.timeout];
         
         console.log(`\n🐼 Starting Lightpanda browser...`);
         console.log(`   Binary: ${lightpandaPath}`);
@@ -878,7 +879,8 @@ async function showBrowserMenu() {
         const logPath = path.join(dataDir, 'lightpanda.log');
         const out = fs.openSync(logPath, 'a');
         
-        const child = spawn(lightpandaPath, ['serve', '--host', '127.0.0.1', '--port', '9222'], {
+        // Use --timeout 300 (5 minutes) to prevent premature disconnection
+        const child = spawn(lightpandaPath, ['serve', '--host', '127.0.0.1', '--port', '9222', '--timeout', '300'], {
             detached: true,
             stdio: ['ignore', out, out]
         });

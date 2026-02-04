@@ -88,7 +88,18 @@ curl -sSL https://orcbot.ai/install.sh | bash
 iwr https://orcbot.vercel.app/install.ps1 | iex
 ```
 
-Alternatively, clone the repo and run:
+**Docker (Recommended for servers)**
+```bash
+# Quick start with Docker Compose
+cp .env.example .env  # Edit with your API keys
+docker compose -f docker-compose.minimal.yml up -d
+
+# Open dashboard at http://localhost:3100
+```
+
+See [Docker Guide](docs/DOCKER.md) for full setup options.
+
+**Manual Installation**
 ```bash
 npm install
 npm run build
