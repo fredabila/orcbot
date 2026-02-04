@@ -53,6 +53,7 @@ export class Agent {
     private lastPluginHealthCheckAt: number = 0;
     private currentActionId: string | null = null;
     private currentActionStartAt: number | null = null;
+    private cancelledActions: Set<string> = new Set();
     private instanceLockPath: string | null = null;
     private instanceLockAcquired: boolean = false;
     private heartbeatJobs: Map<string, Cron> = new Map();
@@ -1923,6 +1924,53 @@ Be thorough and academic.`;
             }
         });
 
+        // Skill: Cancel Action
+        this.skills.registerSkill({
+            name: 'cancel_action',
+            description: 'Cancel a queued or running action by ID. If the action is currently running, it will stop at the next safe checkpoint.',
+            usage: 'cancel_action(action_id, reason?)',
+            handler: async (args: any) => {
+                const actionId = args.action_id || args.id;
+                const reason = args.reason || args.message || 'Cancelled by user';
+                if (!actionId) return 'Error: Missing action_id.';
+
+                const action = this.actionQueue.getQueue().find(a => a.id === actionId);
+                if (!action) return `Action ${actionId} not found.`;
+
+                if (this.currentActionId === actionId && this.isBusy) {
+                    this.cancelledActions.add(actionId);
+                    return `Action ${actionId} cancellation requested. It will stop shortly.`;
+                }
+
+                this.actionQueue.updateStatus(actionId, 'failed');
+                return `Action ${actionId} cancelled (status set to failed).`;
+            }
+        });
+
+        // Skill: Clear Action Queue
+        this.skills.registerSkill({
+            name: 'clear_action_queue',
+            description: 'Fail all pending/in-progress actions and stop any currently running action.',
+            usage: 'clear_action_queue(reason?)',
+            handler: async (args: any) => {
+                const reason = args.reason || args.message || 'Cleared by user';
+                const queue = this.actionQueue.getQueue();
+                let cleared = 0;
+
+                for (const action of queue) {
+                    if (action.status === 'pending' || action.status === 'in-progress') {
+                        if (this.currentActionId === action.id && this.isBusy) {
+                            this.cancelledActions.add(action.id);
+                        }
+                        this.actionQueue.updateStatus(action.id, 'failed');
+                        cleared++;
+                    }
+                }
+
+                return `Cleared ${cleared} action(s). Reason: ${reason}`;
+            }
+        });
+
         // ==================== MULTI-AGENT ORCHESTRATION SKILLS ====================
 
         // Skill: Spawn Agent (Self-Duplication)
@@ -2065,6 +2113,24 @@ Be thorough and academic.`;
                 return success
                     ? `Task ${taskId} marked as failed.`
                     : `Failed to update task ${taskId}. Task may not exist.`;
+            }
+        });
+
+        // Skill: Cancel Delegated Task
+        this.skills.registerSkill({
+            name: 'cancel_delegated_task',
+            description: 'Cancel a delegated task in the orchestrator and mark it as failed.',
+            usage: 'cancel_delegated_task(task_id, reason?)',
+            handler: async (args: any) => {
+                const taskId = args.task_id || args.id;
+                const reason = args.reason || args.message || 'Cancelled by user';
+
+                if (!taskId) return 'Error: Missing task_id.';
+
+                const success = this.orchestrator.cancelTask(taskId, reason);
+                return success
+                    ? `Delegated task ${taskId} cancelled.`
+                    : `Failed to cancel task ${taskId}. Task may not exist.`;
             }
         });
 
@@ -3180,6 +3246,14 @@ Respond with a single actionable task description (one sentence):`;
                 currentStep++;
                 logger.info(`runOnce: Step ${currentStep}/${MAX_STEPS} for action ${action.id}`);
 
+                if (this.cancelledActions.has(action.id)) {
+                    logger.warn(`runOnce: Action ${action.id} cancelled by user`);
+                    result = 'Task cancelled by user';
+                    this.actionQueue.updateStatus(action.id, 'failed');
+                    this.cancelledActions.delete(action.id);
+                    return result;
+                }
+
                 const decision = await this.decisionEngine.decide({
                     ...action,
                     payload: {
@@ -3364,6 +3438,57 @@ Respond with a single actionable task description (one sentence):`;
         this.actionQueue.push(action);
     }
 
+    public cancelAction(actionId: string, reason: string = 'Cancelled by user'): { success: boolean; message: string } {
+        const action = this.actionQueue.getQueue().find(a => a.id === actionId);
+        if (!action) {
+            return { success: false, message: `Action ${actionId} not found.` };
+        }
+
+        if (this.currentActionId === actionId && this.isBusy) {
+            this.cancelledActions.add(actionId);
+            return { success: true, message: `Action ${actionId} cancellation requested. It will stop shortly.` };
+        }
+
+        this.actionQueue.updateStatus(actionId, 'failed');
+        return { success: true, message: `Action ${actionId} cancelled. Reason: ${reason}` };
+    }
+
+    public clearActionQueue(reason: string = 'Cleared by user'): { success: boolean; cleared: number } {
+        const queue = this.actionQueue.getQueue();
+        let cleared = 0;
+
+        for (const action of queue) {
+            if (action.status === 'pending' || action.status === 'in-progress') {
+                if (this.currentActionId === action.id && this.isBusy) {
+                    this.cancelledActions.add(action.id);
+                }
+                this.actionQueue.updateStatus(action.id, 'failed');
+                cleared++;
+            }
+        }
+
+        logger.info(`Agent: Cleared ${cleared} action(s). Reason: ${reason}`);
+        return { success: true, cleared };
+    }
+
+    public cancelDelegatedTask(taskId: string, reason: string = 'Cancelled by user'): { success: boolean; message: string } {
+        const success = this.orchestrator.cancelTask(taskId, reason);
+        return {
+            success,
+            message: success ? `Delegated task ${taskId} cancelled.` : `Failed to cancel delegated task ${taskId}.`
+        };
+    }
+
+    public terminateAgentInstance(agentId: string): { success: boolean; message: string } {
+        const success = this.orchestrator.terminateAgent(agentId);
+        return {
+            success,
+            message: success
+                ? `Agent ${agentId} terminated successfully.`
+                : `Failed to terminate agent ${agentId}. It may not exist or is the primary agent.`
+        };
+    }
+
     private async processNextAction() {
         if (this.isBusy) return;
 
@@ -3434,6 +3559,13 @@ Respond with a single actionable task description (one sentence):`;
                 currentStep++;
                 stepsSinceLastMessage++;
                 logger.info(`Agent: Step ${currentStep} for action ${action.id}`);
+
+                if (this.cancelledActions.has(action.id)) {
+                    logger.warn(`Agent: Action ${action.id} cancelled by user`);
+                    this.actionQueue.updateStatus(action.id, 'failed');
+                    this.cancelledActions.delete(action.id);
+                    break;
+                }
 
                 if (messagesSent >= MAX_MESSAGES) {
                     logger.warn(`Agent: Message budget reached (${messagesSent}/${MAX_MESSAGES}). Forcing termination for action ${action.id}.`);
@@ -3714,6 +3846,10 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                     logger.info(`Agent: Action ${action.id} reached self-termination. Reasoning: ${decision.reasoning || 'No further tools needed.'}`);
                     break;
                 }
+            }
+            const finalStatus = this.actionQueue.getQueue().find(a => a.id === action.id)?.status;
+            if (finalStatus === 'failed') {
+                return;
             }
             // Record Final Response/Reasoning in Memory upon completion
             this.memory.saveMemory({

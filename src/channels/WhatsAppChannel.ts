@@ -39,21 +39,33 @@ export class WhatsAppChannel implements IChannel {
         this.setupConfigListener();
     }
 
+    private readBooleanConfig(key: string, fallback: boolean = false): boolean {
+        const value = this.agent.config.get(key);
+        if (typeof value === 'boolean') return value;
+        if (typeof value === 'string') {
+            const normalized = value.trim().toLowerCase();
+            if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') return true;
+            if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'off') return false;
+        }
+        if (typeof value === 'number') return value === 1;
+        return fallback;
+    }
+
     private loadConfigSettings() {
-        this.autoReplyEnabled = this.agent.config.get('whatsappAutoReplyEnabled') || false;
-        this.statusReplyEnabled = this.agent.config.get('whatsappStatusReplyEnabled') || false;
-        this.autoReactEnabled = this.agent.config.get('whatsappAutoReactEnabled') || false;
-        this.profilingEnabled = this.agent.config.get('whatsappContextProfilingEnabled') || false;
+        this.autoReplyEnabled = this.readBooleanConfig('whatsappAutoReplyEnabled', false);
+        this.statusReplyEnabled = this.readBooleanConfig('whatsappStatusReplyEnabled', false);
+        this.autoReactEnabled = this.readBooleanConfig('whatsappAutoReactEnabled', false);
+        this.profilingEnabled = this.readBooleanConfig('whatsappContextProfilingEnabled', false);
         logger.info(`WhatsAppChannel: Settings loaded - autoReply=${this.autoReplyEnabled}, statusReply=${this.statusReplyEnabled}, autoReact=${this.autoReactEnabled}, profiling=${this.profilingEnabled}`);
     }
 
     private setupConfigListener() {
         eventBus.on('whatsapp:config-changed', (newConfig: any) => {
             logger.info('WhatsAppChannel: Config changed, reloading settings...');
-            this.autoReplyEnabled = newConfig.whatsappAutoReplyEnabled || false;
-            this.statusReplyEnabled = newConfig.whatsappStatusReplyEnabled || false;
-            this.autoReactEnabled = newConfig.whatsappAutoReactEnabled || false;
-            this.profilingEnabled = newConfig.whatsappContextProfilingEnabled || false;
+            this.autoReplyEnabled = this.readBooleanConfig('whatsappAutoReplyEnabled', false);
+            this.statusReplyEnabled = this.readBooleanConfig('whatsappStatusReplyEnabled', false);
+            this.autoReactEnabled = this.readBooleanConfig('whatsappAutoReactEnabled', false);
+            this.profilingEnabled = this.readBooleanConfig('whatsappContextProfilingEnabled', false);
             logger.info(`WhatsAppChannel: Settings reloaded - autoReply=${this.autoReplyEnabled}, statusReply=${this.statusReplyEnabled}, autoReact=${this.autoReactEnabled}, profiling=${this.profilingEnabled}`);
         });
     }

@@ -737,6 +737,9 @@
             </div>
             
             <div class="nav-label">System</div>
+            <div class="nav-item" data-page="orchestrator">
+                <i class="fas fa-sitemap"></i> Orchestrator
+            </div>
             <div class="nav-item" data-page="channels">
                 <i class="fas fa-plug"></i> Channels
             </div>
@@ -860,9 +863,14 @@
                 <div class="card">
                     <div class="card-header">
                         <h3><i class="fas fa-list-check"></i> Task Queue</h3>
-                        <button class="btn btn-primary" onclick="openTaskModal()">
-                            <i class="fas fa-plus"></i> Add Task
-                        </button>
+                        <div style="display: flex; gap: 10px;">
+                            <button class="btn btn-danger" onclick="clearAllTasks()">
+                                <i class="fas fa-trash"></i> Clear All
+                            </button>
+                            <button class="btn btn-primary" onclick="openTaskModal()">
+                                <i class="fas fa-plus"></i> Add Task
+                            </button>
+                        </div>
                     </div>
                     <div class="card-body no-padding">
                         <ul class="task-list" id="taskList">
@@ -922,6 +930,57 @@
                                 <i class="fas fa-brain"></i>
                                 <p>Loading memories...</p>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Orchestrator Page -->
+            <div class="page" id="page-orchestrator">
+                <div class="stats-grid" style="margin-bottom: 20px;">
+                    <div class="stat-card">
+                        <div class="label">Total Agents</div>
+                        <div class="value" id="orchAgentCount">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="label">Active Agents</div>
+                        <div class="value accent" id="orchActiveAgents">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="label">Pending Tasks</div>
+                        <div class="value warning" id="orchPendingTasks">-</div>
+                    </div>
+                </div>
+
+                <div class="two-col">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3><i class="fas fa-robot"></i> Agents</h3>
+                            <button class="btn btn-secondary" onclick="loadOrchestrator()">
+                                <i class="fas fa-refresh"></i>
+                            </button>
+                        </div>
+                        <div class="card-body no-padding">
+                            <ul class="task-list" id="orchAgentsList">
+                                <div class="empty-state">
+                                    <i class="fas fa-robot"></i>
+                                    <p>No agents</p>
+                                </div>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h3><i class="fas fa-tasks"></i> Delegated Tasks</h3>
+                        </div>
+                        <div class="card-body no-padding">
+                            <ul class="task-list" id="orchTasksList">
+                                <div class="empty-state">
+                                    <i class="fas fa-tasks"></i>
+                                    <p>No delegated tasks</p>
+                                </div>
+                            </ul>
                         </div>
                     </div>
                 </div>
@@ -1128,6 +1187,7 @@
             if (page === 'tasks') loadTasks();
             if (page === 'skills') loadSkills();
             if (page === 'memory') loadFullMemory();
+            if (page === 'orchestrator') loadOrchestrator();
             if (page === 'channels') loadChannels();
             if (page === 'logs') loadLogs();
             if (page === 'config') loadConfig();
@@ -1204,7 +1264,34 @@
                 }
                 
                 document.getElementById('modelValue').textContent = data.model || 'Not configured';
-                document.getElementById('providerValue').textContent = data.provider || 'auto';
+                // Show actual provider that will be used
+                let providerLabel = data.provider || 'auto';
+                const inferredProvider = data.inferredProvider || '';
+                
+                if (providerLabel === 'auto' && inferredProvider) {
+                    // Show which provider will be used based on model inference
+                    const providerDisplayNames = {
+                        'openai': 'OpenAI',
+                        'google': 'Google',
+                        'anthropic': 'Anthropic',
+                        'openrouter': 'OpenRouter',
+                        'nvidia': 'NVIDIA',
+                        'bedrock': 'Bedrock'
+                    };
+                    providerLabel = (providerDisplayNames[inferredProvider] || inferredProvider) + ' (auto)';
+                } else if (providerLabel !== 'auto') {
+                    // Explicit provider set
+                    const providerDisplayNames = {
+                        'openai': 'OpenAI',
+                        'google': 'Google',
+                        'anthropic': 'Anthropic',
+                        'openrouter': 'OpenRouter',
+                        'nvidia': 'NVIDIA',
+                        'bedrock': 'Bedrock'
+                    };
+                    providerLabel = providerDisplayNames[providerLabel] || providerLabel;
+                }
+                document.getElementById('providerValue').textContent = providerLabel;
                 document.getElementById('skillCountValue').textContent = data.skillCount || 0;
             } catch (e) {
                 document.getElementById('agentStatusValue').textContent = '? Unknown';
@@ -1226,15 +1313,18 @@
 
                 list.innerHTML = tasks.map(t => {
                     const priClass = t.priority >= 8 ? 'high' : t.priority >= 4 ? 'medium' : 'low';
-                    const statusClass = t.status === 'done' ? 'done' : t.status === 'processing' ? 'processing' : 'pending';
+                    const statusClass = t.status === 'completed' ? 'done' : t.status === 'in-progress' ? 'processing' : 'pending';
+                    const taskDesc = t.payload?.description || t.task || '(No description)';
+                    const canCancel = t.status === 'pending' || t.status === 'in-progress';
                     return `
                         <li class="task-item">
                             <div class="task-priority ${priClass}">${t.priority}</div>
                             <div class="task-content">
-                                <div class="task-text">${escapeHtml(t.task)}</div>
-                                <div class="task-meta">ID: ${t.id} • Added: ${new Date(t.createdAt).toLocaleString()}</div>
+                                <div class="task-text">${escapeHtml(taskDesc)}</div>
+                                <div class="task-meta">ID: ${t.id} • ${t.timestamp ? new Date(t.timestamp).toLocaleString() : ''}</div>
                             </div>
                             <span class="task-status ${statusClass}">${t.status}</span>
+                            ${canCancel ? `<button class="btn btn-danger" style="padding: 4px 10px; font-size: 11px;" onclick="cancelTask('${t.id}')"><i class="fas fa-stop"></i></button>` : ''}
                         </li>
                     `;
                 }).join('');
@@ -1402,7 +1492,18 @@
                 const cfg = data.config || {};
                 
                 document.getElementById('configModel').textContent = cfg.modelName || 'auto';
-                document.getElementById('configProvider').textContent = cfg.provider || 'auto';
+                // Show provider with display name
+                const llmProvider = cfg.llmProvider || cfg.provider || 'auto';
+                const providerDisplayNames = {
+                    'openai': 'OpenAI',
+                    'google': 'Google', 
+                    'anthropic': 'Anthropic',
+                    'openrouter': 'OpenRouter',
+                    'nvidia': 'NVIDIA',
+                    'bedrock': 'Bedrock',
+                    'auto': 'Auto'
+                };
+                document.getElementById('configProvider').textContent = providerDisplayNames[llmProvider] || llmProvider;
                 document.getElementById('configPort').textContent = window.location.port || '3100';
                 
                 const toggle = document.getElementById('safeModeToggle');
@@ -1469,6 +1570,113 @@
                 showToast(`Safe mode ${newValue ? 'enabled' : 'disabled'}`);
             } catch (e) {
                 showToast('Failed to update', 'error');
+            }
+        }
+
+        async function cancelTask(id) {
+            if (!confirm('Cancel this task?')) return;
+            try {
+                const res = await api(`/tasks/${id}/cancel`, { method: 'POST', body: JSON.stringify({ reason: 'Cancelled via dashboard' }) });
+                showToast(res.message || 'Task cancelled');
+                loadTasks();
+            } catch (e) {
+                showToast('Failed to cancel task', 'error');
+            }
+        }
+
+        async function clearAllTasks() {
+            if (!confirm('Clear all pending/in-progress tasks?')) return;
+            try {
+                const res = await api('/tasks/clear', { method: 'POST', body: JSON.stringify({ reason: 'Cleared via dashboard' }) });
+                showToast(`Cleared ${res.cleared} task(s)`);
+                loadTasks();
+            } catch (e) {
+                showToast('Failed to clear tasks', 'error');
+            }
+        }
+
+        async function loadOrchestrator() {
+            try {
+                const [agentsRes, tasksRes] = await Promise.all([
+                    api('/orchestrator/agents'),
+                    api('/orchestrator/tasks')
+                ]);
+                const agents = agentsRes.agents || [];
+                const tasks = tasksRes.tasks || [];
+
+                document.getElementById('orchAgentCount').textContent = agents.length;
+                document.getElementById('orchActiveAgents').textContent = agents.filter(a => a.status === 'working').length;
+                document.getElementById('orchPendingTasks').textContent = tasks.filter(t => t.status === 'pending' || t.status === 'assigned').length;
+
+                // Render agents
+                const agentsList = document.getElementById('orchAgentsList');
+                if (agents.length === 0) {
+                    agentsList.innerHTML = '<div class="empty-state"><i class="fas fa-robot"></i><p>No agents</p></div>';
+                } else {
+                    agentsList.innerHTML = agents.map(a => {
+                        const canTerminate = a.id !== 'primary' && a.status !== 'terminated';
+                        const statusColor = a.status === 'working' ? 'var(--purple)' : a.status === 'idle' ? 'var(--accent)' : a.status === 'terminated' ? 'var(--red)' : 'var(--text-muted)';
+                        return `
+                            <li class="task-item">
+                                <div class="task-priority" style="background: ${statusColor}20; color: ${statusColor};">
+                                    <i class="fas fa-robot"></i>
+                                </div>
+                                <div class="task-content">
+                                    <div class="task-text">${escapeHtml(a.name)} <span style="color: var(--text-muted);">(${a.role})</span></div>
+                                    <div class="task-meta">ID: ${a.id} • ${a.currentTask ? 'Task: ' + a.currentTask : 'No active task'}</div>
+                                </div>
+                                <span class="task-status" style="background: ${statusColor}20; color: ${statusColor};">${a.status}</span>
+                                ${canTerminate ? `<button class="btn btn-danger" style="padding: 4px 10px; font-size: 11px;" onclick="terminateAgent('${a.id}')"><i class="fas fa-skull"></i></button>` : ''}
+                            </li>
+                        `;
+                    }).join('');
+                }
+
+                // Render tasks
+                const tasksList = document.getElementById('orchTasksList');
+                if (tasks.length === 0) {
+                    tasksList.innerHTML = '<div class="empty-state"><i class="fas fa-tasks"></i><p>No delegated tasks</p></div>';
+                } else {
+                    tasksList.innerHTML = tasks.map(t => {
+                        const statusColor = t.status === 'completed' ? 'var(--accent)' : t.status === 'failed' ? 'var(--red)' : t.status === 'in-progress' ? 'var(--purple)' : 'var(--blue)';
+                        const canCancel = t.status === 'pending' || t.status === 'assigned' || t.status === 'in-progress';
+                        return `
+                            <li class="task-item">
+                                <div class="task-priority" style="background: ${statusColor}20; color: ${statusColor};">${t.priority}</div>
+                                <div class="task-content">
+                                    <div class="task-text">${escapeHtml(t.description)}</div>
+                                    <div class="task-meta">ID: ${t.id} • Assigned: ${t.assignedTo || 'None'}</div>
+                                </div>
+                                <span class="task-status" style="background: ${statusColor}20; color: ${statusColor};">${t.status}</span>
+                                ${canCancel ? `<button class="btn btn-danger" style="padding: 4px 10px; font-size: 11px;" onclick="cancelDelegatedTask('${t.id}')"><i class="fas fa-stop"></i></button>` : ''}
+                            </li>
+                        `;
+                    }).join('');
+                }
+            } catch (e) {
+                console.error('Failed to load orchestrator:', e);
+            }
+        }
+
+        async function terminateAgent(id) {
+            if (!confirm('Terminate this agent?')) return;
+            try {
+                const res = await api(`/orchestrator/agents/${id}/terminate`, { method: 'POST' });
+                showToast(res.message || 'Agent terminated');
+                loadOrchestrator();
+            } catch (e) {
+                showToast('Failed to terminate agent', 'error');
+            }
+        }
+
+        async function cancelDelegatedTask(id) {
+            if (!confirm('Cancel this delegated task?')) return;
+            try {
+                const res = await api(`/orchestrator/tasks/${id}/cancel`, { method: 'POST', body: JSON.stringify({ reason: 'Cancelled via dashboard' }) });
+                showToast(res.message || 'Task cancelled');
+                loadOrchestrator();
+            } catch (e) {
+                showToast('Failed to cancel task', 'error');
             }
         }
 

@@ -36,12 +36,18 @@ export class GatewayServer {
     constructor(agent: Agent, config: ConfigManager, gatewayConfig: Partial<GatewayConfig> = {}) {
         this.agent = agent;
         this.config = config;
+        // Resolve staticDir to absolute path
+        let resolvedStaticDir = gatewayConfig.staticDir;
+        if (resolvedStaticDir) {
+            resolvedStaticDir = path.resolve(process.cwd(), resolvedStaticDir);
+        }
+
         this.gatewayConfig = {
             port: gatewayConfig.port || config.get('gatewayPort') || 3100,
             host: gatewayConfig.host || config.get('gatewayHost') || '0.0.0.0',
             apiKey: gatewayConfig.apiKey || config.get('gatewayApiKey'),
             corsOrigins: gatewayConfig.corsOrigins || config.get('gatewayCorsOrigins') || ['*'],
-            staticDir: gatewayConfig.staticDir
+            staticDir: resolvedStaticDir
         };
 
         this.app = express();
@@ -83,8 +89,13 @@ export class GatewayServer {
         });
 
         // Static files for dashboard (if configured)
-        if (this.gatewayConfig.staticDir && fs.existsSync(this.gatewayConfig.staticDir)) {
-            this.app.use(express.static(this.gatewayConfig.staticDir));
+        if (this.gatewayConfig.staticDir) {
+            if (fs.existsSync(this.gatewayConfig.staticDir)) {
+                logger.info(`Gateway: Serving static files from ${this.gatewayConfig.staticDir}`);
+                this.app.use(express.static(this.gatewayConfig.staticDir));
+            } else {
+                logger.warn(`Gateway: Static directory not found: ${this.gatewayConfig.staticDir}`);
+            }
         }
     }
 
@@ -118,6 +129,43 @@ export class GatewayServer {
         router.get('/tasks', (_req: Request, res: Response) => {
             const queue = this.agent.actionQueue?.getQueue() || [];
             res.json({ tasks: queue });
+        });
+
+        router.post('/tasks/:id/cancel', (req: Request, res: Response) => {
+            const { id } = req.params;
+            const { reason } = req.body || {};
+            const result = this.agent.cancelAction(id, reason);
+            res.json(result);
+        });
+
+        router.post('/tasks/clear', (req: Request, res: Response) => {
+            const { reason } = req.body || {};
+            const result = this.agent.clearActionQueue(reason);
+            res.json(result);
+        });
+
+        // ===== ORCHESTRATOR =====
+        router.get('/orchestrator/agents', (_req: Request, res: Response) => {
+            const agents = this.agent.orchestrator.getAgents();
+            res.json({ agents });
+        });
+
+        router.get('/orchestrator/tasks', (_req: Request, res: Response) => {
+            const tasks = this.agent.orchestrator.getTasks();
+            res.json({ tasks });
+        });
+
+        router.post('/orchestrator/tasks/:id/cancel', (req: Request, res: Response) => {
+            const { id } = req.params;
+            const { reason } = req.body || {};
+            const result = this.agent.cancelDelegatedTask(id, reason);
+            res.json(result);
+        });
+
+        router.post('/orchestrator/agents/:id/terminate', (req: Request, res: Response) => {
+            const { id } = req.params;
+            const result = this.agent.terminateAgentInstance(id);
+            res.json(result);
         });
 
         // ===== SKILLS MANAGEMENT =====
@@ -409,6 +457,30 @@ export class GatewayServer {
                 }
                 break;
 
+            case 'cancelAction': {
+                const result = this.agent.cancelAction(payload.actionId, payload.reason);
+                ws.send(JSON.stringify({ type: 'actionCancelled', result }));
+                break;
+            }
+
+            case 'clearActionQueue': {
+                const result = this.agent.clearActionQueue(payload.reason);
+                ws.send(JSON.stringify({ type: 'actionQueueCleared', result }));
+                break;
+            }
+
+            case 'cancelDelegatedTask': {
+                const result = this.agent.cancelDelegatedTask(payload.taskId, payload.reason);
+                ws.send(JSON.stringify({ type: 'delegatedTaskCancelled', result }));
+                break;
+            }
+
+            case 'terminateAgent': {
+                const result = this.agent.terminateAgentInstance(payload.agentId);
+                ws.send(JSON.stringify({ type: 'agentTerminated', result }));
+                break;
+            }
+
             case 'getStatus':
                 ws.send(JSON.stringify({ type: 'status', data: this.getAgentStatus() }));
                 break;
@@ -496,6 +568,8 @@ export class GatewayServer {
             lockInfo,
             model: this.config.get('modelName'),
             provider: this.config.get('llmProvider') || 'auto',
+            inferredProvider: this.inferProviderFromModel(this.config.get('modelName') || ''),
+            configuredProviders: this.getConfiguredProviders(),
             channels: {
                 telegram: !!this.config.get('telegramToken'),
                 whatsapp: this.config.get('whatsappEnabled') || false
@@ -510,7 +584,8 @@ export class GatewayServer {
         const sensitiveKeys = [
             'openaiApiKey', 'googleApiKey', 'openrouterApiKey', 'telegramToken',
             'serperApiKey', 'braveSearchApiKey', 'captchaApiKey', 'gatewayApiKey',
-            'bedrockAccessKeyId', 'bedrockSecretAccessKey', 'bedrockSessionToken'
+            'bedrockAccessKeyId', 'bedrockSecretAccessKey', 'bedrockSessionToken',
+            'nvidiaApiKey'
         ];
 
         const allConfig: Record<string, any> = {};
@@ -532,13 +607,50 @@ export class GatewayServer {
             }
         });
 
+        // Add provider alias for backwards compatibility
+        allConfig.provider = allConfig.llmProvider || 'auto';
+
+        // Add list of configured providers
+        allConfig.configuredProviders = this.getConfiguredProviders();
+
         return allConfig;
+    }
+
+    private getConfiguredProviders(): { name: string; configured: boolean; isActive?: boolean }[] {
+        const modelName = (this.config.get('modelName') || '').toLowerCase();
+        const explicitProvider = this.config.get('llmProvider');
+        
+        // Infer which provider would be used for current model
+        let inferredProvider = 'openai'; // default
+        if (modelName.includes('gemini')) inferredProvider = 'google';
+        else if (modelName.includes('claude')) inferredProvider = 'anthropic';
+        else if (modelName.includes('llama') || modelName.includes('mixtral')) inferredProvider = 'openrouter';
+        else if (modelName.includes('gpt') || modelName.includes('o1') || modelName.includes('o3')) inferredProvider = 'openai';
+        
+        const activeProvider = explicitProvider || inferredProvider;
+
+        return [
+            { name: 'openai', configured: !!this.config.get('openaiApiKey'), isActive: activeProvider === 'openai' },
+            { name: 'google', configured: !!this.config.get('googleApiKey'), isActive: activeProvider === 'google' },
+            { name: 'openrouter', configured: !!this.config.get('openrouterApiKey'), isActive: activeProvider === 'openrouter' },
+            { name: 'nvidia', configured: !!this.config.get('nvidiaApiKey'), isActive: activeProvider === 'nvidia' },
+            { name: 'bedrock', configured: !!this.config.get('bedrockAccessKeyId'), isActive: activeProvider === 'bedrock' }
+        ];
     }
 
     private isSensitiveKey(key: string): boolean {
         const sensitivePatterns = ['key', 'token', 'secret', 'password', 'credential'];
         const lowerKey = key.toLowerCase();
         return sensitivePatterns.some(p => lowerKey.includes(p));
+    }
+
+    private inferProviderFromModel(modelName: string): string {
+        const model = modelName.toLowerCase();
+        if (model.includes('gemini')) return 'google';
+        if (model.includes('claude')) return 'anthropic';
+        if (model.includes('llama') || model.includes('mixtral')) return 'openrouter';
+        if (model.includes('gpt') || model.includes('o1') || model.includes('o3')) return 'openai';
+        return 'openai'; // default
     }
 
     public async start(): Promise<void> {

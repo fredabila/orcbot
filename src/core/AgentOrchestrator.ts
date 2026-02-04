@@ -671,6 +671,13 @@ export class AgentOrchestrator extends EventEmitter {
     }
 
     /**
+     * Cancel task (marks as failed with reason)
+     */
+    public cancelTask(taskId: string, reason: string = 'Cancelled by user'): boolean {
+        return this.failTask(taskId, reason);
+    }
+
+    /**
      * Get all tasks
      */
     public getTasks(): OrchestratorTask[] {
