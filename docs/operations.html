@@ -1,66 +1,231 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Operations | OrcBot Docs</title>
-    <link rel="stylesheet" href="assets/style.css" />
-  </head>
-  <body>
-    <header class="hero">
-      <div class="container">
-        <nav class="doc-nav">
-          <div class="logo">OrcBot Docs</div>
-          <div class="links">
-            <a href="index.html">Overview</a>
-            <a href="getting-started.html">Start</a>
-            <a href="configuration.html">Configuration</a>
-            <a href="gateway.html">Gateway</a>
-            <a href="skills.html">Skills</a>
-            <a href="autonomy.html">Autonomy</a>
-            <a href="operations.html">Operations</a>
-          </div>
-          <a class="nav-cta" href="https://github.com/fredabila/orcbot">GitHub</a>
-        </nav>
-        <div class="badge">Operations</div>
-        <h1>Run OrcBot in production.</h1>
-        <p class="lead">Logs, diagnostics, and operational checklists for reliable uptime.</p>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Operations | OrcBot Docs</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <a href="index.html" class="sidebar-logo">
+          <div class="sidebar-logo-icon">🤖</div>
+          OrcBot
+        </a>
+        <span class="sidebar-version">v1.0.0</span>
       </div>
-    </header>
-
-    <main class="container">
-      <section class="card">
-        <h2>Logs</h2>
-        <p>Review <code>logs/combined.log</code> for runtime events, errors, and search telemetry.</p>
-      </section>
-
-      <section class="grid">
-        <div class="card">
-          <h3>Data locations</h3>
-          <p>State is stored under <code>~/.orcbot</code> (memory, profiles, plugins, downloads).</p>
+      
+      <nav class="sidebar-nav">
+        <div class="nav-section">
+          <div class="nav-section-title">Getting Started</div>
+          <ul class="nav-links">
+            <li><a href="index.html" class="nav-link"><span class="nav-link-icon">📚</span> Introduction</a></li>
+            <li><a href="getting-started.html" class="nav-link"><span class="nav-link-icon">🚀</span> Quick Start</a></li>
+            <li><a href="configuration.html" class="nav-link"><span class="nav-link-icon">⚙️</span> Configuration</a></li>
+          </ul>
         </div>
-        <div class="card">
-          <h3>Backups</h3>
-          <p>Back up <code>memory.json</code>, <code>actions.json</code>, and <code>USER.md</code> for continuity.</p>
+        
+        <div class="nav-section">
+          <div class="nav-section-title">Core Concepts</div>
+          <ul class="nav-links">
+            <li><a href="architecture.html" class="nav-link"><span class="nav-link-icon">🏗️</span> Architecture</a></li>
+            <li><a href="skills.html" class="nav-link"><span class="nav-link-icon">🧩</span> Skills & Plugins</a></li>
+            <li><a href="autonomy.html" class="nav-link"><span class="nav-link-icon">🤖</span> Autonomy</a></li>
+          </ul>
         </div>
-        <div class="card">
-          <h3>Search failures</h3>
-          <p>Configure Serper/Brave/SearxNG for reliable search and avoid loop retries.</p>
+        
+        <div class="nav-section">
+          <div class="nav-section-title">Features</div>
+          <ul class="nav-links">
+            <li><a href="gateway.html" class="nav-link"><span class="nav-link-icon">🌐</span> Web Gateway</a></li>
+            <li><a href="operations.html" class="nav-link active"><span class="nav-link-icon">📊</span> Operations</a></li>
+          </ul>
         </div>
-      </section>
+      </nav>
+      
+      <div class="sidebar-footer">
+        <a href="https://github.com/fredabila/orcbot" target="_blank"><span>⭐</span> GitHub</a>
+        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank"><span>💬</span> Community</a>
+      </div>
+    </aside>
 
-      <section class="card">
-        <h2>Troubleshooting checklist</h2>
-        <ul>
-          <li>Confirm API keys are set in config or env.</li>
-          <li>Restart the agent after changing channel settings.</li>
-          <li>Inspect failed actions in <code>actions.json</code>.</li>
-        </ul>
-      </section>
+    <!-- Main Content -->
+    <main class="main-content">
+      <header class="content-header">
+        <button class="mobile-menu-toggle">☰</button>
+        <div class="breadcrumb">
+          <a href="index.html">Docs</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Operations</span>
+        </div>
+        <div class="header-actions">
+          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank"><span>⭐</span> Star</a>
+        </div>
+      </header>
+
+      <div class="page-content">
+        <div class="page-header">
+          <span class="page-badge">📊 Features</span>
+          <h1 class="page-title">Operations</h1>
+          <p class="page-description">Observability, logging, troubleshooting, and production tips.</p>
+        </div>
+
+        <div class="card">
+          <h2>📝 Logging</h2>
+          <p>OrcBot uses Winston for structured logging:</p>
+          <pre><code># Log location
+~/.orcbot/logs/orcbot.log
+~/.orcbot/logs/error.log
+
+# Log levels: error, warn, info, debug</code></pre>
+          <p>Configure log level in config:</p>
+          <pre><code>logLevel: debug  # More verbose output</code></pre>
+        </div>
+
+        <div class="card">
+          <h2>🔍 Troubleshooting</h2>
+          
+          <h4>WhatsApp Won't Connect</h4>
+          <ul>
+            <li>Delete <code>~/.orcbot/whatsapp-auth</code> and re-scan QR</li>
+            <li>Ensure phone has internet connectivity</li>
+            <li>Check if WhatsApp Web is logged in elsewhere</li>
+          </ul>
+
+          <h4>Telegram Bot Not Responding</h4>
+          <ul>
+            <li>Verify <code>TELEGRAM_BOT_TOKEN</code> is set</li>
+            <li>Check bot is not blocked/deactivated</li>
+            <li>Ensure <code>telegramAutoReply: true</code></li>
+          </ul>
+
+          <h4>LLM Errors</h4>
+          <ul>
+            <li>Verify API keys in <code>~/.orcbot/.env</code></li>
+            <li>Check rate limits and quotas</li>
+            <li>Try switching models: <code>model: gpt-4o-mini</code></li>
+          </ul>
+
+          <h4>Browser Automation Fails</h4>
+          <ul>
+            <li>Ensure Playwright is installed: <code>npx playwright install</code></li>
+            <li>Or use Lightpanda: <code>orcbot lightpanda install</code></li>
+            <li>Check <code>browserEngine</code> config matches installed browser</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h2>🖥️ CLI Commands Reference</h2>
+          <table>
+            <tr><th>Command</th><th>Description</th></tr>
+            <tr><td><code>orcbot run</code></td><td>Start the agent heartbeat loop</td></tr>
+            <tr><td><code>orcbot ui</code></td><td>Interactive TUI menu</td></tr>
+            <tr><td><code>orcbot push "task"</code></td><td>Add task to queue</td></tr>
+            <tr><td><code>orcbot gateway</code></td><td>Start REST/WebSocket server</td></tr>
+            <tr><td><code>orcbot config get/set</code></td><td>View or modify config</td></tr>
+            <tr><td><code>orcbot reset</code></td><td>Reset agent state</td></tr>
+            <tr><td><code>orcbot builder &lt;url&gt;</code></td><td>Generate skill from webpage</td></tr>
+            <tr><td><code>orcbot lightpanda</code></td><td>Manage Lightpanda browser</td></tr>
+          </table>
+        </div>
+
+        <div class="card">
+          <h2>🚀 Production Tips</h2>
+          
+          <div class="callout callout-warning">
+            <strong>⚠️ Security</strong>
+            <p>Never commit API keys. Use environment variables or the encrypted config store.</p>
+          </div>
+
+          <h4>Run as Background Service</h4>
+          <pre><code># Using PM2
+npm install -g pm2
+pm2 start "orcbot run" --name orcbot
+
+# Using systemd (Linux)
+# Create /etc/systemd/system/orcbot.service</code></pre>
+
+          <h4>Resource Management</h4>
+          <ul>
+            <li>Use <code>browserEngine: lightpanda</code> for 9x less RAM</li>
+            <li>Set <code>heartbeatInterval</code> higher to reduce API calls</li>
+            <li>Enable memory consolidation to keep context lean</li>
+          </ul>
+
+          <h4>Monitoring</h4>
+          <ul>
+            <li>Use Gateway dashboard for real-time status</li>
+            <li>Watch logs with: <code>tail -f ~/.orcbot/logs/orcbot.log</code></li>
+            <li>Set up alerts on error.log growth</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h2>📁 Data Locations</h2>
+          <div class="key-grid">
+            <div class="key-item">
+              <div class="key-name">~/.orcbot/</div>
+              <div class="key-description">Main data directory</div>
+            </div>
+            <div class="key-item">
+              <div class="key-name">~/.orcbot/orcbot.config.yaml</div>
+              <div class="key-description">Primary configuration file</div>
+            </div>
+            <div class="key-item">
+              <div class="key-name">~/.orcbot/.env</div>
+              <div class="key-description">Environment variables and API keys</div>
+            </div>
+            <div class="key-item">
+              <div class="key-name">~/.orcbot/memory.json</div>
+              <div class="key-description">Persistent memory store</div>
+            </div>
+            <div class="key-item">
+              <div class="key-name">~/.orcbot/action-queue.json</div>
+              <div class="key-description">Pending task queue</div>
+            </div>
+            <div class="key-item">
+              <div class="key-name">~/.orcbot/plugins/</div>
+              <div class="key-description">Custom skill plugins</div>
+            </div>
+            <div class="key-item">
+              <div class="key-name">~/.orcbot/profiles/</div>
+              <div class="key-description">Contact profiles per JID</div>
+            </div>
+            <div class="key-item">
+              <div class="key-name">~/.orcbot/logs/</div>
+              <div class="key-description">Log files</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>🔄 Backup & Restore</h2>
+          <pre><code># Backup entire data directory
+tar -czvf orcbot-backup.tar.gz ~/.orcbot
+
+# Restore
+tar -xzvf orcbot-backup.tar.gz -C ~/
+
+# Reset to clean state
+orcbot reset</code></pre>
+        </div>
+
+        <footer class="page-footer">
+          <span>© 2026 OrcBot Project</span>
+          <div class="footer-nav">
+            <a href="https://github.com/fredabila/orcbot">GitHub</a>
+          </div>
+        </footer>
+      </div>
     </main>
-
-    <footer class="footer">
-      <div class="container">© 2026 OrcBot Project</div>
-    </footer>
-  </body>
+  </div>
+  <script>
+    const menuToggle = document.querySelector('.mobile-menu-toggle');
+    const sidebar = document.querySelector('.sidebar');
+    if (menuToggle) menuToggle.addEventListener('click', () => sidebar.classList.toggle('open'));
+  </script>
+</body>
 </html>

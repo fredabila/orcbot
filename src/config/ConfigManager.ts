@@ -61,6 +61,9 @@ export interface AgentConfig {
     pluginDenyList?: string[];
     browserProfileDir?: string;
     browserProfileName?: string;
+    browserEngine?: 'playwright' | 'lightpanda';  // Browser engine to use (default: playwright)
+    lightpandaEndpoint?: string;                  // Lightpanda CDP endpoint (default: ws://127.0.0.1:9222)
+    lightpandaPath?: string;                      // Path to Lightpanda binary
     tokenUsagePath?: string;
     tokenLogPath?: string;
     skillRoutingRules?: Array<{

@@ -1,72 +1,150 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Getting Started | OrcBot Docs</title>
-    <link rel="stylesheet" href="assets/style.css" />
-  </head>
-  <body>
-    <header class="hero">
-      <div class="container">
-        <nav class="doc-nav">
-          <div class="logo">OrcBot Docs</div>
-          <div class="links">
-            <a href="index.html">Overview</a>
-            <a href="getting-started.html">Start</a>
-            <a href="configuration.html">Configuration</a>
-            <a href="gateway.html">Gateway</a>
-            <a href="skills.html">Skills</a>
-            <a href="autonomy.html">Autonomy</a>
-            <a href="operations.html">Operations</a>
-          </div>
-          <a class="nav-cta" href="https://github.com/fredabila/orcbot">GitHub</a>
-        </nav>
-        <div class="badge">Getting started</div>
-        <h1>Launch OrcBot in minutes.</h1>
-        <p class="lead">Install dependencies, run the agent, and open the TUI dashboard.</p>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quick Start | OrcBot Docs</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <a href="index.html" class="sidebar-logo">
+          <div class="sidebar-logo-icon">🤖</div>
+          OrcBot
+        </a>
+        <span class="sidebar-version">v1.0.0</span>
       </div>
-    </header>
-
-    <main class="container">
-      <section class="card">
-        <h2>Install & build</h2>
-        <ol>
-          <li>Install dependencies: <code>npm install</code></li>
-          <li>Build the CLI: <code>npm run build</code></li>
-          <li>Run the agent: <code>orcbot run</code></li>
-        </ol>
-      </section>
-
-      <section class="grid">
-        <div class="card">
-          <h3>Run the TUI</h3>
-          <p>Use <code>orcbot ui</code> to configure models, connections, and tooling.</p>
+      
+      <nav class="sidebar-nav">
+        <div class="nav-section">
+          <div class="nav-section-title">Getting Started</div>
+          <ul class="nav-links">
+            <li><a href="index.html" class="nav-link"><span class="nav-link-icon">📚</span> Introduction</a></li>
+            <li><a href="getting-started.html" class="nav-link active"><span class="nav-link-icon">🚀</span> Quick Start</a></li>
+            <li><a href="configuration.html" class="nav-link"><span class="nav-link-icon">⚙️</span> Configuration</a></li>
+          </ul>
         </div>
-        <div class="card">
-          <h3>Push a task</h3>
-          <p>Trigger work immediately with <code>orcbot push "Your task" -p 10</code>.</p>
+        
+        <div class="nav-section">
+          <div class="nav-section-title">Core Concepts</div>
+          <ul class="nav-links">
+            <li><a href="architecture.html" class="nav-link"><span class="nav-link-icon">🏗️</span> Architecture</a></li>
+            <li><a href="skills.html" class="nav-link"><span class="nav-link-icon">🧩</span> Skills & Plugins</a></li>
+            <li><a href="autonomy.html" class="nav-link"><span class="nav-link-icon">🤖</span> Autonomy</a></li>
+          </ul>
         </div>
-        <div class="card">
-          <h3>Verify logs</h3>
-          <p>Check <code>logs/combined.log</code> for runtime traces and diagnostics.</p>
+        
+        <div class="nav-section">
+          <div class="nav-section-title">Features</div>
+          <ul class="nav-links">
+            <li><a href="gateway.html" class="nav-link"><span class="nav-link-icon">🌐</span> Web Gateway</a></li>
+            <li><a href="operations.html" class="nav-link"><span class="nav-link-icon">📊</span> Operations</a></li>
+          </ul>
         </div>
-      </section>
+      </nav>
+      
+      <div class="sidebar-footer">
+        <a href="https://github.com/fredabila/orcbot" target="_blank"><span>⭐</span> GitHub</a>
+        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank"><span>💬</span> Community</a>
+      </div>
+    </aside>
 
-      <section class="card">
-        <h2>Quick checklist</h2>
-        <ul>
-          <li>Set API keys via <code>orcbot ui</code> or config files (OpenAI, Google, Bedrock, or OpenRouter).</li>
-          <li>Optionally set <code>llmProvider</code> to explicitly choose your LLM provider.</li>
-          <li>Enable channels you need (Telegram / WhatsApp).</li>
-          <li>Confirm heartbeat settings for autonomy.</li>
-          <li>Consider enabling <code>autopilotNoQuestions</code> for fully autonomous operation.</li>
-        </ul>
-      </section>
+    <!-- Main Content -->
+    <main class="main-content">
+      <header class="content-header">
+        <button class="mobile-menu-toggle">☰</button>
+        <div class="breadcrumb">
+          <a href="index.html">Docs</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Quick Start</span>
+        </div>
+        <div class="header-actions">
+          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank"><span>⭐</span> Star</a>
+        </div>
+      </header>
+
+      <div class="page-content">
+        <div class="page-header">
+          <span class="page-badge">🚀 Getting Started</span>
+          <h1 class="page-title">Quick Start</h1>
+          <p class="page-description">Get OrcBot running locally in under 5 minutes.</p>
+        </div>
+
+        <div class="card">
+          <h2>📋 Prerequisites</h2>
+          <ul>
+            <li>Node.js 18+ (we recommend 20 LTS)</li>
+            <li>Git</li>
+            <li>OpenAI or Google Gemini API key</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h2>Step 1: Clone & Install</h2>
+          <pre><code>git clone https://github.com/fredabila/orcbot.git
+cd orcbot
+npm install
+npm run build</code></pre>
+        </div>
+
+        <div class="card">
+          <h2>Step 2: Run Setup Wizard</h2>
+          <p>The setup wizard will guide you through configuring API keys and preferences.</p>
+          <pre><code>npm run dev setup
+# Or if installed globally:
+orcbot setup</code></pre>
+        </div>
+
+        <div class="card">
+          <h2>Step 3: Start OrcBot</h2>
+          <pre><code># Run the agent loop
+npm run dev run
+
+# Or use the interactive TUI
+npm run dev ui
+
+# Or install globally and run anywhere
+npm install -g .
+orcbot run</code></pre>
+        </div>
+
+        <div class="callout callout-info">
+          <span class="callout-icon">💡</span>
+          <div class="callout-content">
+            <strong>Tip:</strong> Use <code>orcbot ui</code> for a friendly menu-driven interface to manage your agent, push tasks, and configure settings.
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>🎉 What's Next?</h2>
+          <div class="grid grid-2">
+            <a href="configuration.html" class="link-card">
+              <h3>Configure OrcBot <span class="link-card-arrow">→</span></h3>
+              <p>Set up API keys, channels, and autonomy settings.</p>
+            </a>
+            <a href="skills.html" class="link-card">
+              <h3>Explore Skills <span class="link-card-arrow">→</span></h3>
+              <p>Learn about built-in skills and create custom plugins.</p>
+            </a>
+          </div>
+        </div>
+
+        <footer class="page-footer">
+          <span>© 2026 OrcBot Project</span>
+          <div class="footer-nav">
+            <a href="https://github.com/fredabila/orcbot">GitHub</a>
+          </div>
+        </footer>
+      </div>
     </main>
-
-    <footer class="footer">
-      <div class="container">© 2026 OrcBot Project</div>
-    </footer>
-  </body>
+  </div>
+  <script>
+    const menuToggle = document.querySelector('.mobile-menu-toggle');
+    const sidebar = document.querySelector('.sidebar');
+    if (menuToggle) menuToggle.addEventListener('click', () => sidebar.classList.toggle('open'));
+  </script>
+</body>
 </html>

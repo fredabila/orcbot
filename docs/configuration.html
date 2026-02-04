@@ -1,116 +1,217 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Configuration | OrcBot Docs</title>
-    <link rel="stylesheet" href="assets/style.css" />
-  </head>
-  <body>
-    <header class="hero">
-      <div class="container">
-        <nav class="doc-nav">
-          <div class="logo">OrcBot Docs</div>
-          <div class="links">
-            <a href="index.html">Overview</a>
-            <a href="getting-started.html">Start</a>
-            <a href="configuration.html">Configuration</a>
-            <a href="gateway.html">Gateway</a>
-            <a href="skills.html">Skills</a>
-            <a href="autonomy.html">Autonomy</a>
-            <a href="operations.html">Operations</a>
-          </div>
-          <a class="nav-cta" href="https://github.com/fredabila/orcbot">GitHub</a>
-        </nav>
-        <div class="badge">Configuration</div>
-        <h1>Control how OrcBot behaves.</h1>
-        <p class="lead">Configuration is file-backed, environment-aware, and editable from the TUI.</p>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Configuration | OrcBot Docs</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <a href="index.html" class="sidebar-logo">
+          <div class="sidebar-logo-icon">🤖</div>
+          OrcBot
+        </a>
+        <span class="sidebar-version">v1.0.0</span>
       </div>
-    </header>
+      
+      <nav class="sidebar-nav">
+        <div class="nav-section">
+          <div class="nav-section-title">Getting Started</div>
+          <ul class="nav-links">
+            <li><a href="index.html" class="nav-link"><span class="nav-link-icon">📚</span> Introduction</a></li>
+            <li><a href="getting-started.html" class="nav-link"><span class="nav-link-icon">🚀</span> Quick Start</a></li>
+            <li><a href="configuration.html" class="nav-link active"><span class="nav-link-icon">⚙️</span> Configuration</a></li>
+          </ul>
+        </div>
+        
+        <div class="nav-section">
+          <div class="nav-section-title">Core Concepts</div>
+          <ul class="nav-links">
+            <li><a href="architecture.html" class="nav-link"><span class="nav-link-icon">🏗️</span> Architecture</a></li>
+            <li><a href="skills.html" class="nav-link"><span class="nav-link-icon">🧩</span> Skills & Plugins</a></li>
+            <li><a href="autonomy.html" class="nav-link"><span class="nav-link-icon">🤖</span> Autonomy</a></li>
+          </ul>
+        </div>
+        
+        <div class="nav-section">
+          <div class="nav-section-title">Features</div>
+          <ul class="nav-links">
+            <li><a href="gateway.html" class="nav-link"><span class="nav-link-icon">🌐</span> Web Gateway</a></li>
+            <li><a href="operations.html" class="nav-link"><span class="nav-link-icon">📊</span> Operations</a></li>
+          </ul>
+        </div>
+      </nav>
+      
+      <div class="sidebar-footer">
+        <a href="https://github.com/fredabila/orcbot" target="_blank"><span>⭐</span> GitHub</a>
+        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank"><span>💬</span> Community</a>
+      </div>
+    </aside>
 
-    <main class="container">
-      <section class="card">
-        <h2>Resolution order</h2>
-        <ol>
-          <li>Environment variables</li>
-          <li><code>./orcbot.config.yaml</code></li>
-          <li><code>~/orcbot.config.yaml</code></li>
-          <li><code>~/.orcbot/orcbot.config.yaml</code></li>
-        </ol>
-      </section>
+    <!-- Main Content -->
+    <main class="main-content">
+      <header class="content-header">
+        <button class="mobile-menu-toggle">☰</button>
+        <div class="breadcrumb">
+          <a href="index.html">Docs</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Configuration</span>
+        </div>
+        <div class="header-actions">
+          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank"><span>⭐</span> Star</a>
+        </div>
+      </header>
 
-      <section class="card">
-        <h2>Key settings</h2>
-        <div class="key-grid">
-          <div>
-            <h4>Core</h4>
-            <ul>
-              <li><code>agentName</code></li>
-              <li><code>modelName</code></li>
-              <li><code>maxStepsPerAction</code></li>
-              <li><code>maxMessagesPerAction</code></li>
-              <li><code>messageDedupWindow</code></li>
-            </ul>
-          </div>
-          <div>
-            <h4>Autonomy</h4>
-            <ul>
-              <li><code>autonomyEnabled</code></li>
-              <li><code>autonomyInterval</code></li>
-              <li><code>autonomyBacklogLimit</code></li>
-              <li><code>maxActionRunMinutes</code></li>
-              <li><code>maxStaleActionMinutes</code></li>
-            </ul>
-          </div>
-          <div>
-            <h4>Providers</h4>
-            <ul>
-              <li><code>llmProvider</code></li>
-              <li><code>openaiApiKey</code></li>
-              <li><code>googleApiKey</code></li>
-              <li><code>bedrockRegion</code></li>
-              <li><code>bedrockAccessKeyId</code></li>
-              <li><code>openrouterApiKey</code></li>
-              <li><code>openrouterBaseUrl</code></li>
-            </ul>
-          </div>
-          <div>
-            <h4>Search</h4>
-            <ul>
-              <li><code>serperApiKey</code></li>
-              <li><code>braveSearchApiKey</code></li>
-              <li><code>searxngUrl</code></li>
-              <li><code>searchProviderOrder</code></li>
-            </ul>
-          </div>
-          <div>
-            <h4>Channels</h4>
-            <ul>
-              <li><code>telegramToken</code></li>
-              <li><code>whatsappEnabled</code></li>
-              <li><code>whatsappAutoReplyEnabled</code></li>
-              <li><code>whatsappStatusReplyEnabled</code></li>
-            </ul>
-          </div>
-          <div>
-            <h4>Decision Pipeline</h4>
-            <ul>
-              <li><code>skillRoutingRules</code></li>
-              <li><code>autopilotNoQuestions</code></li>
-              <li><code>autopilotNoQuestionsInterval</code></li>
-            </ul>
+      <div class="page-content">
+        <div class="page-header">
+          <span class="page-badge">⚙️ Configuration</span>
+          <h1 class="page-title">Configuration</h1>
+          <p class="page-description">Control how OrcBot behaves. Configuration is file-backed, environment-aware, and editable from the TUI.</p>
+        </div>
+
+        <div class="card">
+          <h2>📁 Resolution Order</h2>
+          <p>OrcBot looks for configuration in this order (first found wins):</p>
+          <ol>
+            <li>Environment variables</li>
+            <li><code>./orcbot.config.yaml</code> (current directory)</li>
+            <li><code>~/orcbot.config.yaml</code> (home directory)</li>
+            <li><code>~/.orcbot/orcbot.config.yaml</code> (data directory)</li>
+          </ol>
+        </div>
+
+        <div class="card">
+          <h2>🔧 Key Settings</h2>
+          <div class="key-grid">
+            <div>
+              <h4>Core</h4>
+              <ul>
+                <li><code>agentName</code></li>
+                <li><code>modelName</code></li>
+                <li><code>maxStepsPerAction</code></li>
+                <li><code>maxMessagesPerAction</code></li>
+                <li><code>messageDedupWindow</code></li>
+              </ul>
+            </div>
+            <div>
+              <h4>Autonomy</h4>
+              <ul>
+                <li><code>autonomyEnabled</code></li>
+                <li><code>autonomyInterval</code></li>
+                <li><code>autonomyBacklogLimit</code></li>
+                <li><code>maxActionRunMinutes</code></li>
+                <li><code>maxStaleActionMinutes</code></li>
+              </ul>
+            </div>
+            <div>
+              <h4>Providers</h4>
+              <ul>
+                <li><code>llmProvider</code></li>
+                <li><code>openaiApiKey</code></li>
+                <li><code>googleApiKey</code></li>
+                <li><code>nvidiaApiKey</code></li>
+                <li><code>openrouterApiKey</code></li>
+              </ul>
+            </div>
+            <div>
+              <h4>Search</h4>
+              <ul>
+                <li><code>serperApiKey</code></li>
+                <li><code>braveSearchApiKey</code></li>
+                <li><code>searxngUrl</code></li>
+                <li><code>searchProviderOrder</code></li>
+              </ul>
+            </div>
+            <div>
+              <h4>Channels</h4>
+              <ul>
+                <li><code>telegramToken</code></li>
+                <li><code>whatsappEnabled</code></li>
+                <li><code>whatsappAutoReplyEnabled</code></li>
+                <li><code>discordToken</code></li>
+              </ul>
+            </div>
+            <div>
+              <h4>Browser</h4>
+              <ul>
+                <li><code>browserEngine</code></li>
+                <li><code>lightpandaEndpoint</code></li>
+                <li><code>lightpandaPath</code></li>
+                <li><code>browserProfileDir</code></li>
+              </ul>
+            </div>
           </div>
         </div>
-      </section>
 
-      <section class="card">
-        <h2>TUI management</h2>
-        <p>Open the TUI with <code>orcbot ui</code> to configure models, tooling, and connections without editing files.</p>
-      </section>
+        <div class="card">
+          <h2>💻 TUI Management</h2>
+          <p>Open the TUI with <code>orcbot ui</code> to configure models, tooling, and connections without editing files.</p>
+          <pre><code>orcbot ui</code></pre>
+        </div>
+
+        <div class="card">
+          <h2>🐼 Lightpanda Browser</h2>
+          <p>Lightpanda is a lightweight headless browser that uses <strong>9x less RAM</strong> and is <strong>11x faster</strong> than Chrome. Perfect for low-memory VPS deployments.</p>
+          
+          <h4>Quick Setup</h4>
+          <pre><code># Install Lightpanda
+orcbot lightpanda install
+
+# Start the browser server (background)
+orcbot lightpanda start -b
+
+# Enable as default browser engine
+orcbot lightpanda enable
+
+# Check status
+orcbot lightpanda status</code></pre>
+
+          <h4>CLI Commands</h4>
+          <ul>
+            <li><code>orcbot lightpanda install</code> — Download and install Lightpanda</li>
+            <li><code>orcbot lightpanda start [-b]</code> — Start browser server (-b for background)</li>
+            <li><code>orcbot lightpanda stop</code> — Stop background server</li>
+            <li><code>orcbot lightpanda status</code> — Check installation and server status</li>
+            <li><code>orcbot lightpanda enable</code> — Set Lightpanda as default browser</li>
+            <li><code>orcbot lightpanda disable</code> — Switch back to Playwright/Chrome</li>
+          </ul>
+
+          <h4>Config Options</h4>
+          <ul>
+            <li><code>browserEngine</code> — <code>playwright</code> (default) or <code>lightpanda</code></li>
+            <li><code>lightpandaEndpoint</code> — CDP endpoint (default: <code>ws://127.0.0.1:9222</code>)</li>
+            <li><code>lightpandaPath</code> — Path to binary (auto-set by installer)</li>
+          </ul>
+
+          <h4>Platform Support</h4>
+          <ul>
+            <li>Linux x64 ✅</li>
+            <li>macOS ARM64 (Apple Silicon) ✅</li>
+            <li>Windows: Use WSL2 or Docker</li>
+          </ul>
+
+          <h4>Docker Alternative</h4>
+          <pre><code>docker run -d --name lightpanda -p 9222:9222 lightpanda/browser:nightly</code></pre>
+          <p>Then set: <code>orcbot config set lightpandaEndpoint ws://localhost:9222</code></p>
+        </div>
+
+        <footer class="page-footer">
+          <span>© 2026 OrcBot Project</span>
+          <div class="footer-nav">
+            <a href="https://github.com/fredabila/orcbot">GitHub</a>
+          </div>
+        </footer>
+      </div>
     </main>
-
-    <footer class="footer">
-      <div class="container">© 2026 OrcBot Project</div>
-    </footer>
-  </body>
+  </div>
+  <script>
+    const menuToggle = document.querySelector('.mobile-menu-toggle');
+    const sidebar = document.querySelector('.sidebar');
+    if (menuToggle) menuToggle.addEventListener('click', () => sidebar.classList.toggle('open'));
+  </script>
+</body>
 </html>

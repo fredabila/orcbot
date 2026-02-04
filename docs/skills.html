@@ -1,143 +1,203 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Skills & Plugins | OrcBot Docs</title>
-    <link rel="stylesheet" href="assets/style.css" />
-  </head>
-  <body>
-    <header class="hero">
-      <div class="container">
-        <nav class="doc-nav">
-          <div class="logo">OrcBot Docs</div>
-          <div class="links">
-            <a href="index.html">Overview</a>
-            <a href="getting-started.html">Start</a>
-            <a href="configuration.html">Configuration</a>
-            <a href="gateway.html">Gateway</a>
-            <a href="skills.html">Skills</a>
-            <a href="autonomy.html">Autonomy</a>
-            <a href="operations.html">Operations</a>
-          </div>
-          <a class="nav-cta" href="https://github.com/fredabila/orcbot">GitHub</a>
-        </nav>
-        <div class="badge">Skills & Plugins</div>
-        <h1>Extend OrcBot with new tools.</h1>
-        <p class="lead">Core skills live in the agent; plugins are hot-loaded without restarts.</p>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Skills & Plugins | OrcBot Docs</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <a href="index.html" class="sidebar-logo">
+          <div class="sidebar-logo-icon">🤖</div>
+          OrcBot
+        </a>
+        <span class="sidebar-version">v1.0.0</span>
       </div>
-    </header>
-
-          <section class="card">
-            <h2>Skill files (Markdown specs)</h2>
-            <p>Skill specs are written in Markdown and can reference additional files via a <strong>Skill Files</strong> table. OrcBot will fetch all linked URLs when building the skill.</p>
-            <pre><code>## Skill Files
-
-    | File | URL |
-    |------|-----|
-    | **SKILL.md** | https://fredabila.github.io/orcbot/docs/skills/skill.md |
-    | **HEARTBEAT.md** | https://fredabila.github.io/orcbot/docs/skills/heartbeat.md |
-    | **MESSAGING.md** | https://fredabila.github.io/orcbot/docs/skills/messaging.md |
-    | **package.json** | https://fredabila.github.io/orcbot/docs/skills/skill.json |</code></pre>
-            <p>When the TUI skill builder sees this table, it downloads every linked file and uses the combined content to generate a plugin.</p>
-          </section>
-    <main class="container">
-      <section class="card">
-        <h2>Core skills</h2>
-        <p>Defined in <code>src/core/Agent.ts</code>. Key categories:</p>
-        <ul>
-          <li><strong>Web Search</strong>: <code>web_search</code> with smart API + browser fallback</li>
-          <li><strong>Browser</strong>: <code>browse_website</code>, <code>browser_action</code>, <code>browser_type</code></li>
-          <li><strong>Messaging</strong>: <code>send_telegram</code>, <code>send_whatsapp</code>, <code>reply_to_sender</code></li>
-          <li><strong>Orchestration</strong>: <code>spawn_worker</code>, <code>list_workers</code>, <code>terminate_worker</code></li>
-          <li><strong>Learning</strong>: <code>update_learning</code>, <code>update_user_profile</code>, <code>deep_reason</code></li>
-          <li><strong>System</strong>: <code>run_command</code>, <code>schedule_task</code>, <code>manage_skills</code></li>
-        </ul>
-      </section>
-
-      <section class="card">
-        <h2>Search Resilience</h2>
-        <p>The <code>web_search</code> skill uses smart provider ordering:</p>
-        <ul>
-          <li><strong>With API keys</strong>: Serper → Brave → SearXNG → DuckDuckGo → Bing → Google</li>
-          <li><strong>Without API keys</strong>: DuckDuckGo → Bing → Google (browser-based only)</li>
-          <li>Multiple CSS selector strategies for each browser-based provider</li>
-          <li>Graceful fallback with actionable suggestions on total failure</li>
-        </ul>
-      </section>
-
-      <section class="card">
-        <h2>Multi-Agent Skills</h2>
-        <p>Orchestration skills for parallel task execution:</p>
-        <ul>
-          <li><code>spawn_worker(name, task)</code>: Create a worker process for a specific task</li>
-          <li><code>list_workers()</code>: View active worker processes with PIDs and status</li>
-          <li><code>terminate_worker(name)</code>: Stop a specific worker</li>
-          <li><code>broadcast_to_workers(message)</code>: Send instructions to all workers</li>
-        </ul>
-        <p>Workers run as real Node.js child processes with IPC communication.</p>
-      </section>
-
-      <section class="grid">
-        <div class="card">
-          <h3>Plugin directory</h3>
-          <p>Store plugins in <code>~/.orcbot/plugins</code> or <code>./plugins</code>.</p>
+      
+      <nav class="sidebar-nav">
+        <div class="nav-section">
+          <div class="nav-section-title">Getting Started</div>
+          <ul class="nav-links">
+            <li><a href="index.html" class="nav-link"><span class="nav-link-icon">📚</span> Introduction</a></li>
+            <li><a href="getting-started.html" class="nav-link"><span class="nav-link-icon">🚀</span> Quick Start</a></li>
+            <li><a href="configuration.html" class="nav-link"><span class="nav-link-icon">⚙️</span> Configuration</a></li>
+          </ul>
         </div>
-          <section class="grid">
-            <div class="card">
-              <h3>Skill spec directory</h3>
-              <p>We host example specs under <code>/docs/skills/</code> for direct installation.</p>
-              <a class="text-link" href="skills/skill.md">Open SKILL.md →</a>
-            </div>
-            <div class="card">
-              <h3>Heartbeat spec</h3>
-              <p>Document heartbeat behaviors and guardrails.</p>
-              <a class="text-link" href="skills/heartbeat.md">Open HEARTBEAT.md →</a>
-            </div>
-            <div class="card">
-              <h3>Messaging spec</h3>
-              <p>Message templates, limits, and channel rules.</p>
-              <a class="text-link" href="skills/messaging.md">Open MESSAGING.md →</a>
-            </div>
-          </section>
-        <div class="card">
-          <h3>Self repair</h3>
-          <p>Broken plugins trigger <code>self_repair_skill</code> and reload automatically.</p>
+        
+        <div class="nav-section">
+          <div class="nav-section-title">Core Concepts</div>
+          <ul class="nav-links">
+            <li><a href="architecture.html" class="nav-link"><span class="nav-link-icon">🏗️</span> Architecture</a></li>
+            <li><a href="skills.html" class="nav-link active"><span class="nav-link-icon">🧩</span> Skills & Plugins</a></li>
+            <li><a href="autonomy.html" class="nav-link"><span class="nav-link-icon">🤖</span> Autonomy</a></li>
+          </ul>
         </div>
-        <div class="card">
-          <h3>Skill builder</h3>
-          <p>Use the TUI to build new skills from specifications.</p>
+        
+        <div class="nav-section">
+          <div class="nav-section-title">Features</div>
+          <ul class="nav-links">
+            <li><a href="gateway.html" class="nav-link"><span class="nav-link-icon">🌐</span> Web Gateway</a></li>
+            <li><a href="operations.html" class="nav-link"><span class="nav-link-icon">📊</span> Operations</a></li>
+          </ul>
         </div>
-      </section>
+      </nav>
+      
+      <div class="sidebar-footer">
+        <a href="https://github.com/fredabila/orcbot" target="_blank"><span>⭐</span> GitHub</a>
+        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank"><span>💬</span> Community</a>
+      </div>
+    </aside>
 
-      <section class="card">
-        <h2>Skill Routing Rules</h2>
-        <p>Configure intent-based skill selection via <code>skillRoutingRules</code>:</p>
-        <pre><code>skillRoutingRules:
-  - intent: "search"
-    preferSkills: ["web_search", "browser_navigate"]
-  - intent: "code"
-    preferSkills: ["run_command", "manage_skills"]
-  - intent: "messaging"
-    preferSkills: ["send_telegram", "send_whatsapp"]</code></pre>
-        <p>Routing rules help the agent select the most appropriate skills for each task type.</p>
-      </section>
+    <!-- Main Content -->
+    <main class="main-content">
+      <header class="content-header">
+        <button class="mobile-menu-toggle">☰</button>
+        <div class="breadcrumb">
+          <a href="index.html">Docs</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Skills & Plugins</span>
+        </div>
+        <div class="header-actions">
+          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank"><span>⭐</span> Star</a>
+        </div>
+      </header>
 
-      <section class="card">
-        <h2>Plugin contract</h2>
-        <pre><code>module.exports = {
-  name: 'skill_name',
-  description: 'What it does',
-  usage: 'skill_name(arg)',
-  handler: async (args, context) =&gt; {
-    return 'result';
+      <div class="page-content">
+        <div class="page-header">
+          <span class="page-badge">🧩 Core Concepts</span>
+          <h1 class="page-title">Skills & Plugins</h1>
+          <p class="page-description">Core capabilities and how to extend OrcBot with custom plugins.</p>
+        </div>
+
+        <div class="card">
+          <h2>🔧 Built-in Skills</h2>
+          <p>OrcBot ships with 60+ skills organized by category:</p>
+          
+          <div class="key-grid">
+            <div>
+              <h4>Messaging</h4>
+              <ul>
+                <li><code>send_telegram</code></li>
+                <li><code>send_whatsapp</code></li>
+                <li><code>send_discord</code></li>
+                <li><code>react_whatsapp</code></li>
+              </ul>
+            </div>
+            <div>
+              <h4>Browser</h4>
+              <ul>
+                <li><code>browser_navigate</code></li>
+                <li><code>browser_click</code></li>
+                <li><code>browser_type</code></li>
+                <li><code>browser_screenshot</code></li>
+              </ul>
+            </div>
+            <div>
+              <h4>File System</h4>
+              <ul>
+                <li><code>read_file</code></li>
+                <li><code>write_file</code></li>
+                <li><code>list_directory</code></li>
+                <li><code>download_file</code></li>
+              </ul>
+            </div>
+            <div>
+              <h4>Search</h4>
+              <ul>
+                <li><code>web_search</code></li>
+                <li><code>extract_article</code></li>
+                <li><code>youtube_trending</code></li>
+              </ul>
+            </div>
+            <div>
+              <h4>System</h4>
+              <ul>
+                <li><code>run_command</code></li>
+                <li><code>get_system_info</code></li>
+                <li><code>schedule_task</code></li>
+              </ul>
+            </div>
+            <div>
+              <h4>Multi-Agent</h4>
+              <ul>
+                <li><code>spawn_agent</code></li>
+                <li><code>delegate_task</code></li>
+                <li><code>list_agents</code></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>🔌 Creating Custom Plugins</h2>
+          <p>Drop TypeScript or JavaScript files in <code>~/.orcbot/plugins/</code> to extend OrcBot.</p>
+          
+          <h4>Plugin Structure</h4>
+          <pre><code>// ~/.orcbot/plugins/my-skill.ts
+module.exports = {
+  name: 'my_custom_skill',
+  description: 'Does something useful',
+  usage: 'my_custom_skill(param1, param2)',
+  
+  async handler(args: { param1: string; param2?: number }, context: any) {
+    const { logger, config, browser, agent } = context;
+    
+    logger.info(`Running with param1: ${args.param1}`);
+    
+    // Your logic here
+    return { success: true, result: 'Done!' };
   }
 };</code></pre>
-      </section>
-    </main>
+        </div>
 
-    <footer class="footer">
-      <div class="container">© 2026 OrcBot Project</div>
-    </footer>
-  </body>
+        <div class="card">
+          <h2>🔧 Context Object</h2>
+          <p>Plugins receive a context object with access to:</p>
+          <table>
+            <tr><th>Property</th><th>Description</th></tr>
+            <tr><td><code>logger</code></td><td>Winston logger instance</td></tr>
+            <tr><td><code>config</code></td><td>ConfigManager for settings</td></tr>
+            <tr><td><code>browser</code></td><td>WebBrowser instance for automation</td></tr>
+            <tr><td><code>agent</code></td><td>Main agent instance</td></tr>
+          </table>
+        </div>
+
+        <div class="card">
+          <h2>🔄 Self-Repair</h2>
+          <p>If a plugin fails to load due to syntax errors, OrcBot triggers a high-priority <code>self_repair_skill</code> task that uses the LLM to attempt automatic fixes.</p>
+          
+          <div class="callout callout-info">
+            <span class="callout-icon">💡</span>
+            <div class="callout-content">
+              <strong>Tip:</strong> Add a <code>// @source:</code> header to your plugin to help the LLM understand its purpose during repairs.
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>📦 Skill Builder</h2>
+          <p>Build skills from remote specifications using the CLI:</p>
+          <pre><code>orcbot builder https://example.com/skill-spec.md</code></pre>
+          <p>This fetches the spec, generates the plugin code, and installs it automatically.</p>
+        </div>
+
+        <footer class="page-footer">
+          <span>© 2026 OrcBot Project</span>
+          <div class="footer-nav">
+            <a href="https://github.com/fredabila/orcbot">GitHub</a>
+          </div>
+        </footer>
+      </div>
+    </main>
+  </div>
+  <script>
+    const menuToggle = document.querySelector('.mobile-menu-toggle');
+    const sidebar = document.querySelector('.sidebar');
+    if (menuToggle) menuToggle.addEventListener('click', () => sidebar.classList.toggle('open'));
+  </script>
+</body>
 </html>

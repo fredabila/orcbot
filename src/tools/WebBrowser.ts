@@ -5,6 +5,8 @@ import path from 'path';
 import os from 'os';
 import fs from 'fs';
 
+export type BrowserEngine = 'playwright' | 'lightpanda';
+
 export class WebBrowser {
     private browser: Browser | null = null;
     private _page: Page | null = null; // Renamed from 'page' to '_page'
@@ -16,6 +18,8 @@ export class WebBrowser {
     private headlessMode: boolean = true;
     private lastNavigatedUrl?: string;
     private tuner?: RuntimeTuner;
+    private browserEngine: BrowserEngine;
+    private lightpandaEndpoint: string;
 
     public get page(): Page | null {
         return this._page;
@@ -29,14 +33,26 @@ export class WebBrowser {
         private searchProviderOrder: string[] = ['serper', 'brave', 'searxng', 'google', 'bing', 'duckduckgo'],
         browserProfileDir?: string,
         browserProfileName?: string,
-        tuner?: RuntimeTuner
+        tuner?: RuntimeTuner,
+        browserEngine?: BrowserEngine,
+        lightpandaEndpoint?: string
     ) {
         this.profileDir = browserProfileDir;
         this.profileName = browserProfileName || 'default';
         this.tuner = tuner;
+        this.browserEngine = browserEngine || 'playwright';
+        this.lightpandaEndpoint = lightpandaEndpoint || 'ws://127.0.0.1:9222';
     }
 
     private async ensureBrowser(headlessOverride?: boolean) {
+        // Lightpanda is always headless - ignore override for it
+        if (this.browserEngine === 'lightpanda') {
+            if (!this.browser) {
+                await this.connectToLightpanda();
+            }
+            return;
+        }
+
         if (headlessOverride !== undefined && headlessOverride !== this.headlessMode) {
             this.headlessMode = headlessOverride;
             await this.close();
@@ -67,6 +83,47 @@ export class WebBrowser {
             });
 
             this._page = await this.context.newPage();
+        }
+    }
+
+    /**
+     * Connect to Lightpanda browser via CDP (Chrome DevTools Protocol).
+     * Lightpanda must be running: ./lightpanda serve --host 127.0.0.1 --port 9222
+     */
+    private async connectToLightpanda(): Promise<void> {
+        try {
+            logger.info(`Browser: Connecting to Lightpanda at ${this.lightpandaEndpoint}`);
+            
+            // Connect via CDP websocket endpoint
+            this.browser = await chromium.connectOverCDP(this.lightpandaEndpoint);
+            
+            // Get existing contexts or create new one
+            const contexts = this.browser.contexts();
+            if (contexts.length > 0) {
+                this.context = contexts[0];
+            } else {
+                this.context = await this.browser.newContext();
+            }
+            
+            // Get existing page or create new one
+            const pages = this.context.pages();
+            if (pages.length > 0) {
+                this._page = pages[0];
+            } else {
+                this._page = await this.context.newPage();
+            }
+            
+            logger.info('Browser: Connected to Lightpanda successfully');
+        } catch (error: any) {
+            logger.error(`Browser: Failed to connect to Lightpanda at ${this.lightpandaEndpoint}: ${error.message}`);
+            logger.warn('Browser: Make sure Lightpanda is running. Falling back to Playwright...');
+            
+            // Fallback to Playwright
+            this.browserEngine = 'playwright';
+            this.browser = null;
+            this.context = null;
+            this._page = null;
+            await this.ensureBrowser();
         }
     }
 
@@ -704,6 +761,19 @@ export class WebBrowser {
     }
 
     public async close() {
+        if (this.browserEngine === 'lightpanda' && this.browser) {
+            // For Lightpanda, just disconnect - don't close the server
+            try {
+                await this.browser.close();
+            } catch (e) {
+                // Ignore disconnect errors
+            }
+            this.browser = null;
+            this.context = null;
+            this._page = null;
+            return;
+        }
+
         if (this.context) {
             await this.context.close();
             this.context = null;
@@ -713,6 +783,10 @@ export class WebBrowser {
             this.browser = null;
         }
         this._page = null;
+    }
+
+    public getBrowserEngine(): BrowserEngine {
+        return this.browserEngine;
     }
 
     public async switchProfile(profileName: string, profileDir?: string): Promise<string> {

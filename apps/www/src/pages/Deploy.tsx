@@ -29,7 +29,7 @@ function Deploy() {
       description: 'Log into DigitalOcean and create a new Droplet with these recommended specs:',
       details: [
         '**OS**: Ubuntu 22.04 LTS (recommended)',
-        '**Plan**: Basic - $12/mo (2GB RAM, 1 vCPU) minimum',
+        '**Plan**: Basic - $6/mo (1GB RAM, 1 vCPU) with Lightpanda, or $12/mo (2GB RAM) with Chrome',
         '**Datacenter**: Choose closest to your users',
         '**Authentication**: SSH Keys (recommended) or Password',
       ],
@@ -53,14 +53,6 @@ apt install -y nodejs
 node --version`,
     },
     {
-      title: 'Install system dependencies',
-      description: 'Install Chromium dependencies for browser automation:',
-      code: `apt install -y wget gnupg ca-certificates fonts-liberation \\
-  libappindicator3-1 libasound2t64 libatk-bridge2.0-0 libatk1.0-0 \\
-  libcups2 libdbus-1-3 libdrm2 libgbm1 libgtk-3-0 libnspr4 \\
-  libnss3 libxcomposite1 libxdamage1 libxrandr2 xdg-utils`,
-    },
-    {
       title: 'Install OrcBot globally',
       description: 'Clone the repo and install OrcBot as a global CLI tool:',
       code: `git clone https://github.com/fredabila/orcbot.git
@@ -73,6 +65,29 @@ npm install -g .`,
       title: 'Run the setup wizard',
       description: 'Configure your API keys and preferences:',
       code: `orcbot setup`,
+    },
+    {
+      title: 'Install Lightpanda (recommended for low-memory VPS)',
+      description: 'Lightpanda is a lightweight browser using 9x less RAM than Chrome - perfect for $6/mo droplets:',
+      code: `# Install Lightpanda
+orcbot lightpanda install
+
+# Start in background
+orcbot lightpanda start -b
+
+# Enable as default browser
+orcbot lightpanda enable
+
+# Check status
+orcbot lightpanda status`,
+    },
+    {
+      title: 'Alternative: Install Chrome dependencies',
+      description: 'Skip this if using Lightpanda. Only needed for Playwright/Chrome browser automation:',
+      code: `apt install -y wget gnupg ca-certificates fonts-liberation \\
+  libappindicator3-1 libasound2t64 libatk-bridge2.0-0 libatk1.0-0 \\
+  libcups2 libdbus-1-3 libdrm2 libgbm1 libgtk-3-0 libnspr4 \\
+  libnss3 libxcomposite1 libxdamage1 libxrandr2 xdg-utils`,
     },
     {
       title: 'Run in background (simple option)',
@@ -109,6 +124,29 @@ EOF
 systemctl daemon-reload
 systemctl enable orcbot
 systemctl start orcbot`,
+    },
+    {
+      title: 'Create Lightpanda systemd service (if using Lightpanda)',
+      description: 'Auto-start Lightpanda browser on boot:',
+      code: `cat > /etc/systemd/system/lightpanda.service << 'EOF'
+[Unit]
+Description=Lightpanda Browser Server
+Before=orcbot.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/root/.orcbot/lightpanda/lightpanda serve --host 127.0.0.1 --port 9222
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable lightpanda
+systemctl start lightpanda`,
     },
     {
       title: 'Check status and logs',
@@ -247,15 +285,19 @@ ufw enable`,
               <h3>Troubleshooting</h3>
               <div className="trouble-item">
                 <h4>Chromium fails to launch</h4>
-                <p>Make sure all system dependencies are installed (Step 5). You can also try running with <code>PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1</code> and installing Chromium manually.</p>
+                <p>Try using Lightpanda instead: <code>orcbot lightpanda install && orcbot lightpanda enable</code>. It uses 9x less RAM and doesn't need system dependencies.</p>
+              </div>
+              <div className="trouble-item">
+                <h4>Lightpanda won't connect</h4>
+                <p>Make sure it's running: <code>orcbot lightpanda status</code>. Start it with <code>orcbot lightpanda start -b</code> for background mode.</p>
               </div>
               <div className="trouble-item">
                 <h4>OrcBot won't start after reboot</h4>
-                <p>Ensure the systemd service is enabled: <code>systemctl enable orcbot</code></p>
+                <p>Ensure the systemd service is enabled: <code>systemctl enable orcbot</code>. If using Lightpanda, also enable it: <code>systemctl enable lightpanda</code></p>
               </div>
               <div className="trouble-item">
                 <h4>Out of memory errors</h4>
-                <p>Consider upgrading to a 4GB RAM droplet, or add swap space: <code>fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile</code></p>
+                <p>Switch to Lightpanda (<code>orcbot lightpanda enable</code>) which uses 9x less RAM, or add swap: <code>fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile</code></p>
               </div>
             </div>
           </section>

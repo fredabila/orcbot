@@ -1,97 +1,167 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Architecture | OrcBot Docs</title>
-    <link rel="stylesheet" href="assets/style.css" />
-  </head>
-  <body>
-    <header class="hero">
-      <div class="container">
-        <nav class="doc-nav">
-          <div class="logo">OrcBot Docs</div>
-          <div class="links">
-            <a href="index.html">Overview</a>
-            <a href="getting-started.html">Start</a>
-            <a href="configuration.html">Configuration</a>
-            <a href="gateway.html">Gateway</a>
-            <a href="skills.html">Skills</a>
-            <a href="autonomy.html">Autonomy</a>
-            <a href="operations.html">Operations</a>
-          </div>
-          <a class="nav-cta" href="https://github.com/fredabila/orcbot">GitHub</a>
-        </nav>
-        <div class="badge">Architecture</div>
-        <h1>Understand the system layout.</h1>
-        <p class="lead">Core orchestration, memory, tools, and external providers.</p>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Architecture | OrcBot Docs</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <a href="index.html" class="sidebar-logo">
+          <div class="sidebar-logo-icon">🤖</div>
+          OrcBot
+        </a>
+        <span class="sidebar-version">v1.0.0</span>
       </div>
-    </header>
+      
+      <nav class="sidebar-nav">
+        <div class="nav-section">
+          <div class="nav-section-title">Getting Started</div>
+          <ul class="nav-links">
+            <li><a href="index.html" class="nav-link"><span class="nav-link-icon">📚</span> Introduction</a></li>
+            <li><a href="getting-started.html" class="nav-link"><span class="nav-link-icon">🚀</span> Quick Start</a></li>
+            <li><a href="configuration.html" class="nav-link"><span class="nav-link-icon">⚙️</span> Configuration</a></li>
+          </ul>
+        </div>
+        
+        <div class="nav-section">
+          <div class="nav-section-title">Core Concepts</div>
+          <ul class="nav-links">
+            <li><a href="architecture.html" class="nav-link active"><span class="nav-link-icon">🏗️</span> Architecture</a></li>
+            <li><a href="skills.html" class="nav-link"><span class="nav-link-icon">🧩</span> Skills & Plugins</a></li>
+            <li><a href="autonomy.html" class="nav-link"><span class="nav-link-icon">🤖</span> Autonomy</a></li>
+          </ul>
+        </div>
+        
+        <div class="nav-section">
+          <div class="nav-section-title">Features</div>
+          <ul class="nav-links">
+            <li><a href="gateway.html" class="nav-link"><span class="nav-link-icon">🌐</span> Web Gateway</a></li>
+            <li><a href="operations.html" class="nav-link"><span class="nav-link-icon">📊</span> Operations</a></li>
+          </ul>
+        </div>
+      </nav>
+      
+      <div class="sidebar-footer">
+        <a href="https://github.com/fredabila/orcbot" target="_blank"><span>⭐</span> GitHub</a>
+        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank"><span>💬</span> Community</a>
+      </div>
+    </aside>
 
-    <main class="container">
-      <section class="card">
-        <h2>Core flow</h2>
-        <div class="diagram">
-          <div>Channels → Agent Core → Orchestrator → Workers → Skills & Tools → Providers</div>
-          <div class="diagram-note">Telegram / WhatsApp / CLI • Multi-Agent • LLMs • Search (API + Browser) • Storage</div>
+    <!-- Main Content -->
+    <main class="main-content">
+      <header class="content-header">
+        <button class="mobile-menu-toggle">☰</button>
+        <div class="breadcrumb">
+          <a href="index.html">Docs</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Architecture</span>
         </div>
-      </section>
+        <div class="header-actions">
+          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank"><span>⭐</span> Star</a>
+        </div>
+      </header>
 
-      <section class="grid">
-        <div class="card">
-          <h3>Agent Core</h3>
-          <p>DecisionEngine + SimulationEngine orchestrate every task with plans and guardrails.</p>
+      <div class="page-content">
+        <div class="page-header">
+          <span class="page-badge">🏗️ Core Concepts</span>
+          <h1 class="page-title">Architecture</h1>
+          <p class="page-description">Understand OrcBot's modular design and how components interact.</p>
         </div>
-        <div class="card">
-          <h3>AgentOrchestrator</h3>
-          <p>Spawns worker processes via Node.js fork() for parallel task execution with IPC.</p>
-        </div>
-        <div class="card">
-          <h3>Smart Heartbeat</h3>
-          <p>Context-aware scheduling with exponential backoff and productivity tracking.</p>
-        </div>
-        <div class="card">
-          <h3>Memory & Queue</h3>
-          <p>MemoryManager stores short/episodic context. ActionQueue persists tasks.</p>
-        </div>
-        <div class="card">
-          <h3>Decision Pipeline</h3>
-          <p>Guardrails system with skill routing, termination review, and autopilot mode.</p>
-        </div>
-        <div class="card">
-          <h3>Web Search</h3>
-          <p>Resilient search with API providers (Serper, Brave) and browser fallback (DDG, Bing, Google).</p>
-        </div>
-        <div class="card">
-          <h3>Providers</h3>
-          <p>MultiLLM routes to OpenAI, Gemini, Bedrock, or OpenRouter with automatic fallback logic.</p>
-        </div>
-      </section>
 
-      <section class="card">
-        <h2>Data paths</h2>
-        <ul>
-          <li><code>~/.orcbot</code>: memory, profiles, plugins, downloads, worker configs</li>
-          <li><code>logs/</code>: runtime logs (main agent + workers)</li>
-          <li><code>orcbot.config.yaml</code>: configuration source</li>
-        </ul>
-      </section>
+        <div class="card">
+          <h2>📦 System Overview</h2>
+          <pre><code>┌─────────────────────────────────────────────────────────┐
+│                      Channels                            │
+│   (Telegram, WhatsApp, Discord, CLI, Web Gateway)       │
+└─────────────────────────┬───────────────────────────────┘
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│                    Agent Core                            │
+│  ┌─────────────┐  ┌──────────────┐  ┌───────────────┐  │
+│  │  Decision   │  │   Memory     │  │   Scheduler   │  │
+│  │   Engine    │  │   Manager    │  │   (Heartbeat) │  │
+│  └─────────────┘  └──────────────┘  └───────────────┘  │
+└─────────────────────────┬───────────────────────────────┘
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│                 Skills & Tools                           │
+│   (Browser, File System, Search, Messaging, Plugins)    │
+└─────────────────────────┬───────────────────────────────┘
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│                    Providers                             │
+│     (OpenAI, Google, Bedrock, NVIDIA, OpenRouter)       │
+└─────────────────────────────────────────────────────────┘</code></pre>
+        </div>
 
-      <section class="card">
-        <h2>Key files</h2>
-        <ul>
-          <li><code>src/core/Agent.ts</code>: Main agent with skills and heartbeat</li>
-          <li><code>src/core/AgentOrchestrator.ts</code>: Multi-agent coordination</li>
-          <li><code>src/core/AgentWorker.ts</code>: Worker process entry point</li>
-          <li><code>src/core/DecisionPipeline.ts</code>: Guardrails, routing rules, and safety checks</li>
-          <li><code>src/tools/WebBrowser.ts</code>: Browser automation with resilient search</li>
-          <li><code>src/core/Scheduler.ts</code>: Smart heartbeat scheduling</li>
-        </ul>
-      </section>
+        <div class="card">
+          <h2>📁 Data Paths</h2>
+          <p>OrcBot stores all data in <code>~/.orcbot/</code> by default:</p>
+          <table>
+            <tr><th>Path</th><th>Purpose</th></tr>
+            <tr><td><code>orcbot.config.yaml</code></td><td>Main configuration file</td></tr>
+            <tr><td><code>memory.json</code></td><td>Short-term and episodic memories</td></tr>
+            <tr><td><code>action-queue.json</code></td><td>Pending tasks queue</td></tr>
+            <tr><td><code>profiles/</code></td><td>Contact profiles (per-JID)</td></tr>
+            <tr><td><code>plugins/</code></td><td>Custom skill plugins</td></tr>
+            <tr><td><code>browser-profiles/</code></td><td>Persistent browser sessions</td></tr>
+            <tr><td><code>downloads/</code></td><td>Downloaded media files</td></tr>
+          </table>
+        </div>
+
+        <div class="grid grid-2">
+          <div class="card">
+            <h3>🧠 Decision Engine</h3>
+            <p>The decision engine builds context from memories, skills, and channel metadata, then calls the LLM to determine the next action. It supports multi-tool responses.</p>
+          </div>
+          
+          <div class="card">
+            <h3>💾 Memory Manager</h3>
+            <p>Manages short-term memories with automatic consolidation into episodic summaries after 30 entries. Retrieval is capped for context window efficiency.</p>
+          </div>
+          
+          <div class="card">
+            <h3>⏰ Scheduler</h3>
+            <p>Emits <code>scheduler:tick</code> events for background jobs. Heartbeat tasks, polling jobs, and autonomy checks all run through the scheduler.</p>
+          </div>
+          
+          <div class="card">
+            <h3>🔌 Event Bus</h3>
+            <p>Central pub/sub system for decoupled communication. Components subscribe to events like <code>config:changed</code>, <code>action:push</code>, etc.</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>🔄 Request Flow</h2>
+          <ol>
+            <li><strong>Inbound:</strong> Message arrives via channel (Telegram, WhatsApp, etc.)</li>
+            <li><strong>Memory:</strong> Message stored in short-term memory with context</li>
+            <li><strong>Decision:</strong> Decision engine builds prompt with memories, skills, channel context</li>
+            <li><strong>LLM Call:</strong> MultiLLM routes to appropriate provider based on model name</li>
+            <li><strong>Parse:</strong> Parser layer extracts tools array from JSON response</li>
+            <li><strong>Execute:</strong> Skills manager executes each tool in sequence</li>
+            <li><strong>Respond:</strong> Results sent back through the originating channel</li>
+          </ol>
+        </div>
+
+        <footer class="page-footer">
+          <span>© 2026 OrcBot Project</span>
+          <div class="footer-nav">
+            <a href="https://github.com/fredabila/orcbot">GitHub</a>
+          </div>
+        </footer>
+      </div>
     </main>
-
-    <footer class="footer">
-      <div class="container">© 2026 OrcBot Project</div>
-    </footer>
-  </body>
+  </div>
+  <script>
+    const menuToggle = document.querySelector('.mobile-menu-toggle');
+    const sidebar = document.querySelector('.sidebar');
+    if (menuToggle) menuToggle.addEventListener('click', () => sidebar.classList.toggle('open'));
+  </script>
+</body>
 </html>

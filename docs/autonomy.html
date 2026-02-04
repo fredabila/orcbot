@@ -1,108 +1,180 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Autonomy | OrcBot Docs</title>
-    <link rel="stylesheet" href="assets/style.css" />
-  </head>
-  <body>
-    <header class="hero">
-      <div class="container">
-        <nav class="doc-nav">
-          <div class="logo">OrcBot Docs</div>
-          <div class="links">
-            <a href="index.html">Overview</a>
-            <a href="getting-started.html">Start</a>
-            <a href="configuration.html">Configuration</a>
-            <a href="gateway.html">Gateway</a>
-            <a href="skills.html">Skills</a>
-            <a href="autonomy.html">Autonomy</a>
-            <a href="operations.html">Operations</a>
-          </div>
-          <a class="nav-cta" href="https://github.com/fredabila/orcbot">GitHub</a>
-        </nav>
-        <div class="badge">Autonomy</div>
-        <h1>Smart heartbeat-driven autonomy.</h1>
-        <p class="lead">Context-aware scheduling with exponential backoff and action-oriented tasks.</p>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Autonomy | OrcBot Docs</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <a href="index.html" class="sidebar-logo">
+          <div class="sidebar-logo-icon">🤖</div>
+          OrcBot
+        </a>
+        <span class="sidebar-version">v1.0.0</span>
       </div>
-    </header>
-
-    <main class="container">
-      <section class="card">
-        <h2>Smart Heartbeat</h2>
-        <p>The heartbeat system is now intelligent and context-aware:</p>
-        <ul>
-          <li><strong>Exponential Backoff</strong>: Intervals increase (2x, 4x, 8x) when unproductive to save resources</li>
-          <li><strong>Productivity Tracking</strong>: Measures actual work vs idle cycles</li>
-          <li><strong>Context Analysis</strong>: Examines recent conversations to determine relevant actions</li>
-          <li><strong>Action Types</strong>: follow_up, outreach, research, maintenance, delegate</li>
-        </ul>
-      </section>
-
-      <section class="grid">
-        <div class="card">
-          <h3>Backlog limit</h3>
-          <p>Use <code>autonomyBacklogLimit</code> to cap queued proactive tasks.</p>
+      
+      <nav class="sidebar-nav">
+        <div class="nav-section">
+          <div class="nav-section-title">Getting Started</div>
+          <ul class="nav-links">
+            <li><a href="index.html" class="nav-link"><span class="nav-link-icon">📚</span> Introduction</a></li>
+            <li><a href="getting-started.html" class="nav-link"><span class="nav-link-icon">🚀</span> Quick Start</a></li>
+            <li><a href="configuration.html" class="nav-link"><span class="nav-link-icon">⚙️</span> Configuration</a></li>
+          </ul>
         </div>
-        <div class="card">
-          <h3>Stall detection</h3>
-          <p>Long-running actions are failed via <code>maxActionRunMinutes</code>.</p>
+        
+        <div class="nav-section">
+          <div class="nav-section-title">Core Concepts</div>
+          <ul class="nav-links">
+            <li><a href="architecture.html" class="nav-link"><span class="nav-link-icon">🏗️</span> Architecture</a></li>
+            <li><a href="skills.html" class="nav-link"><span class="nav-link-icon">🧩</span> Skills & Plugins</a></li>
+            <li><a href="autonomy.html" class="nav-link active"><span class="nav-link-icon">🤖</span> Autonomy</a></li>
+          </ul>
         </div>
-        <div class="card">
-          <h3>Stale recovery</h3>
-          <p>Stale in-progress actions are marked failed after <code>maxStaleActionMinutes</code>.</p>
+        
+        <div class="nav-section">
+          <div class="nav-section-title">Features</div>
+          <ul class="nav-links">
+            <li><a href="gateway.html" class="nav-link"><span class="nav-link-icon">🌐</span> Web Gateway</a></li>
+            <li><a href="operations.html" class="nav-link"><span class="nav-link-icon">📊</span> Operations</a></li>
+          </ul>
         </div>
-      </section>
+      </nav>
+      
+      <div class="sidebar-footer">
+        <a href="https://github.com/fredabila/orcbot" target="_blank"><span>⭐</span> GitHub</a>
+        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank"><span>💬</span> Community</a>
+      </div>
+    </aside>
 
-      <section class="card">
-        <h2>Multi-Agent Orchestration</h2>
-        <p>For complex tasks, OrcBot can spawn worker processes:</p>
-        <ul>
-          <li>Real Node.js child processes via <code>fork()</code></li>
-          <li>IPC communication between main agent and workers</li>
-          <li>Shared configuration with isolated execution</li>
-          <li>View workers in TUI: <code>orcbot ui</code> → Workers menu</li>
-          <li>Skills: <code>spawn_worker</code>, <code>list_workers</code>, <code>terminate_worker</code></li>
-        </ul>
-      </section>
+    <!-- Main Content -->
+    <main class="main-content">
+      <header class="content-header">
+        <button class="mobile-menu-toggle">☰</button>
+        <div class="breadcrumb">
+          <a href="index.html">Docs</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Autonomy</span>
+        </div>
+        <div class="header-actions">
+          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank"><span>⭐</span> Star</a>
+        </div>
+      </header>
 
-      <section class="card">
-        <h2>Termination Review</h2>
-        <p>OrcBot includes a built-in termination review layer that prevents premature task stops:</p>
-        <ul>
-          <li>Reviews every proposed action before execution</li>
-          <li>Favors completing work over asking clarifying questions</li>
-          <li>Ensures tasks run to completion when possible</li>
-          <li>Always enabled — no configuration needed</li>
-        </ul>
-      </section>
+      <div class="page-content">
+        <div class="page-header">
+          <span class="page-badge">🤖 Core Concepts</span>
+          <h1 class="page-title">Autonomy</h1>
+          <p class="page-description">How OrcBot operates independently via heartbeat, scheduler, and safety guardrails.</p>
+        </div>
 
-      <section class="card">
-        <h2>Autopilot Mode</h2>
-        <p>Enable autonomous operation without human intervention:</p>
-        <ul>
-          <li><code>autopilotNoQuestions: true</code> suppresses clarification requests</li>
-          <li><code>autopilotNoQuestionsInterval</code> sets the evaluation window</li>
-          <li>Agent proceeds with best-effort actions instead of asking</li>
-        </ul>
-      </section>
+        <div class="card">
+          <h2>💓 Heartbeat Loop</h2>
+          <p>The agent runs a continuous heartbeat loop that:</p>
+          <ul>
+            <li>Pulls the next action from the priority queue</li>
+            <li>Simulates potential outcomes via <code>SimulationEngine</code></li>
+            <li>Executes the action using appropriate skills</li>
+            <li>Stores results in memory</li>
+            <li>Triggers learning consolidation periodically</li>
+          </ul>
+          <pre><code># Start the heartbeat loop
+orcbot run</code></pre>
+        </div>
 
-      <section class="card">
-        <h2>Autonomy checklist</h2>
-        <ul>
-          <li>Enable <code>autonomyEnabled</code></li>
-          <li>Set a heartbeat interval that fits your workload (auto-adjusts with backoff)</li>
-          <li>Consider enabling <code>autopilotNoQuestions</code> for fully autonomous operation</li>
-          <li>Monitor logs for proactive task output and worker activity</li>
-          <li>Use <code>spawn_worker</code> for parallel task execution</li>
-          <li>Check TUI Workers menu for process management</li>
-        </ul>
-      </section>
+        <div class="card">
+          <h2>⏰ Scheduler</h2>
+          <p>The scheduler emits <code>scheduler:tick</code> events on a configurable interval:</p>
+          <pre><code># Config
+heartbeatInterval: 60  # seconds between ticks</code></pre>
+          <p>Subscribe to scheduler events via the event bus:</p>
+          <pre><code>import { eventBus } from './core/EventBus';
+
+eventBus.on('scheduler:tick', async () => {
+  // Do periodic work
+});</code></pre>
+        </div>
+
+        <div class="card">
+          <h2>🛡️ Safety Guardrails</h2>
+          <div class="key-grid">
+            <div class="key-item">
+              <div class="key-name">Simulation</div>
+              <div class="key-description">Pre-plan actions to predict outcomes before execution</div>
+            </div>
+            <div class="key-item">
+              <div class="key-name">Token Tracking</div>
+              <div class="key-description">Monitor and limit API token usage per session</div>
+            </div>
+            <div class="key-item">
+              <div class="key-name">Auto-Reply Flags</div>
+              <div class="key-description">Control whether channels can trigger autonomous responses</div>
+            </div>
+            <div class="key-item">
+              <div class="key-name">Priority Queue</div>
+              <div class="key-description">Ensure high-priority tasks execute first</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>🧠 Decision Pipeline</h2>
+          <p>Each decision goes through multiple stages:</p>
+          <ol>
+            <li><strong>Context Gathering</strong> — Recent memories, journal, learning snippets</li>
+            <li><strong>Skill Prompts</strong> — Inject available skill descriptions</li>
+            <li><strong>Channel Context</strong> — Add channel-specific metadata and instructions</li>
+            <li><strong>LLM Call</strong> — Generate structured JSON response</li>
+            <li><strong>Parsing</strong> — Extract tools, speech, and action items</li>
+          </ol>
+        </div>
+
+        <div class="card">
+          <h2>📋 Action Queue</h2>
+          <p>Tasks are persisted in a file-backed priority queue:</p>
+          <pre><code>// Push a task programmatically
+actionQueue.push({
+  taskId: 'abc123',
+  description: 'Research topic X',
+  priority: 8,
+  status: 'pending'
+});
+
+// From CLI
+orcbot push "Research topic X" -p 8</code></pre>
+          <p>Queue location: <code>~/.orcbot/action-queue.json</code></p>
+        </div>
+
+        <div class="card">
+          <h2>🔄 Learning & Memory</h2>
+          <p>The agent consolidates short-term memories into episodic summaries:</p>
+          <ul>
+            <li><strong>Short-term</strong> — Recent events stored individually</li>
+            <li><strong>Episodic</strong> — Consolidated summaries after 30 items</li>
+            <li><strong>Journal</strong> — Daily reflections and learnings</li>
+          </ul>
+          <pre><code># View memories
+orcbot ui  # → Memory menu</code></pre>
+        </div>
+
+        <footer class="page-footer">
+          <span>© 2026 OrcBot Project</span>
+          <div class="footer-nav">
+            <a href="https://github.com/fredabila/orcbot">GitHub</a>
+          </div>
+        </footer>
+      </div>
     </main>
-
-    <footer class="footer">
-      <div class="container">© 2026 OrcBot Project</div>
-    </footer>
-  </body>
+  </div>
+  <script>
+    const menuToggle = document.querySelector('.mobile-menu-toggle');
+    const sidebar = document.querySelector('.sidebar');
+    if (menuToggle) menuToggle.addEventListener('click', () => sidebar.classList.toggle('open'));
+  </script>
+</body>
 </html>

@@ -425,6 +425,287 @@ configCommand
         console.log(`Configuration updated: ${key} = ${value}`);
     });
 
+// Lightpanda browser management
+const lightpandaCommand = program
+    .command('lightpanda')
+    .description('Manage Lightpanda lightweight browser (9x less RAM than Chrome)');
+
+lightpandaCommand
+    .command('install')
+    .description('Download and install Lightpanda browser')
+    .option('-d, --dir <path>', 'Installation directory', path.join(os.homedir(), '.orcbot', 'lightpanda'))
+    .action(async (options) => {
+        const installDir = options.dir;
+        const platform = process.platform;
+        const arch = process.arch;
+        
+        console.log('\n🐼 Installing Lightpanda browser...\n');
+        
+        // Determine download URL based on platform
+        let downloadUrl: string;
+        let binaryName = 'lightpanda';
+        
+        if (platform === 'linux' && arch === 'x64') {
+            downloadUrl = 'https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux';
+        } else if (platform === 'darwin' && arch === 'arm64') {
+            downloadUrl = 'https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-aarch64-macos';
+        } else if (platform === 'win32') {
+            console.error('❌ Lightpanda is not available natively on Windows.');
+            console.log('\n   Use WSL2 instead:');
+            console.log('   1. Open WSL terminal');
+            console.log('   2. Run: curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux');
+            console.log('   3. Run: chmod a+x ./lightpanda');
+            console.log('\n   Or use Docker:');
+            console.log('   docker run -d --name lightpanda -p 9222:9222 lightpanda/browser:nightly');
+            process.exit(1);
+        } else if (platform === 'darwin' && arch === 'x64') {
+            console.error('❌ Lightpanda is not yet available for macOS Intel (x64).');
+            console.log('\n   Only macOS ARM64 (Apple Silicon) is supported.');
+            console.log('\n   Alternative: Use Docker:');
+            console.log('   docker run -d --name lightpanda -p 9222:9222 lightpanda/browser:nightly');
+            process.exit(1);
+        } else {
+            console.error(`❌ Lightpanda is not available for ${platform}/${arch}`);
+            console.log('\n   Supported platforms:');
+            console.log('   - Linux x64');
+            console.log('   - macOS ARM64 (Apple Silicon)');
+            console.log('   - Windows: Use WSL2 or Docker');
+            console.log('\n   Docker alternative:');
+            console.log('   docker run -d --name lightpanda -p 9222:9222 lightpanda/browser:nightly');
+            process.exit(1);
+        }
+        
+        // Create install directory
+        if (!fs.existsSync(installDir)) {
+            fs.mkdirSync(installDir, { recursive: true });
+        }
+        
+        const binaryPath = path.join(installDir, binaryName);
+        
+        console.log(`   Platform: ${platform}/${arch}`);
+        console.log(`   Installing to: ${installDir}`);
+        console.log(`   Downloading from: ${downloadUrl}\n`);
+        
+        try {
+            const https = require('https');
+            const http = require('http');
+            
+            // Follow redirects to get actual download URL
+            const download = (url: string, dest: string): Promise<void> => {
+                return new Promise((resolve, reject) => {
+                    const protocol = url.startsWith('https') ? https : http;
+                    const file = fs.createWriteStream(dest);
+                    
+                    const request = (redirectUrl: string) => {
+                        protocol.get(redirectUrl, { headers: { 'User-Agent': 'OrcBot' } }, (response: any) => {
+                            if (response.statusCode === 302 || response.statusCode === 301) {
+                                request(response.headers.location);
+                                return;
+                            }
+                            
+                            if (response.statusCode !== 200) {
+                                reject(new Error(`Failed to download: ${response.statusCode}`));
+                                return;
+                            }
+                            
+                            const total = parseInt(response.headers['content-length'] || '0', 10);
+                            let downloaded = 0;
+                            
+                            response.on('data', (chunk: Buffer) => {
+                                downloaded += chunk.length;
+                                if (total > 0) {
+                                    const pct = Math.round((downloaded / total) * 100);
+                                    process.stdout.write(`\r   Downloading... ${pct}%`);
+                                }
+                            });
+                            
+                            response.pipe(file);
+                            file.on('finish', () => {
+                                file.close();
+                                console.log('\n');
+                                resolve();
+                            });
+                        }).on('error', reject);
+                    };
+                    
+                    request(url);
+                });
+            };
+            
+            await download(downloadUrl, binaryPath);
+            
+            // Make executable
+            fs.chmodSync(binaryPath, 0o755);
+            
+            console.log('✅ Lightpanda installed successfully!\n');
+            console.log('   Next steps:');
+            console.log(`   1. Start Lightpanda: orcbot lightpanda start`);
+            console.log(`   2. Enable in config: orcbot config set browserEngine lightpanda`);
+            console.log(`   3. Run OrcBot normally: orcbot run\n`);
+            
+            // Auto-configure
+            agent.config.set('lightpandaPath', binaryPath);
+            console.log(`   ✓ Config updated: lightpandaPath = ${binaryPath}`);
+            
+        } catch (error: any) {
+            console.error(`\n❌ Installation failed: ${error.message}`);
+            console.log('\n   Manual installation (Linux):');
+            console.log('   curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux');
+            console.log('   chmod a+x ./lightpanda');
+            console.log(`   mv ./lightpanda ${binaryPath}`);
+            console.log('\n   Or use Docker:');
+            console.log('   docker run -d --name lightpanda -p 9222:9222 lightpanda/browser:nightly');
+            process.exit(1);
+        }
+    });
+
+lightpandaCommand
+    .command('start')
+    .description('Start Lightpanda browser server')
+    .option('-p, --port <number>', 'Port to listen on', '9222')
+    .option('-H, --host <string>', 'Host to bind to', '127.0.0.1')
+    .option('-b, --background', 'Run in background')
+    .action(async (options) => {
+        const lightpandaPath = agent.config.get('lightpandaPath') || path.join(os.homedir(), '.orcbot', 'lightpanda', 'lightpanda');
+        
+        if (!fs.existsSync(lightpandaPath)) {
+            console.error('❌ Lightpanda not found. Run: orcbot lightpanda install');
+            process.exit(1);
+        }
+        
+        const { spawn } = require('child_process');
+        const args = ['serve', '--host', options.host, '--port', options.port];
+        
+        console.log(`\n🐼 Starting Lightpanda browser...`);
+        console.log(`   Binary: ${lightpandaPath}`);
+        console.log(`   Endpoint: ws://${options.host}:${options.port}\n`);
+        
+        if (options.background) {
+            const dataDir = path.join(os.homedir(), '.orcbot');
+            const logPath = path.join(dataDir, 'lightpanda.log');
+            const pidPath = path.join(dataDir, 'lightpanda.pid');
+            const out = fs.openSync(logPath, 'a');
+            
+            const child = spawn(lightpandaPath, args, {
+                detached: true,
+                stdio: ['ignore', out, out]
+            });
+            
+            fs.writeFileSync(pidPath, String(child.pid));
+            child.unref();
+            
+            console.log('✅ Lightpanda running in background');
+            console.log(`   PID: ${child.pid}`);
+            console.log(`   Log: ${logPath}`);
+            console.log(`   Stop with: orcbot lightpanda stop\n`);
+            
+            // Auto-configure endpoint
+            const endpoint = `ws://${options.host}:${options.port}`;
+            agent.config.set('lightpandaEndpoint', endpoint);
+            console.log(`   ✓ Config updated: lightpandaEndpoint = ${endpoint}`);
+        } else {
+            console.log('   Press Ctrl+C to stop\n');
+            
+            const child = spawn(lightpandaPath, args, {
+                stdio: 'inherit'
+            });
+            
+            child.on('error', (err: Error) => {
+                console.error(`❌ Failed to start: ${err.message}`);
+            });
+            
+            child.on('exit', (code: number) => {
+                console.log(`\nLightpanda exited with code ${code}`);
+            });
+        }
+    });
+
+lightpandaCommand
+    .command('stop')
+    .description('Stop Lightpanda browser server')
+    .action(() => {
+        const pidPath = path.join(os.homedir(), '.orcbot', 'lightpanda.pid');
+        
+        if (!fs.existsSync(pidPath)) {
+            console.log('Lightpanda is not running (no PID file found)');
+            return;
+        }
+        
+        try {
+            const pid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
+            process.kill(pid, 'SIGTERM');
+            fs.unlinkSync(pidPath);
+            console.log(`✅ Stopped Lightpanda (PID: ${pid})`);
+        } catch (e: any) {
+            if (e.code === 'ESRCH') {
+                fs.unlinkSync(pidPath);
+                console.log('Lightpanda was not running (stale PID file cleaned up)');
+            } else {
+                console.error(`❌ Failed to stop: ${e.message}`);
+            }
+        }
+    });
+
+lightpandaCommand
+    .command('status')
+    .description('Check Lightpanda browser status')
+    .action(() => {
+        const pidPath = path.join(os.homedir(), '.orcbot', 'lightpanda.pid');
+        const lightpandaPath = agent.config.get('lightpandaPath');
+        const endpoint = agent.config.get('lightpandaEndpoint') || 'ws://127.0.0.1:9222';
+        const engineSetting = agent.config.get('browserEngine') || 'playwright';
+        
+        console.log('\n🐼 Lightpanda Status\n');
+        
+        // Installation status
+        if (lightpandaPath && fs.existsSync(lightpandaPath)) {
+            console.log(`   ✅ Installed: ${lightpandaPath}`);
+        } else {
+            console.log('   ❌ Not installed (run: orcbot lightpanda install)');
+        }
+        
+        // Running status
+        if (fs.existsSync(pidPath)) {
+            try {
+                const pid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
+                process.kill(pid, 0); // Check if running
+                console.log(`   ✅ Running: PID ${pid}`);
+            } catch {
+                fs.unlinkSync(pidPath);
+                console.log('   ⚪ Not running');
+            }
+        } else {
+            console.log('   ⚪ Not running');
+        }
+        
+        // Config status
+        console.log(`   📡 Endpoint: ${endpoint}`);
+        console.log(`   ⚙️  Browser engine: ${engineSetting}`);
+        
+        if (engineSetting !== 'lightpanda') {
+            console.log('\n   💡 To enable: orcbot config set browserEngine lightpanda');
+        }
+        
+        console.log('');
+    });
+
+lightpandaCommand
+    .command('enable')
+    .description('Enable Lightpanda as the default browser engine')
+    .action(() => {
+        agent.config.set('browserEngine', 'lightpanda');
+        console.log('✅ Browser engine set to Lightpanda');
+        console.log('   Make sure Lightpanda is running: orcbot lightpanda start -b');
+    });
+
+lightpandaCommand
+    .command('disable')
+    .description('Switch back to Playwright (Chrome)')
+    .action(() => {
+        agent.config.set('browserEngine', 'playwright');
+        console.log('✅ Browser engine set to Playwright (Chrome)');
+    });
+
 async function showMainMenu() {
     console.clear();
     console.log('🤖 OrcBot TUI');
@@ -508,6 +789,120 @@ async function showMainMenu() {
     }
 }
 
+async function showBrowserMenu() {
+    const currentEngine = agent.config.get('browserEngine') || 'playwright';
+    const lightpandaPath = agent.config.get('lightpandaPath');
+    const lightpandaEndpoint = agent.config.get('lightpandaEndpoint') || 'ws://127.0.0.1:9222';
+    const pidPath = path.join(os.homedir(), '.orcbot', 'lightpanda.pid');
+    
+    // Check if Lightpanda is installed
+    const isInstalled = lightpandaPath && fs.existsSync(lightpandaPath);
+    
+    // Check if Lightpanda is running
+    let isRunning = false;
+    let runningPid: number | null = null;
+    if (fs.existsSync(pidPath)) {
+        try {
+            runningPid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
+            process.kill(runningPid, 0);
+            isRunning = true;
+        } catch {
+            fs.unlinkSync(pidPath);
+        }
+    }
+    
+    console.log('\n--- Browser Engine Configuration ---');
+    console.log(`Engine: ${currentEngine === 'lightpanda' ? '🐼 Lightpanda' : '🌐 Playwright (Chrome)'}`);
+    console.log(`Lightpanda: ${isInstalled ? '✅ Installed' : '❌ Not installed'}`);
+    if (isInstalled) {
+        console.log(`Server: ${isRunning ? `✅ Running (PID: ${runningPid})` : '⚪ Stopped'}`);
+        console.log(`Endpoint: ${lightpandaEndpoint}`);
+    }
+    console.log('');
+
+    const choices = [
+        { name: currentEngine === 'playwright' ? '🐼 Switch to Lightpanda (9x less RAM)' : '🌐 Switch to Playwright (Chrome)', value: 'toggle' },
+    ];
+    
+    if (!isInstalled) {
+        choices.push({ name: '📦 Install Lightpanda', value: 'install' });
+    } else {
+        if (isRunning) {
+            choices.push({ name: '🛑 Stop Lightpanda Server', value: 'stop' });
+        } else {
+            choices.push({ name: '🚀 Start Lightpanda Server', value: 'start' });
+        }
+    }
+    
+    choices.push({ name: 'Back', value: 'back' });
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: 'Browser Options:',
+            choices
+        }
+    ]);
+
+    if (action === 'back') return showToolingMenu();
+    
+    if (action === 'toggle') {
+        if (currentEngine === 'playwright') {
+            if (!isInstalled) {
+                console.log('\n⚠️  Lightpanda is not installed.');
+                const { install } = await inquirer.prompt([
+                    { type: 'confirm', name: 'install', message: 'Would you like to install it now?', default: true }
+                ]);
+                if (install) {
+                    console.log('\n📦 Installing Lightpanda...');
+                    console.log('   Run: orcbot lightpanda install\n');
+                }
+            } else {
+                agent.config.set('browserEngine', 'lightpanda');
+                console.log('\n✅ Switched to Lightpanda');
+                if (!isRunning) {
+                    console.log('   ⚠️  Remember to start the server: orcbot lightpanda start -b');
+                }
+            }
+        } else {
+            agent.config.set('browserEngine', 'playwright');
+            console.log('\n✅ Switched to Playwright (Chrome)');
+        }
+    } else if (action === 'install') {
+        console.log('\n📦 To install Lightpanda, run:');
+        console.log('   orcbot lightpanda install\n');
+    } else if (action === 'start') {
+        const { spawn } = require('child_process');
+        const dataDir = path.join(os.homedir(), '.orcbot');
+        const logPath = path.join(dataDir, 'lightpanda.log');
+        const out = fs.openSync(logPath, 'a');
+        
+        const child = spawn(lightpandaPath, ['serve', '--host', '127.0.0.1', '--port', '9222'], {
+            detached: true,
+            stdio: ['ignore', out, out]
+        });
+        
+        fs.writeFileSync(pidPath, String(child.pid));
+        child.unref();
+        
+        console.log('\n✅ Lightpanda started');
+        console.log(`   PID: ${child.pid}`);
+        console.log(`   Endpoint: ws://127.0.0.1:9222`);
+    } else if (action === 'stop') {
+        try {
+            process.kill(runningPid!, 'SIGTERM');
+            fs.unlinkSync(pidPath);
+            console.log('\n✅ Lightpanda stopped');
+        } catch (e: any) {
+            console.error(`\n❌ Failed to stop: ${e.message}`);
+        }
+    }
+    
+    await waitKeyPress();
+    return showBrowserMenu();
+}
+
 async function showToolingMenu() {
     const { tool } = await inquirer.prompt([
         {
@@ -515,6 +910,7 @@ async function showToolingMenu() {
             name: 'tool',
             message: 'Select Tool to Configure:',
             choices: [
+                { name: '🐼 Browser Engine (Lightpanda/Chrome)', value: 'browser' },
                 { name: 'Serper (Web Search API)', value: 'serper' },
                 { name: 'Brave Search (Web Search API)', value: 'brave' },
                 { name: 'SearxNG (Self-hosted Search)', value: 'searxng' },
@@ -527,7 +923,10 @@ async function showToolingMenu() {
 
     if (tool === 'back') return showMainMenu();
 
-    if (tool === 'serper') {
+    if (tool === 'browser') {
+        await showBrowserMenu();
+        return;
+    } else if (tool === 'serper') {
         const apiKey = agent.config.get('serperApiKey') || 'Not Set';
         const { key } = await inquirer.prompt([
             { type: 'input', name: 'key', message: `Enter Serper API Key (current: ${apiKey.substring(0, 8)}...):` }

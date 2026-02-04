@@ -1,536 +1,161 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Web Gateway - OrcBot Docs</title>
-    <link rel="stylesheet" href="assets/style.css" />
-    <style>
-      .endpoint-table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
-      .endpoint-table th, .endpoint-table td { padding: 0.75rem; text-align: left; border-bottom: 1px solid #333; }
-      .endpoint-table th { background: #1a1a1a; color: #00ff88; }
-      .method { font-weight: bold; font-family: monospace; }
-      .method.get { color: #61affe; }
-      .method.post { color: #49cc90; }
-      .method.put { color: #fca130; }
-      .code-block { background: #1a1a1a; padding: 1rem; border-radius: 8px; overflow-x: auto; margin: 1rem 0; }
-      .code-block code { color: #00ff88; font-size: 0.9rem; }
-      .note { background: #1a2a1a; border-left: 4px solid #00ff88; padding: 1rem; margin: 1rem 0; border-radius: 0 8px 8px 0; }
-      .warning { background: #2a2a1a; border-left: 4px solid #ffaa00; padding: 1rem; margin: 1rem 0; border-radius: 0 8px 8px 0; }
-      .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
-      .feature-card { background: #1a1a1a; padding: 1.25rem; border-radius: 8px; border: 1px solid #333; }
-      .feature-card h4 { color: #00ff88; margin-bottom: 0.5rem; }
-    </style>
-  </head>
-  <body>
-    <header class="hero" style="padding: 2rem 0;">
-      <div class="container">
-        <nav class="doc-nav">
-          <div class="logo">OrcBot Docs</div>
-          <div class="links">
-            <a href="index.html">Overview</a>
-            <a href="getting-started.html">Start</a>
-            <a href="configuration.html">Configuration</a>
-            <a href="gateway.html" class="active">Gateway</a>
-            <a href="skills.html">Skills</a>
-            <a href="operations.html">Operations</a>
-          </div>
-          <a class="nav-cta" href="https://github.com/fredabila/orcbot">GitHub</a>
-        </nav>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Web Gateway | OrcBot Docs</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <a href="index.html" class="sidebar-logo">
+          <div class="sidebar-logo-icon">🤖</div>
+          OrcBot
+        </a>
+        <span class="sidebar-version">v1.0.0</span>
       </div>
-    </header>
-
-    <main class="container">
-      <section class="card">
-        <h1>🌐 Web Gateway</h1>
-        <p class="lead">
-          The Web Gateway lets you control OrcBot from anywhere—your phone, a custom dashboard, or any HTTP client. 
-          No terminal required.
-        </p>
-
-        <h2>What is the Gateway?</h2>
-        <p>
-          The gateway is a web server that exposes OrcBot's functionality over HTTP and WebSocket. 
-          Think of it as a remote control for your agent. You can:
-        </p>
-        <ul>
-          <li>Push tasks to the agent from any device</li>
-          <li>Monitor agent status in real-time</li>
-          <li>View and manage skills</li>
-          <li>Check logs and memory</li>
-          <li>Update configuration remotely</li>
-          <li>Build custom dashboards and integrations</li>
-        </ul>
-      </section>
-
-      <section class="card">
-        <h2>Quick Start</h2>
+      
+      <nav class="sidebar-nav">
+        <div class="nav-section">
+          <div class="nav-section-title">Getting Started</div>
+          <ul class="nav-links">
+            <li><a href="index.html" class="nav-link"><span class="nav-link-icon">📚</span> Introduction</a></li>
+            <li><a href="getting-started.html" class="nav-link"><span class="nav-link-icon">🚀</span> Quick Start</a></li>
+            <li><a href="configuration.html" class="nav-link"><span class="nav-link-icon">⚙️</span> Configuration</a></li>
+          </ul>
+        </div>
         
-        <h3>1. Start the Gateway</h3>
-        <div class="code-block">
-          <code># Basic start (port 3100)<br>
-orcbot gateway<br><br>
-# Start with the agent loop running too<br>
-orcbot gateway --with-agent<br><br>
-# Custom port<br>
-orcbot gateway -p 8080<br><br>
-# With authentication<br>
-orcbot gateway -k your-secret-api-key<br><br>
-# Serve the included dashboard<br>
-orcbot gateway -s ./apps/dashboard</code>
+        <div class="nav-section">
+          <div class="nav-section-title">Core Concepts</div>
+          <ul class="nav-links">
+            <li><a href="architecture.html" class="nav-link"><span class="nav-link-icon">🏗️</span> Architecture</a></li>
+            <li><a href="skills.html" class="nav-link"><span class="nav-link-icon">🧩</span> Skills & Plugins</a></li>
+            <li><a href="autonomy.html" class="nav-link"><span class="nav-link-icon">🤖</span> Autonomy</a></li>
+          </ul>
         </div>
-
-        <h3>2. Access the API</h3>
-        <p>Once running, access endpoints at <code>http://localhost:3100/api/</code></p>
         
-        <div class="code-block">
-          <code># Check if it's working<br>
-curl http://localhost:3100/api/health<br><br>
-# Get agent status<br>
-curl http://localhost:3100/api/status<br><br>
-# Push a task<br>
-curl -X POST http://localhost:3100/api/tasks \<br>
-&nbsp;&nbsp;-H "Content-Type: application/json" \<br>
-&nbsp;&nbsp;-d '{"task": "Send me a summary of today", "priority": 5}'</code>
+        <div class="nav-section">
+          <div class="nav-section-title">Features</div>
+          <ul class="nav-links">
+            <li><a href="gateway.html" class="nav-link active"><span class="nav-link-icon">🌐</span> Web Gateway</a></li>
+            <li><a href="operations.html" class="nav-link"><span class="nav-link-icon">📊</span> Operations</a></li>
+          </ul>
+        </div>
+      </nav>
+      
+      <div class="sidebar-footer">
+        <a href="https://github.com/fredabila/orcbot" target="_blank"><span>⭐</span> GitHub</a>
+        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank"><span>💬</span> Community</a>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <header class="content-header">
+        <button class="mobile-menu-toggle">☰</button>
+        <div class="breadcrumb">
+          <a href="index.html">Docs</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Web Gateway</span>
+        </div>
+        <div class="header-actions">
+          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank"><span>⭐</span> Star</a>
+        </div>
+      </header>
+
+      <div class="page-content">
+        <div class="page-header">
+          <span class="page-badge">🌐 Features</span>
+          <h1 class="page-title">Web Gateway</h1>
+          <p class="page-description">Remote management via REST API and WebSocket for real-time monitoring.</p>
         </div>
 
-        <div class="note">
-          <strong>💡 Tip:</strong> Use <code>--with-agent</code> to run the gateway and agent loop together. 
-          Otherwise, the gateway only provides API access—you'll need to start the agent separately with <code>orcbot run</code>.
+        <div class="card">
+          <h2>🚀 Quick Start</h2>
+          <pre><code># Start gateway server
+orcbot gateway
+
+# Start with agent loop
+orcbot gateway --with-agent
+
+# Custom port and static dashboard
+orcbot gateway -p 8080 -s ./apps/dashboard</code></pre>
         </div>
-      </section>
 
-      <section class="card">
-        <h2>Using the Dashboard</h2>
-        <p>OrcBot includes a ready-to-use dashboard. No coding required!</p>
-
-        <h3>Option A: Serve via Gateway</h3>
-        <div class="code-block">
-          <code># From the orcbot directory<br>
-orcbot gateway -s ./apps/dashboard --with-agent</code>
+        <div class="card">
+          <h2>📡 REST API Endpoints</h2>
+          <table>
+            <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
+            <tr><td>GET</td><td><code>/api/status</code></td><td>Agent status and current action</td></tr>
+            <tr><td>GET</td><td><code>/api/skills</code></td><td>List all registered skills</td></tr>
+            <tr><td>POST</td><td><code>/api/tasks</code></td><td>Push a new task to the queue</td></tr>
+            <tr><td>GET</td><td><code>/api/config</code></td><td>View current configuration</td></tr>
+            <tr><td>GET</td><td><code>/api/memory</code></td><td>View recent memories</td></tr>
+            <tr><td>GET</td><td><code>/api/connections</code></td><td>Channel connection status</td></tr>
+            <tr><td>GET</td><td><code>/api/logs</code></td><td>Recent log entries</td></tr>
+            <tr><td>GET</td><td><code>/api/orchestrator/agents</code></td><td>List spawned agents</td></tr>
+            <tr><td>POST</td><td><code>/api/tasks/:id/cancel</code></td><td>Cancel a pending task</td></tr>
+          </table>
         </div>
-        <p>Then open <code>http://localhost:3100</code> in your browser.</p>
 
-        <h3>Option B: Open the HTML File Directly</h3>
-        <p>You can also just open <code>apps/dashboard/index.html</code> in your browser. 
-        It will connect to <code>localhost:3100</code> automatically.</p>
+        <div class="card">
+          <h2>🔌 WebSocket Events</h2>
+          <p>Connect to <code>ws://localhost:3100</code> for real-time updates:</p>
+          
+          <h4>Incoming Events</h4>
+          <pre><code>// Status update
+{ "type": "status", "data": { "status": "busy", "currentAction": {...} } }
 
-        <h3>Dashboard Features</h3>
-        <div class="feature-grid">
-          <div class="feature-card">
-            <h4>📊 Status Overview</h4>
-            <p>See model, provider, skill count, and safe mode status at a glance.</p>
+// Log entry
+{ "type": "log", "data": { "level": "info", "message": "..." } }
+
+// Memory added
+{ "type": "memory", "data": { "id": "...", "content": "..." } }</code></pre>
+
+          <h4>Outgoing Commands</h4>
+          <pre><code>// Push task via WebSocket
+{ "action": "push_task", "task": "Search for X", "priority": 8 }
+
+// Chat message
+{ "action": "chat", "message": "Hello OrcBot!" }
+
+// Cancel task
+{ "action": "cancel_task", "taskId": "abc123" }</code></pre>
+        </div>
+
+        <div class="card">
+          <h2>🔐 Authentication</h2>
+          <p>Set an API key for authentication:</p>
+          <pre><code># In config
+gatewayApiKey: your-secret-key
+
+# In requests
+curl -H "X-Api-Key: your-secret-key" http://localhost:3100/api/status</code></pre>
+        </div>
+
+        <div class="card">
+          <h2>📊 Dashboard</h2>
+          <p>Serve the built-in dashboard for a visual interface:</p>
+          <pre><code>orcbot gateway -s ./apps/dashboard</code></pre>
+          <p>Then open <code>http://localhost:3100</code> in your browser.</p>
+        </div>
+
+        <footer class="page-footer">
+          <span>© 2026 OrcBot Project</span>
+          <div class="footer-nav">
+            <a href="https://github.com/fredabila/orcbot">GitHub</a>
           </div>
-          <div class="feature-card">
-            <h4>📋 Task Pushing</h4>
-            <p>Push tasks directly from the browser with priority control.</p>
-          </div>
-          <div class="feature-card">
-            <h4>🔧 Skills List</h4>
-            <p>View all available skills with descriptions.</p>
-          </div>
-          <div class="feature-card">
-            <h4>📡 Live Events</h4>
-            <p>WebSocket-powered real-time event stream from the agent.</p>
-          </div>
-          <div class="feature-card">
-            <h4>📜 Log Viewer</h4>
-            <p>Recent logs displayed with auto-refresh.</p>
-          </div>
-          <div class="feature-card">
-            <h4>🔌 Connection Status</h4>
-            <p>See Telegram and WhatsApp connection status.</p>
-          </div>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>API Reference</h2>
-
-        <h3>Status & Health</h3>
-        <table class="endpoint-table">
-          <tr>
-            <th>Method</th>
-            <th>Endpoint</th>
-            <th>Description</th>
-          </tr>
-          <tr>
-            <td><span class="method get">GET</span></td>
-            <td><code>/api/health</code></td>
-            <td>Simple health check (always returns OK)</td>
-          </tr>
-          <tr>
-            <td><span class="method get">GET</span></td>
-            <td><code>/api/status</code></td>
-            <td>Full agent status: running state, model, provider, skill count</td>
-          </tr>
-        </table>
-
-        <h3>Tasks</h3>
-        <table class="endpoint-table">
-          <tr>
-            <th>Method</th>
-            <th>Endpoint</th>
-            <th>Description</th>
-          </tr>
-          <tr>
-            <td><span class="method get">GET</span></td>
-            <td><code>/api/tasks</code></td>
-            <td>List all tasks in the queue</td>
-          </tr>
-          <tr>
-            <td><span class="method post">POST</span></td>
-            <td><code>/api/tasks</code></td>
-            <td>Push a new task. Body: <code>{"task": "...", "priority": 5}</code></td>
-          </tr>
-        </table>
-
-        <h3>Skills</h3>
-        <table class="endpoint-table">
-          <tr>
-            <th>Method</th>
-            <th>Endpoint</th>
-            <th>Description</th>
-          </tr>
-          <tr>
-            <td><span class="method get">GET</span></td>
-            <td><code>/api/skills</code></td>
-            <td>List all available skills</td>
-          </tr>
-          <tr>
-            <td><span class="method post">POST</span></td>
-            <td><code>/api/skills/:name/execute</code></td>
-            <td>Execute a skill. Body contains skill arguments.</td>
-          </tr>
-          <tr>
-            <td><span class="method get">GET</span></td>
-            <td><code>/api/skills/health</code></td>
-            <td>Check health of all plugins</td>
-          </tr>
-        </table>
-
-        <h3>Configuration</h3>
-        <table class="endpoint-table">
-          <tr>
-            <th>Method</th>
-            <th>Endpoint</th>
-            <th>Description</th>
-          </tr>
-          <tr>
-            <td><span class="method get">GET</span></td>
-            <td><code>/api/config</code></td>
-            <td>View all config (sensitive values hidden)</td>
-          </tr>
-          <tr>
-            <td><span class="method get">GET</span></td>
-            <td><code>/api/config/:key</code></td>
-            <td>Get a specific config value</td>
-          </tr>
-          <tr>
-            <td><span class="method put">PUT</span></td>
-            <td><code>/api/config/:key</code></td>
-            <td>Update a config value. Body: <code>{"value": "..."}</code></td>
-          </tr>
-        </table>
-
-        <h3>Memory & Logs</h3>
-        <table class="endpoint-table">
-          <tr>
-            <th>Method</th>
-            <th>Endpoint</th>
-            <th>Description</th>
-          </tr>
-          <tr>
-            <td><span class="method get">GET</span></td>
-            <td><code>/api/memory</code></td>
-            <td>View recent memories</td>
-          </tr>
-          <tr>
-            <td><span class="method get">GET</span></td>
-            <td><code>/api/memory/stats</code></td>
-            <td>Memory statistics</td>
-          </tr>
-          <tr>
-            <td><span class="method get">GET</span></td>
-            <td><code>/api/logs?lines=100</code></td>
-            <td>Get recent log entries</td>
-          </tr>
-        </table>
-
-        <h3>Connections & Models</h3>
-        <table class="endpoint-table">
-          <tr>
-            <th>Method</th>
-            <th>Endpoint</th>
-            <th>Description</th>
-          </tr>
-          <tr>
-            <td><span class="method get">GET</span></td>
-            <td><code>/api/connections</code></td>
-            <td>Telegram/WhatsApp connection status</td>
-          </tr>
-          <tr>
-            <td><span class="method put">PUT</span></td>
-            <td><code>/api/connections/:channel</code></td>
-            <td>Update channel settings</td>
-          </tr>
-          <tr>
-            <td><span class="method get">GET</span></td>
-            <td><code>/api/models</code></td>
-            <td>Current model and provider info</td>
-          </tr>
-          <tr>
-            <td><span class="method put">PUT</span></td>
-            <td><code>/api/models</code></td>
-            <td>Change model/provider. Body: <code>{"modelName": "...", "provider": "..."}</code></td>
-          </tr>
-        </table>
-
-        <h3>Security & Control</h3>
-        <table class="endpoint-table">
-          <tr>
-            <th>Method</th>
-            <th>Endpoint</th>
-            <th>Description</th>
-          </tr>
-          <tr>
-            <td><span class="method get">GET</span></td>
-            <td><code>/api/security</code></td>
-            <td>View security settings (safeMode, allowLists, etc.)</td>
-          </tr>
-          <tr>
-            <td><span class="method put">PUT</span></td>
-            <td><code>/api/security</code></td>
-            <td>Update security settings</td>
-          </tr>
-          <tr>
-            <td><span class="method post">POST</span></td>
-            <td><code>/api/agent/start</code></td>
-            <td>Start the agent loop</td>
-          </tr>
-          <tr>
-            <td><span class="method post">POST</span></td>
-            <td><code>/api/agent/stop</code></td>
-            <td>Stop the agent loop</td>
-          </tr>
-        </table>
-      </section>
-
-      <section class="card">
-        <h2>WebSocket Events</h2>
-        <p>Connect to <code>ws://localhost:3100</code> for real-time updates.</p>
-
-        <h3>Receiving Events</h3>
-        <div class="code-block">
-          <code>const ws = new WebSocket('ws://localhost:3100');<br><br>
-ws.onmessage = (event) => {<br>
-&nbsp;&nbsp;const data = JSON.parse(event.data);<br>
-&nbsp;&nbsp;console.log(data.type, data.event, data.data);<br>
-};</code>
-        </div>
-
-        <h3>Event Types</h3>
-        <ul>
-          <li><code>status</code> - Initial status when connected</li>
-          <li><code>event</code> - Agent events (thinking, action, observation, completed, error)</li>
-          <li><code>taskPushed</code> - Confirmation when pushing tasks via WebSocket</li>
-          <li><code>skillResult</code> - Result of skill execution</li>
-        </ul>
-
-        <h3>Sending Commands</h3>
-        <div class="code-block">
-          <code>// Push a task<br>
-ws.send(JSON.stringify({<br>
-&nbsp;&nbsp;action: 'pushTask',<br>
-&nbsp;&nbsp;payload: { task: 'Hello!', priority: 5 }<br>
-}));<br><br>
-// Execute a skill<br>
-ws.send(JSON.stringify({<br>
-&nbsp;&nbsp;action: 'executeSkill',<br>
-&nbsp;&nbsp;payload: { name: 'web_search', args: { query: 'news' } }<br>
-}));<br><br>
-// Get current status<br>
-ws.send(JSON.stringify({ action: 'getStatus' }));</code>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>Authentication</h2>
-        <p>By default, the gateway has no authentication. For production use, set an API key.</p>
-
-        <h3>Setting an API Key</h3>
-        <div class="code-block">
-          <code># Via command line<br>
-orcbot gateway -k your-secret-key<br><br>
-# Via TUI<br>
-orcbot ui → Web Gateway → Set API Key<br><br>
-# Via config file (orcbot.config.yaml)<br>
-gatewayApiKey: your-secret-key</code>
-        </div>
-
-        <h3>Using the API Key</h3>
-        <div class="code-block">
-          <code># In curl requests<br>
-curl -H "X-Api-Key: your-secret-key" http://localhost:3100/api/status<br><br>
-# Or as query parameter<br>
-curl http://localhost:3100/api/status?apiKey=your-secret-key</code>
-        </div>
-
-        <div class="warning">
-          <strong>⚠️ Security Note:</strong> If exposing the gateway to the internet, always use an API key 
-          and consider putting it behind a reverse proxy with HTTPS (nginx, Caddy, etc.).
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>Configuration Options</h2>
-        <p>Add these to your <code>orcbot.config.yaml</code>:</p>
-
-        <div class="code-block">
-          <code># Gateway settings<br>
-gatewayPort: 3100          # Port to listen on<br>
-gatewayHost: 0.0.0.0       # Host to bind (0.0.0.0 = all interfaces)<br>
-gatewayApiKey: secret      # Optional API key for authentication<br>
-gatewayCorsOrigins:        # Allowed CORS origins<br>
-&nbsp;&nbsp;- http://localhost:3000<br>
-&nbsp;&nbsp;- https://yourdomain.com</code>
-        </div>
-
-        <h3>TUI Configuration</h3>
-        <p>You can also configure the gateway from the TUI:</p>
-        <div class="code-block">
-          <code>orcbot ui → 🌐 Web Gateway</code>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>Building Custom Integrations</h2>
-        <p>The gateway makes it easy to integrate OrcBot with other tools:</p>
-
-        <div class="feature-grid">
-          <div class="feature-card">
-            <h4>📱 Mobile Apps</h4>
-            <p>Build iOS/Android apps that push tasks and monitor your agent.</p>
-          </div>
-          <div class="feature-card">
-            <h4>🔗 Webhooks</h4>
-            <p>Connect to Zapier, n8n, or custom webhooks to trigger tasks.</p>
-          </div>
-          <div class="feature-card">
-            <h4>📊 Custom Dashboards</h4>
-            <p>Build dashboards with React, Vue, or plain HTML/JS.</p>
-          </div>
-          <div class="feature-card">
-            <h4>🤖 Other Bots</h4>
-            <p>Let Discord/Slack bots push tasks to OrcBot.</p>
-          </div>
-        </div>
-
-        <h3>Example: Simple Task Pusher (HTML)</h3>
-        <div class="code-block">
-          <code>&lt;form onsubmit="pushTask(event)"&gt;<br>
-&nbsp;&nbsp;&lt;input type="text" id="task" placeholder="Task..."&gt;<br>
-&nbsp;&nbsp;&lt;button type="submit"&gt;Push&lt;/button&gt;<br>
-&lt;/form&gt;<br><br>
-&lt;script&gt;<br>
-async function pushTask(e) {<br>
-&nbsp;&nbsp;e.preventDefault();<br>
-&nbsp;&nbsp;const task = document.getElementById('task').value;<br>
-&nbsp;&nbsp;await fetch('http://localhost:3100/api/tasks', {<br>
-&nbsp;&nbsp;&nbsp;&nbsp;method: 'POST',<br>
-&nbsp;&nbsp;&nbsp;&nbsp;headers: { 'Content-Type': 'application/json' },<br>
-&nbsp;&nbsp;&nbsp;&nbsp;body: JSON.stringify({ task, priority: 5 })<br>
-&nbsp;&nbsp;});<br>
-&nbsp;&nbsp;alert('Task pushed!');<br>
-}<br>
-&lt;/script&gt;</code>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>Common Setups</h2>
-
-        <h3>Local Development</h3>
-        <div class="code-block">
-          <code># Terminal 1: Run agent<br>
-orcbot run<br><br>
-# Terminal 2: Run gateway<br>
-orcbot gateway -s ./apps/dashboard</code>
-        </div>
-
-        <h3>Production (Single Process)</h3>
-        <div class="code-block">
-          <code># Run both gateway and agent together<br>
-orcbot gateway --with-agent -k your-api-key -s ./apps/dashboard</code>
-        </div>
-
-        <h3>Production with systemd</h3>
-        <div class="code-block">
-          <code># /etc/systemd/system/orcbot-gateway.service<br>
-[Unit]<br>
-Description=OrcBot Web Gateway<br>
-After=network.target<br><br>
-[Service]<br>
-Type=simple<br>
-User=orcbot<br>
-WorkingDirectory=/home/orcbot/.orcbot<br>
-ExecStart=/usr/local/bin/orcbot gateway --with-agent -p 3100<br>
-Restart=always<br><br>
-[Install]<br>
-WantedBy=multi-user.target</code>
-        </div>
-
-        <h3>Behind Nginx (HTTPS)</h3>
-        <div class="code-block">
-          <code># /etc/nginx/sites-available/orcbot<br>
-server {<br>
-&nbsp;&nbsp;listen 443 ssl;<br>
-&nbsp;&nbsp;server_name orcbot.yourdomain.com;<br><br>
-&nbsp;&nbsp;ssl_certificate /etc/letsencrypt/live/...;<br>
-&nbsp;&nbsp;ssl_certificate_key /etc/letsencrypt/live/...;<br><br>
-&nbsp;&nbsp;location / {<br>
-&nbsp;&nbsp;&nbsp;&nbsp;proxy_pass http://localhost:3100;<br>
-&nbsp;&nbsp;&nbsp;&nbsp;proxy_http_version 1.1;<br>
-&nbsp;&nbsp;&nbsp;&nbsp;proxy_set_header Upgrade $http_upgrade;<br>
-&nbsp;&nbsp;&nbsp;&nbsp;proxy_set_header Connection "upgrade";<br>
-&nbsp;&nbsp;&nbsp;&nbsp;proxy_set_header Host $host;<br>
-&nbsp;&nbsp;}<br>
-}</code>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>Troubleshooting</h2>
-
-        <h3>Gateway won't start</h3>
-        <ul>
-          <li>Check if port 3100 is already in use: <code>lsof -i :3100</code></li>
-          <li>Try a different port: <code>orcbot gateway -p 8080</code></li>
-        </ul>
-
-        <h3>Can't connect from another device</h3>
-        <ul>
-          <li>Make sure your firewall allows port 3100</li>
-          <li>Use your server's IP address, not <code>localhost</code></li>
-          <li>Check that gateway is bound to <code>0.0.0.0</code>, not <code>127.0.0.1</code></li>
-        </ul>
-
-        <h3>401 Unauthorized</h3>
-        <ul>
-          <li>The gateway has an API key set—include it in your requests</li>
-          <li>Header: <code>X-Api-Key: your-key</code></li>
-        </ul>
-
-        <h3>CORS errors in browser</h3>
-        <ul>
-          <li>Add your origin to <code>gatewayCorsOrigins</code> in config</li>
-          <li>Or use <code>['*']</code> to allow all origins (not recommended for production)</li>
-        </ul>
-      </section>
+        </footer>
+      </div>
     </main>
-
-    <footer class="footer">
-      <div class="container">© 2026 OrcBot Project</div>
-    </footer>
-  </body>
+  </div>
+  <script>
+    const menuToggle = document.querySelector('.mobile-menu-toggle');
+    const sidebar = document.querySelector('.sidebar');
+    if (menuToggle) menuToggle.addEventListener('click', () => sidebar.classList.toggle('open'));
+  </script>
+</body>
 </html>

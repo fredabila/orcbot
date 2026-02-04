@@ -132,7 +132,9 @@ export class Agent {
             this.config.get('searchProviderOrder'),
             this.config.get('browserProfileDir'),
             this.config.get('browserProfileName'),
-            this.tuner // Pass tuner to browser
+            this.tuner, // Pass tuner to browser
+            this.config.get('browserEngine'),      // Browser engine: 'playwright' | 'lightpanda'
+            this.config.get('lightpandaEndpoint')  // Lightpanda CDP endpoint
         );
         this.workerProfile = new WorkerProfileManager();
         this.orchestrator = new AgentOrchestrator();
@@ -1320,6 +1322,57 @@ Output the fixed code:
                 const profileDir = args.profileDir || args.dir;
                 if (!profileName) return 'Error: Missing profileName.';
                 return this.browser.switchProfile(profileName, profileDir);
+            }
+        });
+
+        // Skill: Switch Browser Engine
+        this.skills.registerSkill({
+            name: 'switch_browser_engine',
+            description: 'Switch between browser engines: "playwright" (Chrome/Chromium via Playwright) or "lightpanda" (lightweight headless browser via CDP). Lightpanda uses 9x less RAM and is 11x faster than Chrome.',
+            usage: 'switch_browser_engine(engine, endpoint?)',
+            handler: async (args: any) => {
+                const engine = args.engine || args.browserEngine;
+                const endpoint = args.endpoint || args.lightpandaEndpoint;
+                
+                if (!engine) return 'Error: Missing engine. Use "playwright" or "lightpanda".';
+                if (engine !== 'playwright' && engine !== 'lightpanda') {
+                    return `Error: Invalid engine "${engine}". Use "playwright" or "lightpanda".`;
+                }
+                
+                // Update config
+                this.config.set('browserEngine', engine);
+                if (endpoint && engine === 'lightpanda') {
+                    this.config.set('lightpandaEndpoint', endpoint);
+                }
+                
+                // Close existing browser and reinitialize
+                await this.browser.close();
+                this.browser = new WebBrowser(
+                    this.config.get('serperApiKey'),
+                    this.config.get('captchaApiKey'),
+                    this.config.get('braveSearchApiKey'),
+                    this.config.get('searxngUrl'),
+                    this.config.get('searchProviderOrder'),
+                    this.config.get('browserProfileDir'),
+                    this.config.get('browserProfileName'),
+                    this.tuner,
+                    this.config.get('browserEngine'),
+                    this.config.get('lightpandaEndpoint')
+                );
+                
+                // Update skills context
+                this.skills.setContext({
+                    browser: this.browser,
+                    config: this.config,
+                    agent: this,
+                    logger: logger,
+                });
+                
+                if (engine === 'lightpanda') {
+                    const ep = this.config.get('lightpandaEndpoint') || 'ws://127.0.0.1:9222';
+                    return `Switched to Lightpanda browser engine. CDP endpoint: ${ep}. Make sure Lightpanda is running: ./lightpanda serve --host 127.0.0.1 --port 9222`;
+                }
+                return 'Switched to Playwright browser engine (Chrome/Chromium).';
             }
         });
 

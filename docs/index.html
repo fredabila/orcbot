@@ -1,108 +1,186 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>OrcBot Docs</title>
-    <link rel="stylesheet" href="assets/style.css" />
-  </head>
-  <body>
-    <header class="hero">
-      <div class="container">
-        <nav class="doc-nav">
-          <div class="logo">OrcBot Docs</div>
-          <div class="links">
-            <a href="index.html">Overview</a>
-            <a href="getting-started.html">Start</a>
-            <a href="configuration.html">Configuration</a>
-            <a href="gateway.html">Gateway</a>
-            <a href="skills.html">Skills</a>
-            <a href="autonomy.html">Autonomy</a>
-            <a href="operations.html">Operations</a>
-          </div>
-          <a class="nav-cta" href="https://github.com/fredabila/orcbot">GitHub</a>
-        </nav>
-        <div class="badge">OrcBot Docs</div>
-        <h1>Operate OrcBot with confidence.</h1>
-        <p class="lead">
-          Local-first autonomous AI agent with multi-agent orchestration, smart heartbeat, decision pipeline, and 4+ LLM providers.
-        </p>
-        <div class="cta">
-          <a class="primary" href="#getting-started">Get started</a>
-          <a class="secondary" href="#configuration">Configure OrcBot</a>
-        </div>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OrcBot Documentation</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <a href="index.html" class="sidebar-logo">
+          <div class="sidebar-logo-icon">🤖</div>
+          OrcBot
+        </a>
+        <span class="sidebar-version">v1.0.0</span>
       </div>
-    </header>
+      
+      <nav class="sidebar-nav">
+        <div class="nav-section">
+          <div class="nav-section-title">Getting Started</div>
+          <ul class="nav-links">
+            <li><a href="index.html" class="nav-link active"><span class="nav-link-icon">📚</span> Introduction</a></li>
+            <li><a href="getting-started.html" class="nav-link"><span class="nav-link-icon">🚀</span> Quick Start</a></li>
+            <li><a href="configuration.html" class="nav-link"><span class="nav-link-icon">⚙️</span> Configuration</a></li>
+          </ul>
+        </div>
+        
+        <div class="nav-section">
+          <div class="nav-section-title">Core Concepts</div>
+          <ul class="nav-links">
+            <li><a href="architecture.html" class="nav-link"><span class="nav-link-icon">🏗️</span> Architecture</a></li>
+            <li><a href="skills.html" class="nav-link"><span class="nav-link-icon">🧩</span> Skills & Plugins</a></li>
+            <li><a href="autonomy.html" class="nav-link"><span class="nav-link-icon">🤖</span> Autonomy</a></li>
+          </ul>
+        </div>
+        
+        <div class="nav-section">
+          <div class="nav-section-title">Features</div>
+          <ul class="nav-links">
+            <li><a href="gateway.html" class="nav-link"><span class="nav-link-icon">🌐</span> Web Gateway</a></li>
+            <li><a href="operations.html" class="nav-link"><span class="nav-link-icon">📊</span> Operations</a></li>
+          </ul>
+        </div>
+      </nav>
+      
+      <div class="sidebar-footer">
+        <a href="https://github.com/fredabila/orcbot" target="_blank">
+          <span>⭐</span> GitHub
+        </a>
+        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank">
+          <span>💬</span> Community
+        </a>
+      </div>
+    </aside>
 
-    <main class="container">
-      <section class="card">
-        <h2>Documentation map</h2>
-        <p>Use these dedicated pages to understand how OrcBot runs in production.</p>
-        <div class="grid">
-          <div class="card">
-            <h3>Getting started</h3>
-            <p>Install, build, and run OrcBot locally.</p>
-            <a class="text-link" href="getting-started.html">Read guide →</a>
+    <!-- Main Content -->
+    <main class="main-content">
+      <header class="content-header">
+        <button class="mobile-menu-toggle">☰</button>
+        <div class="breadcrumb">
+          <a href="index.html">Docs</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Introduction</span>
+        </div>
+        <div class="header-actions">
+          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank">
+            <span>⭐</span> Star on GitHub
+          </a>
+        </div>
+      </header>
+
+      <div class="page-content">
+        <!-- Hero -->
+        <div class="hero">
+          <h1 class="hero-title">OrcBot Documentation</h1>
+          <p class="hero-description">
+            Local-first autonomous AI agent with multi-agent orchestration, smart heartbeat, decision pipeline, and 4+ LLM providers.
+          </p>
+          <div class="hero-actions">
+            <a href="getting-started.html" class="btn btn-primary">Get Started →</a>
+            <a href="https://github.com/fredabila/orcbot" class="btn btn-secondary" target="_blank">View on GitHub</a>
           </div>
-          <div class="card">
+        </div>
+
+        <!-- Quick Links -->
+        <h2 style="margin-bottom: 20px;">Explore the docs</h2>
+        <div class="grid grid-auto">
+          <a href="getting-started.html" class="link-card">
+            <div class="link-card-icon">🚀</div>
+            <h3>Quick Start</h3>
+            <p>Install, build, and run OrcBot locally in minutes.</p>
+          </a>
+          
+          <a href="configuration.html" class="link-card">
+            <div class="link-card-icon">⚙️</div>
             <h3>Configuration</h3>
             <p>Priority order, keys, and runtime configuration via TUI.</p>
-            <a class="text-link" href="configuration.html">Read guide →</a>
-          </div>
-          <div class="card">
+          </a>
+          
+          <a href="architecture.html" class="link-card">
+            <div class="link-card-icon">🏗️</div>
             <h3>Architecture</h3>
             <p>Core system layout, data paths, and infra flow.</p>
-            <a class="text-link" href="architecture.html">Read guide →</a>
-          </div>
-          <div class="card">
-            <h3>Skills & plugins</h3>
+          </a>
+          
+          <a href="skills.html" class="link-card">
+            <div class="link-card-icon">🧩</div>
+            <h3>Skills & Plugins</h3>
             <p>Core skills, plugin system, and self-repair loop.</p>
-            <a class="text-link" href="skills.html">Read guide →</a>
-          </div>
-          <div class="card">
+          </a>
+          
+          <a href="gateway.html" class="link-card">
+            <div class="link-card-icon">🌐</div>
             <h3>Web Gateway</h3>
             <p>Remote management via REST API and WebSocket.</p>
-            <a class="text-link" href="gateway.html">Read guide →</a>
-          </div>
-          <div class="card">
+          </a>
+          
+          <a href="autonomy.html" class="link-card">
+            <div class="link-card-icon">🤖</div>
             <h3>Autonomy</h3>
             <p>Heartbeat scheduler, guardrails, and recovery.</p>
-            <a class="text-link" href="autonomy.html">Read guide →</a>
-          </div>
-          <div class="card">
+          </a>
+          
+          <a href="operations.html" class="link-card">
+            <div class="link-card-icon">📊</div>
             <h3>Operations</h3>
             <p>Observability, troubleshooting, and runbooks.</p>
-            <a class="text-link" href="operations.html">Read guide →</a>
+          </a>
+        </div>
+
+        <!-- Infrastructure Overview -->
+        <div class="card" style="margin-top: 40px;">
+          <h2>📦 Infrastructure Overview</h2>
+          <p>OrcBot is built with a modular architecture that enables flexible deployment and extensibility.</p>
+          
+          <pre><code>Channels (Telegram, WhatsApp, Discord, CLI)
+    ↓
+Agent Core (Decision Engine, Memory, Scheduler)
+    ↓
+Skills & Tools (Browser, File System, Search)
+    ↓
+Providers (OpenAI, Google, Bedrock, NVIDIA, OpenRouter)</code></pre>
+        </div>
+
+        <div class="grid grid-3" style="margin-top: 24px;">
+          <div class="card">
+            <h3>🔌 Channels</h3>
+            <p>Telegram, WhatsApp, and Discord supported out of the box. Add more in <code>src/channels</code>.</p>
+          </div>
+          
+          <div class="card">
+            <h3>🔍 Search Reliability</h3>
+            <p>Smart fallback: API providers first (Serper, Brave), then browser-based (DDG, Bing, Google).</p>
+          </div>
+          
+          <div class="card">
+            <h3>👥 Multi-Agent</h3>
+            <p>Spawn worker processes for parallel tasks. View in TUI: <code>orcbot ui</code> → Workers.</p>
           </div>
         </div>
-      </section>
-    </main>
-      <section class="card">
-        <h2>Infrastructure map</h2>
-        <div class="diagram">
-          <div>Channels → Agent Core → Skills & Tools → Providers</div>
-          <div class="diagram-note">Telegram / WhatsApp / CLI • LLMs • Search providers • Storage</div>
-        </div>
-      </section>
 
-      <section class="grid">
-        <div class="card">
-          <h3>Channels</h3>
-          <p>Telegram and WhatsApp are supported out of the box. Add more in <code>src/channels</code>.</p>
-        </div>
-        <div class="card">
-          <h3>Search reliability</h3>
-          <p>Smart fallback: API providers first (Serper, Brave), then browser-based (DDG, Bing, Google).</p>
-        </div>
-        <div class="card">
-          <h3>Multi-Agent</h3>
-          <p>Spawn worker processes for parallel tasks. View in TUI: <code>orcbot ui</code> → Workers.</p>
-        </div>
-      </section>
+        <!-- Footer -->
+        <footer class="page-footer">
+          <span>© 2026 OrcBot Project</span>
+          <div class="footer-nav">
+            <a href="https://github.com/fredabila/orcbot">GitHub</a>
+            <a href="https://github.com/fredabila/orcbot/discussions">Community</a>
+          </div>
+        </footer>
+      </div>
     </main>
+  </div>
 
-    <footer class="footer">
-      <div class="container">© 2026 OrcBot Project</div>
-    </footer>
-  </body>
+  <script>
+    // Mobile menu toggle
+    const menuToggle = document.querySelector('.mobile-menu-toggle');
+    const sidebar = document.querySelector('.sidebar');
+    if (menuToggle) {
+      menuToggle.addEventListener('click', () => sidebar.classList.toggle('open'));
+    }
+  </script>
+</body>
 </html>
