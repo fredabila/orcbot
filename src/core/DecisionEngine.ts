@@ -86,12 +86,12 @@ STRATEGIC REASONING PROTOCOLS:
     - IMPORTANT: If you include tools[] AND set goals_met: true, the tools will run and THEN the action terminates. This is the correct pattern for "send this message and we're done".
      - If goals_met is false, you MUST include at least one tool to make progress (or request clarification with request_supporting_data).
 3.  **Step-1 Mandatory Interaction**: If this is a NEW request (\`messagesSent: 0\`), you MUST provide a response in Step 1. Do NOT stay silent.
-    - **SOCIAL FINALITY**: If the user says "Hi", "Hello", or "How are you?", respond naturally and **terminate immediately** (\`goals_met: true\` with send_telegram/send_whatsapp) in Step 1. Do not look for additional work or research their profile unless specifically asked.
+    - **SOCIAL FINALITY**: If the user says "Hi", "Hello", or "How are you?", respond naturally and **terminate immediately** (\`goals_met: true\` with send_telegram/send_whatsapp/send_discord) in Step 1. Do not look for additional work or research their profile unless specifically asked.
 4.  **Step-2+ Purpose (RESULTS ONLY)**: If \`messagesSent > 0\`, do NOT send another message unless you have gathered NEW, CRITICAL information or reached a 15-step milestone in a long process.
 5.  **Prohibiting Repetitive Greetings**: If you have already greeted the user or offered help in Step 1, do NOT repeat that offer in Step 2+. If no new data was found, terminate immediately (\`goals_met: true\` with NO tools).
 6.  **Single-Turn Finality**: For social fluff, simple updates, or when all required info is already available, complete ALL actions and send the final response in Step 1. Do NOT wait until Step 2 to respond if you have the answer now.
 7.  **MANDATORY TERMINATION CHECK (ANTI-LOOP)**: Before outputting any tools, **READ THE 'Recent Conversation History'**. 
-    - If you see a \`send_telegram\` or \`send_whatsapp\` observation that already contains the final answer/result, you MUST set \`goals_met: true\` with NO tools and STOP. 
+    - If you see a \`send_telegram\`, \`send_whatsapp\`, or \`send_discord\` observation that already contains the final answer/result, you MUST set \`goals_met: true\` with NO tools and STOP. 
     - Do NOT repeat the message "just to be sure" or because "the user might have missed it". 
     - If your Reasoning says "I will re-send just in case", YOU ARE ALREADY IN A LOOP. BREAK IT.
 8.  **Progress Over Reflection**: Do not loop just to "reflect" in your journal or update learning. 
@@ -99,7 +99,7 @@ STRATEGIC REASONING PROTOCOLS:
     - If you cannot make objective progress, inform the user and stop. Do NOT stay in a loop just updating metadata.
 9.  **Interactive Clarification**: If a task CANNOT be safely or fully completed due to missing details, you MUST use the \`request_supporting_data\` skill. 
     - Execution will PAUSE until the user provides the answer. Do NOT guess or hallucinate missing data.
-    - IMPORTANT: If you ask a question via send_telegram/send_whatsapp, the system will AUTO-PAUSE and wait for user response. DO NOT continue working after asking a question.
+    - IMPORTANT: If you ask a question via send_telegram/send_whatsapp/send_discord, the system will AUTO-PAUSE and wait for user response. DO NOT continue working after asking a question.
     - After asking a clarifying question, set goals_met: true to terminate. The user's reply will create a NEW action.
 10. **User Correction Override**: If the user's NEW message provides corrective information (e.g., a new password after a failed login, a corrected URL, updated credentials), this is a RETRY TRIGGER. You MUST attempt the action AGAIN with the new data, even if you previously failed. The goal is always to SUCCEED, not just to try once and give up.
 11. **WAITING STATE AWARENESS**: Check memory for "[SYSTEM: Sent question to user. WAITING for response]" entries.
@@ -118,7 +118,7 @@ DYNAMIC COMMUNICATION INTELLIGENCE:
 - **Logical Finality**: Once the goal is reached (e.g., results found and sent), provide a final comprehensive report IF NOT SENT ALREADY, and terminate immediately.
 - **No Redundancy**: Do not send "Acknowledgment" messages if you are about to provide the result in the same step. Do NOT send "Consolidated" summaries of information you just sent in the previous step.
 - **Status Presence**: If you are in the middle of a multi-step task (e.g., downloading a large file, scanning multiple pages), providing a progress update is encouraged once every ~15 steps to keep the user in the loop.
-- **Sent Message Awareness**: BEFORE you send any message to the user (via any channel skill like \`send_telegram\`, \`send_whatsapp\`, etc.), READ the 'Recent Conversation History'. If you see ANY message observation confirming successful delivery of the requested info, DO NOT send another message.
+- **Sent Message Awareness**: BEFORE you send any message to the user (via any channel skill like \`send_telegram\`, \`send_whatsapp\`, \`send_discord\`, etc.), READ the 'Recent Conversation History'. If you see ANY message observation confirming successful delivery of the requested info, DO NOT send another message.
 
 HUMAN-LIKE COLLABORATION:
 - Combined multiple confirmations into one natural response.
@@ -176,6 +176,13 @@ ACTIVE CHANNEL CONTEXT:
 - Rule: To message this user, you MUST use the "send_whatsapp" skill.
 ${contactProfile ? `\nCONTACT PROFILE (Learned Knowledge):\n${contactProfile}\n` : ''}
 ${profilingEnabled && !contactProfile ? '\n- Task: I don\'t have a profile for this contact yet. Use \'update_contact_profile\' if you learn important facts about them.\n' : ''}
+`;
+        } else if (metadata.source === 'discord') {
+            channelInstructions = `
+ACTIVE CHANNEL CONTEXT:
+- Channel: Discord
+- Channel ID: "${metadata.sourceId}" (User: ${metadata.senderName})
+- Rule: To message this user, you MUST use the "send_discord" skill with channel_id="${metadata.sourceId}".
 `;
         }
 

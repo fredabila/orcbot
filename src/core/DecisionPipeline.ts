@@ -169,7 +169,7 @@ export class DecisionPipeline {
         let lastSendIndex = -1;
         for (let i = actionMemories.length - 1; i >= 0; i--) {
             const tool = actionMemories[i].metadata?.tool;
-            if (tool === 'send_telegram' || tool === 'send_whatsapp') {
+            if (tool === 'send_telegram' || tool === 'send_whatsapp' || tool === 'send_discord') {
                 lastSendIndex = i;
                 break;
             }
@@ -179,7 +179,7 @@ export class DecisionPipeline {
 
         for (let i = lastSendIndex + 1; i < actionMemories.length; i++) {
             const tool = actionMemories[i].metadata?.tool;
-            if (tool && tool !== 'send_telegram' && tool !== 'send_whatsapp') {
+            if (tool && tool !== 'send_telegram' && tool !== 'send_whatsapp' && tool !== 'send_discord') {
                 return true;
             }
         }
@@ -343,7 +343,7 @@ export class DecisionPipeline {
                 }
             }
 
-            const isSend = tool.name === 'send_telegram' || tool.name === 'send_whatsapp';
+            const isSend = tool.name === 'send_telegram' || tool.name === 'send_whatsapp' || tool.name === 'send_discord';
             if (!isSend) {
                 filteredTools.push(tool);
                 continue;
