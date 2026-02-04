@@ -21,18 +21,68 @@ Register a new polling job to check a condition periodically.
 **Parameters:**
 - `job_id` (string): Unique identifier for the job
 - `description` (string): Human-readable description
+- `condition_type` (string): Type of condition to check (see below)
+- `condition_params` (object): Parameters specific to the condition type
 - `interval_ms` (number): Polling interval in milliseconds (default: 5000)
 - `max_attempts` (number, optional): Maximum number of attempts before failing
 
-**Example:**
+**Supported Condition Types:**
+1. **file_exists** - Checks if a file exists at a path
+   - Parameters: `path` or `file_path` (string)
+2. **memory_contains** - Searches recent memories for text
+   - Parameters: `text` or `search` (string)
+3. **task_status** - Checks if a task has reached a specific status
+   - Parameters: `task_id` or `id` (string), `status` (string, default: "completed")
+4. **custom_check** - Looks for custom check results in memory (format: "key:true")
+   - Parameters: `check_key` or `key` (string)
+
+**Example (file_exists):**
 ```json
 {
   "skill": "register_polling_job",
   "args": {
-    "job_id": "check_email_response",
-    "description": "Wait for email response from client",
+    "job_id": "wait_for_report",
+    "description": "Wait for report file to be created",
+    "condition_type": "file_exists",
+    "condition_params": {
+      "path": "/path/to/report.pdf"
+    },
+    "interval_ms": 5000,
+    "max_attempts": 20
+  }
+}
+```
+
+**Example (memory_contains):**
+```json
+{
+  "skill": "register_polling_job",
+  "args": {
+    "job_id": "wait_for_approval",
+    "description": "Wait for approval message",
+    "condition_type": "memory_contains",
+    "condition_params": {
+      "text": "approved"
+    },
     "interval_ms": 10000,
     "max_attempts": 30
+  }
+}
+```
+
+**Example (task_status):**
+```json
+{
+  "skill": "register_polling_job",
+  "args": {
+    "job_id": "wait_for_task",
+    "description": "Wait for background task completion",
+    "condition_type": "task_status",
+    "condition_params": {
+      "task_id": "background-task-123",
+      "status": "completed"
+    },
+    "interval_ms": 3000
   }
 }
 ```
@@ -280,13 +330,35 @@ The Discord channel integrates with OrcBot's core features:
   "args": {
     "job_id": "wait_for_upload",
     "description": "Wait for user to upload report file",
+    "condition_type": "file_exists",
+    "condition_params": {
+      "path": "/home/user/uploads/report.pdf"
+    },
     "interval_ms": 5000,
     "max_attempts": 60
   }
 }
 ```
 
-### Example 2: Send Discord Notification
+### Example 2: Wait for Approval in Memory
+
+```json
+{
+  "skill": "register_polling_job",
+  "args": {
+    "job_id": "wait_for_approval",
+    "description": "Wait for manager approval message",
+    "condition_type": "memory_contains",
+    "condition_params": {
+      "text": "APPROVED"
+    },
+    "interval_ms": 10000,
+    "max_attempts": 30
+  }
+}
+```
+
+### Example 3: Send Discord Notification
 
 ```json
 {
@@ -298,7 +370,7 @@ The Discord channel integrates with OrcBot's core features:
 }
 ```
 
-### Example 3: List Discord Channels and Send Message
+### Example 4: List Discord Channels and Send Message
 
 ```json
 [
