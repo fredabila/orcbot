@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, Message, Partials, AttachmentBuilder } from 'discord.js';
+import { Client, GatewayIntentBits, Message, Partials, AttachmentBuilder, TextBasedChannel } from 'discord.js';
 import { IChannel } from './IChannel';
 import { logger } from '../utils/logger';
 import fs from 'fs';
@@ -61,6 +61,13 @@ export class DiscordChannel implements IChannel {
         });
     }
 
+    private isSendableChannel(channel: TextBasedChannel): channel is TextBasedChannel & {
+        send: (...args: any[]) => Promise<any>;
+        sendTyping: () => Promise<any>;
+    } {
+        return typeof (channel as any).send === 'function' && typeof (channel as any).sendTyping === 'function';
+    }
+
     private async handleIncomingMessage(message: Message): Promise<void> {
         // Ignore bot's own messages
         if (message.author.bot) return;
@@ -71,7 +78,9 @@ export class DiscordChannel implements IChannel {
         const content = message.content;
         const messageId = message.id;
         const guildId = message.guildId;
-        const channelName = message.channel instanceof TextChannel ? message.channel.name : 'DM';
+        const channelName = message.channel.isDMBased()
+            ? 'DM'
+            : ('name' in message.channel ? message.channel.name : 'Unknown');
 
         logger.info(`Discord message from ${username} (${userId}) in ${channelName}: ${content.substring(0, 100)}`);
 
@@ -157,20 +166,25 @@ export class DiscordChannel implements IChannel {
         try {
             // 'to' should be a channel ID
             const channel = await this.client.channels.fetch(to);
-            
+
             if (!channel || !channel.isTextBased()) {
                 throw new Error(`Channel ${to} not found or not text-based`);
+            }
+
+            const textChannel = channel as TextBasedChannel;
+            if (!this.isSendableChannel(textChannel)) {
+                throw new Error(`Channel ${to} does not support sending messages`);
             }
 
             // Discord has a 2000 character limit, split if necessary
             const maxLength = 2000;
             if (message.length <= maxLength) {
-                await channel.send(message);
+                await textChannel.send(message);
             } else {
                 // Split into chunks
                 const chunks = this.splitMessage(message, maxLength);
                 for (const chunk of chunks) {
-                    await channel.send(chunk);
+                    await textChannel.send(chunk);
                     // Small delay to avoid rate limiting
                     await this.delay(500);
                 }
@@ -190,9 +204,14 @@ export class DiscordChannel implements IChannel {
 
         try {
             const channel = await this.client.channels.fetch(to);
-            
+
             if (!channel || !channel.isTextBased()) {
                 throw new Error(`Channel ${to} not found or not text-based`);
+            }
+
+            const textChannel = channel as TextBasedChannel;
+            if (!this.isSendableChannel(textChannel)) {
+                throw new Error(`Channel ${to} does not support sending messages`);
             }
 
             if (!fs.existsSync(filePath)) {
@@ -201,7 +220,7 @@ export class DiscordChannel implements IChannel {
 
             const attachment = new AttachmentBuilder(filePath);
             
-            await channel.send({
+            await textChannel.send({
                 content: caption || undefined,
                 files: [attachment]
             });
@@ -220,9 +239,12 @@ export class DiscordChannel implements IChannel {
 
         try {
             const channel = await this.client.channels.fetch(to);
-            
+
             if (channel && channel.isTextBased()) {
-                await channel.sendTyping();
+                const textChannel = channel as TextBasedChannel;
+                if (this.isSendableChannel(textChannel)) {
+                    await textChannel.sendTyping();
+                }
             }
         } catch (error: any) {
             logger.error(`Failed to send Discord typing indicator: ${error.message}`);

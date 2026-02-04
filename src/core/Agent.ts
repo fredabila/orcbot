@@ -2312,7 +2312,7 @@ Be thorough and academic.`;
                             return 'Error: task_status condition requires task_id parameter';
                         }
                         checkFn = async () => {
-                            const action = this.actionQueue.getAction(taskId);
+                            const action = this.actionQueue.getQueue().find(a => a.id === taskId);
                             return action ? action.status === expectedStatus : false;
                         };
                         break;

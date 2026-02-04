@@ -92,4 +92,9 @@ export class ActionQueue {
     public getQueue() {
         return this.readQueue();
     }
+
+    public getAction(id: string): Action | undefined {
+        const queue = this.readQueue();
+        return queue.find(action => action.id === id);
+    }
 }
