@@ -126,7 +126,14 @@ export class DiscordChannel implements IChannel {
 
         // Auto-reply if enabled
         if (this.autoReplyEnabled) {
-            const priority = guildId ? 6 : 8; // Higher priority for DMs
+            // Send typing indicator immediately for user feedback
+            try {
+                await this.sendTypingIndicator(channelId);
+            } catch (e) {
+                // Ignore typing indicator errors
+            }
+
+            const priority = 10; // High priority for user messages (same as Telegram)
             await this.agent.pushTask(
                 `Respond to Discord message from ${username} in ${channelName}: "${content}"`,
                 priority,
