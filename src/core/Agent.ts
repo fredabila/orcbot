@@ -3362,18 +3362,24 @@ Respond with a single actionable task description (one sentence):`;
         this.scheduler.start();
         this.pollingManager.start();
 
-        const startupPromises: Promise<void>[] = [];
+        const startupTasks: Array<{ name: string; promise: Promise<void> }> = [];
         if (this.telegram) {
-            startupPromises.push(this.telegram.start());
+            startupTasks.push({ name: 'telegram', promise: this.telegram.start() });
         }
         if (this.whatsapp) {
-            startupPromises.push(this.whatsapp.start());
+            startupTasks.push({ name: 'whatsapp', promise: this.whatsapp.start() });
         }
         if (this.discord) {
-            startupPromises.push(this.discord.start());
+            startupTasks.push({ name: 'discord', promise: this.discord.start() });
         }
 
-        await Promise.all(startupPromises);
+        const results = await Promise.allSettled(startupTasks.map(t => t.promise));
+        results.forEach((result, index) => {
+            if (result.status === 'rejected') {
+                const name = startupTasks[index]?.name || 'unknown';
+                logger.error(`Agent: Failed to start ${name} channel: ${result.reason?.message || result.reason}`);
+            }
+        });
         await this.runPluginHealthCheck('startup');
         logger.info('Agent: All channels initialized');
     }
