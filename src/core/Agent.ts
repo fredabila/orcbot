@@ -2260,11 +2260,13 @@ Be thorough and academic.`;
         // Skill: Register Polling Job
         this.skills.registerSkill({
             name: 'register_polling_job',
-            description: 'Register a polling job to check a condition periodically instead of busy-waiting in loops',
-            usage: 'register_polling_job(job_id, description, check_condition, interval_ms, max_attempts?)',
+            description: 'Register a polling job to check a condition periodically. Supports condition types: file_exists, memory_contains, task_status, custom_check',
+            usage: 'register_polling_job(job_id, description, condition_type, condition_params, interval_ms, max_attempts?)',
             handler: async (args: any) => {
                 const jobId = args.job_id || args.id;
                 const description = args.description;
+                const conditionType = args.condition_type || args.type;
+                const conditionParams = args.condition_params || args.params || {};
                 const intervalMs = parseInt(args.interval_ms || args.interval || '5000', 10);
                 const maxAttempts = args.max_attempts ? parseInt(args.max_attempts, 10) : undefined;
 
@@ -2272,17 +2274,73 @@ Be thorough and academic.`;
                     return 'Error: Missing job_id or description';
                 }
 
-                // Note: The check_condition would need to be implemented based on the use case
-                // For now, we'll provide a basic example that can be extended
+                if (!conditionType) {
+                    return 'Error: Missing condition_type. Supported types: file_exists, memory_contains, task_status, custom_check';
+                }
+
+                // Create the check function based on condition type
+                let checkFn: () => Promise<boolean>;
+
+                switch (conditionType) {
+                    case 'file_exists':
+                        const filePath = conditionParams.path || conditionParams.file_path;
+                        if (!filePath) {
+                            return 'Error: file_exists condition requires path parameter';
+                        }
+                        checkFn = async () => {
+                            return fs.existsSync(filePath);
+                        };
+                        break;
+
+                    case 'memory_contains':
+                        const searchText = conditionParams.text || conditionParams.search;
+                        if (!searchText) {
+                            return 'Error: memory_contains condition requires text parameter';
+                        }
+                        checkFn = async () => {
+                            const recentMemories = this.memory.getRecentContext(10);
+                            return recentMemories.some(m => 
+                                m.content.toLowerCase().includes(searchText.toLowerCase())
+                            );
+                        };
+                        break;
+
+                    case 'task_status':
+                        const taskId = conditionParams.task_id || conditionParams.id;
+                        const expectedStatus = conditionParams.status || 'completed';
+                        if (!taskId) {
+                            return 'Error: task_status condition requires task_id parameter';
+                        }
+                        checkFn = async () => {
+                            const action = this.actionQueue.getAction(taskId);
+                            return action ? action.status === expectedStatus : false;
+                        };
+                        break;
+
+                    case 'custom_check':
+                        // For custom checks, look for a stored condition in memory
+                        const checkKey = conditionParams.check_key || conditionParams.key;
+                        if (!checkKey) {
+                            return 'Error: custom_check condition requires check_key parameter';
+                        }
+                        checkFn = async () => {
+                            // Look for a custom check result in memory
+                            const memories = this.memory.getRecentContext(5);
+                            return memories.some(m => 
+                                m.content.includes(`${checkKey}:true`) || 
+                                m.content.includes(`${checkKey}: true`)
+                            );
+                        };
+                        break;
+
+                    default:
+                        return `Error: Unknown condition_type '${conditionType}'. Supported: file_exists, memory_contains, task_status, custom_check`;
+                }
+
                 this.pollingManager.registerJob({
                     id: jobId,
                     description: description,
-                    checkFn: async () => {
-                        // This is a placeholder - in real usage, agents would provide
-                        // the condition logic or reference a stored condition
-                        logger.debug(`Polling job ${jobId}: Checking condition...`);
-                        return false; // Override this in actual implementations
-                    },
+                    checkFn,
                     intervalMs,
                     maxAttempts,
                     onSuccess: (id: string) => {
@@ -2293,7 +2351,7 @@ Be thorough and academic.`;
                     }
                 });
 
-                return `Polling job '${jobId}' registered with ${intervalMs}ms interval`;
+                return `Polling job '${jobId}' registered with ${intervalMs}ms interval (condition: ${conditionType})`;
             }
         });
 

@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, Message, TextChannel, Partials, AttachmentBuilder } from 'discord.js';
+import { Client, GatewayIntentBits, Message, Partials, AttachmentBuilder, BaseChannel } from 'discord.js';
 import { IChannel } from './IChannel';
 import { logger } from '../utils/logger';
 import fs from 'fs';
@@ -165,12 +165,12 @@ export class DiscordChannel implements IChannel {
             // Discord has a 2000 character limit, split if necessary
             const maxLength = 2000;
             if (message.length <= maxLength) {
-                await (channel as TextChannel).send(message);
+                await channel.send(message);
             } else {
                 // Split into chunks
                 const chunks = this.splitMessage(message, maxLength);
                 for (const chunk of chunks) {
-                    await (channel as TextChannel).send(chunk);
+                    await channel.send(chunk);
                     // Small delay to avoid rate limiting
                     await this.delay(500);
                 }
@@ -201,7 +201,7 @@ export class DiscordChannel implements IChannel {
 
             const attachment = new AttachmentBuilder(filePath);
             
-            await (channel as TextChannel).send({
+            await channel.send({
                 content: caption || undefined,
                 files: [attachment]
             });
@@ -222,7 +222,7 @@ export class DiscordChannel implements IChannel {
             const channel = await this.client.channels.fetch(to);
             
             if (channel && channel.isTextBased()) {
-                await (channel as TextChannel).sendTyping();
+                await channel.sendTyping();
             }
         } catch (error: any) {
             logger.error(`Failed to send Discord typing indicator: ${error.message}`);

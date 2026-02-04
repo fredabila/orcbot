@@ -13,7 +13,6 @@
 async function main() {
     const { Agent } = require('./dist/core/Agent.js');
     const { PollingManager } = require('./dist/core/PollingManager.js');
-    const { DiscordChannel } = require('./dist/channels/DiscordChannel.js');
 
     console.log('🧪 Running Integration Verification\n');
     console.log('='.repeat(50));

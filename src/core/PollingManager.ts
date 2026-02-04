@@ -74,8 +74,16 @@ export class PollingManager {
 
         logger.info(`PollingManager: Registering job "${job.id}" with interval ${job.intervalMs}ms`);
 
-        let attempts = 0;
         const startedAt = Date.now();
+
+        // Store job data first so we can update attempts in place
+        const jobData = {
+            job,
+            interval: null as any,
+            attempts: 0,
+            startedAt
+        };
+        this.jobs.set(job.id, jobData);
 
         const interval = setInterval(async () => {
             if (!this.isRunning) {
@@ -83,7 +91,13 @@ export class PollingManager {
                 return;
             }
 
-            attempts++;
+            // Get current job data and increment attempts
+            const currentJobData = this.jobs.get(job.id);
+            if (!currentJobData) return;
+            
+            currentJobData.attempts++;
+            const attempts = currentJobData.attempts;
+            
             logger.debug(`PollingManager: Job "${job.id}" - attempt ${attempts}`);
 
             // Emit progress event
@@ -154,12 +168,8 @@ export class PollingManager {
             }
         }, job.intervalMs);
 
-        this.jobs.set(job.id, {
-            job,
-            interval,
-            attempts,
-            startedAt
-        });
+        // Update with the actual interval
+        jobData.interval = interval;
 
         eventBus.emit('polling:registered', { 
             jobId: job.id, 
