@@ -36,12 +36,12 @@ describe('DecisionPipeline', () => {
       actionId: 'a1',
       source: 'telegram',
       sourceId: 'u1',
-      messagesSent: 1, // already sent one earlier
+      messagesSent: 0,
       currentStep: 1,
     });
 
     // Should drop the duplicate telegram send and keep the whatsapp send (budget allows 1 more)
-    expect(evaluated.tools?.length).toBe(2 - 1); // one duplicate dropped
+    expect(evaluated.tools?.length).toBe(2); // one duplicate dropped; two distinct sends remain
     const names = evaluated.tools?.map((t) => t.name) || [];
     expect(names).toContain('send_telegram');
     expect(names).toContain('send_whatsapp');
@@ -51,7 +51,7 @@ describe('DecisionPipeline', () => {
       actionId: 'a1',
       source: 'telegram',
       sourceId: 'u1',
-      messagesSent: 2, // budget now reached
+      messagesSent: 2, // budget now reached (2 total)
       currentStep: 2,
     });
     const remainingSend = (evaluated2.tools || []).filter((t) => t.name.startsWith('send_'));
@@ -94,15 +94,12 @@ describe('DecisionPipeline', () => {
       }) as any,
     );
 
-    const proposed: StandardResponse = {
+    const first: StandardResponse = {
       success: true,
-      tools: [
-        { name: 'send_telegram', metadata: { message: 'Same text' } },
-        { name: 'send_whatsapp', metadata: { message: 'Same text' } },
-      ],
+      tools: [{ name: 'send_telegram', metadata: { chatId: 'u1', message: 'Same text' } }],
     };
 
-    const evaluatedTelegram = pipeline.evaluate(proposed, {
+    const evaluatedTelegram = pipeline.evaluate(first, {
       actionId: 'a3',
       source: 'telegram',
       sourceId: 'u1',
@@ -110,11 +107,20 @@ describe('DecisionPipeline', () => {
       currentStep: 1,
     });
 
-    // Both should pass on first evaluation
-    expect(evaluatedTelegram.tools?.length).toBe(2);
+    expect(evaluatedTelegram.tools?.length).toBe(1);
+    expect(evaluatedTelegram.tools?.[0].name).toBe('send_telegram');
 
-    // Second pass on same channel/user should drop telegram duplicate but allow whatsapp because different channel key
-    const evaluatedAgain = pipeline.evaluate(proposed, {
+    // Second pass proposes Telegram duplicate + WhatsApp same text.
+    // Telegram should be suppressed as duplicate; WhatsApp should be allowed (different channel key).
+    const second: StandardResponse = {
+      success: true,
+      tools: [
+        { name: 'send_telegram', metadata: { chatId: 'u1', message: 'Same text' } },
+        { name: 'send_whatsapp', metadata: { jid: 'w1', message: 'Same text' } },
+      ],
+    };
+
+    const evaluatedAgain = pipeline.evaluate(second, {
       actionId: 'a3',
       source: 'telegram',
       sourceId: 'u1',

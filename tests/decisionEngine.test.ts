@@ -167,3 +167,90 @@ describe('DecisionEngine - System Prompt Persistence', () => {
     expect(llmCalls[1].systemMessage).toContain(testIdentity);
   });
 });
+
+describe('DecisionEngine - Thread Context Grounding', () => {
+  it('should include same-chat user+assistant memories and filter tool noise', async () => {
+    const llmCalls: Array<{ prompt: string; systemMessage?: string }> = [];
+
+    const mockLLM = {
+      call: vi.fn(async (prompt: string, systemMessage?: string) => {
+        llmCalls.push({ prompt, systemMessage });
+        return JSON.stringify({
+          verification: { goals_met: true, analysis: 'Done' },
+          tools: []
+        });
+      })
+    } as any;
+
+    const mockMemory = {
+      getUserContext: () => ({ raw: 'Test user context' }),
+      getRecentContext: () => [],
+      getContactProfile: () => null,
+      searchMemory: (type: 'short' | 'long' | 'episodic') => {
+        if (type !== 'short') return [];
+        return [
+          {
+            id: 'tg-1',
+            type: 'short',
+            content: 'User Alice (Telegram 999) said: I spoke with Frederick yesterday.',
+            timestamp: '2026-02-05T10:00:00.000Z',
+            metadata: { source: 'telegram', role: 'user', chatId: '12345', userId: '999' }
+          },
+          {
+            id: 'tg-out-1',
+            type: 'short',
+            content: 'Assistant sent Telegram message to 12345: Frederick is the contact we were discussing.',
+            timestamp: '2026-02-05T10:01:00.000Z',
+            metadata: { source: 'telegram', role: 'assistant', chatId: '12345' }
+          },
+          {
+            id: 'noise-1',
+            type: 'short',
+            content: 'Observation: Tool web_search returned: "..."',
+            timestamp: '2026-02-05T10:02:00.000Z',
+            metadata: { source: 'telegram', tool: 'web_search' }
+          }
+        ];
+      }
+    } as any;
+
+    const mockSkills = {
+      getSkillsPrompt: () => 'Available Skills:\n- send_telegram',
+      getAllSkills: () => [{ name: 'send_telegram' }]
+    } as any;
+
+    const mockConfig = {
+      get: () => undefined
+    } as any;
+
+    const engine = new DecisionEngine(
+      mockMemory,
+      mockLLM,
+      mockSkills,
+      '/tmp/journal.md',
+      '/tmp/learning.md',
+      mockConfig
+    );
+
+    await engine.decide({
+      id: 'action-1',
+      payload: {
+        description: 'Ask him what time he is free',
+        messagesSent: 0,
+        currentStep: 1,
+        executionPlan: 'Respond',
+        source: 'telegram',
+        sourceId: '12345',
+        chatId: '12345',
+        userId: '999',
+        senderName: 'Alice'
+      }
+    });
+
+    expect(llmCalls.length).toBe(2);
+    const systemPrompt = llmCalls[0].systemMessage || '';
+    expect(systemPrompt).toContain('THREAD CONTEXT (Same Chat)');
+    expect(systemPrompt).toContain('Frederick');
+    expect(systemPrompt).not.toContain('Observation: Tool web_search returned');
+  });
+});

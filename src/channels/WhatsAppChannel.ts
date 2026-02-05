@@ -284,6 +284,7 @@ export class WhatsAppChannel implements IChannel {
                             timestamp: new Date().toISOString(),
                             metadata: { 
                                 source: 'whatsapp', 
+                                role: 'user',
                                 messageId, 
                                 senderId, 
                                 senderName,

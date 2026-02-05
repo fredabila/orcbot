@@ -9,7 +9,7 @@ export interface Action {
     payload: any;
     priority: number;
     lane?: 'user' | 'autonomy';
-    status: 'pending' | 'in-progress' | 'completed' | 'failed';
+    status: 'pending' | 'waiting' | 'in-progress' | 'completed' | 'failed';
     timestamp: string;
     updatedAt?: string;
 }

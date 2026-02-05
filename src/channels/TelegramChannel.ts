@@ -34,6 +34,7 @@ export class TelegramChannel implements IChannel {
         this.bot.on(['text', 'photo', 'document', 'audio', 'voice', 'video'], async (ctx) => {
             const message = ctx.message as any;
             const userId = ctx.from.id.toString();
+            const chatId = (ctx.chat?.id != null ? ctx.chat.id.toString() : userId);
             const userName = ctx.from.first_name;
             const autoReplyEnabled = this.agent.config.get('telegramAutoReplyEnabled');
 
@@ -98,7 +99,9 @@ export class TelegramChannel implements IChannel {
                 timestamp: new Date().toISOString(),
                 metadata: { 
                     source: 'telegram', 
+                    role: 'user',
                     messageId: message.message_id, 
+                    chatId,
                     userId, 
                     userName, 
                     mediaPath,
@@ -122,8 +125,11 @@ export class TelegramChannel implements IChannel {
                 10,
                 {
                     source: 'telegram',
-                    sourceId: userId,
+                    // Use chatId as sourceId so replies go to the same chat (DM or group).
+                    sourceId: chatId,
                     senderName: userName,
+                    chatId,
+                    userId,
                     messageId: message.message_id,  // For deduplication
                     mediaPath,
                     replyToMessageId,
@@ -195,6 +201,7 @@ export class TelegramChannel implements IChannel {
             }
         } catch (error) {
             logger.error(`TelegramChannel: Error sending message to ${to}: ${error}`);
+            throw error;
         }
     }
 

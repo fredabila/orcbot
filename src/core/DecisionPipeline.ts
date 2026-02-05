@@ -154,6 +154,8 @@ export class DecisionPipeline {
     }
 
     private hasNonSendToolSinceLastSend(ctx: PipelineContext): boolean {
+        if (!ctx.recentMemories) return false;
+
         const memories = ctx.recentMemories || [];
         const actionPrefix = `${ctx.actionId}-step-`;
         const actionMemories = memories
@@ -164,7 +166,8 @@ export class DecisionPipeline {
                 return ta - tb;
             });
 
-        if (actionMemories.length === 0) return true;
+    // If we have no recorded tool activity, do not assume there is new information.
+    if (actionMemories.length === 0) return false;
 
         let lastSendIndex = -1;
         for (let i = actionMemories.length - 1; i >= 0; i--) {
@@ -350,7 +353,20 @@ export class DecisionPipeline {
             }
 
             const message = (tool.metadata?.message || tool.metadata?.text || '').trim();
-            const channelKey = `${ctx.source || 'unknown'}:${ctx.sourceId || 'anon'}`;
+
+            // Deduplicate per destination+channel tool, not per originating action source.
+            // This ensures (1) Telegram and WhatsApp can send the same text without suppressing each other,
+            // and (2) duplicates are evaluated in the correct channel/thread.
+            let destination = '';
+            if (tool.name === 'send_telegram') {
+                destination = (tool.metadata?.chatId || tool.metadata?.chat_id || tool.metadata?.id || ctx.sourceId || '').toString();
+            } else if (tool.name === 'send_whatsapp') {
+                destination = (tool.metadata?.jid || tool.metadata?.to || tool.metadata?.id || ctx.sourceId || '').toString();
+            } else if (tool.name === 'send_discord') {
+                destination = (tool.metadata?.channel_id || tool.metadata?.channelId || tool.metadata?.to || tool.metadata?.id || ctx.sourceId || '').toString();
+            }
+
+            const channelKey = `${tool.name}:${destination || 'anon'}`;
 
             if (maxMessages > 0 && (ctx.messagesSent + allowedMessages) >= maxMessages) {
                 dropped.push(`limit:${tool.name}`);

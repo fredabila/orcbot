@@ -245,7 +245,7 @@ export class Agent {
         this.skills.registerSkill({
             name: 'send_telegram',
             description: 'Send a message to a Telegram user',
-            usage: 'send_telegram(chat_id, message)',
+            usage: 'send_telegram(chatId, message)',
             handler: async (args: any) => {
                 const chat_id = args.chat_id || args.chatId || args.id;
                 const message = args.message || args.content || args.text;
@@ -255,6 +255,19 @@ export class Agent {
 
                 if (this.telegram) {
                     await this.telegram.sendMessage(chat_id, message);
+
+                    // Persist outbound message so future actions can use it as thread context.
+                    this.memory.saveMemory({
+                        id: `tg-out-${Date.now()}`,
+                        type: 'short',
+                        content: `Assistant sent Telegram message to ${chat_id}: ${message}`,
+                        timestamp: new Date().toISOString(),
+                        metadata: {
+                            source: 'telegram',
+                            role: 'assistant',
+                            chatId: chat_id
+                        }
+                    });
                     return `Message sent to ${chat_id}`;
                 }
                 return 'Telegram channel not available';
@@ -275,6 +288,20 @@ export class Agent {
 
                 if (this.whatsapp) {
                     await this.whatsapp.sendMessage(jid, message);
+
+                    // Persist outbound message so future actions can use it as thread context.
+                    this.memory.saveMemory({
+                        id: `wa-out-${Date.now()}`,
+                        type: 'short',
+                        content: `Assistant sent WhatsApp message to ${jid}: ${message}`,
+                        timestamp: new Date().toISOString(),
+                        metadata: {
+                            source: 'whatsapp',
+                            role: 'assistant',
+                            senderId: jid,
+                            sourceId: jid
+                        }
+                    });
                     return `Message sent to ${jid} via WhatsApp`;
                 }
                 return 'WhatsApp channel not available';
@@ -295,6 +322,20 @@ export class Agent {
 
                 if (this.discord) {
                     await this.discord.sendMessage(channel_id, message);
+
+                    // Persist outbound message so future actions can use it as thread context.
+                    this.memory.saveMemory({
+                        id: `discord-out-${Date.now()}`,
+                        type: 'short',
+                        content: `Assistant sent Discord message to channel ${channel_id}: ${message}`,
+                        timestamp: new Date().toISOString(),
+                        metadata: {
+                            source: 'discord',
+                            role: 'assistant',
+                            channelId: channel_id,
+                            sourceId: channel_id
+                        }
+                    });
                     return `Message sent to Discord channel ${channel_id}`;
                 }
                 return 'Discord channel not available';
@@ -2056,7 +2097,7 @@ Be thorough and academic.`;
                 let cleared = 0;
 
                 for (const action of queue) {
-                    if (action.status === 'pending' || action.status === 'in-progress') {
+                    if (action.status === 'pending' || action.status === 'waiting' || action.status === 'in-progress') {
                         if (this.currentActionId === action.id && this.isBusy) {
                             this.cancelledActions.add(action.id);
                         }
@@ -3589,9 +3630,9 @@ Respond with a single actionable task description (one sentence):`;
                 return;
             }
             
-            // Also check if there's already a pending/in-progress task for this message
+            // Also check if there's already a pending/waiting/in-progress task for this message
             const existingTask = this.actionQueue.getQueue().find(a => 
-                (a.status === 'pending' || a.status === 'in-progress') && 
+                (a.status === 'pending' || a.status === 'waiting' || a.status === 'in-progress') && 
                 a.payload?.messageId === messageId
             );
             if (existingTask) {
@@ -3606,6 +3647,40 @@ Respond with a single actionable task description (one sentence):`;
             if (this.processedMessages.size > this.processedMessagesMaxSize) {
                 const entries = Array.from(this.processedMessages);
                 entries.slice(0, 100).forEach(e => this.processedMessages.delete(e));
+            }
+        }
+
+        // If we have an action paused waiting for a reply from this same source/thread,
+        // resume it instead of pushing a brand-new action.
+        // This prevents duplicate clarification sends on scheduler ticks and keeps the
+        // original action as the continuation point once the user replies.
+        if (metadata?.source && metadata?.sourceId) {
+            const waitingAction = this.actionQueue.getQueue()
+                .filter(a => a.status === 'waiting' && a.payload?.source === metadata.source && a.payload?.sourceId === metadata.sourceId)
+                .sort((a, b) => {
+                    const at = Date.parse(a.updatedAt || a.timestamp || '') || 0;
+                    const bt = Date.parse(b.updatedAt || b.timestamp || '') || 0;
+                    return bt - at;
+                })[0];
+
+            if (waitingAction) {
+                logger.info(`Agent: Resuming waiting action ${waitingAction.id} due to new inbound message${messageId ? ` ${messageId}` : ''}`);
+                this.actionQueue.updateStatus(waitingAction.id, 'pending');
+
+                this.memory.saveMemory({
+                    id: `${waitingAction.id}-resume-${messageId || Date.now()}`,
+                    type: 'short',
+                    content: `[SYSTEM: New user message received; resuming previously paused action ${waitingAction.id}.]`,
+                    timestamp: new Date().toISOString(),
+                    metadata: {
+                        actionId: waitingAction.id,
+                        resumedFrom: 'waiting',
+                        source: metadata.source,
+                        sourceId: metadata.sourceId,
+                        messageId: messageId || undefined
+                    }
+                });
+                return;
             }
         }
         
@@ -3641,7 +3716,7 @@ Respond with a single actionable task description (one sentence):`;
         let cleared = 0;
 
         for (const action of queue) {
-            if (action.status === 'pending' || action.status === 'in-progress') {
+            if (action.status === 'pending' || action.status === 'waiting' || action.status === 'in-progress') {
                 if (this.currentActionId === action.id && this.isBusy) {
                     this.cancelledActions.add(action.id);
                 }
@@ -3987,8 +4062,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             
                             logger.info(`Agent: Clarification requested. Pausing action ${action.id} - waiting for user response.`);
                             
-                            // Mark action as waiting (not completed) so user reply can resume it
-                            this.actionQueue.updateStatus(action.id, 'pending');
+                            // Mark action as waiting (not completed) so it won't be re-picked until user replies
+                            this.actionQueue.updateStatus(action.id, 'waiting');
                             
                             this.memory.saveMemory({
                                 id: `${action.id}-step-${currentStep}-clarification`,
@@ -4015,7 +4090,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             
                             // QUESTION PAUSE: If this message asked a question, pause and wait for response
                             const sentMessage = toolCall.metadata?.message || '';
-                            if (this.messageContainsQuestion(sentMessage)) {
+                            const wasSuccessfulSend = toolResult && !resultString.toLowerCase().includes('error');
+                            if (this.messageContainsQuestion(sentMessage) && wasSuccessfulSend) {
                                 this.memory.saveMemory({
                                     id: `${action.id}-step-${currentStep}-waiting`,
                                     type: 'short',
@@ -4023,10 +4099,14 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                     metadata: { waitingForResponse: true, actionId: action.id }
                                 });
                                 logger.info(`Agent: Pausing action ${action.id} - waiting for user response to question.`);
+
+                                this.actionQueue.updateStatus(action.id, 'waiting');
                                 
                                 // Actually pause - set flags to break loop and skip completion
                                 waitingForClarification = true;
                                 forceBreak = true;
+                            } else if (this.messageContainsQuestion(sentMessage) && !wasSuccessfulSend) {
+                                logger.warn(`Agent: Attempted to ask a question via ${toolCall.name}, but send failed; not entering waiting state.`);
                             }
                         }
 
@@ -4078,7 +4158,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
             // If we're waiting for clarification, don't mark as completed
             if (waitingForClarification) {
                 logger.info(`Agent: Action ${action.id} paused awaiting user clarification. Will resume when user responds.`);
-                return; // Skip the completion logic - action stays pending
+                return; // Skip the completion logic - action stays waiting
             }
             
             // Record Final Response/Reasoning in Memory upon completion

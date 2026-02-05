@@ -108,6 +108,7 @@ export class DiscordChannel implements IChannel {
             timestamp: new Date().toISOString(),
             metadata: {
                 source: 'discord',
+                role: 'user',
                 channelId,
                 userId,
                 username,

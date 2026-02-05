@@ -63,6 +63,56 @@ export class DecisionEngine {
         return this.systemContext;
     }
 
+    private applyChannelDefaultsToTools(parsed: StandardResponse, metadata: any): StandardResponse {
+        if (!parsed?.tools || parsed.tools.length === 0) return parsed;
+
+        const source = (metadata?.source || '').toString().toLowerCase();
+        const sourceId = metadata?.sourceId;
+
+        parsed.tools = parsed.tools.map((tool) => {
+            const name = (tool?.name || '').toLowerCase();
+            const toolMetadata: Record<string, any> = { ...(tool.metadata || {}) };
+
+            // Normalize message across send tools if missing
+            if (toolMetadata.message == null) {
+                toolMetadata.message = toolMetadata.text ?? toolMetadata.content ?? toolMetadata.body;
+            }
+
+            if (name === 'send_telegram') {
+                // Prefer the action sourceId when we're in a Telegram-sourced action.
+                // This prevents bad outputs like chatId="Frederick" causing "chat not found".
+                const hasChatId = !!toolMetadata.chatId;
+                const chatIdLooksInvalid = typeof toolMetadata.chatId === 'string' && /[a-zA-Z]/.test(toolMetadata.chatId);
+                const preferredChatId = metadata?.chatId ?? sourceId;
+                if ((source === 'telegram') && preferredChatId && (!hasChatId || chatIdLooksInvalid)) {
+                    toolMetadata.chatId = preferredChatId;
+                }
+            }
+
+            if (name === 'send_whatsapp') {
+                if ((source === 'whatsapp') && sourceId && !toolMetadata.jid) {
+                    toolMetadata.jid = sourceId;
+                }
+            }
+
+            if (name === 'send_discord') {
+                if ((source === 'discord') && sourceId && !toolMetadata.channel_id) {
+                    toolMetadata.channel_id = sourceId;
+                }
+            }
+
+            if (name === 'send_gateway_chat') {
+                if ((source === 'gateway-chat') && sourceId && !toolMetadata.chatId) {
+                    toolMetadata.chatId = sourceId;
+                }
+            }
+
+            return { ...tool, metadata: toolMetadata };
+        });
+
+        return parsed;
+    }
+
     /**
      * Builds the core system instructions that should be present in ALL LLM calls.
      * This ensures the agent always remembers its identity, capabilities, and protocols.
@@ -266,6 +316,124 @@ ${availableSkills}
         const actionPrefix = `${actionId}-step-`;
         const actionMemories = recentContext.filter(c => c.id && c.id.startsWith(actionPrefix));
         const otherMemories = recentContext.filter(c => !c.id || !c.id.startsWith(actionPrefix)).slice(0, 5);
+
+        // Thread context: last N user/assistant messages from the same source+thread.
+        // This is the main mechanism for grounding follow-ups (e.g., pronouns like "he") across actions.
+        const source = (metadata.source || '').toString().toLowerCase();
+        const sourceId = metadata.sourceId;
+        const telegramChatId = metadata?.chatId ?? (source === 'telegram' ? sourceId : undefined);
+        const telegramUserId = metadata?.userId;
+
+        let threadContextString = '';
+        try {
+            const stopwords = new Set([
+                'the','a','an','and','or','but','if','then','else','when','where','what','who','whom','which','why','how',
+                'i','me','my','mine','you','your','yours','we','us','our','ours','they','them','their','theirs','he','him','his','she','her','hers','it','its',
+                'to','of','in','on','at','for','from','with','as','by','about','into','over','after','before','between','through','during','without','within',
+                'is','are','was','were','be','been','being','do','does','did','have','has','had','will','would','can','could','should','may','might','must'
+            ]);
+
+            const tokenize = (s: string): string[] => {
+                const tokens = Array.from((s || '').toLowerCase().match(/[a-z0-9]+/g) ?? []);
+                return tokens.filter(t => t.length >= 3 && !stopwords.has(t));
+            };
+
+            const taskTokens = new Set(tokenize(taskDescription));
+            const scoreRelevance = (content: string): number => {
+                if (!content) return 0;
+                const toks = tokenize(content);
+                let overlap = 0;
+                for (const t of toks) {
+                    if (taskTokens.has(t)) overlap++;
+                }
+                return overlap;
+            };
+
+            const isLowSignal = (m: any): boolean => {
+                const content = (m?.content || '').toString();
+                const md = m?.metadata || {};
+                if (md?.tool) return true;
+                if (content.startsWith('Observation: Tool ')) return true;
+                if (content.startsWith('[SYSTEM:')) return true;
+                if (content.startsWith('Pipeline notes:')) return true;
+                return false;
+            };
+
+            const shortAll = this.memory.searchMemory('short');
+
+            const candidates = shortAll
+                .filter(m => (m as any)?.metadata?.source && ((m as any).metadata.source || '').toString().toLowerCase() === source)
+                .filter(m => {
+                    if (!sourceId && !telegramChatId && !telegramUserId) return false;
+                    const md: any = (m as any).metadata || {};
+
+                    if (source === 'telegram') {
+                        const matchChat = telegramChatId != null && md.chatId?.toString() === telegramChatId.toString();
+                        const matchUser = telegramUserId != null && md.userId?.toString() === telegramUserId.toString();
+                        // Back-compat: older actions used userId as sourceId.
+                        const matchLegacy = sourceId != null && (md.userId?.toString() === sourceId.toString() || md.chatId?.toString() === sourceId.toString());
+                        return matchChat || matchUser || matchLegacy;
+                    }
+                    if (source === 'whatsapp') {
+                        return sourceId != null && (md.senderId?.toString() === sourceId.toString() || md.sourceId?.toString() === sourceId.toString());
+                    }
+                    if (source === 'discord') {
+                        return sourceId != null && (md.channelId?.toString() === sourceId.toString() || md.sourceId?.toString() === sourceId.toString());
+                    }
+                    if (source === 'gateway-chat') {
+                        return sourceId != null && (md.chatId?.toString() === sourceId.toString() || md.sourceId?.toString() === sourceId.toString());
+                    }
+                    return false;
+                })
+                .filter(m => !isLowSignal(m))
+                .sort((a, b) => {
+                    const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+                    const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+                    return tb - ta;
+                });
+
+            const RECENT_N = 8;
+            const RELEVANT_N = 8;
+            const MAX_LINE_LEN = 420;
+
+            const recent = candidates.slice(0, RECENT_N);
+            const relevant = [...candidates]
+                .sort((a, b) => {
+                    const sa = scoreRelevance((a as any).content || '');
+                    const sb = scoreRelevance((b as any).content || '');
+                    if (sb !== sa) return sb - sa;
+                    const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+                    const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+                    return tb - ta;
+                })
+                .slice(0, RELEVANT_N);
+
+            const merged: any[] = [];
+            const seen = new Set<string>();
+            for (const m of [...recent, ...relevant]) {
+                const id = (m as any)?.id || '';
+                const key = id || `${m.timestamp || ''}:${(m.content || '').slice(0, 40)}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                merged.push(m);
+            }
+
+            if (merged.length > 0) {
+                threadContextString = merged
+                    .slice(0, RECENT_N + RELEVANT_N)
+                    .map(m => {
+                        const md: any = (m as any).metadata || {};
+                        const role = md.role ? md.role.toString() : '';
+                        const ts = (m as any).timestamp || '';
+                        const raw = ((m as any).content || '').toString();
+                        const clipped = raw.length > MAX_LINE_LEN ? raw.slice(0, MAX_LINE_LEN) + '…' : raw;
+                        return `[${ts}]${role ? ` (${role})` : ''} ${clipped}`;
+                    })
+                    .join('\n');
+            }
+        } catch {
+            // Best-effort only
+        }
         
         // Build step history specific to this action
         const stepHistoryString = actionMemories.length > 0 
@@ -344,6 +512,8 @@ ${journalContent ? `Agent Journal (Recent Reflections):\n${journalContent}` : ''
 
 ${learningContent ? `Agent Learning Base (Knowledge):\n${learningContent}` : ''}
 
+${threadContextString ? `THREAD CONTEXT (Same Chat):\n${threadContextString}` : ''}
+
 STEP HISTORY FOR THIS ACTION (Action ${actionId}):
 ${stepHistoryString}
 
@@ -354,7 +524,7 @@ ${otherContextString ? `RECENT BACKGROUND CONTEXT:\n${otherContextString}` : ''}
         
         // Use retry wrapper for main LLM call
         const rawResponse = await this.callLLMWithRetry(taskDescription, systemPrompt, actionId);
-        const parsed = ParserLayer.normalize(rawResponse);
+        const parsed = this.applyChannelDefaultsToTools(ParserLayer.normalize(rawResponse), metadata);
 
         // Validate response before processing
         const validation = ResponseValidator.validateResponse(parsed, allowedToolNames);

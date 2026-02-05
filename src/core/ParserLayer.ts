@@ -21,6 +21,41 @@ export interface StandardResponse {
 
 export class ParserLayer {
     /**
+     * Normalize tool call metadata to a canonical shape expected by ResponseValidator
+     * and downstream execution.
+     */
+    private static normalizeToolCalls(tools: ToolCall[]): ToolCall[] {
+        return (tools || []).map((tool) => {
+            const toolName = (tool?.name || '').toLowerCase();
+            const metadata: Record<string, any> = { ...(tool.metadata || {}) };
+
+            // Normalize message field across messaging tools
+            if (metadata.message == null) {
+                metadata.message = metadata.content ?? metadata.text ?? metadata.body;
+            }
+
+            if (toolName === 'send_telegram') {
+                // ResponseValidator requires metadata.chatId
+                if (metadata.chatId == null) {
+                    metadata.chatId = metadata.chat_id ?? metadata.chatid ?? metadata.id ?? metadata.to ?? metadata.userId;
+                }
+            }
+
+            if (toolName === 'send_discord') {
+                // ResponseValidator requires metadata.channel_id
+                if (metadata.channel_id == null) {
+                    metadata.channel_id = metadata.channelId ?? metadata.channel ?? metadata.id ?? metadata.to ?? metadata.sourceId;
+                }
+            }
+
+            return {
+                ...tool,
+                metadata
+            };
+        });
+    }
+
+    /**
      * Sanitize JSON string to fix common LLM escaping issues
      */
     private static sanitizeJsonString(jsonStr: string): string {
@@ -75,6 +110,8 @@ export class ParserLayer {
                 if (parsed.tool && tools.length === 0) {
                     tools.push({ name: parsed.tool, metadata: parsed.metadata });
                 }
+
+                tools = this.normalizeToolCalls(tools);
 
                 return {
                     success: parsed.success ?? true,
