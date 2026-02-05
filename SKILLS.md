@@ -74,8 +74,76 @@ These skills allow the agent to dynamically adjust its own behavior based on wha
 - **get_tuning_history(limit?)**: See recent tuning changes and their outcomes.
 - **reset_tuning(category?)**: Reset tuning to defaults (browser, workflow, llm, or all).
 
+## Agent Skills (SKILL.md Ecosystem)
+Agent Skills follow the [agentskills.io](https://agentskills.io/) specification — portable, LLM-readable skill packages that can extend OrcBot in any direction.
+
+### Agent Skill Management
+- **install_skill(source)**: Install a skill from GitHub URL, gist, `.skill` zip, or local path.
+- **create_skill(name, description?, instructions?)**: Scaffold a new skill with SKILL.md template.
+- **activate_skill(name, active?)**: Toggle skill activation (progressive disclosure — only activated skills load full instructions).
+- **list_agent_skills()**: List all installed agent skills with status, resources, and version.
+- **read_skill_resource(skill_name, file_path)**: Read a bundled file (reference, script, asset) from an installed skill.
+- **validate_skill(name_or_path)**: Validate a skill directory against the agentskills.io specification.
+- **uninstall_agent_skill(name)**: Remove an installed agent skill.
+- **run_skill_script(skill_name, script, args?)**: Execute a bundled script (.js/.ts/.py/.sh/.ps1) from a skill.
+- **write_skill_file(skill_name, file_path, content)**: Write or update files inside a skill directory.
+
+### SKILL.md Format
+Each skill is a directory containing a `SKILL.md` file with YAML frontmatter:
+```yaml
+---
+name: my-skill-name
+description: "What this skill does"
+license: MIT
+compatibility:
+  - "orcbot"
+metadata:
+  version: "1.0.0"
+  author: "Author Name"
+allowed-tools:
+  - "web_search"
+  - "run_command"
+orcbot:
+  autoActivate: false
+  triggerPatterns: ["pattern1", "pattern2"]
+  requiredConfig: ["apiKey"]
+  requiredPackages: ["some-npm-package"]
+  permissions: ["network", "filesystem"]
+---
+
+# My Skill Name
+
+Instructions for the agent in natural language...
+```
+
+### Directory Structure
+```
+my-skill-name/
+  SKILL.md          # Required — frontmatter + instructions
+  scripts/          # Executable scripts the agent can run
+  references/       # Background knowledge and documentation
+  assets/           # Images, templates, data files
+```
+
+### Installing Skills
+- **CLI**: `orcbot skill install <url-or-path>`
+- **TUI**: Skills menu → Install from URL / Install from Local Path
+- **Agent**: Use `install_skill` tool with a GitHub URL, gist, or local path
+- **Manual**: Copy a skill directory into `~/.orcbot/plugins/skills/`
+
+### Creating Skills
+- **CLI**: `orcbot skill create <name> --description "What it does"`
+- **TUI**: Skills menu → Create New
+- **Agent**: Use `create_skill` tool — the agent can even generate instructions from a description
+
+### Progressive Disclosure
+Skills use a three-level loading strategy to minimize token usage:
+1. **Level 1** (always loaded): Name + description (~100 tokens per skill)
+2. **Level 2** (on activation): Full SKILL.md instructions
+3. **Level 3** (on demand): Bundled resources via `read_skill_resource`
+
 ## Community / Plugin Skills
-Custom plugin skills are loaded from ~/.orcbot/plugins. If you add new plugins there, they will appear in the agent’s live skill registry.
+Custom plugin skills (.ts/.js files) are loaded from ~/.orcbot/plugins. If you add new plugins there, they will appear in the agent's live skill registry.
 
 ## Configuration Management
 Agent-driven configuration management with policy-based security. See [docs/CONFIG_MANAGEMENT.md](docs/CONFIG_MANAGEMENT.md) for complete documentation.

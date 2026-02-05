@@ -5,7 +5,7 @@ import path from 'path';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { TokenTracker } from './TokenTracker';
 
-export type LLMProvider = 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia';
+export type LLMProvider = 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia' | 'anthropic';
 
 export interface LLMMessage {
     role: 'system' | 'user' | 'assistant';
@@ -20,6 +20,7 @@ export class MultiLLM {
     private openrouterAppName?: string;
     private googleKey: string | undefined;
     private nvidiaKey: string | undefined;
+    private anthropicKey: string | undefined;
     private modelName: string;
     private bedrockRegion?: string;
     private bedrockAccessKeyId?: string;
@@ -28,7 +29,7 @@ export class MultiLLM {
     private tokenTracker?: TokenTracker;
     private preferredProvider?: LLMProvider;
 
-    constructor(config?: { apiKey?: string, googleApiKey?: string, nvidiaApiKey?: string, modelName?: string, bedrockRegion?: string, bedrockAccessKeyId?: string, bedrockSecretAccessKey?: string, bedrockSessionToken?: string, tokenTracker?: TokenTracker, openrouterApiKey?: string, openrouterBaseUrl?: string, openrouterReferer?: string, openrouterAppName?: string, llmProvider?: LLMProvider }) {
+    constructor(config?: { apiKey?: string, googleApiKey?: string, nvidiaApiKey?: string, anthropicApiKey?: string, modelName?: string, bedrockRegion?: string, bedrockAccessKeyId?: string, bedrockSecretAccessKey?: string, bedrockSessionToken?: string, tokenTracker?: TokenTracker, openrouterApiKey?: string, openrouterBaseUrl?: string, openrouterReferer?: string, openrouterAppName?: string, llmProvider?: LLMProvider }) {
         this.openaiKey = config?.apiKey || process.env.OPENAI_API_KEY;
         this.openrouterKey = config?.openrouterApiKey || process.env.OPENROUTER_API_KEY;
         this.openrouterBaseUrl = config?.openrouterBaseUrl || process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
@@ -36,6 +37,7 @@ export class MultiLLM {
         this.openrouterAppName = config?.openrouterAppName || process.env.OPENROUTER_APP_NAME;
         this.googleKey = config?.googleApiKey || process.env.GOOGLE_API_KEY;
         this.nvidiaKey = config?.nvidiaApiKey || process.env.NVIDIA_API_KEY;
+        this.anthropicKey = config?.anthropicApiKey || process.env.ANTHROPIC_API_KEY;
         this.modelName = config?.modelName || 'gpt-4o';
         this.bedrockRegion = config?.bedrockRegion || process.env.BEDROCK_REGION || process.env.AWS_REGION;
         this.bedrockAccessKeyId = config?.bedrockAccessKeyId || process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID;
@@ -59,6 +61,7 @@ export class MultiLLM {
             if (p === 'bedrock') return this.callBedrock(prompt, systemMessage, m);
             if (p === 'openrouter') return this.callOpenRouter(prompt, systemMessage, m);
             if (p === 'nvidia') return this.callNvidia(prompt, systemMessage, m);
+            if (p === 'anthropic') return this.callAnthropic(prompt, systemMessage, m);
             throw new Error(`Provider ${p} not supported`);
         };
 
@@ -79,12 +82,13 @@ export class MultiLLM {
 
     private getFallbackProvider(primaryProvider: LLMProvider): LLMProvider | null {
         // Priority order for fallbacks based on what's configured
-        const fallbackOrder: LLMProvider[] = ['openai', 'google', 'nvidia', 'openrouter', 'bedrock'];
+        const fallbackOrder: LLMProvider[] = ['openai', 'anthropic', 'google', 'nvidia', 'openrouter', 'bedrock'];
         
         for (const provider of fallbackOrder) {
             if (provider === primaryProvider) continue;
             
             if (provider === 'openai' && this.openaiKey) return 'openai';
+            if (provider === 'anthropic' && this.anthropicKey) return 'anthropic';
             if (provider === 'google' && this.googleKey) return 'google';
             if (provider === 'nvidia' && this.nvidiaKey) return 'nvidia';
             if (provider === 'openrouter' && this.openrouterKey) return 'openrouter';
@@ -100,6 +104,7 @@ export class MultiLLM {
             case 'google': return 'gemini-2.0-flash';
             case 'nvidia': return 'moonshotai/kimi-k2.5';
             case 'openrouter': return 'google/gemini-2.0-flash-exp:free';
+            case 'anthropic': return 'claude-sonnet-4-5';
             case 'bedrock': return this.modelName;
             default: return this.modelName;
         }
@@ -311,6 +316,7 @@ export class MultiLLM {
     private inferProvider(modelName: string): LLMProvider {
         const lower = modelName.toLowerCase();
         if (lower.includes('bedrock') || lower.startsWith('br:')) return 'bedrock';
+        if (lower.includes('claude') || lower.startsWith('anthropic:') || lower.startsWith('ant:')) return 'anthropic';
         if (lower.includes('gemini')) return 'google';
         if (lower.startsWith('openrouter:') || lower.startsWith('openrouter/') || lower.startsWith('or:')) return 'openrouter';
         if (lower.startsWith('nvidia:') || lower.startsWith('nv:')) return 'nvidia';
@@ -328,6 +334,12 @@ export class MultiLLM {
         return modelName
             .replace(/^nvidia:/i, '')
             .replace(/^nv:/i, '');
+    }
+
+    private normalizeAnthropicModel(modelName: string): string {
+        return modelName
+            .replace(/^anthropic:/i, '')
+            .replace(/^ant:/i, '');
     }
 
     private getBedrockClient() {
@@ -542,6 +554,57 @@ export class MultiLLM {
         }
     }
 
+    private async callAnthropic(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
+        if (!this.anthropicKey) throw new Error('Anthropic API key not configured');
+
+        const rawModel = modelOverride || this.modelName;
+        const model = this.normalizeAnthropicModel(rawModel);
+
+        const body: any = {
+            model,
+            max_tokens: 16384,
+            messages: [
+                { role: 'user', content: prompt }
+            ]
+        };
+
+        // Anthropic Messages API uses a top-level "system" field, not a system message in the array
+        if (systemMessage) {
+            body.system = systemMessage;
+        }
+
+        try {
+            const response = await fetch('https://api.anthropic.com/v1/messages', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-key': this.anthropicKey,
+                    'anthropic-version': '2023-06-01',
+                },
+                body: JSON.stringify(body),
+            });
+
+            if (!response.ok) {
+                const err = await response.text();
+                throw new Error(`Anthropic API Error: ${response.status} ${err}`);
+            }
+
+            const data = await response.json() as any;
+
+            // Extract text from content blocks
+            const textContent = data.content
+                ?.filter((block: any) => block.type === 'text')
+                ?.map((block: any) => block.text)
+                ?.join('') || '';
+
+            this.recordUsage('anthropic', model, prompt, data, textContent);
+            return textContent;
+        } catch (error) {
+            logger.error(`MultiLLM Anthropic Error: ${error}`);
+            throw error;
+        }
+    }
+
     private recordUsage(provider: LLMProvider, model: string, prompt: string, data: any, completionText?: string) {
         if (!this.tokenTracker) return;
 
@@ -573,8 +636,15 @@ export class MultiLLM {
             totalTokens = usage.total_tokens ?? usage.totalTokens ?? (promptTokens + completionTokens);
         }
 
+        if (provider === 'anthropic' && data?.usage) {
+            promptTokens = data.usage.input_tokens ?? promptTokens;
+            completionTokens = data.usage.output_tokens ?? completionTokens;
+            totalTokens = (promptTokens + completionTokens);
+        }
+
         const estimated = (provider === 'openai' && !data?.usage) ||
             (provider === 'nvidia' && !data?.usage) ||
+            (provider === 'anthropic' && !data?.usage) ||
             (provider === 'google' && !data?.usageMetadata) ||
             (provider === 'bedrock' && !data?.usage);
 

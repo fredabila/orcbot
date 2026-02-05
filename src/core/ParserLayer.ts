@@ -17,6 +17,8 @@ export interface StandardResponse {
         goals_met: boolean;
         analysis: string;
     };
+    /** Set by DecisionEngine when validator filters out tools */
+    toolsFiltered?: number;
 }
 
 export class ParserLayer {
@@ -45,6 +47,32 @@ export class ParserLayer {
                 // ResponseValidator requires metadata.channel_id
                 if (metadata.channel_id == null) {
                     metadata.channel_id = metadata.channelId ?? metadata.channel ?? metadata.id ?? metadata.to ?? metadata.sourceId;
+                }
+            }
+
+            // Normalize browser tool fields to what ResponseValidator expects.
+            // The LLM frequently uses selector_or_ref/ref/css/value, while the executor and validator
+            // prefer canonical keys: selector + text.
+            if (toolName === 'browser_click' || toolName === 'browser_type') {
+                if (metadata.selector == null) {
+                    const selectorCandidate =
+                        metadata.selector_or_ref ??
+                        metadata.selectorOrRef ??
+                        metadata.css ??
+                        metadata.ref;
+
+                    if (selectorCandidate != null) {
+                        metadata.selector = String(selectorCandidate);
+                    }
+                }
+
+                if (toolName === 'browser_type') {
+                    if (metadata.text === undefined) {
+                        const textCandidate = metadata.value ?? metadata.content;
+                        if (textCandidate !== undefined) {
+                            metadata.text = textCandidate;
+                        }
+                    }
                 }
             }
 

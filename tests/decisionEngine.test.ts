@@ -51,7 +51,12 @@ describe('DecisionEngine - System Prompt Persistence', () => {
       getAllSkills: () => [
         { name: 'send_telegram' },
         { name: 'web_search' }
-      ]
+      ],
+      matchSkillsForTask: () => [],
+      getAgentSkillsPrompt: () => '',
+      getActivatedSkillsContext: () => '',
+      getAgentSkills: () => [],
+      activateAgentSkill: () => {}
     } as any;
 
     const mockConfig = {
@@ -141,7 +146,12 @@ describe('DecisionEngine - System Prompt Persistence', () => {
 
     const mockSkills = {
       getSkillsPrompt: () => 'Available Skills:\n- test_skill',
-      getAllSkills: () => [{ name: 'test_skill' }]
+      getAllSkills: () => [{ name: 'test_skill' }],
+      matchSkillsForTask: () => [],
+      getAgentSkillsPrompt: () => '',
+      getActivatedSkillsContext: () => '',
+      getAgentSkills: () => [],
+      activateAgentSkill: () => {}
     } as any;
 
     const mockConfig = {
@@ -216,7 +226,12 @@ describe('DecisionEngine - Thread Context Grounding', () => {
 
     const mockSkills = {
       getSkillsPrompt: () => 'Available Skills:\n- send_telegram',
-      getAllSkills: () => [{ name: 'send_telegram' }]
+      getAllSkills: () => [{ name: 'send_telegram' }],
+      matchSkillsForTask: () => [],
+      getAgentSkillsPrompt: () => '',
+      getActivatedSkillsContext: () => '',
+      getAgentSkills: () => [],
+      activateAgentSkill: () => {}
     } as any;
 
     const mockConfig = {

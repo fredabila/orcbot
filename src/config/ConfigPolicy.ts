@@ -35,7 +35,7 @@ export class ConfigPolicy {
             level: ConfigChangeLevel.SAFE,
             description: 'LLM provider selection',
             reason: 'Agents can switch providers based on availability and task requirements',
-            validation: (value: any) => ['openai', 'google', 'bedrock', 'openrouter', 'nvidia'].includes(value)
+            validation: (value: any) => ['openai', 'google', 'bedrock', 'openrouter', 'nvidia', 'anthropic'].includes(value)
         }],
         ['memoryContextLimit', {
             key: 'memoryContextLimit',
@@ -94,6 +94,13 @@ export class ConfigPolicy {
             description: 'NVIDIA API key',
             reason: 'API keys are sensitive and should be approved',
             validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['anthropicApiKey', {
+            key: 'anthropicApiKey',
+            level: ConfigChangeLevel.APPROVAL,
+            description: 'Anthropic API key',
+            reason: 'API keys are sensitive and should be approved',
+            validation: (value: any) => typeof value === 'string' && value.startsWith('sk-ant-')
         }],
         ['openrouterApiKey', {
             key: 'openrouterApiKey',

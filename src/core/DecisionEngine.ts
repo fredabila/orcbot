@@ -233,6 +233,12 @@ HUMAN-LIKE COLLABORATION:
 
 Available Skills:
 ${availableSkills}
+
+${this.skills.getAgentSkills().length > 0 ? `AGENT SKILLS (SKILL.md packages — use activate_skill to load full instructions):
+${this.skills.getAgentSkillsPrompt()}` : ''}
+
+${this.skills.getActivatedSkillsContext() ? `ACTIVATED SKILL INSTRUCTIONS (Loaded on demand):
+${this.skills.getActivatedSkillsContext()}` : ''}
 `;
     }
 
@@ -317,6 +323,17 @@ ${availableSkills}
         const recentContext = this.memory.getRecentContext();
         const availableSkills = this.skills.getSkillsPrompt();
         const allowedToolNames = this.skills.getAllSkills().map(s => s.name);
+
+        // Auto-activate matching agent skills for this task (progressive disclosure)
+        if ((metadata.currentStep || 1) === 1) {
+            const matchedSkills = this.skills.matchSkillsForTask(taskDescription);
+            for (const matched of matchedSkills) {
+                if (!matched.activated) {
+                    this.skills.activateAgentSkill(matched.meta.name);
+                    logger.info(`DecisionEngine: Auto-activated skill "${matched.meta.name}" for task`);
+                }
+            }
+        }
 
         // Load Journal and Learning - keep meaningful context
         const isFirstStep = (metadata.currentStep || 1) === 1;
@@ -564,8 +581,12 @@ ${otherContextString ? `RECENT BACKGROUND CONTEXT:\n${otherContextString}` : ''}
                 );
                 return toolValidation.valid;
             });
+            const filteredCount = originalCount - validTools.length;
             parsed.tools = validTools;
-            logger.warn(`DecisionEngine: Filtered out ${originalCount - parsed.tools.length} invalid tool(s) from response`);
+            if (filteredCount > 0) {
+                parsed.toolsFiltered = filteredCount;
+                logger.warn(`DecisionEngine: Filtered out ${filteredCount} invalid tool(s) from response`);
+            }
         }
 
         // Run parsed response through structured pipeline guardrails

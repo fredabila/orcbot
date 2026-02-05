@@ -18,6 +18,56 @@ import { TokenTracker } from '../core/TokenTracker';
 dotenv.config(); // Local .env
 dotenv.config({ path: path.join(os.homedir(), '.orcbot', '.env') }); // Global .env
 
+// ── ANSI color helpers (zero deps) ─────────────────────────────────────
+const c = {
+    reset: '\x1b[0m',
+    bold: '\x1b[1m',
+    dim: '\x1b[2m',
+    cyan: '\x1b[36m',
+    green: '\x1b[32m',
+    yellow: '\x1b[33m',
+    red: '\x1b[31m',
+    magenta: '\x1b[35m',
+    blue: '\x1b[34m',
+    white: '\x1b[37m',
+    gray: '\x1b[90m',
+    bgCyan: '\x1b[46m',
+    bgBlue: '\x1b[44m',
+};
+const clr = (color: string, text: string) => `${color}${text}${c.reset}`;
+const bold = (text: string) => clr(c.bold, text);
+const dim = (text: string) => clr(c.dim, text);
+const cyan = (text: string) => clr(c.cyan, text);
+const green = (text: string) => clr(c.green, text);
+const yellow = (text: string) => clr(c.yellow, text);
+const red = (text: string) => clr(c.red, text);
+const magenta = (text: string) => clr(c.magenta, text);
+const blue = (text: string) => clr(c.blue, text);
+const gray = (text: string) => clr(c.gray, text);
+
+function banner() {
+    console.log('');
+    console.log(cyan('  ╔═══════════════════════════════════════════════╗'));
+    console.log(cyan('  ║') + bold('  🤖 OrcBot ') + dim('— Autonomous AI Agent Framework') + cyan('  ║'));
+    console.log(cyan('  ╚═══════════════════════════════════════════════╝'));
+    console.log('');
+}
+
+function sectionHeader(emoji: string, title: string) {
+    const line = '─'.repeat(45);
+    console.log('');
+    console.log(cyan(`  ${emoji} ${bold(title)}`));
+    console.log(gray(`  ${line}`));
+}
+
+function kvLine(key: string, value: string, indent = '  ') {
+    console.log(`${indent}${gray(key + ':')} ${value}`);
+}
+
+function statusBadge(ok: boolean, onLabel = 'ON', offLabel = 'OFF'): string {
+    return ok ? green(`● ${onLabel}`) : gray(`○ ${offLabel}`);
+}
+
 process.on('unhandledRejection', (reason) => {
     logger.error(`Unhandled Promise rejection (non-fatal): ${reason}`);
 });
@@ -61,6 +111,138 @@ program
         const builder = new SkillBuilder();
         console.log(`Fetching spec and building skill from ${url}...`);
         const result = await builder.buildFromUrl(url);
+        console.log(result);
+    });
+
+// ─── Skill subcommands ───────────────────────────────────────────────
+const skillCmd = program
+    .command('skill')
+    .description('Manage Agent Skills (SKILL.md format)');
+
+skillCmd
+    .command('install')
+    .description('Install a skill from a GitHub URL, gist, .skill file, or local path')
+    .argument('<source>', 'URL or local path to the skill')
+    .action(async (source) => {
+        const { ConfigManager } = require('../config/ConfigManager');
+        const config = new ConfigManager();
+        const { SkillsManager } = require('./SkillsManager') || require('../core/SkillsManager');
+        const sm = new (require('../core/SkillsManager').SkillsManager)(
+            config.get('skillsPath'),
+            config.get('pluginsPath')
+        );
+
+        if (source.startsWith('http://') || source.startsWith('https://')) {
+            console.log(`📦 Installing skill from ${source}...`);
+            const result = await sm.installSkillFromUrl(source);
+            console.log(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
+        } else {
+            console.log(`📦 Installing skill from ${source}...`);
+            const result = await sm.installSkillFromPath(source);
+            console.log(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
+        }
+    });
+
+skillCmd
+    .command('create')
+    .description('Create a new skill scaffold')
+    .argument('<name>', 'Skill name (lowercase-with-hyphens)')
+    .option('-d, --description <desc>', 'Skill description')
+    .action(async (name, options) => {
+        const { ConfigManager } = require('../config/ConfigManager');
+        const config = new ConfigManager();
+        const sm = new (require('../core/SkillsManager').SkillsManager)(
+            config.get('skillsPath'),
+            config.get('pluginsPath')
+        );
+
+        const result = sm.initSkill(name, options.description);
+        console.log(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
+        if (result.success) {
+            console.log(`\nNext steps:`);
+            console.log(`  1. Edit ${path.join(result.path, 'SKILL.md')}`);
+            console.log(`  2. Add scripts to ${path.join(result.path, 'scripts/')}`);
+            console.log(`  3. Add references to ${path.join(result.path, 'references/')}`);
+            console.log(`  4. Validate: orcbot skill validate ${name}`);
+        }
+    });
+
+skillCmd
+    .command('list')
+    .description('List all installed agent skills')
+    .action(async () => {
+        const { ConfigManager } = require('../config/ConfigManager');
+        const config = new ConfigManager();
+        const sm = new (require('../core/SkillsManager').SkillsManager)(
+            config.get('skillsPath'),
+            config.get('pluginsPath')
+        );
+
+        const skills = sm.getAgentSkills();
+        if (skills.length === 0) {
+            console.log('No Agent Skills installed.');
+            console.log('  Install: orcbot skill install <url>');
+            console.log('  Create:  orcbot skill create <name>');
+            return;
+        }
+
+        console.log(`\n${skills.length} Agent Skills installed:\n`);
+        for (const s of skills) {
+            const status = s.activated ? '🟢 Active' : '⚪ Inactive';
+            console.log(`${status} ${s.meta.name}`);
+            console.log(`  ${s.meta.description}`);
+            if (s.scripts.length > 0) console.log(`  Scripts: ${s.scripts.join(', ')}`);
+            if (s.references.length > 0) console.log(`  References: ${s.references.join(', ')}`);
+            if (s.meta.metadata?.version) console.log(`  Version: ${s.meta.metadata.version}`);
+            console.log('');
+        }
+    });
+
+skillCmd
+    .command('validate')
+    .description('Validate a skill against the Agent Skills specification')
+    .argument('<name>', 'Skill name or path to skill directory')
+    .action(async (name) => {
+        const { ConfigManager } = require('../config/ConfigManager');
+        const config = new ConfigManager();
+        const sm = new (require('../core/SkillsManager').SkillsManager)(
+            config.get('skillsPath'),
+            config.get('pluginsPath')
+        );
+
+        let skillDir = name;
+        if (!path.isAbsolute(name)) {
+            const agentSkill = sm.getAgentSkill(name);
+            if (agentSkill) {
+                skillDir = agentSkill.skillDir;
+            } else {
+                skillDir = path.join(config.get('pluginsPath'), 'skills', name);
+            }
+        }
+
+        const result = sm.validateSkill(skillDir);
+        if (result.valid) {
+            console.log(`✅ Skill "${name}" is valid.`);
+        } else {
+            console.log(`❌ ${result.errors.length} issue(s):`);
+            result.errors.forEach((e: string) => console.log(`  - ${e}`));
+            process.exitCode = 1;
+        }
+    });
+
+skillCmd
+    .command('uninstall')
+    .description('Uninstall an agent skill')
+    .argument('<name>', 'Skill name to uninstall')
+    .action(async (name) => {
+        const { ConfigManager } = require('../config/ConfigManager');
+        const config = new ConfigManager();
+        const sm = new (require('../core/SkillsManager').SkillsManager)(
+            config.get('skillsPath'),
+            config.get('pluginsPath')
+        );
+
+        const result = sm.uninstallAgentSkill(name);
         console.log(result);
     });
 
@@ -709,7 +891,14 @@ lightpandaCommand
 
 async function showMainMenu() {
     console.clear();
-    console.log('🤖 OrcBot TUI');
+    banner();
+
+    // Quick status line
+    const model = agent.config.get('modelName') || 'gpt-4o';
+    const provider = agent.config.get('llmProvider') || 'auto';
+    const queueLen = agent.actionQueue.getQueue().length;
+    console.log(gray('  ') + dim('Model: ') + cyan(model) + dim(' │ Provider: ') + cyan(provider) + dim(' │ Queue: ') + (queueLen > 0 ? yellow(String(queueLen)) : green('0')));
+    console.log('');
 
     const { action } = await inquirer.prompt([
         {
@@ -717,22 +906,27 @@ async function showMainMenu() {
             name: 'action',
             message: 'What would you like to do?',
             choices: [
-                { name: 'Start Agent Loop', value: 'start' },
-                { name: 'Push Task', value: 'push' },
-                { name: 'View Status', value: 'status' },
-                { name: 'Manage Skills (Plugins)', value: 'skills' },
-                { name: 'Manage Connections', value: 'connections' },
-                { name: 'Manage AI Models', value: 'models' },
-                { name: 'Tooling & APIs', value: 'tooling' },
+                new inquirer.Separator(gray(' ─── Run ───────────────────────────')),
+                { name: '▶  Start Agent Loop', value: 'start' },
+                { name: '📋 Push Task', value: 'push' },
+                { name: '📊 View Status', value: 'status' },
+                new inquirer.Separator(gray(' ─── Configure ─────────────────────')),
+                { name: '🧠 Manage AI Models', value: 'models' },
+                { name: '🔌 Manage Connections', value: 'connections' },
+                { name: '⚡ Manage Skills (Plugins)', value: 'skills' },
+                { name: '🔧 Tooling & APIs', value: 'tooling' },
+                new inquirer.Separator(gray(' ─── Advanced ──────────────────────')),
                 { name: '🌐 Web Gateway', value: 'gateway' },
-                { name: 'Worker Profile (Digital Identity)', value: 'worker' },
-                { name: 'Multi-Agent Orchestration', value: 'orchestration' },
+                { name: '🪪 Worker Profile (Digital Identity)', value: 'worker' },
+                { name: '🐙 Multi-Agent Orchestration', value: 'orchestration' },
                 { name: '🔒 Security & Permissions', value: 'security' },
-                { name: '📊 Token Usage', value: 'tokens' },
-                { name: 'Configure Agent', value: 'config' },
+                { name: '📈 Token Usage', value: 'tokens' },
+                new inquirer.Separator(gray(' ─── System ────────────────────────')),
+                { name: '⚙️  Configure Agent', value: 'config' },
                 { name: '⬆️  Update OrcBot', value: 'update' },
-                { name: 'Exit', value: 'exit' },
+                { name: dim('   Exit'), value: 'exit' },
             ],
+            pageSize: 22
         },
     ]);
 
@@ -812,12 +1006,14 @@ async function showBrowserMenu() {
         }
     }
     
-    console.log('\n--- Browser Engine Configuration ---');
-    console.log(`Engine: ${currentEngine === 'lightpanda' ? '🐼 Lightpanda' : '🌐 Playwright (Chrome)'}`);
-    console.log(`Lightpanda: ${isInstalled ? '✅ Installed' : '❌ Not installed'}`);
+    console.log('');
+    sectionHeader('🐼', 'Browser Engine');
+    console.log('');
+    kvLine('Engine    ', currentEngine === 'lightpanda' ? cyan('🐼 Lightpanda') : cyan('🌐 Playwright (Chrome)'));
+    kvLine('Installed ', isInstalled ? green('● Yes') : gray('○ No'));
     if (isInstalled) {
-        console.log(`Server: ${isRunning ? `✅ Running (PID: ${runningPid})` : '⚪ Stopped'}`);
-        console.log(`Endpoint: ${lightpandaEndpoint}`);
+        kvLine('Server    ', isRunning ? green(`● Running (PID: ${runningPid})`) : gray('○ Stopped'));
+        kvLine('Endpoint  ', dim(lightpandaEndpoint));
     }
     console.log('');
 
@@ -906,19 +1102,32 @@ async function showBrowserMenu() {
 }
 
 async function showToolingMenu() {
+    console.clear();
+    sectionHeader('🔧', 'Tooling & APIs');
+    console.log('');
+
+    const hasSerper = !!agent.config.get('serperApiKey');
+    const hasBrave = !!agent.config.get('braveSearchApiKey');
+    const hasSearxng = !!agent.config.get('searxngUrl');
+    const hasCaptcha = !!agent.config.get('captchaApiKey');
+    const dot = (ok: boolean) => ok ? green('●') : gray('○');
+
     const { tool } = await inquirer.prompt([
         {
             type: 'list',
             name: 'tool',
-            message: 'Select Tool to Configure:',
+            message: 'Select tool to configure:',
             choices: [
                 { name: '🐼 Browser Engine (Lightpanda/Chrome)', value: 'browser' },
-                { name: 'Serper (Web Search API)', value: 'serper' },
-                { name: 'Brave Search (Web Search API)', value: 'brave' },
-                { name: 'SearxNG (Self-hosted Search)', value: 'searxng' },
-                { name: 'Search Provider Order', value: 'searchOrder' },
-                { name: '2Captcha (CAPTCHA Solver)', value: 'captcha' },
-                { name: 'Back', value: 'back' }
+                new inquirer.Separator(gray(' ─── Search Providers ─────────────')),
+                { name: `${dot(hasSerper)} Serper (Web Search API)`, value: 'serper' },
+                { name: `${dot(hasBrave)} Brave Search`, value: 'brave' },
+                { name: `${dot(hasSearxng)} SearxNG (Self-hosted)`, value: 'searxng' },
+                { name: '  🔀 Search Provider Order', value: 'searchOrder' },
+                new inquirer.Separator(gray(' ─── Other ────────────────────────')),
+                { name: `${dot(hasCaptcha)} 2Captcha (CAPTCHA Solver)`, value: 'captcha' },
+                new inquirer.Separator(gray(' ────────────────────────────────')),
+                { name: dim('  Back'), value: 'back' }
             ]
         }
     ]);
@@ -973,14 +1182,17 @@ async function showToolingMenu() {
 }
 
 async function showGatewayMenu() {
+    console.clear();
     const currentPort = agent.config.get('gatewayPort') || 3100;
     const currentHost = agent.config.get('gatewayHost') || '0.0.0.0';
     const apiKey = agent.config.get('gatewayApiKey');
 
-    console.log('\n--- Web Gateway Settings ---');
-    console.log(`Port: ${currentPort}`);
-    console.log(`Host: ${currentHost}`);
-    console.log(`API Key: ${apiKey ? '***SET***' : 'Not Set (no authentication)'}`);
+    sectionHeader('🌐', 'Web Gateway');
+    console.log('');
+    kvLine('Host     ', cyan(String(currentHost)));
+    kvLine('Port     ', cyan(String(currentPort)));
+    kvLine('Auth     ', apiKey ? green('● API Key set') : yellow('○ No authentication'));
+    console.log('');
 
     const { action } = await inquirer.prompt([
         {
@@ -1067,7 +1279,8 @@ async function showModelsMenu() {
                 { name: 'OpenRouter (multi-model gateway)', value: 'openrouter' },
                 { name: 'Google (Gemini Pro/Flash)', value: 'google' },
                 { name: 'NVIDIA (AI models)', value: 'nvidia' },
-                { name: 'AWS Bedrock (Claude/other foundation models)', value: 'bedrock' },
+                { name: 'Anthropic (Claude)', value: 'anthropic' },
+                { name: 'AWS Bedrock (foundation models)', value: 'bedrock' },
                 { name: 'Back', value: 'back' }
             ]
         }
@@ -1085,6 +1298,8 @@ async function showModelsMenu() {
         await showGeminiConfig();
     } else if (provider === 'nvidia') {
         await showNvidiaConfig();
+    } else if (provider === 'anthropic') {
+        await showAnthropicConfig();
     } else if (provider === 'bedrock') {
         await showBedrockConfig();
     }
@@ -1096,6 +1311,7 @@ async function showSetPrimaryProvider() {
     const hasGoogle = !!agent.config.get('googleApiKey');
     const hasOpenRouter = !!agent.config.get('openrouterApiKey');
     const hasNvidia = !!agent.config.get('nvidiaApiKey');
+    const hasAnthropic = !!agent.config.get('anthropicApiKey');
     const hasBedrock = !!agent.config.get('bedrockAccessKeyId');
     
     const choices = [
@@ -1122,6 +1338,11 @@ async function showSetPrimaryProvider() {
             name: `NVIDIA${hasNvidia ? '' : ' (no key configured)'}${currentProvider === 'nvidia' ? ' ✓' : ''}`, 
             value: 'nvidia',
             disabled: !hasNvidia
+        },
+        { 
+            name: `Anthropic (Claude)${hasAnthropic ? '' : ' (no key configured)'}${currentProvider === 'anthropic' ? ' ✓' : ''}`, 
+            value: 'anthropic',
+            disabled: !hasAnthropic
         },
         { 
             name: `AWS Bedrock${hasBedrock ? '' : ' (no credentials configured)'}${currentProvider === 'bedrock' ? ' ✓' : ''}`, 
@@ -1300,6 +1521,56 @@ async function showNvidiaConfig() {
     return showNvidiaConfig();
 }
 
+async function showAnthropicConfig() {
+    const currentModel = agent.config.get('modelName');
+    const apiKey = agent.config.get('anthropicApiKey') || 'Not Set';
+    const displayKey = apiKey === 'Not Set' ? 'Not Set' : `${apiKey.substring(0, 12)}...`;
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: `Anthropic Settings (Active Model: ${currentModel}):`,
+            choices: [
+                { name: `Set API Key (current: ${displayKey})`, value: 'key' },
+                { name: 'Set Model Name', value: 'model' },
+                { name: 'Back', value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showModelsMenu();
+
+    if (action === 'key') {
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter Anthropic API Key:' }]);
+        agent.config.set('anthropicApiKey', val);
+    } else if (action === 'model') {
+        const { val } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'val',
+                message: 'Select Claude Model:',
+                choices: [
+                    { name: 'Claude Opus 4.6   — Most intelligent (agents, complex coding)', value: 'claude-opus-4-6' },
+                    { name: 'Claude Sonnet 4.5 — Best speed + intelligence balance', value: 'claude-sonnet-4-5' },
+                    { name: 'Claude Haiku 4.5  — Fastest, near-frontier intelligence', value: 'claude-haiku-4-5' },
+                    { name: 'Custom model ID...', value: 'custom' }
+                ]
+            }
+        ]);
+        if (val === 'custom') {
+            const { custom } = await inquirer.prompt([{ type: 'input', name: 'custom', message: 'Enter Claude Model ID:', default: currentModel }]);
+            agent.config.set('modelName', custom);
+        } else {
+            agent.config.set('modelName', val);
+        }
+    }
+
+    console.log('Anthropic settings updated!');
+    await waitKeyPress();
+    return showAnthropicConfig();
+}
+
 async function showBedrockConfig() {
     const currentModel = agent.config.get('modelName');
     const region = agent.config.get('bedrockRegion') || 'Not Set';
@@ -1363,16 +1634,26 @@ async function showPushTaskMenu() {
 }
 
 async function showConnectionsMenu() {
+    console.clear();
+    sectionHeader('🔌', 'Connections');
+    console.log('');
+
+    const hasTelegram = !!agent.config.get('telegramToken');
+    const hasWhatsapp = !!agent.config.get('whatsappEnabled');
+    const hasDiscord = !!agent.config.get('discordToken');
+    const dot = (ok: boolean) => ok ? green('●') : gray('○');
+
     const { channel } = await inquirer.prompt([
         {
             type: 'list',
             name: 'channel',
-            message: 'Manage Connections:',
+            message: 'Select channel to configure:',
             choices: [
-                { name: 'Telegram Bot', value: 'telegram' },
-                { name: 'WhatsApp (Baileys)', value: 'whatsapp' },
-                { name: 'Discord Bot', value: 'discord' },
-                { name: 'Back', value: 'back' },
+                { name: `${dot(hasTelegram)} Telegram Bot`, value: 'telegram' },
+                { name: `${dot(hasWhatsapp)} WhatsApp (Baileys)`, value: 'whatsapp' },
+                { name: `${dot(hasDiscord)} Discord Bot`, value: 'discord' },
+                new inquirer.Separator(gray(' ────────────────────────────────')),
+                { name: dim('  Back'), value: 'back' },
             ]
         }
     ]);
@@ -1580,8 +1861,7 @@ async function showDiscordConfig() {
 
 async function showWorkerProfileMenu() {
     console.clear();
-    console.log('🪪 Worker Profile (Digital Identity)');
-    console.log('=====================================');
+    sectionHeader('🪪', 'Worker Profile (Digital Identity)');
 
     if (!workerProfile.exists()) {
         console.log('No worker profile exists yet.\n');
@@ -1689,8 +1969,7 @@ async function showWorkerWebsitesMenu() {
     if (!profile) return showWorkerProfileMenu();
 
     console.clear();
-    console.log('🌐 Linked Websites');
-    console.log('==================');
+    sectionHeader('🌐', 'Linked Websites');
 
     if (profile.websites.length === 0) {
         console.log('No websites linked yet.\n');
@@ -1744,20 +2023,19 @@ async function showWorkerWebsitesMenu() {
 
 async function showOrchestrationMenu() {
     console.clear();
-    console.log('🐙 Multi-Agent Orchestration');
-    console.log('============================');
+    sectionHeader('🐙', 'Multi-Agent Orchestration');
 
     const orchestrator = agent.orchestrator;
     const status = orchestrator.getStatus();
     const runningWorkers = orchestrator.getRunningWorkers();
     const detailedWorkers = orchestrator.getDetailedWorkerStatus();
 
-    // Show current status
-    console.log(`Active Agents: ${status.activeAgents}`);
-    console.log(`Running Workers: ${runningWorkers.length} process(es)`);
-    console.log(`Pending Tasks: ${status.pendingTasks}`);
-    console.log(`Completed Tasks: ${status.completedTasks}`);
-    console.log(`Failed Tasks: ${status.failedTasks}`);
+    console.log('');
+    kvLine('Active Agents  ', cyan(String(status.activeAgents)));
+    kvLine('Running Workers', status.activeAgents > 0 ? green(String(runningWorkers.length) + ' process(es)') : gray('0'));
+    kvLine('Pending Tasks  ', status.pendingTasks > 0 ? yellow(String(status.pendingTasks)) : green('0'));
+    kvLine('Completed      ', green(String(status.completedTasks)));
+    kvLine('Failed         ', status.failedTasks > 0 ? red(String(status.failedTasks)) : gray('0'));
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -2029,18 +2307,18 @@ async function showOrchestrationMenu() {
 
 async function showSecurityMenu() {
     console.clear();
-    console.log('🔐 Security & Permissions');
-    console.log('=========================');
+    sectionHeader('🔐', 'Security & Permissions');
 
     const safeMode = agent.config.get('safeMode');
     const sudoMode = agent.config.get('sudoMode');
     const allowList = (agent.config.get('commandAllowList') || []) as string[];
     const denyList = (agent.config.get('commandDenyList') || []) as string[];
 
-    console.log(`\nSafe Mode: ${safeMode ? '🔒 ON (run_command disabled)' : '🔓 OFF'}`);
-    console.log(`Sudo Mode: ${sudoMode ? '⚠️ ON (all commands allowed)' : '✅ OFF (allowList enforced)'}`);
-    console.log(`\nAllowed Commands (${allowList.length}): ${allowList.slice(0, 10).join(', ')}${allowList.length > 10 ? '...' : ''}`);
-    console.log(`Blocked Commands (${denyList.length}): ${denyList.join(', ')}`);
+    console.log('');
+    kvLine('Safe Mode       ', safeMode ? red(bold('🔒 ON') + ' (commands disabled)') : green('🔓 OFF'));
+    kvLine('Sudo Mode       ', sudoMode ? yellow(bold('⚠️  ON') + ' (all commands allowed)') : green('✅ OFF (allowList enforced)'));
+    kvLine('Allowed Commands', cyan(String(allowList.length)) + dim(allowList.length > 0 ? ` — ${allowList.slice(0, 8).join(', ')}${allowList.length > 8 ? '...' : ''}` : ''));
+    kvLine('Blocked Commands', cyan(String(denyList.length)) + dim(denyList.length > 0 ? ` — ${denyList.join(', ')}` : ''));
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -2144,9 +2422,13 @@ async function showSecurityMenu() {
 }
 
 async function showConfigMenu() {
+    console.clear();
+    sectionHeader('⚙️', 'Agent Configuration');
+    console.log('');
+
     const config = agent.config.getAll();
     // Ensure we show explicit keys relative to core config
-    const keys = ['agentName', 'llmProvider', 'modelName', 'openaiApiKey', 'openrouterApiKey', 'openrouterBaseUrl', 'openrouterReferer', 'openrouterAppName', 'googleApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl', 'searchProviderOrder', 'captchaApiKey', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'whatsappAutoReplyEnabled', 'progressFeedbackEnabled', 'memoryContextLimit', 'memoryEpisodicLimit', 'memoryConsolidationThreshold', 'memoryConsolidationBatch', 'maxStepsPerAction', 'maxMessagesPerAction', 'memoryPath', 'commandAllowList', 'commandDenyList', 'safeMode', 'sudoMode', 'pluginAllowList', 'pluginDenyList', 'browserProfileDir', 'browserProfileName'] as const;
+    const keys = ['agentName', 'llmProvider', 'modelName', 'openaiApiKey', 'anthropicApiKey', 'openrouterApiKey', 'openrouterBaseUrl', 'openrouterReferer', 'openrouterAppName', 'googleApiKey', 'nvidiaApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl', 'searchProviderOrder', 'captchaApiKey', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'whatsappAutoReplyEnabled', 'progressFeedbackEnabled', 'memoryContextLimit', 'memoryEpisodicLimit', 'memoryConsolidationThreshold', 'memoryConsolidationBatch', 'maxStepsPerAction', 'maxMessagesPerAction', 'memoryPath', 'commandAllowList', 'commandDenyList', 'safeMode', 'sudoMode', 'pluginAllowList', 'pluginDenyList', 'browserProfileDir', 'browserProfileName'] as const;
 
     const choices: { name: string, value: string }[] = keys.map(key => ({
         name: `${key}: ${config[key as keyof typeof config] || '(empty)'}`,
@@ -2209,11 +2491,46 @@ async function showConfigMenu() {
 
 async function showSkillsMenu() {
     const skills = agent.skills.getAllSkills();
-    const choices = skills.map(s => ({
-        name: `${s.name} ${s.pluginPath ? '(Plugin)' : '(Core)'}: ${s.description}`,
-        value: s.name
-    }));
-    choices.push({ name: '✨ Build New Skill from URL', value: 'build' });
+    const agentSkills = agent.skills.getAgentSkills();
+
+    const choices: any[] = [];
+
+    // Section: Agent Skills (SKILL.md format)
+    if (agentSkills.length > 0) {
+        choices.push(new inquirer.Separator('── Agent Skills (SKILL.md) ──'));
+        for (const s of agentSkills) {
+            const status = s.activated ? '🟢' : '⚪';
+            choices.push({
+                name: `${status} ${s.meta.name}: ${s.meta.description.slice(0, 60)}${s.meta.description.length > 60 ? '...' : ''}`,
+                value: `agent:${s.meta.name}`
+            });
+        }
+    }
+
+    // Section: Plugin Skills
+    const pluginSkills = skills.filter(s => s.pluginPath);
+    if (pluginSkills.length > 0) {
+        choices.push(new inquirer.Separator('── Plugin Skills (.ts/.js) ──'));
+        for (const s of pluginSkills) {
+            choices.push({
+                name: `  ${s.name}: ${s.description.slice(0, 60)}`,
+                value: `plugin:${s.name}`
+            });
+        }
+    }
+
+    // Section: Core Skills
+    const coreSkills = skills.filter(s => !s.pluginPath);
+    choices.push(new inquirer.Separator(`── Core Skills (${coreSkills.length}) ──`));
+    choices.push({ name: `  Show all ${coreSkills.length} core skills`, value: 'list_core' });
+
+    // Actions
+    choices.push(new inquirer.Separator('── Actions ──'));
+    choices.push({ name: '📦 Install Skill from URL', value: 'install_url' });
+    choices.push({ name: '📁 Install Skill from Local Path', value: 'install_path' });
+    choices.push({ name: '✨ Create New Skill', value: 'create' });
+    choices.push({ name: '🔨 Build Skill from Spec URL (Legacy)', value: 'build' });
+    choices.push({ name: '✅ Validate Skill', value: 'validate' });
     choices.push({ name: 'Back', value: 'back' });
 
     const { selection } = await inquirer.prompt([
@@ -2221,15 +2538,193 @@ async function showSkillsMenu() {
             type: 'list',
             name: 'selection',
             message: 'Manage Agent Skills:',
-            choices
+            choices,
+            pageSize: 20
         }
     ]);
 
     if (selection === 'back') return showMainMenu();
 
+    // ── Agent Skill management ──
+    if (selection.startsWith('agent:')) {
+        const skillName = selection.replace('agent:', '');
+        const skill = agent.skills.getAgentSkill(skillName);
+        if (!skill) return showSkillsMenu();
+
+        const { action } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'action',
+                message: `Agent Skill: ${skillName}`,
+                choices: [
+                    { name: skill.activated ? '⏸️  Deactivate' : '▶️  Activate', value: 'toggle' },
+                    { name: '📖 View SKILL.md', value: 'view' },
+                    { name: '✅ Validate', value: 'validate' },
+                    { name: '📂 Show Resources', value: 'resources' },
+                    { name: '🗑️  Uninstall', value: 'uninstall' },
+                    { name: 'Back', value: 'back' }
+                ]
+            }
+        ]);
+
+        if (action === 'toggle') {
+            if (skill.activated) {
+                agent.skills.deactivateAgentSkill(skillName);
+                console.log(`⏸️  Deactivated "${skillName}"`);
+            } else {
+                agent.skills.activateAgentSkill(skillName);
+                console.log(`▶️  Activated "${skillName}"`);
+            }
+            await waitKeyPress();
+        } else if (action === 'view') {
+            console.log('\n' + '─'.repeat(60));
+            console.log(fs.readFileSync(path.join(skill.skillDir, 'SKILL.md'), 'utf8'));
+            console.log('─'.repeat(60));
+            await waitKeyPress();
+        } else if (action === 'validate') {
+            const result = agent.skills.validateSkill(skill.skillDir);
+            if (result.valid) {
+                console.log(`✅ Skill "${skillName}" is valid.`);
+            } else {
+                console.log(`❌ ${result.errors.length} issue(s):`);
+                result.errors.forEach(e => console.log(`  - ${e}`));
+            }
+            await waitKeyPress();
+        } else if (action === 'resources') {
+            console.log(`\n📂 Resources for "${skillName}":`);
+            if (skill.scripts.length > 0) console.log(`  Scripts: ${skill.scripts.join(', ')}`);
+            if (skill.references.length > 0) console.log(`  References: ${skill.references.join(', ')}`);
+            if (skill.assets.length > 0) console.log(`  Assets: ${skill.assets.join(', ')}`);
+            if (skill.scripts.length + skill.references.length + skill.assets.length === 0) {
+                console.log('  (No bundled resources)');
+            }
+            await waitKeyPress();
+        } else if (action === 'uninstall') {
+            const { confirm } = await inquirer.prompt([{ type: 'confirm', name: 'confirm', message: `Really uninstall "${skillName}"?`, default: false }]);
+            if (confirm) {
+                console.log(agent.skills.uninstallAgentSkill(skillName));
+                await waitKeyPress();
+            }
+        }
+        return showSkillsMenu();
+    }
+
+    // ── Plugin skill management ──
+    if (selection.startsWith('plugin:')) {
+        const skillName = selection.replace('plugin:', '');
+        const selectedSkill = skills.find(s => s.name === skillName);
+        if (selectedSkill?.pluginPath) {
+            const { action } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'action',
+                    message: `Plugin Skill: ${skillName}`,
+                    choices: [
+                        { name: '🗑️  Uninstall (Delete Plugin)', value: 'uninstall' },
+                        { name: 'Back', value: 'back' }
+                    ]
+                }
+            ]);
+
+            if (action === 'uninstall') {
+                const { confirm } = await inquirer.prompt([{ type: 'confirm', name: 'confirm', message: `Really delete ${skillName}?`, default: false }]);
+                if (confirm) {
+                    console.log(agent.skills.uninstallSkill(skillName));
+                    await waitKeyPress();
+                }
+            }
+        }
+        return showSkillsMenu();
+    }
+
+    // ── List core skills ──
+    if (selection === 'list_core') {
+        console.log('\nCore Skills:');
+        for (const s of coreSkills) {
+            console.log(`  ${s.name}: ${s.description}`);
+            console.log(`    Usage: ${s.usage}\n`);
+        }
+        await waitKeyPress();
+        return showSkillsMenu();
+    }
+
+    // ── Install from URL ──
+    if (selection === 'install_url') {
+        const { url } = await inquirer.prompt([
+            { type: 'input', name: 'url', message: 'Enter URL (GitHub repo, gist, .skill file, or raw SKILL.md):' }
+        ]);
+        if (url) {
+            console.log('Installing skill...');
+            const result = await agent.skills.installSkillFromUrl(url);
+            console.log(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
+            await waitKeyPress();
+        }
+        return showSkillsMenu();
+    }
+
+    // ── Install from local path ──
+    if (selection === 'install_path') {
+        const { localPath } = await inquirer.prompt([
+            { type: 'input', name: 'localPath', message: 'Enter local path to skill directory or .skill file:' }
+        ]);
+        if (localPath) {
+            console.log('Installing skill...');
+            const result = await agent.skills.installSkillFromPath(localPath);
+            console.log(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
+            await waitKeyPress();
+        }
+        return showSkillsMenu();
+    }
+
+    // ── Create new skill ──
+    if (selection === 'create') {
+        const answers = await inquirer.prompt([
+            { type: 'input', name: 'name', message: 'Skill name (lowercase-with-hyphens):' },
+            { type: 'input', name: 'description', message: 'Description (what it does and when to use it):' }
+        ]);
+        if (answers.name) {
+            const result = agent.skills.initSkill(answers.name, answers.description);
+            console.log(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
+            if (result.success) console.log(`  Edit SKILL.md at: ${path.join(result.path, 'SKILL.md')}`);
+            await waitKeyPress();
+        }
+        return showSkillsMenu();
+    }
+
+    // ── Validate skill ──
+    if (selection === 'validate') {
+        const agentSkillsList = agent.skills.getAgentSkills();
+        if (agentSkillsList.length === 0) {
+            console.log('No agent skills installed to validate.');
+            await waitKeyPress();
+            return showSkillsMenu();
+        }
+        const { skillName } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'skillName',
+                message: 'Select skill to validate:',
+                choices: agentSkillsList.map(s => ({ name: s.meta.name, value: s.meta.name }))
+            }
+        ]);
+        const skill = agent.skills.getAgentSkill(skillName);
+        if (skill) {
+            const result = agent.skills.validateSkill(skill.skillDir);
+            if (result.valid) {
+                console.log(`✅ Skill "${skillName}" is valid.`);
+            } else {
+                console.log(`❌ ${result.errors.length} issue(s):`);
+                result.errors.forEach(e => console.log(`  - ${e}`));
+            }
+        }
+        await waitKeyPress();
+        return showSkillsMenu();
+    }
+
+    // ── Build from spec URL (legacy) ──
     if (selection === 'build') {
         const { url } = await inquirer.prompt([
-            { type: 'input', name: 'url', message: 'Enter URL for SKILLS.md specification:' }
+            { type: 'input', name: 'url', message: 'Enter URL for skill specification:' }
         ]);
         if (url) {
             const { SkillBuilder } = require('./builder');
@@ -2237,38 +2732,10 @@ async function showSkillsMenu() {
             console.log('Building skill...');
             const result = await builder.buildFromUrl(url);
             console.log(result);
-            agent.skills.loadPlugins(); // Reload to pick up new skill
+            agent.skills.loadPlugins();
             await waitKeyPress();
         }
         return showSkillsMenu();
-    }
-
-    // Individual skill management
-    const selectedSkill = skills.find(s => s.name === selection);
-    if (selectedSkill?.pluginPath) {
-        const { action } = await inquirer.prompt([
-            {
-                type: 'list',
-                name: 'action',
-                message: `Skill: ${selection}`,
-                choices: [
-                    { name: '🗑️ Uninstall (Delete Plugin)', value: 'uninstall' },
-                    { name: 'Back', value: 'back' }
-                ]
-            }
-        ]);
-
-        if (action === 'uninstall') {
-            const { confirm } = await inquirer.prompt([{ type: 'confirm', name: 'confirm', message: `Really delete ${selection}?`, default: false }]);
-            if (confirm) {
-                const res = agent.skills.uninstallSkill(selection);
-                console.log(res);
-                await waitKeyPress();
-            }
-        }
-    } else {
-        console.log(`\nCore skill "${selection}" cannot be uninstalled.\nUsage: ${selectedSkill?.usage}`);
-        await waitKeyPress();
     }
 
     return showSkillsMenu();
@@ -2399,48 +2866,72 @@ async function performUpdate() {
 }
 
 function showStatus() {
-    console.log('--- Agent Status ---');
-    console.log(`Memory Entries: ${agent.memory.searchMemory('short').length} (short-term)`);
-    console.log(`Action Queue: ${agent.actionQueue.getQueue().length} total actions`);
-    console.log(`Telegram Bot: ${agent.telegram ? 'Connected' : 'Disconnected/Not Set'}`);
-    console.log(`WhatsApp: ${agent.whatsapp ? 'Connected' : 'Disconnected/Disabled'}`);
-    console.log('--------------------');
+    console.clear();
+    banner();
+    sectionHeader('📊', 'Agent Status');
+
+    const shortMem = agent.memory.searchMemory('short').length;
+    const queueLen = agent.actionQueue.getQueue().length;
+    const hasTelegram = !!agent.telegram;
+    const hasWhatsapp = !!agent.whatsapp;
+    const hasDiscord = !!agent.discord;
+    const model = agent.config.get('modelName') || 'gpt-4o';
+    const provider = agent.config.get('llmProvider') || 'auto';
+
+    console.log('');
+    kvLine('Active Model    ', cyan(model));
+    kvLine('LLM Provider    ', cyan(provider));
+    kvLine('Memory Entries  ', yellow(String(shortMem)) + dim(' (short-term)'));
+    kvLine('Action Queue    ', queueLen > 0 ? yellow(String(queueLen)) + ' pending' : green('0 pending'));
+    console.log('');
+    kvLine('Telegram        ', statusBadge(hasTelegram, 'Connected', 'Not connected'));
+    kvLine('WhatsApp        ', statusBadge(hasWhatsapp, 'Connected', 'Not connected'));
+    kvLine('Discord         ', statusBadge(hasDiscord, 'Connected', 'Not connected'));
+    console.log('');
 }
 
 function showTokenUsage() {
+    console.clear();
+    banner();
+    sectionHeader('📈', 'Token Usage');
+
     const tracker = new TokenTracker(
         agent.config.get('tokenUsagePath'),
         agent.config.get('tokenLogPath')
     );
     const summary = tracker.getSummary();
 
-    console.log('--- Token Usage ---');
-    console.log(`Total Prompt Tokens: ${summary.totals.promptTokens}`);
-    console.log(`Total Completion Tokens: ${summary.totals.completionTokens}`);
-    console.log(`Total Tokens: ${summary.totals.totalTokens}`);
+    console.log('');
+    kvLine('Prompt Tokens     ', bold(summary.totals.promptTokens.toLocaleString()));
+    kvLine('Completion Tokens ', bold(summary.totals.completionTokens.toLocaleString()));
+    kvLine('Total Tokens      ', cyan(bold(summary.totals.totalTokens.toLocaleString())));
 
     const providers = Object.entries(summary.byProvider);
     if (providers.length > 0) {
-        console.log('\nBy Provider:');
-        providers.forEach(([provider, totals]) => {
-            console.log(`  ${provider}: ${totals.totalTokens} (prompt ${totals.promptTokens}, completion ${totals.completionTokens})`);
+        console.log('');
+        console.log(gray('  By Provider:'));
+        providers.forEach(([prov, totals]) => {
+            const bar = '█'.repeat(Math.min(20, Math.ceil((totals.totalTokens / Math.max(summary.totals.totalTokens, 1)) * 20)));
+            console.log(`    ${cyan(prov.padEnd(12))} ${green(bar)} ${dim(totals.totalTokens.toLocaleString())}`);
         });
     }
 
     const models = Object.entries(summary.byModel).slice(0, 6);
     if (models.length > 0) {
-        console.log('\nTop Models:');
-        models.forEach(([model, totals]) => {
-            console.log(`  ${model}: ${totals.totalTokens} tokens`);
+        console.log('');
+        console.log(gray('  Top Models:'));
+        models.forEach(([mdl, totals]) => {
+            console.log(`    ${mdl.padEnd(30)} ${dim(totals.totalTokens.toLocaleString() + ' tokens')}`);
         });
     }
 
-    console.log(`\nLast Updated: ${summary.lastUpdated}`);
-    console.log('--------------------');
+    console.log('');
+    kvLine('Last Updated      ', dim(summary.lastUpdated));
+    console.log('');
 }
 
 async function waitKeyPress() {
-    await inquirer.prompt([{ type: 'input', name: 'continue', message: 'Press Enter to continue...' }]);
+    await inquirer.prompt([{ type: 'input', name: 'continue', message: gray('Press Enter to continue...') }]);
 }
 
 program.parse(process.argv);

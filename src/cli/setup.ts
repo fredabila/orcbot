@@ -51,6 +51,12 @@ export async function runSetup() {
         },
         {
             type: 'input',
+            name: 'anthropicApiKey',
+            message: 'Anthropic (Claude) API Key (optional):',
+            mask: '*'
+        },
+        {
+            type: 'input',
             name: 'bedrockRegion',
             message: 'AWS Bedrock Region (optional, e.g., us-east-1):'
         },
@@ -127,6 +133,7 @@ export async function runSetup() {
     if (answers.openaiApiKey) envContent += `OPENAI_API_KEY=${answers.openaiApiKey}\n`;
     if (answers.googleApiKey) envContent += `GOOGLE_API_KEY=${answers.googleApiKey}\n`;
     if (answers.nvidiaApiKey) envContent += `NVIDIA_API_KEY=${answers.nvidiaApiKey}\n`;
+    if (answers.anthropicApiKey) envContent += `ANTHROPIC_API_KEY=${answers.anthropicApiKey}\n`;
     if (answers.bedrockRegion) envContent += `BEDROCK_REGION=${answers.bedrockRegion}\n`;
     if (answers.bedrockAccessKeyId) envContent += `BEDROCK_ACCESS_KEY_ID=${answers.bedrockAccessKeyId}\n`;
     if (answers.bedrockSecretAccessKey) envContent += `BEDROCK_SECRET_ACCESS_KEY=${answers.bedrockSecretAccessKey}\n`;

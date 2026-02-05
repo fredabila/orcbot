@@ -97,6 +97,7 @@ export class Agent {
             openrouterAppName: this.config.get('openrouterAppName'),
             googleApiKey: this.config.get('googleApiKey'),
             nvidiaApiKey: this.config.get('nvidiaApiKey'),
+            anthropicApiKey: this.config.get('anthropicApiKey'),
             modelName: this.config.get('modelName'),
             llmProvider: this.config.get('llmProvider'),
             bedrockRegion: this.config.get('bedrockRegion'),
@@ -1178,6 +1179,9 @@ Output the fixed code:
                     fs.writeFileSync(targetSkill.pluginPath, cleanCode);
                     this.skills.loadPlugins(); // Reload registry
 
+                    // Regenerate SKILL.md wrapper to keep metadata in sync
+                    this.generateSkillMdForPlugin(skillName, targetSkill.description || '', targetSkill.pluginPath);
+
                     return `Successfully repaired and reloaded skill "${skillName}". You can now try to use it again.`;
 
                 } catch (error: any) {
@@ -1203,7 +1207,7 @@ Output the fixed code:
         // Skill: Manage Skills
         this.skills.registerSkill({
             name: 'manage_skills',
-            description: 'Install or update a skill in SKILLS.md. Use this to describe new tools the agent should have access to.',
+            description: 'Append a skill definition to SKILLS.md (the skill registry doc). This is a LIGHTWEIGHT way to document a new skill. For creating actual EXECUTABLE skills use create_custom_skill. For creating KNOWLEDGE-BASED skills use create_skill.',
             usage: 'manage_skills(skill_definition)',
             handler: async (args: any) => {
                 const skill_definition = args.skill_definition || args.definition || args.skill || args.text;
@@ -1219,6 +1223,263 @@ Output the fixed code:
                 } catch (e) {
                     return `Failed to update skills: ${e}`;
                 }
+            }
+        });
+
+        // ─── Agent Skills (SKILL.md Format) ──────────────────────────────
+
+        // Skill: Install Agent Skill (from URL or path)
+        this.skills.registerSkill({
+            name: 'install_skill',
+            description: 'Install an Agent Skill from a GitHub repo URL, gist, .skill file URL, raw SKILL.md URL, or local path. Agent Skills follow the agentskills.io format and extend the agent with new capabilities, workflows, and knowledge.',
+            usage: 'install_skill(source)',
+            handler: async (args: any) => {
+                const source = args.source || args.url || args.path || args.repo;
+                if (!source) return 'Error: Missing source. Provide a URL or local path to a skill.';
+
+                if (source.startsWith('http://') || source.startsWith('https://')) {
+                    const result = await this.skills.installSkillFromUrl(source);
+                    if (result.success && result.skillName) {
+                        // Auto-activate newly installed skill
+                        this.skills.activateAgentSkill(result.skillName);
+                    }
+                    return result.message;
+                } else {
+                    const result = await this.skills.installSkillFromPath(source);
+                    if (result.success && result.skillName) {
+                        this.skills.activateAgentSkill(result.skillName);
+                    }
+                    return result.message;
+                }
+            }
+        });
+
+        // Skill: Create Agent Skill (KNOWLEDGE-BASED — scaffolds SKILL.md with instructions)
+        // Use create_skill for knowledge, workflows, prompts, guides, and reference material.
+        // Use create_custom_skill for executable code (API calls, automation, data processing).
+        this.skills.registerSkill({
+            name: 'create_skill',
+            description: 'Create a KNOWLEDGE-BASED Agent Skill (SKILL.md format) with instructions, scripts, references, and assets. Use this for skills that teach the agent NEW WORKFLOWS, PROCEDURES, KNOWLEDGE, or PROMPT PATTERNS — not executable code. For skills that need to RUN CODE (API calls, automation, etc.), use create_custom_skill instead.',
+            usage: 'create_skill(name, description?, instructions?)',
+            handler: async (args: any) => {
+                const name = args.name || args.skill_name;
+                const description = args.description || args.desc;
+                const instructions = args.instructions || args.body;
+                if (!name) return 'Error: Missing skill name. Use lowercase-with-hyphens format (e.g., "pdf-processor").';
+
+                const result = this.skills.initSkill(name, description);
+                if (!result.success) return result.message;
+
+                // If instructions provided, write them to SKILL.md body
+                if (instructions && result.path) {
+                    const skillMdPath = path.join(result.path, 'SKILL.md');
+                    const content = fs.readFileSync(skillMdPath, 'utf8');
+                    const parsed = this.skills.parseSkillMd(content);
+                    if (parsed) {
+                        const newContent = `---\nname: ${name}\ndescription: "${description || parsed.meta.description}"\nmetadata:\n  author: orcbot\n  version: "1.0"\n---\n\n${instructions}`;
+                        fs.writeFileSync(skillMdPath, newContent);
+                    }
+                }
+
+                // If no instructions provided but we have a description, use LLM to generate
+                if (!instructions && description) {
+                    try {
+                        const prompt = `Generate a SKILL.md body (Markdown instructions, NOT frontmatter) for an Agent Skill called "${name}" described as: "${description}".
+
+Include:
+1. ## Overview — what the skill does
+2. ## When to Use — triggers and scenarios
+3. ## Instructions — step-by-step procedural knowledge for an AI agent
+4. ## Examples — concrete input/output examples
+5. ## Resources — mention scripts/, references/, assets/ if applicable
+
+Write clear, actionable instructions an AI agent can follow. Be specific. Under 300 lines.
+Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`;
+
+                        const body = await this.llm.call(prompt, 'You are an expert at writing Agent Skills that teach AI agents new capabilities.');
+                        const cleanBody = body.replace(/```markdown/g, '').replace(/```/g, '').trim();
+                        const skillMdPath = path.join(result.path, 'SKILL.md');
+                        const newContent = `---\nname: ${name}\ndescription: "${description}"\nmetadata:\n  author: orcbot\n  version: "1.0"\n---\n\n${cleanBody}`;
+                        fs.writeFileSync(skillMdPath, newContent);
+                    } catch (e) {
+                        logger.warn(`Agent: Failed to generate skill instructions: ${e}`);
+                    }
+                }
+
+                this.skills.discoverAgentSkills();
+                return `${result.message}\n\nThe skill is ready. You can edit SKILL.md and add scripts/references/assets as needed.`;
+            }
+        });
+
+        // Skill: Activate/Deactivate Agent Skill
+        this.skills.registerSkill({
+            name: 'activate_skill',
+            description: 'Activate or deactivate an Agent Skill. Activated skills have their full instructions loaded into your context. Use this to load specialized knowledge on demand.',
+            usage: 'activate_skill(name, active?)',
+            handler: async (args: any) => {
+                const name = args.name || args.skill_name || args.skill;
+                const active = args.active !== false && args.active !== 'false' && args.deactivate !== true;
+                if (!name) return 'Error: Missing skill name.';
+
+                if (active) {
+                    const skill = this.skills.activateAgentSkill(name);
+                    if (!skill) return `Agent skill "${name}" not found. Use list_agent_skills to see available skills.`;
+                    return `Activated skill "${name}". Its instructions are now in your context:\n\n${skill.instructions.slice(0, 500)}${skill.instructions.length > 500 ? '...' : ''}`;
+                } else {
+                    const ok = this.skills.deactivateAgentSkill(name);
+                    if (!ok) return `Agent skill "${name}" not found.`;
+                    return `Deactivated skill "${name}". Its instructions are removed from context.`;
+                }
+            }
+        });
+
+        // Skill: List Agent Skills
+        this.skills.registerSkill({
+            name: 'list_agent_skills',
+            description: 'List all installed Agent Skills (SKILL.md format) with their metadata, activation status, and available resources.',
+            usage: 'list_agent_skills()',
+            handler: async () => {
+                const agentSkills = this.skills.getAgentSkills();
+                if (agentSkills.length === 0) {
+                    return 'No Agent Skills installed. Use install_skill(url) to install from GitHub or create_skill(name, description) to create one.';
+                }
+
+                const lines: string[] = [`Found ${agentSkills.length} Agent Skills:\n`];
+                for (const skill of agentSkills) {
+                    const status = skill.activated ? '🟢 Active' : '⚪ Inactive';
+                    lines.push(`${status} **${skill.meta.name}**: ${skill.meta.description}`);
+                    if (skill.scripts.length > 0) lines.push(`  Scripts: ${skill.scripts.join(', ')}`);
+                    if (skill.references.length > 0) lines.push(`  References: ${skill.references.join(', ')}`);
+                    if (skill.assets.length > 0) lines.push(`  Assets: ${skill.assets.join(', ')}`);
+                    if (skill.meta.metadata?.version) lines.push(`  Version: ${skill.meta.metadata.version}`);
+                    lines.push('');
+                }
+
+                return lines.join('\n');
+            }
+        });
+
+        // Skill: Read Skill Resource
+        this.skills.registerSkill({
+            name: 'read_skill_resource',
+            description: 'Read a bundled file from an installed Agent Skill. Use this to load reference docs, read script code, or access asset files on demand (progressive disclosure).',
+            usage: 'read_skill_resource(skill_name, file_path)',
+            handler: async (args: any) => {
+                const skillName = args.skill_name || args.skill || args.name;
+                const filePath = args.file_path || args.file || args.path;
+                if (!skillName || !filePath) return 'Error: Missing skill_name and/or file_path.';
+
+                const content = this.skills.readSkillResource(skillName, filePath);
+                if (content === null) return `Could not read "${filePath}" from skill "${skillName}". Check the path and skill name.`;
+                return content;
+            }
+        });
+
+        // Skill: Validate Skill
+        this.skills.registerSkill({
+            name: 'validate_skill',
+            description: 'Validate an Agent Skill directory against the agentskills.io specification. Checks frontmatter, naming, structure.',
+            usage: 'validate_skill(name_or_path)',
+            handler: async (args: any) => {
+                const input = args.name_or_path || args.name || args.path || args.skill;
+                if (!input) return 'Error: Missing skill name or path.';
+
+                // Resolve path: could be a skill name or absolute path
+                let skillDir = input;
+                if (!path.isAbsolute(input)) {
+                    const agentSkill = this.skills.getAgentSkill(input);
+                    if (agentSkill) {
+                        skillDir = agentSkill.skillDir;
+                    } else if (this.config.get('pluginsPath')) {
+                        skillDir = path.join(this.config.get('pluginsPath'), 'skills', input);
+                    }
+                }
+
+                const result = this.skills.validateSkill(skillDir);
+                if (result.valid) return `✅ Skill "${input}" is valid.`;
+                return `❌ Skill "${input}" has ${result.errors.length} issue(s):\n${result.errors.map(e => `  - ${e}`).join('\n')}`;
+            }
+        });
+
+        // Skill: Uninstall Agent Skill
+        this.skills.registerSkill({
+            name: 'uninstall_agent_skill',
+            description: 'Uninstall an Agent Skill by removing its directory. This is for SKILL.md-format skills only.',
+            usage: 'uninstall_agent_skill(name)',
+            handler: async (args: any) => {
+                const name = args.name || args.skill_name || args.skill;
+                if (!name) return 'Error: Missing skill name.';
+                return this.skills.uninstallAgentSkill(name);
+            }
+        });
+
+        // Skill: Run Skill Script
+        this.skills.registerSkill({
+            name: 'run_skill_script',
+            description: 'Execute a script bundled with an Agent Skill. Scripts can be .js, .py, .sh, or other executable files.',
+            usage: 'run_skill_script(skill_name, script, args?)',
+            handler: async (args: any) => {
+                const skillName = args.skill_name || args.skill || args.name;
+                const scriptPath = args.script || args.file;
+                const scriptArgs = args.args || '';
+                if (!skillName || !scriptPath) return 'Error: Missing skill_name and/or script path.';
+
+                const skill = this.skills.getAgentSkill(skillName);
+                if (!skill) return `Agent skill "${skillName}" not found.`;
+
+                const fullScriptPath = path.join(skill.skillDir, 'scripts', scriptPath);
+                if (!fullScriptPath.startsWith(skill.skillDir)) return 'Error: Path traversal not allowed.';
+                if (!fs.existsSync(fullScriptPath)) return `Script not found: ${scriptPath}`;
+
+                const ext = path.extname(fullScriptPath).toLowerCase();
+                let cmd: string;
+                if (ext === '.js') cmd = `node "${fullScriptPath}" ${scriptArgs}`;
+                else if (ext === '.ts') cmd = `npx ts-node "${fullScriptPath}" ${scriptArgs}`;
+                else if (ext === '.py') cmd = `python "${fullScriptPath}" ${scriptArgs}`;
+                else if (ext === '.sh') cmd = `bash "${fullScriptPath}" ${scriptArgs}`;
+                else if (ext === '.ps1') cmd = `powershell -File "${fullScriptPath}" ${scriptArgs}`;
+                else cmd = `"${fullScriptPath}" ${scriptArgs}`;
+
+                return new Promise((resolve) => {
+                    const { exec } = require('child_process');
+                    exec(cmd, { timeout: 120000, cwd: skill.skillDir }, (error: any, stdout: string, stderr: string) => {
+                        if (error) {
+                            resolve(`Script error: ${error.message}\n${stderr}`);
+                        } else {
+                            resolve(stdout || stderr || 'Script completed with no output.');
+                        }
+                    });
+                });
+            }
+        });
+
+        // Skill: Write Skill File
+        this.skills.registerSkill({
+            name: 'write_skill_file',
+            description: 'Write or update a file within an Agent Skill directory. Use this to add scripts, references, assets, or edit SKILL.md.',
+            usage: 'write_skill_file(skill_name, file_path, content)',
+            handler: async (args: any) => {
+                const skillName = args.skill_name || args.skill || args.name;
+                const filePath = args.file_path || args.file || args.path;
+                const content = args.content || args.text || args.body;
+                if (!skillName || !filePath || content === undefined) return 'Error: Missing skill_name, file_path, or content.';
+
+                const skill = this.skills.getAgentSkill(skillName);
+                if (!skill) return `Agent skill "${skillName}" not found.`;
+
+                const fullPath = path.join(skill.skillDir, filePath);
+                if (!fullPath.startsWith(skill.skillDir)) return 'Error: Path traversal not allowed.';
+
+                // Ensure parent directory exists
+                const dir = path.dirname(fullPath);
+                if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+                fs.writeFileSync(fullPath, content);
+
+                // Rediscover if SKILL.md was modified
+                if (filePath === 'SKILL.md') this.skills.discoverAgentSkills();
+
+                return `Written ${content.length} bytes to ${filePath} in skill "${skillName}".`;
             }
         });
 
@@ -1431,10 +1692,12 @@ Output the fixed code:
             }
         });
 
-        // Skill: Create Custom Skill
+        // Skill: Create Custom Skill (CODE-BASED — writes a .ts plugin with executable logic)
+        // Use create_custom_skill when you need to write RUNNABLE CODE (API calls, automation, data processing).
+        // Use create_skill when you need to capture KNOWLEDGE/INSTRUCTIONS (workflows, guides, prompts).
         this.skills.registerSkill({
             name: 'create_custom_skill',
-            description: 'Autonomously create a new skill. The "code" argument must be the **BODY** of a Node.js async function.\n\nSYSTEM STANDARDS (MANDATORY):\n1. Do NOT wrap the code in `async function() { ... }` or `() => { ... }`. Provide ONLY the inner logic.\n2. Always `return` a string (or a value that can be safely stringified).\n3. Use `context.browser` for browser automation.\n4. Use `context.config.get(...)` for settings; never hardcode keys.\n5. To call another skill, use `await context.agent.skills.executeSkill("skill_name", { ... })` (or `execute`).\n6. Never access secrets directly; use config.\n7. Keep the plugin CommonJS-friendly and export a named skill object.',
+            description: 'Create a CODE-BASED plugin skill (.ts file) that executes logic. Use this for skills that need to RUN CODE — API integrations, data processing, browser automation, calculations, etc. For KNOWLEDGE-BASED skills (workflow instructions, prompt templates, reference guides), use create_skill instead.\n\nThe "code" argument must be the **BODY** of a Node.js async function.\n\nSYSTEM STANDARDS (MANDATORY):\n1. Do NOT wrap the code in `async function() { ... }` or `() => { ... }`. Provide ONLY the inner logic.\n2. Always `return` a string (or a value that can be safely stringified).\n3. Use `context.browser` for browser automation.\n4. Use `context.config.get(...)` for settings; never hardcode keys.\n5. To call another skill, use `await context.agent.skills.executeSkill("skill_name", { ... })` (or `execute`).\n6. Never access secrets directly; use config.\n7. Keep the plugin CommonJS-friendly and export a named skill object.',
             usage: 'create_custom_skill({ name, description, usage, code })',
             handler: async (args: any) => {
                 if (this.config.get('safeMode')) {
@@ -1516,6 +1779,8 @@ Output the fixed code:
                             return `Error: The skill '${name}' failed to register. The module may be missing the required exports (name, description, usage, handler).`;
                         }
                         
+                        // Also generate SKILL.md wrapper so plugin is visible in both systems
+                        this.generateSkillMdForPlugin(name, description || loaded?.description || '', filePath);
                         return `Skill '${name}' created from full module code at ${filePath} and registered successfully.`;
                     } catch (loadError: any) {
                         try { fs.unlinkSync(filePath); } catch {}
@@ -1626,6 +1891,8 @@ export default ${name};
                         return `Error: Skill '${name}' failed to load after creation. The code may have syntax errors or invalid exports. Please review and provide corrected code.`;
                     }
                     
+                    // Also generate SKILL.md wrapper so plugin is visible in both systems
+                    this.generateSkillMdForPlugin(name, description || loaded?.description || '', filePath);
                     return `Skill '${name}' created at ${filePath} and registered successfully. You can use it immediately.`;
                 } catch (loadError: any) {
                     // Delete the broken file
@@ -2895,7 +3162,10 @@ Respond in JSON:
 Implementation hints:
 ${parsed.implementation_hints?.map((h: string) => `- ${h}`).join('\n') || 'None'}
 
-Use manage_skills to create this skill. Research APIs and methods first if needed.
+Choose the right tool:
+- If this skill needs EXECUTABLE CODE (API calls, data processing, automation): use create_custom_skill({ name, description, usage, code })
+- If this skill needs KNOWLEDGE/INSTRUCTIONS (workflow steps, prompt patterns, guides): use create_skill(name, description, instructions)
+- Research APIs and methods first if needed.
 This skill should prevent future failures when ${taskDescription.slice(0, 100)}...`,
                 9, // High priority
                 { source: 'self_improvement', skillName: parsed.skill_name, trigger: 'loop_detection' },
@@ -2904,6 +3174,73 @@ This skill should prevent future failures when ${taskDescription.slice(0, 100)}.
 
         } catch (e) {
             logger.debug(`Agent: Auto skill creation analysis failed: ${e}`);
+        }
+    }
+
+    /**
+     * Generate a SKILL.md wrapper for a code-based plugin (.ts/.js) so it appears
+     * in the Agent Skills system alongside knowledge-based skills.
+     * This bridges the two skill systems — plugin code is executable, SKILL.md provides
+     * metadata and discoverability.
+     */
+    private generateSkillMdForPlugin(skillName: string, description: string, pluginPath: string): void {
+        try {
+            const pluginsDir = this.config.get('pluginsPath') || './plugins';
+            const skillsDir = path.join(pluginsDir, 'skills');
+            // Convert underscore plugin names to hyphenated SKILL.md names
+            const skillMdName = skillName.replace(/_/g, '-');
+            const skillDir = path.join(skillsDir, skillMdName);
+
+            // Don't overwrite if a SKILL.md directory already exists
+            if (fs.existsSync(path.join(skillDir, 'SKILL.md'))) {
+                logger.debug(`Agent: SKILL.md already exists for ${skillName}, skipping wrapper generation`);
+                return;
+            }
+
+            fs.mkdirSync(skillDir, { recursive: true });
+
+            const relPluginPath = path.relative(skillDir, pluginPath).replace(/\\/g, '/');
+            const skillMd = `---
+name: ${skillMdName}
+description: "${(description || '').replace(/"/g, '\\"')}"
+metadata:
+  author: orcbot
+  version: "1.0"
+  type: code-plugin
+  pluginFile: "${path.basename(pluginPath)}"
+orcbot:
+  autoActivate: true
+  permissions:
+    - code-execution
+---
+
+# ${skillName}
+
+## Overview
+
+${description || 'Auto-generated code-based skill.'}
+
+This is a **code-based skill** backed by a TypeScript/JavaScript plugin at \`${relPluginPath}\`.
+It executes real code when invoked, unlike knowledge-based skills which provide instructions.
+
+## Plugin Details
+
+- **Plugin file**: \`${relPluginPath}\`
+- **Skill name**: \`${skillName}\`
+- **Type**: Executable code plugin
+
+## Usage
+
+Call this skill directly by name: \`${skillName}(...args)\`
+
+The plugin handles all logic internally. See the plugin source for implementation details.
+`;
+
+            fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skillMd);
+            this.skills.discoverAgentSkills();
+            logger.info(`Agent: Generated SKILL.md wrapper for plugin "${skillName}" at ${skillDir}`);
+        } catch (e) {
+            logger.debug(`Agent: Failed to generate SKILL.md wrapper for ${skillName}: ${e}`);
         }
     }
 
@@ -3513,17 +3850,18 @@ Respond with a single actionable task description (one sentence):`;
 
     public async resetMemory() {
         logger.info('Agent: Resetting all memory and identity files...');
+        const dataHome = this.config.getDataHome();
 
         // Clear memory.json
-        const memoryPath = this.config.get('memoryPath') || './memory.json';
+        const memoryPath = this.config.get('memoryPath') || path.join(dataHome, 'memory.json');
         if (fs.existsSync(memoryPath)) fs.writeFileSync(memoryPath, JSON.stringify({}, null, 2));
 
         // Clear actions.json
-        const actionPath = this.config.get('actionQueuePath') || './actions.json';
+        const actionPath = this.config.get('actionQueuePath') || path.join(dataHome, 'actions.json');
         if (fs.existsSync(actionPath)) fs.writeFileSync(actionPath, JSON.stringify([], null, 2));
 
         // Reset USER.md
-        const userPath = this.config.get('userProfilePath') || './USER.md';
+        const userPath = this.config.get('userProfilePath') || path.join(dataHome, 'USER.md');
         const localUserPath = path.resolve(process.cwd(), 'USER.md');
         const defaultUser = fs.existsSync(localUserPath)
             ? fs.readFileSync(localUserPath, 'utf-8')
@@ -3538,7 +3876,7 @@ Respond with a single actionable task description (one sentence):`;
         fs.writeFileSync(this.agentConfigFile, defaultAI);
 
         // Reset JOURNAL.md
-        const journalPath = this.config.get('journalPath') || './JOURNAL.md';
+        const journalPath = this.config.get('journalPath') || path.join(dataHome, 'JOURNAL.md');
         const localJournalPath = path.resolve(process.cwd(), 'JOURNAL.md');
         const defaultJournal = fs.existsSync(localJournalPath)
             ? fs.readFileSync(localJournalPath, 'utf-8')
@@ -3546,7 +3884,7 @@ Respond with a single actionable task description (one sentence):`;
         fs.writeFileSync(journalPath, defaultJournal);
 
         // Reset LEARNING.md
-        const learningPath = this.config.get('learningPath') || './LEARNING.md';
+        const learningPath = this.config.get('learningPath') || path.join(dataHome, 'LEARNING.md');
         const localLearningPath = path.resolve(process.cwd(), 'LEARNING.md');
         const defaultLearning = fs.existsSync(localLearningPath)
             ? fs.readFileSync(localLearningPath, 'utf-8')
@@ -4005,11 +4343,13 @@ Respond with a single actionable task description (one sentence):`;
 
             const MAX_STEPS = isSocialFastPath ? 1 : (this.config.get('maxStepsPerAction') || 30);
             const MAX_MESSAGES = isSocialFastPath ? 1 : (this.config.get('maxMessagesPerAction') || 3);
+            const MAX_NO_TOOLS_RETRIES = 3; // Max retries when LLM returns no tools but goals_met=false
             let currentStep = 0;
             let messagesSent = 0;
             let lastMessageContent = '';
             let lastStepToolSignatures = '';
             let loopCounter = 0;
+            let noToolsRetryCount = 0; // Track retries for no-tools error state
             let deepToolExecutedSinceLastMessage = true; // Start true to allow Step 1 message
             let stepsSinceLastMessage = 0;
             let consecutiveNonDeepTurns = 0;
@@ -4092,6 +4432,9 @@ Respond with a single actionable task description (one sentence):`;
                 // IMPORTANT: Execute tools FIRST, then check goals_met
                 // The agent might say "goals will be met after I send this message" but we must actually send it!
                 if (decision.tools && decision.tools.length > 0) {
+                    // Reset no-tools retry counter since we have valid tools
+                    noToolsRetryCount = 0;
+                    
                     // 1. INTRA-STEP DEDUPLICATION (Fixes multi-call issues on commands)
                     const uniqueTools: any[] = [];
                     const seenSignatures = new Set<string>();
@@ -4360,6 +4703,49 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
 
                     if (forceBreak) break;
                 } else {
+                    // No tools in response - check why before self-terminating
+                    const toolsWereFiltered = (decision as any).toolsFiltered > 0;
+                    const goalsNotMet = decision.verification?.goals_met === false;
+                    
+                    // Case 1: Tools were filtered by validator - retry with feedback
+                    if (toolsWereFiltered && goalsNotMet) {
+                        noToolsRetryCount++;
+                        if (noToolsRetryCount >= MAX_NO_TOOLS_RETRIES) {
+                            logger.error(`Agent: Exceeded max retries (${MAX_NO_TOOLS_RETRIES}) for filtered tools. Terminating action ${action.id}.`);
+                            break;
+                        }
+                        logger.warn(`Agent: ${(decision as any).toolsFiltered} tool(s) were filtered by validator but goals_met=false. Retry ${noToolsRetryCount}/${MAX_NO_TOOLS_RETRIES}...`);
+                        
+                        this.memory.saveMemory({
+                            id: `${action.id}-step-${currentStep}-tools-filtered`,
+                            type: 'short',
+                            content: `[SYSTEM: Your tool calls were INVALID and filtered. Common issues: browser_click/browser_type require 'selector' (use ref number from snapshot), browser_type requires 'text'. Check your tool metadata and try again with valid parameters.]`,
+                            metadata: { actionId: action.id, step: currentStep, toolsFiltered: (decision as any).toolsFiltered }
+                        });
+                        
+                        continue;
+                    }
+                    
+                    // Case 2: LLM said goals_met=false but provided no tools - this is an error, retry
+                    if (goalsNotMet && !toolsWereFiltered) {
+                        noToolsRetryCount++;
+                        if (noToolsRetryCount >= MAX_NO_TOOLS_RETRIES) {
+                            logger.error(`Agent: Exceeded max retries (${MAX_NO_TOOLS_RETRIES}) for no-tools error. Terminating action ${action.id}.`);
+                            break;
+                        }
+                        logger.warn(`Agent: LLM returned goals_met=false but no tools. Retry ${noToolsRetryCount}/${MAX_NO_TOOLS_RETRIES}...`);
+                        
+                        this.memory.saveMemory({
+                            id: `${action.id}-step-${currentStep}-no-tools-error`,
+                            type: 'short',
+                            content: `[SYSTEM: You said goals_met=false but provided NO TOOLS. This is INVALID. If goals are not met, you MUST include at least one tool to make progress. Re-read the task and provide the appropriate tool calls.]`,
+                            metadata: { actionId: action.id, step: currentStep, error: 'no_tools_but_goals_not_met' }
+                        });
+                        
+                        continue;
+                    }
+                    
+                    // Case 3: goals_met=true or undefined with no tools - legitimate termination
                     logger.info(`Agent: Action ${action.id} reached self-termination. Reasoning: ${decision.reasoning || 'No further tools needed.'}`);
                     break;
                 }

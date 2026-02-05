@@ -7,7 +7,7 @@ import { eventBus } from '../core/EventBus';
 
 export interface AgentConfig {
     agentName: string;
-    llmProvider?: 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia';
+    llmProvider?: 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia' | 'anthropic';
     telegramToken?: string;
     openaiApiKey?: string;
     openrouterApiKey?: string;
@@ -16,6 +16,7 @@ export interface AgentConfig {
     openrouterAppName?: string;
     googleApiKey?: string;
     nvidiaApiKey?: string;
+    anthropicApiKey?: string;
     braveSearchApiKey?: string;
     searxngUrl?: string;
     searchProviderOrder?: string[];
@@ -191,6 +192,7 @@ export class ConfigManager {
             openrouterAppName: process.env.OPENROUTER_APP_NAME,
             googleApiKey: process.env.GOOGLE_API_KEY,
             nvidiaApiKey: process.env.NVIDIA_API_KEY,
+            anthropicApiKey: process.env.ANTHROPIC_API_KEY,
             braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY,
             searxngUrl: process.env.SEARXNG_URL,
             serperApiKey: process.env.SERPER_API_KEY,
@@ -257,6 +259,12 @@ export class ConfigManager {
 
         const remapIfCiOrPosix = (value: string): string => {
             const normalized = value.replace(/\\/g, '/');
+
+            // Handle relative paths (./something or just filename) - resolve to dataHome
+            if (normalized.startsWith('./') || normalized.startsWith('../') || !path.isAbsolute(value)) {
+                const basename = normalized.replace(/^\.\//, '').replace(/^\.\.\//, '');
+                return path.join(this.dataHome, basename);
+            }
 
             // If it points inside a .orcbot folder on POSIX, map the suffix into our dataHome.
             const idx = normalized.indexOf('/.orcbot/');
@@ -461,6 +469,7 @@ export class ConfigManager {
             openrouterAppName: 'OPENROUTER_APP_NAME',
             googleApiKey: 'GOOGLE_API_KEY',
             nvidiaApiKey: 'NVIDIA_API_KEY',
+            anthropicApiKey: 'ANTHROPIC_API_KEY',
             braveSearchApiKey: 'BRAVE_SEARCH_API_KEY',
             searxngUrl: 'SEARXNG_URL',
             serperApiKey: 'SERPER_API_KEY',
