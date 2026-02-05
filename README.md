@@ -38,6 +38,9 @@ OrcBot is a next-generation **autonomous reasoning agent**. In v2.0, we've moved
 *   🔍 **Resilient Web Search**: Smart fallback from API providers to browser-based search when keys aren't configured.
 *   🖥️ **Interactive TUI & Dashboard**: Comprehensive terminal interface with worker process management.
 *   🔌 **Dynamic Plugin System**: Hot-loadable TypeScript plugins for limitless extensibility.
+*   🔄 **Circuit Breaker Pattern**: Intelligent loop prevention in browser operations to avoid getting stuck.
+*   📚 **Self-Updating Identity**: Agent can evolve its personality, values, and operating instructions through bootstrap files.
+*   ⏱️ **Event-Driven Polling**: Efficient condition monitoring without busy-waiting loops.
 
 ---
 
@@ -111,6 +114,14 @@ npm run setup
 ## Documentation
 
 Live docs (GitHub Pages): https://fredabila.github.io/orcbot/docs/
+
+**Key Guides:**
+*   🌐 [**Browser & Identity Improvements**](BROWSER_IDENTITY_IMPROVEMENTS.md) - Loop prevention, state tracking, self-updating system
+*   ⏱️ [**Polling System Guide**](POLLING_USAGE.md) - Event-driven condition monitoring
+*   ⚙️ [**Configuration Guide**](docs/CONFIG_MANAGEMENT.md) - Comprehensive configuration management
+*   🐳 [**Docker Guide**](docs/DOCKER.md) - Container deployment options
+*   📊 [**Testing Guide**](TESTING_GUIDE.md) - Testing strategies and patterns
+*   🔒 [**Security Summary**](SECURITY_SUMMARY.md) - Security features and best practices
 
 ---
 
