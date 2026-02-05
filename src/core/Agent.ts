@@ -16,6 +16,8 @@ import { WebBrowser } from '../tools/WebBrowser';
 import { WorkerProfileManager } from './WorkerProfile';
 import { AgentOrchestrator } from './AgentOrchestrator';
 import { RuntimeTuner } from './RuntimeTuner';
+import { BootstrapManager } from './BootstrapManager';
+import { memoryToolsSkills } from '../skills/memoryTools';
 import { Cron } from 'croner';
 import { Readability } from '@mozilla/readability';
 import { DOMParser } from 'linkedom';
@@ -43,6 +45,7 @@ export class Agent {
     public browser: WebBrowser;
     public workerProfile: WorkerProfileManager;
     public orchestrator: AgentOrchestrator;
+    public bootstrap: BootstrapManager;
     private lastActionTime: number;
     private lastHeartbeatAt: number = 0;
     private consecutiveIdleHeartbeats: number = 0;
@@ -147,6 +150,11 @@ export class Agent {
         this.loadLastHeartbeatTime();
         this.heartbeatSchedulePath = path.join(path.dirname(this.config.get('actionQueuePath')), 'heartbeat-schedules.json');
         this.loadHeartbeatSchedules();
+
+        // Initialize Bootstrap Manager for workspace files
+        this.bootstrap = new BootstrapManager(path.join(os.homedir(), '.orcbot'));
+        this.bootstrap.initializeFiles();
+        logger.info('Bootstrap manager initialized');
 
         // Ensure context is up to date (supports reconfiguration)
         this.skills.setContext({
@@ -2551,6 +2559,13 @@ Be thorough and academic.`;
                 }
             }
         });
+
+        // Memory Tools - Inspired by OpenClaw
+        // Register memory tools
+        for (const skill of memoryToolsSkills) {
+            this.skills.registerSkill(skill);
+            logger.info(`Registered memory tool: ${skill.name}`);
+        }
     }
 
     private loadAgentIdentity() {
