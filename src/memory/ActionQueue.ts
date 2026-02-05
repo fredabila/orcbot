@@ -89,6 +89,18 @@ export class ActionQueue {
         }
     }
 
+    public updatePayload(id: string, payloadPatch: Record<string, any>) {
+        const queue = this.readQueue();
+        const action = queue.find(a => a.id === id);
+        if (action) {
+            const currentPayload = (action.payload && typeof action.payload === 'object') ? action.payload : {};
+            action.payload = { ...currentPayload, ...payloadPatch };
+            action.updatedAt = new Date().toISOString();
+            this.saveQueue(queue);
+            logger.info(`Action ${id} payload updated (persistent)`);
+        }
+    }
+
     public getQueue() {
         return this.readQueue();
     }

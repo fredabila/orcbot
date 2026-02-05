@@ -225,7 +225,7 @@ export class WhatsAppChannel implements IChannel {
                         if (shouldDownloadMedia && (imageMsg || audioMsg || docMsg || videoMsg)) {
                             try {
                                 const buffer = await downloadMediaMessage(msg, 'buffer', {});
-                                const downloadsDir = path.join(os.homedir(), '.orcbot', 'downloads');
+                                const downloadsDir = path.join(this.agent.config.getDataHome(), 'downloads');
                                 if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
 
                                 const ext = imageMsg ? 'jpg' : audioMsg ? 'ogg' : videoMsg ? 'mp4' : (docMsg?.mimetype?.split('/')[1] || 'bin');

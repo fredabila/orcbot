@@ -118,6 +118,14 @@ export class ConfigManager {
         this.startWatcher(customPath);
     }
 
+    /**
+     * Returns the resolved OrcBot data directory (defaults to ~/.orcbot).
+     * This is the base directory where file-backed state should live.
+     */
+    public getDataHome(): string {
+        return this.dataHome;
+    }
+
     private startWatcher(customPath?: string) {
         if (!fs.existsSync(this.configPath)) return;
 
@@ -219,7 +227,72 @@ export class ConfigManager {
             }
         });
 
-        return mergedConfig;
+        return this.normalizePlatformPaths(mergedConfig, silent);
+    }
+
+    /**
+     * Normalizes file/directory paths in config to be valid on the current OS.
+     *
+     * This primarily protects Windows users when a config file contains CI/Linux-style
+     * absolute paths like /home/runner/.orcbot/..., by remapping them into the
+     * resolved dataHome directory.
+     */
+    private normalizePlatformPaths(config: AgentConfig, silent: boolean): AgentConfig {
+        if (process.platform !== 'win32') return config;
+
+        const pathKeys: Array<keyof AgentConfig> = [
+            'memoryPath',
+            'skillsPath',
+            'userProfilePath',
+            'agentIdentityPath',
+            'actionQueuePath',
+            'journalPath',
+            'learningPath',
+            'pluginsPath',
+            'whatsappSessionPath',
+            'browserProfileDir',
+            'tokenUsagePath',
+            'tokenLogPath'
+        ];
+
+        const remapIfCiOrPosix = (value: string): string => {
+            const normalized = value.replace(/\\/g, '/');
+
+            // If it points inside a .orcbot folder on POSIX, map the suffix into our dataHome.
+            const idx = normalized.indexOf('/.orcbot/');
+            if (idx >= 0) {
+                const suffix = normalized.slice(idx + '/.orcbot/'.length).replace(/^\/+/, '');
+                return path.join(this.dataHome, ...suffix.split('/'));
+            }
+
+            // If it's exactly a .orcbot directory (rare), map to dataHome.
+            if (normalized.endsWith('/.orcbot')) {
+                return this.dataHome;
+            }
+
+            // For other POSIX-rooted absolute paths, keep as-is (user may genuinely want it),
+            // but warn once so it's not silently creating directories at drive root.
+            if (normalized.startsWith('/')) {
+                if (!silent) {
+                    logger.warn(`ConfigManager: Detected POSIX-style absolute path on Windows: ${value}. Consider removing it or setting ORCBOT_DATA_DIR.`);
+                }
+            }
+
+            return value;
+        };
+
+        for (const key of pathKeys) {
+            const current = config[key];
+            if (typeof current !== 'string' || current.trim() === '') continue;
+
+            const remapped = remapIfCiOrPosix(current);
+            if (remapped !== current && !silent) {
+                logger.info(`ConfigManager: Normalized ${String(key)} to ${remapped}`);
+            }
+            (config as any)[key] = remapped;
+        }
+
+        return config;
     }
 
     private getStringDefaultConfig(): AgentConfig {

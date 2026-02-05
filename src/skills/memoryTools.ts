@@ -2,7 +2,6 @@ import { DailyMemory } from '../memory/DailyMemory';
 import { logger } from '../utils/logger';
 import path from 'path';
 import os from 'os';
-import fs from 'fs';
 
 /**
  * Memory tools for searching and retrieving markdown-based memory files.
@@ -20,7 +19,8 @@ export async function memorySearchSkill(args: any, context: any): Promise<string
             return 'Error: No search query provided. Use: memory_search query="your search term"';
         }
 
-        const dailyMemory = new DailyMemory(path.join(os.homedir(), '.orcbot'));
+        const dataHome = context?.config?.getDataHome?.() || process.env.ORCBOT_DATA_DIR || path.join(os.homedir(), '.orcbot');
+        const dailyMemory = new DailyMemory(dataHome);
         const results: Array<{
             file: string;
             snippet: string;
@@ -78,7 +78,8 @@ export async function memoryGetSkill(args: any, context: any): Promise<string> {
             return 'Error: No file path provided. Use: memory_get path="MEMORY.md" or path="memory/2024-01-15.md"';
         }
 
-        const dailyMemory = new DailyMemory(path.join(os.homedir(), '.orcbot'));
+        const dataHome = context?.config?.getDataHome?.() || process.env.ORCBOT_DATA_DIR || path.join(os.homedir(), '.orcbot');
+        const dailyMemory = new DailyMemory(dataHome);
         
         // Handle different file path formats
         let content: string | null = null;
@@ -127,7 +128,8 @@ export async function memoryWriteSkill(args: any, context: any): Promise<string>
             return 'Error: No content provided. Use: memory_write content="text to remember" type="daily|long-term"';
         }
 
-        const dailyMemory = new DailyMemory(path.join(os.homedir(), '.orcbot'));
+        const dataHome = context?.config?.getDataHome?.() || process.env.ORCBOT_DATA_DIR || path.join(os.homedir(), '.orcbot');
+        const dailyMemory = new DailyMemory(dataHome);
 
         if (type === 'long-term' || type === 'longterm') {
             dailyMemory.appendToLongTerm(content, category);
@@ -147,7 +149,8 @@ export async function memoryWriteSkill(args: any, context: any): Promise<string>
  */
 export async function memoryStatsSkill(args: any, context: any): Promise<string> {
     try {
-        const dailyMemory = new DailyMemory(path.join(os.homedir(), '.orcbot'));
+        const dataHome = context?.config?.getDataHome?.() || process.env.ORCBOT_DATA_DIR || path.join(os.homedir(), '.orcbot');
+        const dailyMemory = new DailyMemory(dataHome);
         const stats = dailyMemory.getStats();
         const recentFiles = dailyMemory.listDailyMemories().slice(0, 10);
 

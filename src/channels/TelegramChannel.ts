@@ -70,7 +70,7 @@ export class TelegramChannel implements IChannel {
                         const response = await fetch(fileLink.href);
                         const buffer = await response.arrayBuffer();
 
-                        const downloadsDir = path.join(os.homedir(), '.orcbot', 'downloads');
+                        const downloadsDir = path.join(this.agent.config.getDataHome(), 'downloads');
                         if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
 
                         const ext = photo ? 'jpg' : doc ? (doc.file_name?.split('.').pop() || 'bin') : audio ? 'ogg' : video ? 'mp4' : 'bin';

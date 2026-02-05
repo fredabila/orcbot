@@ -4,7 +4,6 @@ import { logger } from '../utils/logger';
 import dotenv from 'dotenv';
 import { MultiLLM } from '../core/MultiLLM';
 import path from 'path';
-import os from 'os';
 import { DailyMemory } from './DailyMemory';
 
 dotenv.config();
@@ -36,8 +35,9 @@ export class MemoryManager {
         this.storage = new JSONAdapter(dbPath);
         this.loadUserContext(userPath);
 
-        // Profiles directory in .orcbot
-        const dataHome = path.join(os.homedir(), '.orcbot');
+        // Derive data directory from the configured memory database location.
+        // This keeps *all* file-backed state co-located (and supports ORCBOT_DATA_DIR).
+        const dataHome = path.dirname(path.resolve(dbPath));
         this.profilesDir = path.join(dataHome, 'profiles');
         if (!fs.existsSync(this.profilesDir)) {
             fs.mkdirSync(this.profilesDir, { recursive: true });

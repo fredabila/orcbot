@@ -117,7 +117,7 @@ export class Agent {
         );
         
         // Initialize Bootstrap Manager for workspace files early
-        this.bootstrap = new BootstrapManager(path.join(os.homedir(), '.orcbot'));
+        this.bootstrap = new BootstrapManager(this.config.getDataHome());
         this.bootstrap.initializeFiles();
         logger.info('Bootstrap manager initialized');
         
@@ -3177,8 +3177,8 @@ This skill should prevent future failures when ${taskDescription.slice(0, 100)}.
         const intervalMinutes = this.config.get('autonomyInterval') || 0;
         if (!autonomyEnabled || intervalMinutes <= 0) return;
 
-        // Check for ACTIVE tasks only (pending or in-progress)
-        const activeTasks = this.actionQueue.getQueue().filter(a => a.status === 'pending' || a.status === 'in-progress');
+        // Check for ACTIVE tasks (pending, waiting, or in-progress)
+        const activeTasks = this.actionQueue.getQueue().filter(a => a.status === 'pending' || a.status === 'waiting' || a.status === 'in-progress');
 
         // CRITICAL: Skip heartbeat if there are ANY pending/in-progress tasks
         // This prevents heartbeat from disrupting ongoing work
@@ -3594,7 +3594,9 @@ Respond with a single actionable task description (one sentence):`;
             this.llm,
             this.skills,
             journalPath,
-            learningPath
+            learningPath,
+            this.config,
+            this.bootstrap
         );
 
         logger.info('Agent: Memory and Identity have been reset.');
@@ -3853,8 +3855,7 @@ Respond with a single actionable task description (one sentence):`;
 
         // If we have an action paused waiting for a reply from this same source/thread,
         // resume it instead of pushing a brand-new action.
-        // This prevents duplicate clarification sends on scheduler ticks and keeps the
-        // original action as the continuation point once the user replies.
+        // We do NOT require platform reply/quote usage; users often respond normally.
         if (metadata?.source && metadata?.sourceId) {
             const waitingAction = this.actionQueue.getQueue()
                 .filter(a => a.status === 'waiting' && a.payload?.source === metadata.source && a.payload?.sourceId === metadata.sourceId)
@@ -3866,6 +3867,13 @@ Respond with a single actionable task description (one sentence):`;
 
             if (waitingAction) {
                 logger.info(`Agent: Resuming waiting action ${waitingAction.id} due to new inbound message${messageId ? ` ${messageId}` : ''}`);
+                // Persist the latest user message onto the waiting action so the DecisionEngine can't
+                // accidentally deliberate only on the old prompt.
+                this.actionQueue.updatePayload(waitingAction.id, {
+                    lastUserMessageId: messageId || undefined,
+                    lastUserMessageText: description,
+                    resumedFromWaitingAt: new Date().toISOString()
+                });
                 this.actionQueue.updateStatus(waitingAction.id, 'pending');
 
                 this.memory.saveMemory({
@@ -4201,8 +4209,11 @@ Respond with a single actionable task description (one sentence):`;
                             // 5. QUESTION DETECTION: If message contains a question, pause and wait for response
                             if (this.messageContainsQuestion(currentMessage)) {
                                 logger.info(`Agent: Message contains question. Will pause after sending to wait for user response.`);
-                                // Mark that we should break after this tool executes
-                                forceBreak = true;
+                                // Only pause if we actually still need the user's answer to make progress.
+                                // If goals are already met, do not block the queue in a waiting state.
+                                if (!decision.verification?.goals_met) {
+                                    forceBreak = true;
+                                }
                             }
                         }
 
@@ -4292,7 +4303,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             // QUESTION PAUSE: If this message asked a question, pause and wait for response
                             const sentMessage = toolCall.metadata?.message || '';
                             const wasSuccessfulSend = toolResult && !resultString.toLowerCase().includes('error');
-                            if (this.messageContainsQuestion(sentMessage) && wasSuccessfulSend) {
+                            if (this.messageContainsQuestion(sentMessage) && wasSuccessfulSend && !decision.verification?.goals_met) {
                                 this.memory.saveMemory({
                                     id: `${action.id}-step-${currentStep}-waiting`,
                                     type: 'short',
@@ -4306,6 +4317,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 // Actually pause - set flags to break loop and skip completion
                                 waitingForClarification = true;
                                 forceBreak = true;
+                            } else if (this.messageContainsQuestion(sentMessage) && wasSuccessfulSend && decision.verification?.goals_met) {
+                                logger.info(`Agent: Sent a question in action ${action.id}, but goals_met=true; not entering waiting state.`);
                             } else if (this.messageContainsQuestion(sentMessage) && !wasSuccessfulSend) {
                                 logger.warn(`Agent: Attempted to ask a question via ${toolCall.name}, but send failed; not entering waiting state.`);
                             }

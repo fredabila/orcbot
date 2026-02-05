@@ -12,16 +12,7 @@ autonomyInterval: 15
 autonomyBacklogLimit: 3
 maxActionRunMinutes: 10
 maxStaleActionMinutes: 30
-memoryPath: /home/runner/.orcbot/memory.json
-skillsPath: /home/runner/.orcbot/SKILLS.md
-userProfilePath: /home/runner/.orcbot/USER.md
-agentIdentityPath: /home/runner/.orcbot/.AI.md
-actionQueuePath: /home/runner/.orcbot/actions.json
-journalPath: /home/runner/.orcbot/JOURNAL.md
-learningPath: /home/runner/.orcbot/LEARNING.md
-pluginsPath: /home/runner/.orcbot/plugins
 whatsappEnabled: false
-whatsappSessionPath: /home/runner/.orcbot/whatsapp-session
 whatsappAutoReplyEnabled: false
 whatsappStatusReplyEnabled: false
 whatsappAutoReactEnabled: false
@@ -87,10 +78,7 @@ commandDenyList:
 safeMode: false
 pluginAllowList: []
 pluginDenyList: []
-browserProfileDir: /home/runner/.orcbot/browser-profiles
 browserProfileName: default
-tokenUsagePath: /home/runner/.orcbot/token-usage-summary.json
-tokenLogPath: /home/runner/.orcbot/token-usage.log
 sudoMode: false
 openrouterBaseUrl: https://openrouter.ai/api/v1
 skillRoutingRules: []
