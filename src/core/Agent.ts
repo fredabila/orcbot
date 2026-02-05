@@ -115,13 +115,20 @@ export class Agent {
                 logger: logger
             }
         );
+        
+        // Initialize Bootstrap Manager for workspace files early
+        this.bootstrap = new BootstrapManager(path.join(os.homedir(), '.orcbot'));
+        this.bootstrap.initializeFiles();
+        logger.info('Bootstrap manager initialized');
+        
         this.decisionEngine = new DecisionEngine(
             this.memory,
             this.llm,
             this.skills,
             this.config.get('journalPath'),
             this.config.get('learningPath'),
-            this.config
+            this.config,
+            this.bootstrap  // Pass bootstrap manager
         );
         this.simulationEngine = new SimulationEngine(this.llm);
         this.actionQueue = new ActionQueue(this.config.get('actionQueuePath') || './actions.json');
@@ -150,11 +157,6 @@ export class Agent {
         this.loadLastHeartbeatTime();
         this.heartbeatSchedulePath = path.join(path.dirname(this.config.get('actionQueuePath')), 'heartbeat-schedules.json');
         this.loadHeartbeatSchedules();
-
-        // Initialize Bootstrap Manager for workspace files
-        this.bootstrap = new BootstrapManager(path.join(os.homedir(), '.orcbot'));
-        this.bootstrap.initializeFiles();
-        logger.info('Bootstrap manager initialized');
 
         // Ensure context is up to date (supports reconfiguration)
         this.skills.setContext({
@@ -195,7 +197,7 @@ export class Agent {
             // Ensure file exists with default content if missing
             if (!fs.existsSync(filePath)) {
                 let defaultContent = '';
-                if (key === 'agentIdentity') defaultContent = '# .AI.md\nName: OrcBot\nPersonality: proactive, concise, professional\nAutonomyLevel: high\nDefaultBehavior: \n  - prioritize tasks based on user goals\n  - act proactively when deadlines are near\n  - consult SKILLS.md tools to accomplish actions\n';
+                if (key === 'agentIdentity') defaultContent = '# .AI.md\nName: OrcBot\nType: Strategic AI Agent\nPersonality: proactive, concise, professional, adaptive\nAutonomyLevel: high\nVersion: 2.0\nDefaultBehavior: \n  - prioritize tasks based on user goals\n  - act proactively when deadlines are near\n  - consult SKILLS.md tools to accomplish actions\n  - think strategically and simulate before complex actions\n  - learn from interactions and adapt approach\n';
                 if (key === 'userProfile') defaultContent = '# User Profile\n\nThis file contains information about the user.\n\n## Core Identity\n- Name: Frederick\n- Preferences: None known yet\n';
                 if (key === 'journal') defaultContent = '# Agent Journal\nThis file contains self-reflections and activity logs.\n';
                 if (key === 'learning') defaultContent = '# Agent Learning Base\nThis file contains structured knowledge on various topics.\n';
@@ -1959,10 +1961,10 @@ Be thorough and academic.`;
             }
         });
 
-        // Skill: Evolve Identity
+        // Skill: Evolve Identity (legacy .AI.md compatibility)
         this.skills.registerSkill({
             name: 'update_agent_identity',
-            description: 'Update your own identity, personality, or name. Provide a snippet or a full block.',
+            description: 'Update your own identity, personality, or name. Provide a snippet or a full block. Deprecated: Use update_bootstrap_file("IDENTITY.md", content) instead.',
             usage: 'update_agent_identity(trait)',
             handler: async (args: any) => {
                 const trait = args.trait || args.info || args.text;
@@ -1982,6 +1984,84 @@ Be thorough and academic.`;
                     }
                 } catch (e) {
                     return `Failed to update identity at ${identityPath}: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Update Bootstrap File (IDENTITY.md, SOUL.md, AGENTS.md, etc.)
+        this.skills.registerSkill({
+            name: 'update_bootstrap_file',
+            description: 'Update a bootstrap file (IDENTITY.md, SOUL.md, AGENTS.md, TOOLS.md, USER.md). These files define your identity, persona, operating instructions, and user context. Use this to evolve your identity and capabilities.',
+            usage: 'update_bootstrap_file(filename, content, mode?)',
+            handler: async (args: any) => {
+                const filename = args.filename || args.file;
+                const content = args.content || args.text;
+                const mode = args.mode || 'replace'; // 'replace' or 'append'
+
+                if (!filename) return 'Error: Missing filename (e.g., "IDENTITY.md", "SOUL.md").';
+                if (!content) return 'Error: Missing content to write.';
+
+                const validFiles = ['IDENTITY.md', 'SOUL.md', 'AGENTS.md', 'TOOLS.md', 'USER.md'];
+                if (!validFiles.includes(filename)) {
+                    return `Error: Invalid filename. Must be one of: ${validFiles.join(', ')}`;
+                }
+
+                try {
+                    if (mode === 'append') {
+                        const current = this.bootstrap.getFile(filename) || '';
+                        const updated = current + '\n\n' + content;
+                        this.bootstrap.updateFile(filename, updated);
+                        return `Successfully appended to ${filename}`;
+                    } else {
+                        this.bootstrap.updateFile(filename, content);
+                        return `Successfully updated ${filename}`;
+                    }
+                } catch (e) {
+                    return `Failed to update ${filename}: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Read Bootstrap File
+        this.skills.registerSkill({
+            name: 'read_bootstrap_file',
+            description: 'Read the contents of a bootstrap file (IDENTITY.md, SOUL.md, AGENTS.md, TOOLS.md, USER.md).',
+            usage: 'read_bootstrap_file(filename)',
+            handler: async (args: any) => {
+                const filename = args.filename || args.file;
+                if (!filename) return 'Error: Missing filename.';
+
+                const validFiles = ['IDENTITY.md', 'SOUL.md', 'AGENTS.md', 'TOOLS.md', 'USER.md'];
+                if (!validFiles.includes(filename)) {
+                    return `Error: Invalid filename. Must be one of: ${validFiles.join(', ')}`;
+                }
+
+                try {
+                    const content = this.bootstrap.getFile(filename);
+                    if (!content) {
+                        return `${filename} is empty or does not exist.`;
+                    }
+                    return `Contents of ${filename}:\n\n${content}`;
+                } catch (e) {
+                    return `Failed to read ${filename}: ${e}`;
+                }
+            }
+        });
+
+        // Skill: List Bootstrap Files
+        this.skills.registerSkill({
+            name: 'list_bootstrap_files',
+            description: 'List all bootstrap files and their status (exists, size).',
+            usage: 'list_bootstrap_files()',
+            handler: async () => {
+                try {
+                    const files = this.bootstrap.listFiles();
+                    const result = files.map(f => 
+                        `- ${f.name}: ${f.exists ? `${f.size} bytes` : 'not created'}`
+                    ).join('\n');
+                    return `Bootstrap files:\n${result}`;
+                } catch (e) {
+                    return `Failed to list bootstrap files: ${e}`;
                 }
             }
         });
@@ -2607,6 +2687,127 @@ Be thorough and academic.`;
             this.skills.registerSkill(skill);
             logger.info(`Registered memory tool: ${skill.name}`);
         }
+
+        // Polling Manager Skills
+        this.skills.registerSkill({
+            name: 'register_polling_job',
+            description: 'Register a polling job to wait for a condition to be met. Useful for monitoring tasks, waiting for file changes, or checking status periodically.',
+            usage: 'register_polling_job(id, description, checkCommand, intervalMs, maxAttempts?)',
+            handler: async (args: any) => {
+                const id = args.id || args.job_id;
+                const description = args.description || args.desc;
+                const checkCommand = args.checkCommand || args.command || args.check;
+                const intervalMs = args.intervalMs || args.interval || 5000;
+                const maxAttempts = args.maxAttempts || args.max_attempts;
+
+                if (!id) return 'Error: Missing job id.';
+                if (!description) return 'Error: Missing description.';
+                if (!checkCommand) return 'Error: Missing checkCommand (a shell command that returns exit code 0 when condition is met).';
+
+                try {
+                    this.pollingManager.registerJob({
+                        id,
+                        description,
+                        checkFn: async () => {
+                            // Execute shell command and check exit code
+                            const { exec } = require('child_process');
+                            return new Promise((resolve) => {
+                                exec(checkCommand, (error: any) => {
+                                    // Exit code 0 = success = condition met
+                                    resolve(!error);
+                                });
+                            });
+                        },
+                        intervalMs,
+                        maxAttempts,
+                        onSuccess: (jobId) => {
+                            logger.info(`Polling job "${jobId}" succeeded`);
+                            this.memory.saveMemory({
+                                id: `polling-success-${Date.now()}`,
+                                type: 'short',
+                                content: `Polling job "${jobId}" (${description}) completed successfully`,
+                                timestamp: new Date().toISOString(),
+                                metadata: { source: 'polling', jobId }
+                            });
+                        },
+                        onFailure: (jobId, reason) => {
+                            logger.warn(`Polling job "${jobId}" failed: ${reason}`);
+                            this.memory.saveMemory({
+                                id: `polling-failure-${Date.now()}`,
+                                type: 'short',
+                                content: `Polling job "${jobId}" (${description}) failed: ${reason}`,
+                                timestamp: new Date().toISOString(),
+                                metadata: { source: 'polling', jobId, reason }
+                            });
+                        }
+                    });
+                    return `Polling job "${id}" registered. Will check every ${intervalMs}ms${maxAttempts ? ` (max ${maxAttempts} attempts)` : ''}.`;
+                } catch (e) {
+                    return `Failed to register polling job: ${e}`;
+                }
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'cancel_polling_job',
+            description: 'Cancel a running polling job by ID.',
+            usage: 'cancel_polling_job(id)',
+            handler: async (args: any) => {
+                const id = args.id || args.job_id;
+                if (!id) return 'Error: Missing job id.';
+
+                try {
+                    const cancelled = this.pollingManager.cancelJob(id);
+                    if (cancelled) {
+                        return `Polling job "${id}" cancelled successfully.`;
+                    } else {
+                        return `Polling job "${id}" not found.`;
+                    }
+                } catch (e) {
+                    return `Failed to cancel polling job: ${e}`;
+                }
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'list_polling_jobs',
+            description: 'List all active polling jobs with their status.',
+            usage: 'list_polling_jobs()',
+            handler: async () => {
+                try {
+                    const jobs = this.pollingManager.getActiveJobs();
+                    if (jobs.length === 0) {
+                        return 'No active polling jobs.';
+                    }
+                    const jobList = jobs.map(j => 
+                        `- ${j.id}: ${j.description} (${j.attempts} attempts, ${Math.round(j.duration / 1000)}s elapsed, interval: ${j.intervalMs}ms)`
+                    ).join('\n');
+                    return `Active polling jobs (${jobs.length}):\n${jobList}`;
+                } catch (e) {
+                    return `Failed to list polling jobs: ${e}`;
+                }
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'get_polling_job_status',
+            description: 'Get the status of a specific polling job.',
+            usage: 'get_polling_job_status(id)',
+            handler: async (args: any) => {
+                const id = args.id || args.job_id;
+                if (!id) return 'Error: Missing job id.';
+
+                try {
+                    const status = this.pollingManager.getJobStatus(id);
+                    if (!status.exists) {
+                        return `Polling job "${id}" not found.`;
+                    }
+                    return `Polling job "${id}":\n- Description: ${status.description}\n- Attempts: ${status.attempts}\n- Duration: ${Math.round((status.duration || 0) / 1000)}s`;
+                } catch (e) {
+                    return `Failed to get polling job status: ${e}`;
+                }
+            }
+        });
     }
 
     private loadAgentIdentity() {

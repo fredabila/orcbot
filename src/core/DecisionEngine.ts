@@ -11,6 +11,7 @@ import { ErrorClassifier, ErrorType } from './ErrorClassifier';
 import { ExecutionStateManager } from './ExecutionState';
 import { ContextCompactor } from './ContextCompactor';
 import { ResponseValidator } from './ResponseValidator';
+import { BootstrapManager } from './BootstrapManager';
 
 export class DecisionEngine {
     private agentIdentity: string = '';
@@ -20,6 +21,7 @@ export class DecisionEngine {
     private contextCompactor: ContextCompactor;
     private maxRetries: number;
     private enableAutoCompaction: boolean;
+    private bootstrap?: BootstrapManager;
 
     constructor(
         private memory: MemoryManager,
@@ -28,7 +30,9 @@ export class DecisionEngine {
         private journalPath: string = './JOURNAL.md',
         private learningPath: string = './LEARNING.md',
         private config?: ConfigManager,
+        bootstrap?: BootstrapManager
     ) {
+        this.bootstrap = bootstrap;
         this.pipeline = new DecisionPipeline(this.config || new ConfigManager());
         this.systemContext = this.buildSystemContext();
         this.executionStateManager = new ExecutionStateManager();
@@ -126,11 +130,31 @@ CURRENT DATE & TIME:
 - Timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}
 `;
 
+        // Load bootstrap context if available (IDENTITY.md, SOUL.md, etc.)
+        let bootstrapContext = '';
+        if (this.bootstrap) {
+            try {
+                const context = this.bootstrap.loadBootstrapContext();
+                if (context.IDENTITY) {
+                    bootstrapContext += `\n## IDENTITY (from IDENTITY.md)\n${context.IDENTITY}\n`;
+                }
+                if (context.SOUL) {
+                    bootstrapContext += `\n## PERSONA & BOUNDARIES (from SOUL.md)\n${context.SOUL}\n`;
+                }
+                if (context.AGENTS) {
+                    bootstrapContext += `\n## OPERATING INSTRUCTIONS (from AGENTS.md)\n${context.AGENTS}\n`;
+                }
+            } catch (e) {
+                logger.debug(`DecisionEngine: Could not load bootstrap context: ${e}`);
+            }
+        }
+
         return `
 You are a highly intelligent, autonomous AI Agent. Your persona and identity are defined below.
         
 YOUR IDENTITY:
 ${agentIdentity || 'You are a professional autonomous agent.'}
+${bootstrapContext}
 
 ${dateContext}
 

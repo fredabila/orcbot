@@ -1,6 +1,7 @@
 import { chromium, Browser, Page, BrowserContext } from 'playwright';
 import { logger } from '../utils/logger';
 import { RuntimeTuner } from '../core/RuntimeTuner';
+import { BrowserStateManager } from './BrowserStateManager';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
@@ -20,6 +21,7 @@ export class WebBrowser {
     private tuner?: RuntimeTuner;
     private browserEngine: BrowserEngine;
     private lightpandaEndpoint: string;
+    private stateManager: BrowserStateManager;
 
     public get page(): Page | null {
         return this._page;
@@ -42,6 +44,7 @@ export class WebBrowser {
         this.tuner = tuner;
         this.browserEngine = browserEngine || 'playwright';
         this.lightpandaEndpoint = lightpandaEndpoint || 'ws://127.0.0.1:9222';
+        this.stateManager = new BrowserStateManager();
     }
 
     private async ensureBrowser(headlessOverride?: boolean) {
@@ -214,6 +217,20 @@ export class WebBrowser {
 
     public async navigate(url: string, waitSelectors: string[] = [], allowHeadfulRetry: boolean = true): Promise<string> {
         try {
+            // Check for navigation loop
+            if (this.stateManager.detectNavigationLoop(url)) {
+                const error = `Navigation loop detected for ${url}. Aborting to prevent infinite loop.`;
+                this.stateManager.recordNavigation(url, 'navigate', false, error);
+                return `Error: ${error}\n\nSuggestion: Try a different URL or strategy.`;
+            }
+
+            // Check circuit breaker
+            if (this.stateManager.isCircuitOpen('navigate', url)) {
+                const error = `Circuit breaker open for ${url} (too many recent failures).`;
+                this.stateManager.recordNavigation(url, 'navigate', false, error);
+                return `Error: ${error}\n\nSuggestion: Wait a moment or try a different approach.`;
+            }
+
             const needsGoogleForms = /docs\.google\.com\/forms/i.test(url);
             const needsHeadful = this.shouldUseHeadful(url);
             
@@ -296,15 +313,20 @@ export class WebBrowser {
             if (looksBlank && !allowHeadfulRetry) {
                 logger.warn('Browser: Persistent profile returned blank page. Retrying with stateless context...');
                 const fallback = await this.navigateEphemeral(targetUrl, effectiveWaitSelectors);
-                if (fallback) return fallback;
+                if (fallback) {
+                    this.stateManager.recordNavigation(targetUrl, 'navigate', true);
+                    return fallback;
+                }
             }
 
             this.recordProfileHistory({ url: targetUrl, title, timestamp: new Date().toISOString() });
             this.lastNavigatedUrl = targetUrl;
+            this.stateManager.recordNavigation(targetUrl, 'navigate', true);
             return `Page Loaded: ${title}\nURL: ${url}${captcha ? `\n[WARNING: ${captcha}]` : ''}`;
         } catch (e) {
             const classified = this.classifyNavigateError(e);
             logger.error(`Browser Error at ${url}: ${classified.raw}`);
+            this.stateManager.recordNavigation(url, 'navigate', false, classified.message);
             return `Error: ${classified.message}`;
         }
     }
@@ -657,6 +679,20 @@ export class WebBrowser {
                 finalSelector = `[data-orcbot-ref="${selector}"]`;
             }
 
+            // Check for action loop
+            if (this.stateManager.detectActionLoop('click', selector)) {
+                const error = `Action loop detected: clicking ${selector} repeatedly.`;
+                this.stateManager.recordAction('click', this.lastNavigatedUrl || 'unknown', selector, false, error);
+                return `Error: ${error}\n\nSuggestion: Element may not be responding. Try a different selector or approach.`;
+            }
+
+            // Check circuit breaker
+            if (this.stateManager.isCircuitOpen('click', this.lastNavigatedUrl || '', selector)) {
+                const error = `Circuit breaker open for clicking ${selector} (too many recent failures).`;
+                this.stateManager.recordAction('click', this.lastNavigatedUrl || 'unknown', selector, false, error);
+                return `Error: ${error}\n\nSuggestion: Wait a moment or try a different element.`;
+            }
+
             // Get tuned settings for current domain
             const settings = this.lastNavigatedUrl 
                 ? this.tuner?.getBrowserSettingsForDomain(this.lastNavigatedUrl)
@@ -669,6 +705,8 @@ export class WebBrowser {
             await this.page!.waitForTimeout(300); // Small delay for dynamic elements
             await this.page!.click(finalSelector, { timeout: clickTimeout });
             await this.waitForStablePage(waitAfterClick); // Wait for any navigation/updates after click
+            
+            this.stateManager.recordAction('click', this.lastNavigatedUrl || 'unknown', selector, true);
             return `Successfully clicked: ${selector}`;
         } catch (e) {
             // Learn from failure - if timeout, increase timeout for next time
@@ -679,6 +717,8 @@ export class WebBrowser {
                     logger.info(`Browser: Auto-tuned ${domain} with increased click timeout`);
                 } catch {}
             }
+            const error = String(e);
+            this.stateManager.recordAction('click', this.lastNavigatedUrl || 'unknown', selector, false, error);
             return `Failed to click ${selector}: ${e}`;
         }
     }
@@ -691,6 +731,13 @@ export class WebBrowser {
             let finalSelector = selector;
             if (/^\d+$/.test(selector)) {
                 finalSelector = `[data-orcbot-ref="${selector}"]`;
+            }
+
+            // Check for action loop
+            if (this.stateManager.detectActionLoop('type', selector)) {
+                const error = `Action loop detected: typing in ${selector} repeatedly.`;
+                this.stateManager.recordAction('type', this.lastNavigatedUrl || 'unknown', selector, false, error);
+                return `Error: ${error}\n\nSuggestion: Element may already be filled or not accepting input.`;
             }
 
             // Get tuned settings for current domain
@@ -728,6 +775,8 @@ export class WebBrowser {
                     }
                 }
             }
+            
+            this.stateManager.recordAction('type', this.lastNavigatedUrl || 'unknown', selector, true);
             return `Successfully typed into ${selector}: "${text}"`;
         } catch (e) {
             // Learn from failure
@@ -739,6 +788,9 @@ export class WebBrowser {
                     logger.info(`Browser: Auto-tuned ${domain} with increased type timeout`);
                 } catch {}
             }
+            
+            const error = String(e);
+            this.stateManager.recordAction('type', this.lastNavigatedUrl || 'unknown', selector, false, error);
             return `Failed to type in ${selector}: ${e}`;
         }
     }
@@ -1159,5 +1211,27 @@ export class WebBrowser {
         }
         
         return 'Error: No results found on DuckDuckGo.';
+    }
+
+    /**
+     * Get browser state summary for agent context
+     */
+    public getStateSummary(): string {
+        return this.stateManager.getStateSummary();
+    }
+
+    /**
+     * Get browser diagnostics for debugging
+     */
+    public getDiagnostics(): any {
+        return this.stateManager.getDiagnostics();
+    }
+
+    /**
+     * Reset browser state tracking (useful after completing a task)
+     */
+    public resetState(): void {
+        this.stateManager.reset();
+        logger.info('Browser state reset');
     }
 }
