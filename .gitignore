@@ -5,3 +5,4 @@ dist
 memory.json
 logs
 orcbot.config.yaml
+.orcbot

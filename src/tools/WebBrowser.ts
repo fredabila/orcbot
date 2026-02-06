@@ -169,7 +169,6 @@ export class WebBrowser {
         const blockedDomains = [
             'youtube.com',
             'google.com/search',
-            'linkedin.com',
             'instagram.com',
             'facebook.com',
             'twitter.com',

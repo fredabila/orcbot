@@ -56,7 +56,8 @@ describe('DecisionEngine - System Prompt Persistence', () => {
       getAgentSkillsPrompt: () => '',
       getActivatedSkillsContext: () => '',
       getAgentSkills: () => [],
-      activateAgentSkill: () => {}
+      activateAgentSkill: () => {},
+      deactivateNonStickySkills: () => {}
     } as any;
 
     const mockConfig = {
@@ -151,7 +152,8 @@ describe('DecisionEngine - System Prompt Persistence', () => {
       getAgentSkillsPrompt: () => '',
       getActivatedSkillsContext: () => '',
       getAgentSkills: () => [],
-      activateAgentSkill: () => {}
+      activateAgentSkill: () => {},
+      deactivateNonStickySkills: () => {}
     } as any;
 
     const mockConfig = {
@@ -231,7 +233,8 @@ describe('DecisionEngine - Thread Context Grounding', () => {
       getAgentSkillsPrompt: () => '',
       getActivatedSkillsContext: () => '',
       getAgentSkills: () => [],
-      activateAgentSkill: () => {}
+      activateAgentSkill: () => {},
+      deactivateNonStickySkills: () => {}
     } as any;
 
     const mockConfig = {

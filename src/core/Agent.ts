@@ -61,6 +61,9 @@ export class Agent {
     private instanceLockAcquired: boolean = false;
     private heartbeatJobs: Map<string, Cron> = new Map();
     private heartbeatSchedulePath: string;
+    private scheduledTasks: Map<string, Cron> = new Map();
+    private scheduledTaskMeta: Map<string, any> = new Map();
+    private scheduledTasksPath: string = '';
     
     // Track processed messages to prevent duplicates
     private processedMessages: Set<string> = new Set();
@@ -158,6 +161,8 @@ export class Agent {
         this.loadLastHeartbeatTime();
         this.heartbeatSchedulePath = path.join(path.dirname(this.config.get('actionQueuePath')), 'heartbeat-schedules.json');
         this.loadHeartbeatSchedules();
+        this.scheduledTasksPath = path.join(path.dirname(this.config.get('actionQueuePath')), 'scheduled-tasks.json');
+        this.loadScheduledTasks();
 
         // Ensure context is up to date (supports reconfiguration)
         this.skills.setContext({
@@ -626,6 +631,69 @@ export class Agent {
                     return await this.llm.analyzeMedia(filePath, prompt);
                 } catch (e) {
                     return `Error analyzing media: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Text-to-Speech
+        this.skills.registerSkill({
+            name: 'text_to_speech',
+            description: 'Convert text to an audio file using AI voice synthesis. Returns the file path of the generated audio. Available voices: alloy, echo, fable, onyx, nova, shimmer.',
+            usage: 'text_to_speech(text, voice?, speed?)',
+            handler: async (args: any) => {
+                const text = args.text || args.message || args.content;
+                const voice = args.voice || 'nova';
+                const speed = parseFloat(args.speed) || 1.0;
+
+                if (!text) return 'Error: Missing text to convert to speech.';
+                if (text.length > 4096) return 'Error: Text too long for TTS (max 4096 chars). Shorten the text.';
+
+                try {
+                    const downloadsDir = path.join(this.config.getDataHome(), 'downloads');
+                    if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
+                    const outputPath = path.join(downloadsDir, `tts_${Date.now()}.ogg`);
+                    
+                    await this.llm.textToSpeech(text, outputPath, voice, speed);
+                    return `Audio generated successfully: ${outputPath} (voice: ${voice}, ${text.length} chars)`;
+                } catch (e) {
+                    return `Error generating speech: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Send Voice Note (compound: TTS + send as voice message)
+        this.skills.registerSkill({
+            name: 'send_voice_note',
+            description: 'Convert text to speech and send it as a voice note/voice message to a contact. The message will appear as a playable voice bubble (not a file attachment). Available voices: alloy, echo, fable, onyx, nova, shimmer.',
+            usage: 'send_voice_note(jid, text, voice?)',
+            handler: async (args: any) => {
+                const jid = args.jid || args.to;
+                const text = args.text || args.message || args.content;
+                const voice = args.voice || 'nova';
+
+                if (!jid) return 'Error: Missing jid (recipient identifier).';
+                if (!text) return 'Error: Missing text to convert to voice.';
+                if (text.length > 4096) return 'Error: Text too long for TTS (max 4096 chars). Shorten the text.';
+
+                try {
+                    // Generate the audio
+                    const downloadsDir = path.join(this.config.getDataHome(), 'downloads');
+                    if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
+                    const audioPath = path.join(downloadsDir, `voice_${Date.now()}.ogg`);
+                    await this.llm.textToSpeech(text, audioPath, voice);
+
+                    // Send as voice note through the appropriate channel
+                    const isWhatsApp = jid.includes('@s.whatsapp.net') || jid.includes('@g.us');
+                    if (isWhatsApp && this.whatsapp) {
+                        await this.whatsapp.sendVoiceNote(jid, audioPath);
+                        return `Voice note sent via WhatsApp to ${jid} (voice: ${voice}, ${text.length} chars)`;
+                    } else if (this.telegram && !isWhatsApp) {
+                        await this.telegram.sendVoiceNote(jid, audioPath);
+                        return `Voice note sent via Telegram to ${jid} (voice: ${voice}, ${text.length} chars)`;
+                    }
+                    return 'Appropriate channel not available or JID type not recognized.';
+                } catch (e) {
+                    return `Error sending voice note: ${e}`;
                 }
             }
         });
@@ -2094,10 +2162,10 @@ export default ${name};
             }
         });
 
-        // Skill: Schedule Task
+        // Skill: Schedule Task (one-off, tracked + persisted)
         this.skills.registerSkill({
             name: 'schedule_task',
-            description: 'Schedule a task to run later using cron syntax or relative time (e.g. "in 5 minutes")',
+            description: 'Schedule a one-off task to run later. Supports relative time (e.g. "in 15 minutes", "in 2 hours", "in 1 day") or cron syntax. Returns an ID you can use with schedule_list / schedule_remove.',
             usage: 'schedule_task(time_or_cron, task_description)',
             handler: async (args: any) => {
                 const time_or_cron = args.time_or_cron || args.time || args.schedule;
@@ -2107,6 +2175,7 @@ export default ${name};
 
                 try {
                     let schedule: string | Date = time_or_cron;
+                    let scheduledFor: string = time_or_cron; // human-readable
                     const relativeMatch = time_or_cron.match(/in (\d+) (second|minute|hour|day)s?/i);
                     if (relativeMatch) {
                         const amount = parseInt(relativeMatch[1]);
@@ -2117,17 +2186,66 @@ export default ${name};
                         if (unit.startsWith('hour')) date.setHours(date.getHours() + amount);
                         if (unit.startsWith('day')) date.setDate(date.getDate() + amount);
                         schedule = date;
+                        scheduledFor = date.toISOString();
                     }
 
-                    new Cron(schedule, () => {
-                        logger.info(`Scheduled Task Triggered: ${task_description}`);
+                    const id = `st_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+                    const cron = new Cron(schedule, () => {
+                        logger.info(`⏰ Scheduled Task Triggered [${id}]: ${task_description}`);
                         this.pushTask(`Scheduled Task: ${task_description}`, 8);
+                        // Auto-cleanup after firing
+                        this.scheduledTasks.delete(id);
+                        this.scheduledTaskMeta.delete(id);
+                        this.persistScheduledTasks();
                     });
 
-                    return `Task scheduled successfully for: ${schedule}`;
+                    const meta = {
+                        id,
+                        task: task_description,
+                        scheduledFor,
+                        createdAt: new Date().toISOString(),
+                        rawInput: time_or_cron
+                    };
+
+                    this.scheduledTasks.set(id, cron);
+                    this.scheduledTaskMeta.set(id, meta);
+                    this.persistScheduledTasks();
+
+                    return `✅ Task scheduled (id=${id}) for ${scheduledFor}: "${task_description}"`;
                 } catch (e) {
                     return `Failed to schedule task: ${e}`;
                 }
+            }
+        });
+
+        // Skill: List Scheduled Tasks (one-off)
+        this.skills.registerSkill({
+            name: 'schedule_list',
+            description: 'List all pending one-off scheduled tasks. For recurring schedules, use heartbeat_list.',
+            usage: 'schedule_list()',
+            handler: async () => {
+                const list = Array.from(this.scheduledTaskMeta.values());
+                if (list.length === 0) return 'No pending scheduled tasks.';
+                return list.map((s: any) => `• ${s.id} → fires at ${s.scheduledFor} → "${s.task}" (created ${s.createdAt})`).join('\n');
+            }
+        });
+
+        // Skill: Remove/Cancel a Scheduled Task
+        this.skills.registerSkill({
+            name: 'schedule_remove',
+            description: 'Cancel a pending scheduled task by its ID.',
+            usage: 'schedule_remove(id)',
+            handler: async (args: any) => {
+                const id = args.id || args.task_id;
+                if (!id) return 'Error: Missing id.';
+                const cron = this.scheduledTasks.get(id);
+                if (!cron) return `No scheduled task found for id=${id}.`;
+                cron.stop();
+                this.scheduledTasks.delete(id);
+                this.scheduledTaskMeta.delete(id);
+                this.persistScheduledTasks();
+                return `Scheduled task cancelled: ${id}`;
             }
         });
 
@@ -3094,6 +3212,13 @@ Be thorough and academic.`;
      */
     private async triggerSkillCreationForFailure(taskDescription: string, failingTool?: string, failingContext?: string) {
         try {
+            // GUARD: Never trigger self-improvement for core built-in skills.
+            // If web_search or browser_navigate is "failing", it's a strategy problem, not a missing skill.
+            if (failingTool && this.isCoreBuiltinSkill(failingTool)) {
+                logger.info(`Agent: Skipping auto skill creation — '${failingTool}' is a core built-in skill. Strategy issue, not missing capability.`);
+                return;
+            }
+
             // Don't spam skill creation - check if we recently tried
             const recentMemories = this.memory.searchMemory('short');
             const recentSkillCreations = recentMemories.filter(m => 
@@ -3285,6 +3410,183 @@ The plugin handles all logic internally. See the plugin source for implementatio
             }
         } catch (e) {
             logger.debug(`Failed to send progress feedback: ${e}`);
+        }
+    }
+
+    /**
+     * REVIEW GATE for forced terminations.
+     * When a hard guardrail (message budget, skill frequency, max steps) wants to kill a task,
+     * this method asks the LLM review layer whether the task is truly done or should continue.
+     * Returns 'continue' if the task should keep going, 'terminate' if it should stop.
+     */
+    private async reviewForcedTermination(
+        action: Action,
+        reason: 'message_budget' | 'skill_frequency' | 'max_steps',
+        currentStep: number,
+        details: string
+    ): Promise<'continue' | 'terminate'> {
+        try {
+            const taskDescription = action.payload?.description || 'Unknown task';
+            const recentContext = this.memory.getRecentContext();
+            const stepHistory = recentContext
+                .filter(m => m.content?.includes(action.id) || m.metadata?.actionId === action.id)
+                .map(m => m.content)
+                .join('\n')
+                .slice(-2000); // Last 2000 chars of step history for this action
+
+            const reviewPrompt = `You are a task completion reviewer. A hard safety guardrail is about to TERMINATE a task. Your job is to decide if the task is truly done or if it should continue.
+
+TASK: "${taskDescription}"
+TERMINATION REASON: ${reason} — ${details}
+CURRENT STEP: ${currentStep}
+
+RECENT STEP HISTORY:
+${stepHistory || 'No step history available.'}
+
+RULES:
+- If the task was a RESEARCH or DEEP WORK task (gathering info, writing reports, building something) and meaningful progress has been made but it's not done yet, return "continue".
+- If the agent is truly stuck in a loop making NO progress at all (same exact calls with same results), return "terminate".
+- If the agent has already gathered enough information to deliver a useful response to the user, return "terminate" (it should compile and send what it has).
+- If the agent hasn't delivered ANY results to the user yet but has gathered data, return "continue" (it needs to compile and send).
+- Prefer "continue" when in doubt — it's better to let the agent wrap up than to leave the user hanging.
+
+Respond with ONLY valid JSON:
+{ "decision": "continue" | "terminate", "reason": "brief explanation" }`;
+
+            const response = await this.llm.call(reviewPrompt, 'You are a task reviewer. Respond only with valid JSON.');
+            const match = response.match(/\{[\s\S]*\}/);
+            if (match) {
+                const parsed = JSON.parse(match[0]);
+                const decision = parsed.decision === 'continue' ? 'continue' : 'terminate';
+                logger.info(`Agent: Forced termination review (${reason}): ${decision} — ${parsed.reason || 'no reason'}`);
+                return decision;
+            }
+        } catch (e) {
+            logger.debug(`Agent: Forced termination review failed: ${e}. Defaulting to terminate.`);
+        }
+        return 'terminate';
+    }
+
+    /**
+     * Check if a skill is a core built-in skill (not a user-created or plugin skill).
+     * Core skills should never trigger self-improvement — if they're failing, it's a strategy
+     * issue, not a missing capability.
+     */
+    private isCoreBuiltinSkill(skillName: string): boolean {
+        const coreSkills = new Set([
+            'web_search', 'browser_navigate', 'browser_click', 'browser_type',
+            'browser_examine_page', 'browser_screenshot', 'browser_back',
+            'extract_article', 'download_file', 'read_file', 'write_to_file',
+            'write_file', 'create_file', 'delete_file', 'run_command',
+            'send_telegram', 'send_whatsapp', 'send_discord', 'send_gateway_chat',
+            'send_voice_note', 'text_to_speech', 'analyze_media',
+            'update_journal', 'update_learning', 'update_user_profile',
+            'update_agent_identity', 'get_system_info', 'system_check',
+            'manage_config', 'read_bootstrap_file', 'request_supporting_data',
+            'manage_skills', 'create_custom_skill', 'create_skill',
+            'schedule_task', 'schedule_list', 'schedule_remove',
+            'install_npm_dependency'
+        ]);
+        return coreSkills.has(skillName);
+    }
+
+    /**
+     * POST-ACTION HOOK: Detect if the agent acknowledged incomplete prior work
+     * but didn't actually resume it (empty promise detection).
+     * 
+     * When a user asks "are u done?" and the agent replies "not yet, working on it!"
+     * but then sets goals_met=true and stops, the user is left hanging. This method
+     * detects that pattern and auto-pushes a continuation task.
+     */
+    private async detectAndResumeIncompleteWork(
+        action: Action,
+        sentMessages: string[],
+        stepCount: number
+    ): Promise<void> {
+        try {
+            // Only check short actions (1-3 steps) that sent a message — longer actions likely did real work
+            if (stepCount > 3 || sentMessages.length === 0) return;
+            
+            // Only check follow-up-style actions (user asking about status/completion)
+            const taskDesc = (action.payload?.description || '').toLowerCase();
+            const isFollowUpInquiry = /\b(are (you|u) done|is it (ready|done|finished)|status|update|what('?s| is) (the )?(progress|status)|how('?s| is) it going|finished yet|ready yet|done yet|completed)\b/.test(taskDesc);
+            if (!isFollowUpInquiry) return;
+
+            // Check if any sent message acknowledges incomplete work
+            const incompleteIndicators = [
+                'not yet', 'still working', 'not done', 'in progress', 'working on',
+                'haven\'t finished', 'haven\'t completed', 'not finished', 'shortly',
+                'will deliver', 'will have', 'will send', 'will get', 'almost done',
+                'nearly done', 'finishing up', 'wrapping up', 'give me a moment',
+                'bear with me', 'just a bit', 'coming soon', 'on it', 'hold on'
+            ];
+            
+            const lastMessage = sentMessages[sentMessages.length - 1]?.toLowerCase() || '';
+            const acknowledgesIncomplete = incompleteIndicators.some(ind => lastMessage.includes(ind));
+            
+            if (!acknowledgesIncomplete) return;
+
+            // Check if the agent also scheduled or pushed continuation work
+            const recentShort = this.memory.searchMemory('short');
+            const thisActionMemories = recentShort.filter(m => 
+                m.metadata?.actionId === action.id
+            );
+            const didScheduleOrContinue = thisActionMemories.some(m => 
+                m.metadata?.tool === 'schedule_task' || 
+                m.metadata?.tool === 'web_search' ||
+                m.metadata?.tool === 'browser_navigate' ||
+                m.metadata?.tool === 'extract_article' ||
+                m.metadata?.tool === 'run_command'
+            );
+
+            if (didScheduleOrContinue) return; // Agent actually did some work, not just a promise
+
+            // EMPTY PROMISE DETECTED: Agent acknowledged incomplete work but didn't continue
+            logger.warn(`Agent: Empty promise detected in action ${action.id}. Agent acknowledged incomplete work but didn't resume. Auto-pushing continuation task.`);
+
+            // Try to find the original incomplete task from recent episodic memory
+            const episodicMemories = this.memory.searchMemory('episodic');
+            const recentIncomplete = episodicMemories
+                .filter(m => {
+                    const content = (m.content || '').toLowerCase();
+                    return content.includes('task finished:') && 
+                           m.metadata?.actionId !== action.id &&
+                           m.metadata?.steps !== undefined;
+                })
+                .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
+                .slice(0, 3); // Check the last 3 completed tasks
+
+            // Also check short-term memories for the original task context
+            const taskContextMemories = recentShort
+                .filter(m => {
+                    const content = (m.content || '').toLowerCase();
+                    return (content.includes('web_search') || content.includes('browser_navigate') || content.includes('research')) &&
+                           m.metadata?.actionId !== action.id;
+                })
+                .slice(-5);
+
+            // Build a description for the continuation task
+            const contextHint = taskContextMemories.map(m => m.content?.slice(0, 100)).join(' | ');
+            
+            const continuationDesc = `CONTINUATION: Resume the incomplete task that the user asked about. The user asked "${action.payload?.description?.slice(0, 100)}" and I acknowledged the work is not done. I MUST now actually complete it. ${contextHint ? `Previous progress context: ${contextHint}` : 'Check episodic memory for the original task details.'}. Compile all available results and deliver a comprehensive response to the user.`;
+
+            await this.pushTask(
+                continuationDesc,
+                8, // High priority — user is waiting
+                {
+                    source: action.payload?.source,
+                    sourceId: action.payload?.sourceId,
+                    chatId: action.payload?.chatId,
+                    userId: action.payload?.userId,
+                    trigger: 'empty_promise_recovery',
+                    originalActionId: action.id
+                },
+                action.lane === 'autonomy' ? 'autonomy' : 'user'
+            );
+
+            logger.info(`Agent: Auto-pushed continuation task to resume incomplete work.`);
+        } catch (e) {
+            logger.debug(`Agent: detectAndResumeIncompleteWork failed: ${e}`);
         }
     }
 
@@ -3781,6 +4083,81 @@ Respond with a single actionable task description (one sentence):`;
         }
     }
 
+    // --- One-off Scheduled Task persistence ---
+
+    private loadScheduledTasks() {
+        try {
+            if (!fs.existsSync(this.scheduledTasksPath)) {
+                fs.writeFileSync(this.scheduledTasksPath, '[]', 'utf8');
+                return;
+            }
+            const raw = fs.readFileSync(this.scheduledTasksPath, 'utf8');
+            const tasks = JSON.parse(raw || '[]');
+            if (!Array.isArray(tasks)) return;
+
+            const now = Date.now();
+            let changed = false;
+
+            for (const meta of tasks) {
+                if (!meta?.id || !meta?.task || !meta?.scheduledFor) continue;
+
+                // If scheduledFor is an ISO date, check if it's in the future
+                const scheduledDate = new Date(meta.scheduledFor);
+                if (!isNaN(scheduledDate.getTime())) {
+                    if (scheduledDate.getTime() <= now) {
+                        // Expired while OrcBot was offline — fire it immediately
+                        logger.info(`⏰ Scheduled task [${meta.id}] was due while offline. Firing now: "${meta.task}"`);
+                        this.pushTask(`Scheduled Task (delayed): ${meta.task}`, 8);
+                        changed = true;
+                        continue;
+                    }
+
+                    // Still in the future — re-register
+                    const cron = new Cron(scheduledDate, () => {
+                        logger.info(`⏰ Scheduled Task Triggered [${meta.id}]: ${meta.task}`);
+                        this.pushTask(`Scheduled Task: ${meta.task}`, 8);
+                        this.scheduledTasks.delete(meta.id);
+                        this.scheduledTaskMeta.delete(meta.id);
+                        this.persistScheduledTasks();
+                    });
+                    this.scheduledTasks.set(meta.id, cron);
+                    this.scheduledTaskMeta.set(meta.id, meta);
+                } else {
+                    // Cron expression — re-register as-is (it's a repeating pattern, not a one-off date)
+                    try {
+                        const cron = new Cron(meta.rawInput || meta.scheduledFor, () => {
+                            logger.info(`⏰ Scheduled Task Triggered [${meta.id}]: ${meta.task}`);
+                            this.pushTask(`Scheduled Task: ${meta.task}`, 8);
+                            this.scheduledTasks.delete(meta.id);
+                            this.scheduledTaskMeta.delete(meta.id);
+                            this.persistScheduledTasks();
+                        });
+                        this.scheduledTasks.set(meta.id, cron);
+                        this.scheduledTaskMeta.set(meta.id, meta);
+                    } catch (e) {
+                        logger.warn(`Failed to reload scheduled task [${meta.id}]: ${e}`);
+                        changed = true;
+                    }
+                }
+            }
+
+            if (changed) this.persistScheduledTasks();
+            const count = this.scheduledTasks.size;
+            if (count > 0) logger.info(`Loaded ${count} scheduled task(s) from disk.`);
+        } catch (e) {
+            logger.warn(`Failed to load scheduled tasks: ${e}`);
+        }
+    }
+
+    private persistScheduledTasks() {
+        try {
+            const tasks = Array.from(this.scheduledTaskMeta.values());
+            fs.writeFileSync(this.scheduledTasksPath, JSON.stringify(tasks, null, 2));
+        } catch (e) {
+            logger.warn(`Failed to persist scheduled tasks: ${e}`);
+        }
+    }
+
     private heartbeatJobMeta: Map<string, any> = new Map();
 
     private registerHeartbeatSchedule(scheduleDef: any, persist: boolean = true) {
@@ -3917,6 +4294,17 @@ Respond with a single actionable task description (one sentence):`;
         }
         this.heartbeatJobs.clear();
         this.heartbeatJobMeta.clear();
+
+        // Stop and clear all one-off scheduled tasks
+        for (const [id, cron] of this.scheduledTasks.entries()) {
+            cron.stop();
+            logger.info(`Agent: Stopped scheduled task: ${id}`);
+        }
+        this.scheduledTasks.clear();
+        this.scheduledTaskMeta.clear();
+        if (fs.existsSync(this.scheduledTasksPath)) {
+            fs.writeFileSync(this.scheduledTasksPath, '[]', 'utf8');
+        }
 
         // Reset heartbeat tracking variables
         this.lastHeartbeatAt = Date.now();
@@ -4205,9 +4593,13 @@ Respond with a single actionable task description (one sentence):`;
 
             if (waitingAction) {
                 logger.info(`Agent: Resuming waiting action ${waitingAction.id} due to new inbound message${messageId ? ` ${messageId}` : ''}`);
-                // Persist the latest user message onto the waiting action so the DecisionEngine can't
-                // accidentally deliberate only on the old prompt.
+                // Update the ACTION DESCRIPTION to include the new user message.
+                // This is critical — the DecisionEngine deliberates on payload.description,
+                // so if we don't update it, the LLM keeps re-reading the stale original task.
+                const originalDesc = waitingAction.payload?.description || '';
+                const updatedDesc = `${originalDesc}\n\n[USER FOLLOW-UP]: ${description}`;
                 this.actionQueue.updatePayload(waitingAction.id, {
+                    description: updatedDesc,
                     lastUserMessageId: messageId || undefined,
                     lastUserMessageText: description,
                     resumedFromWaitingAt: new Date().toISOString()
@@ -4341,9 +4733,31 @@ Respond with a single actionable task description (one sentence):`;
                         : this.skills.getSkillsPrompt()
                 );
 
-            const MAX_STEPS = isSocialFastPath ? 1 : (this.config.get('maxStepsPerAction') || 30);
-            const MAX_MESSAGES = isSocialFastPath ? 1 : (this.config.get('maxMessagesPerAction') || 3);
+            // RESEARCH TASK DETECTION
+            // Research/deep-work tasks legitimately need many tool calls and status updates.
+            // We give them higher budgets so they don't get killed mid-work.
+            const RESEARCH_TOOLS = new Set([
+                'web_search', 'browser_navigate', 'browser_click', 'browser_type',
+                'browser_examine_page', 'browser_screenshot', 'browser_back',
+                'extract_article', 'download_file', 'read_file', 'write_to_file',
+                'run_command', 'analyze_media'
+            ]);
+            const taskDesc = (action.payload.description || '').toLowerCase();
+            const researchKeywords = [
+                'research', 'deep dive', 'investigate', 'find out', 'look up', 'search for',
+                'compile', 'gather', 'aggregate', 'analyze', 'explore', 'discover',
+                'browse', 'scrape', 'crawl', 'download', 'collect', 'summarize',
+                'report on', 'write about', 'create a report', 'build a', 'develop a',
+                'set up', 'configure', 'install', 'deploy', 'with pictures', 'with images'
+            ];
+            const isResearchTask = !isSocialFastPath && researchKeywords.some(kw => taskDesc.includes(kw));
+
+            const MAX_STEPS = isSocialFastPath ? 1 : (this.config.get('maxStepsPerAction') || 15);
+            const MAX_MESSAGES = isSocialFastPath ? 1 : isResearchTask ? 8 : (this.config.get('maxMessagesPerAction') || 3);
             const MAX_NO_TOOLS_RETRIES = 3; // Max retries when LLM returns no tools but goals_met=false
+            const MAX_SKILL_REPEATS = 5; // Max times any single skill can be called in one action
+            const MAX_RESEARCH_SKILL_REPEATS = 15; // Higher ceiling for research tools (web_search, browser_*, etc.)
+            const MAX_CONSECUTIVE_FAILURES = 3; // Max consecutive failures of same skill before aborting
             let currentStep = 0;
             let messagesSent = 0;
             let lastMessageContent = '';
@@ -4355,6 +4769,9 @@ Respond with a single actionable task description (one sentence):`;
             let consecutiveNonDeepTurns = 0;
             let waitingForClarification = false; // Track if we're paused for user input
             const sentMessagesInAction: string[] = [];
+            const skillCallCounts: Record<string, number> = {}; // Track how many times each skill is called
+            const skillFailCounts: Record<string, number> = {}; // Track consecutive failures per skill
+            const recentSkillNames: string[] = []; // Track skill name sequence for pattern detection
 
             const nonDeepSkills = [
                 'send_telegram',
@@ -4366,6 +4783,8 @@ Respond with a single actionable task description (one sentence):`;
                 'update_agent_identity',
                 'get_system_info',
                 'system_check',
+                'manage_config',  // Config reads are not progress-making actions
+                'read_bootstrap_file', // Reading bootstrap files is not progress
                 'browser_examine_page', // Examining without action is low info
                 'browser_screenshot',
                 'request_supporting_data'
@@ -4384,8 +4803,29 @@ Respond with a single actionable task description (one sentence):`;
                 }
 
                 if (messagesSent >= MAX_MESSAGES) {
-                    logger.warn(`Agent: Message budget reached (${messagesSent}/${MAX_MESSAGES}). Forcing termination for action ${action.id}.`);
-                    break;
+                    logger.warn(`Agent: Message budget reached (${messagesSent}/${MAX_MESSAGES}) for action ${action.id}. Checking if task is truly done...`);
+                    
+                    // REVIEW GATE: Don't blindly kill — ask the review layer if task is actually done
+                    const budgetReviewResult = await this.reviewForcedTermination(
+                        action, 'message_budget', currentStep,
+                        `Message budget reached (${messagesSent}/${MAX_MESSAGES}). Agent has been sending status updates while working.`
+                    );
+                    
+                    if (budgetReviewResult === 'continue') {
+                        // Review layer says the task isn't done — suppress future status messages
+                        // by making budget unreachable, but let the agent keep WORKING silently
+                        logger.info(`Agent: Review layer says task is NOT done. Suppressing further status messages but continuing work.`);
+                        this.memory.saveMemory({
+                            id: `${action.id}-step-${currentStep}-message-budget-suppress`,
+                            type: 'short',
+                            content: `[SYSTEM: You have sent ${messagesSent} messages already. STOP sending status updates. Focus ONLY on completing the task silently. Only send ONE final message when the task is FULLY complete with all results.]`,
+                            metadata: { actionId: action.id, step: currentStep }
+                        });
+                        // Don't break — just suppress further messages by not resetting budget
+                    } else {
+                        logger.warn(`Agent: Review layer confirms task is done or unrecoverable. Terminating action ${action.id}.`);
+                        break;
+                    }
                 }
 
                 if (this.telegram && action.payload.source === 'telegram') {
@@ -4472,11 +4912,15 @@ Respond with a single actionable task description (one sentence):`;
                             // PROGRESS FEEDBACK: Let user know we got stuck
                             await this.sendProgressFeedback(action, 'recovering', 'Got stuck in a loop. Learning from this to improve...');
                             
-                            // SELF-IMPROVEMENT: When stuck in a loop, try to build a skill to solve it
+                            // SELF-IMPROVEMENT: Only trigger for non-core tools (core tools looping = strategy issue, not missing skill)
                             const failingTool = decision.tools[0]?.name;
-                            const failingContext = JSON.stringify(decision.tools[0]?.metadata || {}).slice(0, 200);
-                            const taskDescription = typeof action.payload === 'string' ? action.payload : JSON.stringify(action.payload);
-                            await this.triggerSkillCreationForFailure(taskDescription, failingTool, failingContext);
+                            if (failingTool && !this.isCoreBuiltinSkill(failingTool) && !RESEARCH_TOOLS.has(failingTool)) {
+                                const failingContext = JSON.stringify(decision.tools[0]?.metadata || {}).slice(0, 200);
+                                const taskDescription = typeof action.payload === 'string' ? action.payload : JSON.stringify(action.payload);
+                                await this.triggerSkillCreationForFailure(taskDescription, failingTool, failingContext);
+                            } else {
+                                logger.info(`Agent: Loop on core/research tool '${failingTool}' — not triggering self-improvement (strategy issue, not missing skill).`);
+                            }
                             
                             break;
                         } else {
@@ -4486,6 +4930,87 @@ Respond with a single actionable task description (one sentence):`;
                         loopCounter = 0;
                     }
                     lastStepToolSignatures = currentStepSignatures;
+
+                    // 4. SKILL FREQUENCY LOOP DETECTION
+                    // Track how many times each skill is called across the entire action
+                    for (const t of decision.tools) {
+                        skillCallCounts[t.name] = (skillCallCounts[t.name] || 0) + 1;
+                        recentSkillNames.push(t.name);
+                    }
+                    
+                    // Research tools (web_search, browser_*, extract_article) get a higher ceiling
+                    // because they legitimately need many calls with different queries for deep research.
+                    const overusedSkill = Object.entries(skillCallCounts).find(([skillName, count]) => {
+                        const limit = RESEARCH_TOOLS.has(skillName) ? MAX_RESEARCH_SKILL_REPEATS : MAX_SKILL_REPEATS;
+                        return count >= limit;
+                    });
+                    
+                    if (overusedSkill) {
+                        const [skillName, callCount] = overusedSkill;
+                        const isResearchTool = RESEARCH_TOOLS.has(skillName);
+                        const failCount = skillFailCounts[skillName] || 0;
+                        const skillExists = this.skills.getAllSkills().some(s => s.name === skillName);
+                        
+                        logger.warn(`Agent: Skill '${skillName}' called ${callCount} times in action ${action.id}${isResearchTool ? ' (research tool, higher limit)' : ''}.`);
+                        
+                        // REVIEW GATE: Ask the review layer before killing the task
+                        const reviewResult = await this.reviewForcedTermination(
+                            action, 'skill_frequency', currentStep,
+                            `Skill '${skillName}' called ${callCount} times. ${isResearchTool ? 'This is a research tool that has hit even the extended ceiling.' : 'Non-research tool exceeded call limit.'} Fail count: ${failCount}. Task: ${action.payload?.description?.slice(0, 200)}`
+                        );
+                        
+                        if (reviewResult === 'continue') {
+                            // Review says task isn't done — inject pivot guidance instead of killing
+                            logger.info(`Agent: Review layer says task is NOT done despite skill overuse. Injecting pivot guidance.`);
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-skill-pivot-guidance`,
+                                type: 'short',
+                                content: `[SYSTEM: You have called '${skillName}' ${callCount} times. STOP using '${skillName}' — you MUST try a completely different approach. ${isResearchTool ? 'If web_search isn\'t finding what you need, try browser_navigate to visit specific sites directly. If browser isn\'t working, try a different search query strategy or compile what you already have.' : 'Switch to a different tool or method entirely.'} Compile and deliver whatever results you have gathered so far.]`,
+                                metadata: { actionId: action.id, skill: skillName, callCount, step: currentStep }
+                            });
+                            // Ban the overused skill for the rest of this action
+                            skillCallCounts[skillName] = 0; // Reset so it can be used sparingly
+                            // Don't break — let the agent continue with a different approach
+                        } else {
+                            // Review layer confirms we should stop
+                            await this.sendProgressFeedback(action, 'recovering', `Got stuck repeating '${skillName}'. Wrapping up with what I have...`);
+                            
+                            // Only trigger self-improvement for NON-core, non-research skills
+                            if (!isResearchTool && !this.isCoreBuiltinSkill(skillName)) {
+                                if (skillExists && failCount > 0) {
+                                    logger.info(`Agent: Skill '${skillName}' exists but keeps failing (${failCount} errors). Not creating a new skill — this is a parameter issue.`);
+                                    this.memory.saveMemory({
+                                        id: `${action.id}-step-${currentStep}-skill-loop-guidance`,
+                                        type: 'short',
+                                        content: `[SYSTEM: You called '${skillName}' ${callCount} times but it kept failing. The skill EXISTS and works — the problem is that you are passing WRONG PARAMETERS. Review the skill's usage instructions carefully, check what parameters it expects, and try again with correct values. If you cannot determine the right parameters, INFORM THE USER that you need help with this skill.]`,
+                                        metadata: { actionId: action.id, skill: skillName, failures: failCount }
+                                    });
+                                } else {
+                                    await this.triggerSkillCreationForFailure(
+                                        typeof action.payload === 'string' ? action.payload : JSON.stringify(action.payload),
+                                        skillName,
+                                        `Skill called ${callCount} times without progress`
+                                    );
+                                }
+                            } else {
+                                logger.info(`Agent: '${skillName}' is a core/research tool — skipping self-improvement trigger (not a missing capability).`);
+                            }
+                            break;
+                        }
+                    }
+
+                    // 5. PATTERN-BASED LOOP DETECTION
+                    // Detect repeating patterns like [manage_config, run_command, manage_config, run_command]
+                    if (recentSkillNames.length >= 6) {
+                        const last6 = recentSkillNames.slice(-6);
+                        const pattern2 = `${last6[0]},${last6[1]}`;
+                        const isRepeating2 = `${last6[2]},${last6[3]}` === pattern2 && `${last6[4]},${last6[5]}` === pattern2;
+                        if (isRepeating2) {
+                            logger.warn(`Agent: Detected repeating skill pattern [${pattern2}] x3 in action ${action.id}. Breaking loop.`);
+                            await this.sendProgressFeedback(action, 'recovering', 'Detected repeating pattern. Trying a different approach...');
+                            break;
+                        }
+                    }
 
                     let forceBreak = false;
                     let hasSentMessageInThisStep = false;
@@ -4516,16 +5041,37 @@ Respond with a single actionable task description (one sentence):`;
                             );
                             
                             if (messageIndicatesCompletion && !decision.verification?.goals_met) {
-                                logger.warn(`Agent: Blocked premature completion message in action ${action.id}. Message claims completion but goals_met=false. Message: "${currentMessage.slice(0, 100)}..."`);
+                                // Allow messages that contain questions - they're asking for input, not claiming done
+                                const messageHasQuestion = currentMessage.includes('?') || this.messageContainsQuestion(currentMessage);
                                 
-                                // Save to memory so the agent learns not to do this
-                                this.memory.saveMemory({
-                                    id: `${action.id}-step-${currentStep}-blocked-premature-completion`,
-                                    type: 'short',
-                                    content: `[SYSTEM: BLOCKED premature completion message. You tried to tell the user the task is done, but verification.goals_met was false. This means you haven't actually completed the task yet. Continue working and only claim completion when goals_met=true.]`,
-                                    metadata: { actionId: action.id, step: currentStep }
-                                });
-                                continue;
+                                // Allow messages that are actually reporting blockers/problems, not claiming success
+                                const blockerPhrases = [
+                                    "can't", "cannot", "unable", "couldn't", "not yet", "still pending",
+                                    "need you to", "waiting for", "error", "failed", "problem",
+                                    "issue", "blocked", "requires", "hold on", "not claimed",
+                                    "before i can", "prerequisite", "first need", "however",
+                                    "but", "although", "what would", "what do", "what should"
+                                ];
+                                const isReportingBlocker = blockerPhrases.some(phrase =>
+                                    currentMessage.toLowerCase().includes(phrase)
+                                );
+                                
+                                if (messageHasQuestion) {
+                                    logger.info(`Agent: Allowing message through despite completion phrases — message contains a question (asking for input, not claiming done).`);
+                                } else if (isReportingBlocker) {
+                                    logger.info(`Agent: Allowing blocker-report message through despite completion phrases (goals_met=false but message reports a problem).`);
+                                } else {
+                                    logger.warn(`Agent: Blocked premature completion message in action ${action.id}. Message claims completion but goals_met=false. Message: "${currentMessage.slice(0, 100)}..."`);
+                                    
+                                    // Save to memory so the agent learns not to do this
+                                    this.memory.saveMemory({
+                                        id: `${action.id}-step-${currentStep}-blocked-premature-completion`,
+                                        type: 'short',
+                                        content: `[SYSTEM: BLOCKED premature completion message. You tried to tell the user the task is done, but verification.goals_met was false. This means you haven't actually completed the task yet. Continue working and only claim completion when goals_met=true.]`,
+                                        metadata: { actionId: action.id, step: currentStep }
+                                    });
+                                    continue;
+                                }
                             }
 
                             // 3. Communication Cooldown: Block if no new deep info since last message
@@ -4594,9 +5140,23 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         let toolResult;
                         try {
                             toolResult = await this.skills.executeSkill(toolCall.name, toolCall.metadata || {});
+                            // Reset failure counter on success
+                            skillFailCounts[toolCall.name] = 0;
                         } catch (e) {
                             logger.error(`Skill execution failed: ${toolCall.name} - ${e}`);
                             toolResult = `Error executing skill ${toolCall.name}: ${e}`;
+                            
+                            // Track consecutive failures per skill
+                            skillFailCounts[toolCall.name] = (skillFailCounts[toolCall.name] || 0) + 1;
+                            if (skillFailCounts[toolCall.name] >= MAX_CONSECUTIVE_FAILURES) {
+                                logger.warn(`Agent: Skill '${toolCall.name}' failed ${MAX_CONSECUTIVE_FAILURES} consecutive times in action ${action.id}. Aborting skill.`);
+                                this.memory.saveMemory({
+                                    id: `${action.id}-step-${currentStep}-skill-failure-limit`,
+                                    type: 'short',
+                                    content: `[SYSTEM: Skill '${toolCall.name}' has failed ${MAX_CONSECUTIVE_FAILURES} times in a row. STOP using this skill. Try a completely different approach or inform the user that this method isn't working.]`,
+                                    metadata: { actionId: action.id, skill: toolCall.name, failures: skillFailCounts[toolCall.name] }
+                                });
+                            }
                             
                             // PROGRESS FEEDBACK: Let user know we hit an error but are recovering
                             await this.sendProgressFeedback(action, 'error', `${toolCall.name} failed`);
@@ -4633,19 +5193,104 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             break;
                         }
 
-                        // Mark if a deep tool was successfully used
+                        // Determine if the result indicates an error using STRUCTURED checks first,
+                        // then fall back to string scanning for unstructured results.
                         const resultString = JSON.stringify(toolResult) || '';
-                        if (!nonDeepSkills.includes(toolCall.name) && !resultString.toLowerCase().includes('error')) {
+                        
+                        // Structured check: if result is an object with explicit success/error fields, trust those
+                        const hasStructuredResult = toolResult && typeof toolResult === 'object' && !Array.isArray(toolResult);
+                        let resultIndicatesError: boolean;
+                        
+                        if (hasStructuredResult && 'success' in toolResult) {
+                            // Plugin returned { success: true/false, ... } — trust the explicit field
+                            resultIndicatesError = toolResult.success === false;
+                        } else if (hasStructuredResult && 'error' in toolResult && typeof toolResult.error === 'string' && toolResult.error.length > 0) {
+                            // Plugin returned { error: "some message" } without success field
+                            resultIndicatesError = true;
+                        } else if (typeof toolResult === 'string') {
+                            // Unstructured string result — scan for error indicators
+                            // But only at the START of the string (not deeply nested in response data)
+                            const lower = toolResult.toLowerCase();
+                            resultIndicatesError = lower.startsWith('error') || 
+                                                   lower.startsWith('failed') || 
+                                                   lower.includes('error executing skill');
+                        } else {
+                            resultIndicatesError = false;
+                        }
+                        if (!nonDeepSkills.includes(toolCall.name) && !resultIndicatesError) {
                             deepToolExecutedSinceLastMessage = true;
+                            // Reset failure counter for this skill on success
+                            skillFailCounts[toolCall.name] = 0;
+                        } else if (resultIndicatesError) {
+                            // Track ALL tool failures that return error results (not just thrown exceptions)
+                            skillFailCounts[toolCall.name] = (skillFailCounts[toolCall.name] || 0) + 1;
+                            
+                            // Inject explicit error feedback so the LLM learns from this failure
+                            const errorSnippet = resultString.slice(0, 300);
+                            const paramsSummary = JSON.stringify(toolCall.metadata || {}).slice(0, 200);
+                            
+                            // Detect rate-limit errors and suggest schedule_task instead of giving up
+                            const rateLimitMatch = resultString.match(/(?:wait|retry.*?after|rate.*?limit).*?(\d+)\s*(second|minute|hour|min|sec|hr)s?/i);
+                            const hasRetryAfter = hasStructuredResult && (toolResult.retry_after_minutes || toolResult.retry_after_seconds || toolResult.details?.retry_after_minutes || toolResult.details?.retry_after_seconds);
+                            
+                            if (rateLimitMatch || hasRetryAfter) {
+                                let waitMinutes: number;
+                                if (hasRetryAfter) {
+                                    const retryMins = toolResult.retry_after_minutes || toolResult.details?.retry_after_minutes;
+                                    const retrySecs = toolResult.retry_after_seconds || toolResult.details?.retry_after_seconds;
+                                    waitMinutes = retryMins ? Number(retryMins) : Math.ceil(Number(retrySecs || 60) / 60);
+                                } else {
+                                    const amount = parseInt(rateLimitMatch![1]);
+                                    const unit = rateLimitMatch![2].toLowerCase();
+                                    waitMinutes = unit.startsWith('sec') ? Math.ceil(amount / 60) : unit.startsWith('hr') || unit.startsWith('hour') ? amount * 60 : amount;
+                                }
+                                // Add 1 minute buffer
+                                waitMinutes = Math.max(waitMinutes + 1, 2);
+                                
+                                logger.info(`Agent: Rate limit detected for '${toolCall.name}'. Suggesting schedule_task for ${waitMinutes} minutes.`);
+                                this.memory.saveMemory({
+                                    id: `${action.id}-step-${currentStep}-${toolCall.name}-rate-limit-guidance`,
+                                    type: 'short',
+                                    content: `[SYSTEM: TEMPORAL BLOCKER — '${toolCall.name}' hit a rate limit / cooldown (~${waitMinutes} min). DO NOT retry now. Use schedule_task({ time_or_cron: "in ${waitMinutes} minutes", task_description: "<original task>" }) to auto-retry, then inform the user what you scheduled.]`,
+                                    metadata: { actionId: action.id, skill: toolCall.name, rateLimitMinutes: waitMinutes, step: currentStep }
+                                });
+                            } else {
+                                this.memory.saveMemory({
+                                    id: `${action.id}-step-${currentStep}-${toolCall.name}-error-feedback`,
+                                    type: 'short',
+                                    content: `[SYSTEM: TOOL ERROR — '${toolCall.name}' FAILED with params ${paramsSummary}. Error: ${errorSnippet}. DO NOT call '${toolCall.name}' again with the same parameters. Fix the parameters or try a completely different approach.]`,
+                                    metadata: { actionId: action.id, skill: toolCall.name, failures: skillFailCounts[toolCall.name], step: currentStep }
+                                });
+                            }
+                            
+                            if (skillFailCounts[toolCall.name] >= MAX_CONSECUTIVE_FAILURES) {
+                                logger.warn(`Agent: '${toolCall.name}' returned errors ${MAX_CONSECUTIVE_FAILURES} times in action ${action.id}. Injecting hard stop notice.`);
+                                this.memory.saveMemory({
+                                    id: `${action.id}-step-${currentStep}-${toolCall.name}-failure-limit`,
+                                    type: 'short',
+                                    content: `[SYSTEM: CRITICAL — '${toolCall.name}' has FAILED ${MAX_CONSECUTIVE_FAILURES} times in a row. STOP using this skill entirely. The approach is NOT working. Either inform the user that you cannot complete this task with the current skill, or try a fundamentally different method.]`,
+                                    metadata: { actionId: action.id, skill: toolCall.name, failures: skillFailCounts[toolCall.name] }
+                                });
+                            }
                         }
 
-                        let observation = `Observation: Tool ${toolCall.name} returned: ${JSON.stringify(toolResult)}`;
+                        let observation: string;
+                        if (resultIndicatesError) {
+                            const errorDetail = hasStructuredResult && toolResult.error 
+                                ? toolResult.error 
+                                : resultString.slice(0, 400);
+                            observation = `⚠️ TOOL ERROR: ${toolCall.name} FAILED — ${errorDetail}`;
+                        } else if (hasStructuredResult && toolResult.success === true) {
+                            observation = `✅ Tool ${toolCall.name} succeeded: ${resultString.slice(0, 500)}`;
+                        } else {
+                            observation = `Observation: Tool ${toolCall.name} returned: ${resultString.slice(0, 500)}`;
+                        }
                         if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_gateway_chat' || toolCall.name === 'send_discord') {
                             messagesSent++;
                             
                             // QUESTION PAUSE: If this message asked a question, pause and wait for response
                             const sentMessage = toolCall.metadata?.message || '';
-                            const wasSuccessfulSend = toolResult && !resultString.toLowerCase().includes('error');
+                            const wasSuccessfulSend = !resultIndicatesError;
                             if (this.messageContainsQuestion(sentMessage) && wasSuccessfulSend && !decision.verification?.goals_met) {
                                 this.memory.saveMemory({
                                     id: `${action.id}-step-${currentStep}-waiting`,
@@ -4750,6 +5395,84 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                     break;
                 }
             }
+
+            // If we exhausted all steps, review before giving up
+            if (currentStep >= MAX_STEPS) {
+                logger.warn(`Agent: Reached max steps (${MAX_STEPS}) for action ${action.id}. Reviewing if task is truly done...`);
+                
+                const maxStepsReview = await this.reviewForcedTermination(
+                    action, 'max_steps', currentStep,
+                    `Reached max steps (${MAX_STEPS}). The agent may have made progress but not delivered results yet.`
+                );
+                
+                if (maxStepsReview === 'continue') {
+                    // Give the agent a few more steps to compile and deliver results
+                    logger.info(`Agent: Review layer says task isn't done. Granting ${Math.min(5, MAX_STEPS)} bonus steps to wrap up.`);
+                    this.memory.saveMemory({
+                        id: `${action.id}-step-${currentStep}-max-steps-extension`,
+                        type: 'short',
+                        content: `[SYSTEM: You have used all ${MAX_STEPS} steps. You are getting a FEW BONUS STEPS to wrap up. IMMEDIATELY compile everything you have gathered and send a FINAL comprehensive message to the user. Do NOT start new research — deliver what you have NOW.]`,
+                        metadata: { actionId: action.id, step: currentStep }
+                    });
+                    // Grant up to 5 bonus steps for wrapping up
+                    const bonusSteps = Math.min(5, MAX_STEPS);
+                    // Continue the loop for bonus steps (simple approach: just don't break, 
+                    // but we need to adjust MAX_STEPS since the while loop already exited)
+                    // We'll run a mini-loop here
+                    for (let bonus = 0; bonus < bonusSteps; bonus++) {
+                        currentStep++;
+                        logger.info(`Agent: Bonus step ${bonus + 1}/${bonusSteps} for action ${action.id}`);
+                        
+                        try {
+                            const bonusDecision = await ErrorHandler.withRetry(async () => {
+                                return await this.decisionEngine.decide({
+                                    ...action,
+                                    payload: {
+                                        ...action.payload,
+                                        messagesSent,
+                                        messagingLocked: true,
+                                        currentStep,
+                                        executionPlan
+                                    }
+                                });
+                            }, { maxRetries: 2, initialDelay: 1000 });
+                            
+                            if (!bonusDecision?.tools?.length) {
+                                logger.info(`Agent: No tools in bonus step. Wrapping up.`);
+                                break;
+                            }
+                            
+                            for (const toolCall of bonusDecision.tools) {
+                                try {
+                                    const toolResult = await this.skills.executeSkill(toolCall.name, toolCall.metadata || {});
+                                    if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_discord' || toolCall.name === 'send_gateway_chat') {
+                                        messagesSent++;
+                                    }
+                                    this.memory.saveMemory({
+                                        id: `${action.id}-bonus-${bonus}-${toolCall.name}`,
+                                        type: 'short',
+                                        content: `Bonus step: Tool ${toolCall.name} returned: ${JSON.stringify(toolResult).slice(0, 500)}`,
+                                        metadata: { tool: toolCall.name, result: toolResult }
+                                    });
+                                } catch (e) {
+                                    logger.error(`Bonus step skill failed: ${toolCall.name} - ${e}`);
+                                }
+                            }
+                            
+                            if (bonusDecision.verification?.goals_met) {
+                                logger.info(`Agent: Goals met during bonus steps. Done.`);
+                                break;
+                            }
+                        } catch (e) {
+                            logger.error(`Bonus step decision failed: ${e}`);
+                            break;
+                        }
+                    }
+                } else {
+                    await this.sendProgressFeedback(action, 'recovering', `Reached the step limit (${MAX_STEPS}). I couldn't complete this task — it may need a different approach or manual help.`);
+                }
+            }
+
             const finalStatus = this.actionQueue.getQueue().find(a => a.id === action.id)?.status;
             if (finalStatus === 'failed') {
                 return;
@@ -4761,6 +5484,10 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                 return; // Skip the completion logic - action stays waiting
             }
             
+            // TASK CONTINUITY CHECK: Detect if the agent acknowledged incomplete prior work
+            // but didn't actually resume it (empty promise detection)
+            await this.detectAndResumeIncompleteWork(action, sentMessagesInAction, currentStep);
+
             // Record Final Response/Reasoning in Memory upon completion
             this.memory.saveMemory({
                 id: `${action.id}-conclusion`,

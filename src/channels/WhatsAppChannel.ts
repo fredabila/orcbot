@@ -274,13 +274,36 @@ export class WhatsAppChannel implements IChannel {
                         // Skip if no text AND no media (e.g. some system msg)
                         if (!text && !mediaPath) return;
 
-                        logger.info(`WhatsApp Msg: ${senderName} (${senderId}): ${text || '[Media]'} [ID: ${messageId}] | autoReply=${this.autoReplyEnabled}`);
+                        // Auto-transcribe voice/audio messages so the agent can "hear" them
+                        let transcription = '';
+                        if (mediaPath && audioMsg) {
+                            try {
+                                logger.info(`WhatsApp: Auto-transcribing audio from ${senderName}...`);
+                                const result = await this.agent.llm.analyzeMedia(mediaPath, 'Transcribe this audio message exactly. Return only the transcription text.');
+                                transcription = result.replace(/^Transcription result:\n/i, '').trim();
+                                if (transcription) {
+                                    logger.info(`WhatsApp: Transcribed voice from ${senderName}: "${transcription.substring(0, 100)}..."`);
+                                }
+                            } catch (e) {
+                                logger.warn(`WhatsApp: Auto-transcription failed: ${e}`);
+                            }
+                        }
+
+                        logger.info(`WhatsApp Msg: ${senderName} (${senderId}): ${text || transcription || '[Media]'} [ID: ${messageId}] | autoReply=${this.autoReplyEnabled}`);
+
+                        // Build content string that includes media info + transcription
+                        const voiceLabel = transcription ? ` [Voice message transcription: "${transcription}"]` : '';
+                        const contentStr = text 
+                            ? `User ${senderName} (${senderId}) said on WhatsApp: ${text}${voiceLabel}${replyContext ? ' ' + replyContext : ''}`
+                            : transcription
+                                ? `User ${senderName} (${senderId}) sent a voice message on WhatsApp: "${transcription}"${replyContext ? ' ' + replyContext : ''}`
+                                : `User ${senderName} (${senderId}) sent a file on WhatsApp: ${path.basename(mediaPath)}${replyContext ? ' ' + replyContext : ''}`;
 
                         // Save to memory for context
                         this.agent.memory.saveMemory({
                             id: `wa-${messageId}`,
                             type: 'short',
-                            content: `User ${senderName} (${senderId}) said on WhatsApp: ${text}${replyContext ? ' ' + replyContext : ''}`,
+                            content: contentStr,
                             timestamp: new Date().toISOString(),
                             metadata: { 
                                 source: 'whatsapp', 
@@ -288,6 +311,7 @@ export class WhatsAppChannel implements IChannel {
                                 messageId, 
                                 senderId, 
                                 senderName,
+                                mediaPath: mediaPath || undefined,
                                 quotedMessageId,
                                 replyContext: replyContext || undefined
                             }
@@ -299,18 +323,21 @@ export class WhatsAppChannel implements IChannel {
 
                         // Treat as Command if from Owner (self-chat - message from yourself on another device)
                         // Note: isSelfChat means the remoteJid equals owner's JID (messaging yourself)
+                        const mediaNote = mediaPath ? ` (File stored at: ${mediaPath})` : '';
+                        const displayText = text || (transcription ? `[Voice: "${transcription}"]` : '[Media]');
+
                         if (isSelfChat) {
                             await this.agent.pushTask(
-                                `WhatsApp command from yourself (ID: ${messageId}): "${text}"${replyNote}${profileInstruction}`,
+                                `WhatsApp command from yourself (ID: ${messageId}): \"${displayText}\"${replyNote}${mediaNote}${profileInstruction}`,
                                 10,
-                                { source: 'whatsapp', sourceId: senderId, senderName: senderName, isOwner: true, messageId, quotedMessageId, replyContext: replyContext || undefined }
+                                { source: 'whatsapp', sourceId: senderId, senderName: senderName, isOwner: true, messageId, quotedMessageId, replyContext: replyContext || undefined, mediaPath: mediaPath || undefined }
                             );
                         } else if (this.autoReplyEnabled) {
                             // Treat as External Interaction for AI to decide on
                             await this.agent.pushTask(
-                                `EXTERNAL WHATSAPP MESSAGE from ${senderName} (ID: ${messageId}): "${text}"${replyNote}. \n\nGoal: Decide if you should respond${reactInstruction} to this person on my behalf based on our history and my persona. If yes, use 'send_whatsapp'${reactInstruction}.${profileInstruction}`,
+                                `EXTERNAL WHATSAPP MESSAGE from ${senderName} (ID: ${messageId}): \"${displayText}\"${replyNote}${mediaNote}. \n\nGoal: Decide if you should respond${reactInstruction} to this person on my behalf based on our history and my persona. If yes, use 'send_whatsapp'${reactInstruction}.${profileInstruction}`,
                                 5,
-                                { source: 'whatsapp', sourceId: senderId, senderName: senderName, isExternal: true, messageId, quotedMessageId, replyContext: replyContext || undefined }
+                                { source: 'whatsapp', sourceId: senderId, senderName: senderName, isExternal: true, messageId, quotedMessageId, replyContext: replyContext || undefined, mediaPath: mediaPath || undefined }
                             );
                         } else {
                             logger.info(`WhatsApp: External message from ${senderName} not queued - autoReplyEnabled is false`);
@@ -451,6 +478,37 @@ export class WhatsAppChannel implements IChannel {
             logger.info(`WhatsAppChannel: Sent file ${filePath} to ${to}`);
         } catch (error) {
             logger.error(`WhatsAppChannel: Error sending file: ${error}`);
+            throw error;
+        }
+    }
+
+    /**
+     * Send a voice note (push-to-talk) to a WhatsApp contact.
+     * Sends the audio with ptt:true so it appears as a voice message bubble.
+     */
+    public async sendVoiceNote(to: string, filePath: string): Promise<void> {
+        try {
+            if (!fs.existsSync(filePath)) {
+                throw new Error(`File not found: ${filePath}`);
+            }
+
+            let jid = to;
+            if (!jid.includes('@')) {
+                jid = `${jid}@s.whatsapp.net`;
+            }
+
+            const buffer = fs.readFileSync(filePath);
+            const ext = path.extname(filePath).toLowerCase().substring(1);
+            const mimetype = ext === 'mp3' ? 'audio/mpeg' : ext === 'ogg' ? 'audio/ogg; codecs=opus' : `audio/${ext}`;
+
+            await this.sock.sendMessage(jid, {
+                audio: buffer,
+                mimetype,
+                ptt: true  // Push-to-talk = voice note bubble
+            });
+            logger.info(`WhatsAppChannel: Sent voice note ${filePath} to ${to}`);
+        } catch (error) {
+            logger.error(`WhatsAppChannel: Error sending voice note: ${error}`);
             throw error;
         }
     }

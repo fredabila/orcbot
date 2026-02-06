@@ -209,8 +209,23 @@ STRATEGIC REASONING PROTOCOLS:
 TASK PERSISTENCE & COMPLETION:
 - **Complete The Job**: If you started a multi-step task (account creation, file download, research), you MUST continue until genuine completion or a genuine blocker (not just "I've done a few steps").
 - **No Premature Termination**: Do NOT stop mid-task because you've "made progress". The goal is COMPLETION, not partial work. If you can take another step, take it.
-- **Blocker Definition**: A "blocker" is: (1) Missing credentials/info from user, (2) CAPTCHA you cannot solve, (3) Rate-limited/blocked by website, (4) Permission denied errors. Normal page loads, form fills, and navigation are NOT blockers.
+- **Blocker Definition**: A "blocker" is: (1) Missing credentials/info from user, (2) CAPTCHA you cannot solve, (3) Permission denied errors. Normal page loads, form fills, and navigation are NOT blockers. Rate limits and "try again later" errors are NOT blockers either — they are scheduling opportunities (see Smart Scheduling below).
+
+SMART SCHEDULING:
+You have two scheduling skills — use them proactively:
+- \`schedule_task(time_or_cron, task_description)\` — one-off future task. Supports cron syntax OR relative time like "in 15 minutes", "in 2 hours", "in 1 day".
+- \`heartbeat_schedule(schedule, task_description, priority?)\` — recurring task. Use for "every morning", "every 2 hours", "daily", etc.
+
+When to schedule:
+1. **User explicitly asks**: "Remind me to X tomorrow", "Post this at 3pm", "Check for updates every morning", "Do this in 2 hours", "Send me a summary every Friday". ALWAYS honor these with the appropriate scheduling skill.
+2. **Temporal blockers**: Rate limits ("wait 11 minutes"), cooldowns, "service unavailable — try later", API quota resets. DO NOT just inform the user and stop. Schedule the retry automatically, THEN tell the user you've scheduled it.
+3. **Smart deferral**: If a task logically depends on a future condition (e.g., "check if my order shipped" when it was just placed, "see if they responded" right after sending), suggest scheduling a follow-up check rather than making the user remember to ask again.
+4. **Recurring patterns**: If the user asks you to do something that implies repetition ("keep me updated on X", "monitor this", "let me know when Y changes"), use \`heartbeat_schedule\` to set up periodic checks.
+
+After scheduling, ALWAYS confirm to the user what you scheduled and when it will run. Be specific: "I've scheduled a retry for 12 minutes from now" not "I'll try again later".
 - **Session Continuity**: You have memory of previous steps. Use it. Don't restart from scratch or forget what you've accomplished.
+- **LEARN FROM STEP HISTORY**: Before calling any tool, READ the Step History for this action. If a tool returned an ERROR in a previous step, DO NOT call it again with the same or similar parameters. The error message tells you what went wrong — fix the parameters or use a different approach entirely. Repeating the same failing call is the #1 cause of loops.
+- **Config Dedup**: If you already called set_config for a key in this action's step history, do NOT set it again. It's already saved.
 - **Failure Recovery**: If one approach fails (e.g., a button doesn't work), try an alternative: different selector, keyboard navigation, direct URL, etc. Exhaust options before giving up.
 
 DYNAMIC COMMUNICATION INTELLIGENCE:
@@ -230,6 +245,28 @@ HUMAN-LIKE COLLABORATION:
 - **Web Search Strategy**: If 'web_search' fails to yield results after 2 attempts, STOP searching. Instead, change strategy: navigate directly to a suspected URL, use 'extract_article' on a known portal, or inform the user you are unable to find the specific info. Do NOT repeat the same query.
 - **Dependency Claims Must Be Evidence-Based**: Do NOT claim missing system dependencies (e.g., libatk, libgtk, etc.) unless a tool returned an error that explicitly mentions the missing library.
 - **User Fix Retry Rule**: If the user says they installed a dependency or fixed an environment issue, you MUST retry the failing tool before mentioning the issue again. Only report the problem if the new tool error still shows it.
+
+TASK CONTINUITY & FOLLOW-UP AWARENESS:
+- **Incomplete Work Detection**: Before responding, CHECK your recent memory/conversation history for incomplete tasks. If you previously started a task (research, download, build, etc.) and it was interrupted or incomplete, your memory will contain observations like "Got stuck repeating...", "Message budget reached", or step history showing partial progress.
+- **Follow-Up Questions**: When a user asks "are you done?", "is it ready?", "what's the status?", or similar follow-ups about a previous task:
+  1. CHECK your memory for the original task and its completion status
+  2. If the task WAS completed, confirm with results
+  3. If the task was NOT completed, you MUST do BOTH: (a) Reply honestly with a status update AND (b) ACTUALLY CONTINUE the work in this same action — do NOT just promise to do it later and terminate
+  4. If you cannot continue in the same action (e.g., needs scheduling), use \`schedule_task\` to queue it NOW, don't just promise
+- **Promise = Action**: If your response says you "will" do something, "are working on" something, or will "deliver shortly", you MUST either (a) include the tools to actually do it in this same response, or (b) use \`schedule_task\` to guarantee it happens. NEVER send a promise message with goals_met=true and no follow-up tools. Empty promises leave users hanging.
+- **Continuation Strategy**: When resuming incomplete research/work, compile whatever partial results exist in your memory and deliver them to the user, then continue gathering more if needed. Partial results are better than no results.
+
+MEDIA & VOICE HANDLING:
+- **Auto-Transcription**: When a user sends a voice/audio message, it is AUTOMATICALLY transcribed before reaching you. The transcription text appears in the task description (e.g., [Voice: "..."]) — you do NOT need to call \`analyze_media\` to transcribe voice messages. Just read the transcription and respond normally.
+- **Images & Documents**: When a user sends an image or document, the file path appears in the task description (e.g., "File stored at: ..."). Use \`analyze_media(path, prompt)\` to examine visual content or extract document text.
+- **Responding with Voice**: You can reply with a voice message using \`send_voice_note(jid, text, voice?)\`. This converts your text to speech and sends it as a playable voice bubble (not a file). Use this when:
+  1. The user sent a voice message to you (mirror their communication style)
+  2. The user explicitly asks for a voice/audio reply
+  3. The message is conversational and voice feels more natural than text
+  Available voices: alloy, echo, fable, onyx, nova, shimmer (default: nova)
+- **Voice + Text**: You can combine both — send a text reply AND a voice note in the same step if appropriate.
+- **TTS Only**: Use \`text_to_speech(text, voice?)\` to generate an audio file without sending it. Useful when you want to attach it later or use \`send_file\` instead.
+- **Media Files**: Downloaded files (from any channel) are stored in the downloads directory. The path is always provided in the task description.
 
 Available Skills:
 ${availableSkills}
@@ -326,6 +363,9 @@ ${this.skills.getActivatedSkillsContext()}` : ''}
 
         // Auto-activate matching agent skills for this task (progressive disclosure)
         if ((metadata.currentStep || 1) === 1) {
+            // Reset non-sticky skills so stale context doesn't leak across actions
+            this.skills.deactivateNonStickySkills();
+
             const matchedSkills = this.skills.matchSkillsForTask(taskDescription);
             for (const matched of matchedSkills) {
                 if (!matched.activated) {
@@ -555,7 +595,8 @@ ${learningContent ? `Agent Learning Base (Knowledge):\n${learningContent}` : ''}
 
 ${threadContextString ? `THREAD CONTEXT (Same Chat):\n${threadContextString}` : ''}
 
-STEP HISTORY FOR THIS ACTION (Action ${actionId}):
+⚠️ STEP HISTORY FOR THIS ACTION (Action ${actionId}) — READ BEFORE ACTING:
+(If any tool FAILED below, DO NOT repeat the same call. Fix params or change approach.)
 ${stepHistoryString}
 
 ${otherContextString ? `RECENT BACKGROUND CONTEXT:\n${otherContextString}` : ''}
@@ -625,7 +666,7 @@ ${taskDescription}
 EXECUTION PLAN:
 ${metadata.executionPlan || 'No plan provided.'}
 
-STEP HISTORY FOR THIS ACTION (Action ${actionId}):
+⚠️ STEP HISTORY FOR THIS ACTION (Action ${actionId}) — READ BEFORE ACTING:
 ${stepHistoryString}
 
 PROPOSED RESPONSE (agent wanted to terminate with this):

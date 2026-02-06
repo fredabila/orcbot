@@ -120,6 +120,59 @@ export class MultiLLM {
         }
     }
 
+    /**
+     * Text-to-Speech: Convert text to an audio file using OpenAI TTS API.
+     * Returns the path to the generated audio file.
+     * 
+     * @param text The text to convert to speech
+     * @param outputPath Where to save the audio file
+     * @param voice The voice to use (alloy, echo, fable, onyx, nova, shimmer). Default: nova
+     * @param speed Speech speed multiplier (0.25 to 4.0). Default: 1.0
+     */
+    public async textToSpeech(text: string, outputPath: string, voice: string = 'nova', speed: number = 1.0): Promise<string> {
+        if (!this.openaiKey) throw new Error('OpenAI API key not configured — required for TTS');
+
+        const validVoices = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'];
+        if (!validVoices.includes(voice)) {
+            voice = 'nova';
+        }
+
+        try {
+            const response = await fetch('https://api.openai.com/v1/audio/speech', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.openaiKey}`,
+                },
+                body: JSON.stringify({
+                    model: 'tts-1',
+                    input: text,
+                    voice: voice,
+                    response_format: 'opus',  // Opus codec in OGG container — works as voice note
+                    speed: Math.max(0.25, Math.min(4.0, speed))
+                })
+            });
+
+            if (!response.ok) {
+                const err = await response.text();
+                throw new Error(`OpenAI TTS Error: ${response.status} ${err}`);
+            }
+
+            const buffer = Buffer.from(await response.arrayBuffer());
+            
+            // Ensure output directory exists
+            const dir = path.dirname(outputPath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+            fs.writeFileSync(outputPath, buffer);
+            logger.info(`MultiLLM TTS: Generated ${buffer.length} bytes → ${outputPath}`);
+            return outputPath;
+        } catch (error) {
+            logger.error(`MultiLLM TTS Error: ${error}`);
+            throw error;
+        }
+    }
+
     private async analyzeMediaGoogle(filePath: string, prompt: string): Promise<string> {
         if (!this.googleKey) throw new Error('Google API key not configured');
 

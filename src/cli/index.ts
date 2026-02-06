@@ -23,6 +23,10 @@ const c = {
     reset: '\x1b[0m',
     bold: '\x1b[1m',
     dim: '\x1b[2m',
+    italic: '\x1b[3m',
+    underline: '\x1b[4m',
+    inverse: '\x1b[7m',
+    strikethrough: '\x1b[9m',
     cyan: '\x1b[36m',
     green: '\x1b[32m',
     yellow: '\x1b[33m',
@@ -31,12 +35,26 @@ const c = {
     blue: '\x1b[34m',
     white: '\x1b[37m',
     gray: '\x1b[90m',
+    brightCyan: '\x1b[96m',
+    brightGreen: '\x1b[92m',
+    brightYellow: '\x1b[93m',
+    brightRed: '\x1b[91m',
+    brightMagenta: '\x1b[95m',
+    brightBlue: '\x1b[94m',
+    brightWhite: '\x1b[97m',
     bgCyan: '\x1b[46m',
     bgBlue: '\x1b[44m',
+    bgMagenta: '\x1b[45m',
+    bgGreen: '\x1b[42m',
+    bgYellow: '\x1b[43m',
+    bgRed: '\x1b[41m',
+    bgGray: '\x1b[100m',
+    bgWhite: '\x1b[47m',
 };
 const clr = (color: string, text: string) => `${color}${text}${c.reset}`;
 const bold = (text: string) => clr(c.bold, text);
 const dim = (text: string) => clr(c.dim, text);
+const italic = (text: string) => clr(c.italic, text);
 const cyan = (text: string) => clr(c.cyan, text);
 const green = (text: string) => clr(c.green, text);
 const yellow = (text: string) => clr(c.yellow, text);
@@ -44,28 +62,145 @@ const red = (text: string) => clr(c.red, text);
 const magenta = (text: string) => clr(c.magenta, text);
 const blue = (text: string) => clr(c.blue, text);
 const gray = (text: string) => clr(c.gray, text);
+const brightCyan = (text: string) => clr(c.brightCyan, text);
+const brightGreen = (text: string) => clr(c.brightGreen, text);
+const brightMagenta = (text: string) => clr(c.brightMagenta, text);
+
+// ── Visual rendering helpers ───────────────────────────────────────────
+
+/** Render a box with double-line borders and optional title */
+function box(lines: string[], opts: { title?: string; width?: number; color?: string; padding?: number } = {}) {
+    const color = opts.color || c.cyan;
+    const pad = opts.padding ?? 1;
+    // Strip ANSI for measuring
+    const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
+    const contentWidth = opts.width || Math.max(
+        opts.title ? stripAnsi(opts.title).length + 4 : 0,
+        ...lines.map(l => stripAnsi(l).length + pad * 2)
+    );
+    const w = Math.max(contentWidth, 40);
+    
+    const top = opts.title
+        ? `${color}╔═${ bold(` ${opts.title} `)}${color}${'═'.repeat(Math.max(0, w - stripAnsi(opts.title).length - 3))}╗${c.reset}`
+        : `${color}╔${'═'.repeat(w)}╗${c.reset}`;
+    const bot = `${color}╚${'═'.repeat(w)}╝${c.reset}`;
+    
+    console.log(top);
+    for (const line of lines) {
+        const visible = stripAnsi(line).length;
+        const rightPad = Math.max(0, w - visible - pad);
+        console.log(`${color}║${c.reset}${' '.repeat(pad)}${line}${' '.repeat(rightPad)}${color}║${c.reset}`);
+    }
+    console.log(bot);
+}
+
+/** Render a horizontal bar (progress/usage visualization) */
+function progressBar(value: number, max: number, width = 20, opts: { filled?: string; empty?: string; colorFn?: (s: string) => string } = {}): string {
+    const ratio = Math.min(1, Math.max(0, max > 0 ? value / max : 0));
+    const filledLen = Math.round(ratio * width);
+    const emptyLen = width - filledLen;
+    const filled = (opts.filled || '█').repeat(filledLen);
+    const empty = (opts.empty || '░').repeat(emptyLen);
+    const colorFn = opts.colorFn || (ratio > 0.7 ? green : ratio > 0.3 ? yellow : red);
+    return colorFn(filled) + dim(empty);
+}
+
+/** Render a simple table with aligned columns */
+function table(rows: string[][], opts: { indent?: string; separator?: string; headerColor?: (s: string) => string } = {}) {
+    const indent = opts.indent || '  ';
+    const sep = opts.separator || '  ';
+    if (rows.length === 0) return;
+    
+    const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
+    const colWidths: number[] = [];
+    for (const row of rows) {
+        for (let i = 0; i < row.length; i++) {
+            colWidths[i] = Math.max(colWidths[i] || 0, stripAnsi(row[i]).length);
+        }
+    }
+    
+    rows.forEach((row, ri) => {
+        const cells = row.map((cell, ci) => {
+            const padLen = colWidths[ci] - stripAnsi(cell).length;
+            const padded = cell + ' '.repeat(Math.max(0, padLen));
+            if (ri === 0 && opts.headerColor) return opts.headerColor(stripAnsi(padded));
+            return padded;
+        });
+        console.log(indent + cells.join(sep));
+    });
+}
+
+/** Render a mini sparkline from an array of numbers */
+function sparkline(values: number[]): string {
+    if (values.length === 0) return '';
+    const chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = max - min || 1;
+    return values.map(v => {
+        const idx = Math.round(((v - min) / range) * (chars.length - 1));
+        return cyan(chars[idx]);
+    }).join('');
+}
+
+/** Gradient text effect (cycles through colors) */
+function gradient(text: string, colors: string[] = [c.cyan, c.brightCyan, c.blue, c.brightMagenta, c.magenta]): string {
+    let result = '';
+    for (let i = 0; i < text.length; i++) {
+        const color = colors[i % colors.length];
+        result += `${color}${text[i]}`;
+    }
+    return result + c.reset;
+}
+
+/** Big block-letter OrcBot logo */
+function renderLogo() {
+    const logoLines = [
+        '  ██████╗ ██████╗  ██████╗██████╗  ██████╗ ████████╗',
+        ' ██╔═══██╗██╔══██╗██╔════╝██╔══██╗██╔═══██╗╚══██╔══╝',
+        ' ██║   ██║██████╔╝██║     ██████╔╝██║   ██║   ██║   ',
+        ' ██║   ██║██╔══██╗██║     ██╔══██╗██║   ██║   ██║   ',
+        ' ╚██████╔╝██║  ██║╚██████╗██████╔╝╚██████╔╝   ██║   ',
+        '  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝╚═════╝  ╚═════╝    ╚═╝   ',
+    ];
+    const gradientColors = [c.cyan, c.brightCyan, c.brightCyan, c.brightMagenta, c.magenta, c.blue];
+    for (let i = 0; i < logoLines.length; i++) {
+        console.log(`  ${gradientColors[i % gradientColors.length]}${logoLines[i]}${c.reset}`);
+    }
+}
 
 function banner() {
     console.log('');
-    console.log(cyan('  ╔═══════════════════════════════════════════════╗'));
-    console.log(cyan('  ║') + bold('  🤖 OrcBot ') + dim('— Autonomous AI Agent Framework') + cyan('  ║'));
-    console.log(cyan('  ╚═══════════════════════════════════════════════╝'));
+    renderLogo();
+    console.log(gray('  ') + dim('  Autonomous AI Agent Framework') + gray('  │  ') + dim('v1.0.0'));
+    console.log(gray('  ') + dim('  by ') + brightCyan('Frederick Abila') + dim('  │  ') + cyan('frederick.buzzchat.site'));
+    console.log(gray('  ') + dim('  ') + gray('github.com/') + bold('fredabila/orcbot'));
+    console.log(gray('  ' + '─'.repeat(54)));
     console.log('');
 }
 
 function sectionHeader(emoji: string, title: string) {
-    const line = '─'.repeat(45);
+    const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
+    const titleText = `${emoji}  ${title}`;
+    const w = Math.max(48, stripAnsi(titleText).length + 4);
     console.log('');
-    console.log(cyan(`  ${emoji} ${bold(title)}`));
-    console.log(gray(`  ${line}`));
+    console.log(`  ${c.cyan}┌${'─'.repeat(w)}┐${c.reset}`);
+    console.log(`  ${c.cyan}│${c.reset} ${bold(titleText)}${' '.repeat(Math.max(0, w - stripAnsi(titleText).length - 1))}${c.cyan}│${c.reset}`);
+    console.log(`  ${c.cyan}└${'─'.repeat(w)}┘${c.reset}`);
 }
 
 function kvLine(key: string, value: string, indent = '  ') {
-    console.log(`${indent}${gray(key + ':')} ${value}`);
+    console.log(`${indent}  ${c.gray}${key}${c.reset} ${value}`);
 }
 
 function statusBadge(ok: boolean, onLabel = 'ON', offLabel = 'OFF'): string {
-    return ok ? green(`● ${onLabel}`) : gray(`○ ${offLabel}`);
+    return ok ? `${c.green}${c.bold}● ${onLabel}${c.reset}` : `${c.gray}○ ${offLabel}${c.reset}`;
+}
+
+/** Status dot with label */
+function statusDot(ok: boolean, label?: string): string {
+    if (ok) return `${c.green}●${c.reset}${label ? ` ${label}` : ''}`;
+    return `${c.gray}○${c.reset}${label ? ` ${dim(label)}` : ''}`;
 }
 
 process.on('unhandledRejection', (reason) => {
@@ -893,40 +1028,63 @@ async function showMainMenu() {
     console.clear();
     banner();
 
-    // Quick status line
+    // ── Dashboard Panel ──────────────────────────────────────────────
     const model = agent.config.get('modelName') || 'gpt-4o';
     const provider = agent.config.get('llmProvider') || 'auto';
-    const queueLen = agent.actionQueue.getQueue().length;
-    console.log(gray('  ') + dim('Model: ') + cyan(model) + dim(' │ Provider: ') + cyan(provider) + dim(' │ Queue: ') + (queueLen > 0 ? yellow(String(queueLen)) : green('0')));
+    const queueItems = agent.actionQueue.getQueue();
+    const queueLen = queueItems.length;
+    const pendingCount = queueItems.filter((a: any) => a.status === 'queued' || a.status === 'in-progress').length;
+    const shortMem = agent.memory.searchMemory('short').length;
+    const hasTelegram = !!agent.config.get('telegramToken');
+    const hasWhatsapp = !!agent.config.get('whatsappEnabled');
+    const hasDiscord = !!agent.config.get('discordToken');
+    const channelCount = [hasTelegram, hasWhatsapp, hasDiscord].filter(Boolean).length;
+    const agentName = agent.config.get('agentName') || 'OrcBot';
+    const sudoMode = agent.config.get('sudoMode');
+
+    const channelDots = [
+        hasTelegram ? `${c.brightCyan}TG${c.reset}` : `${c.gray}TG${c.reset}`,
+        hasWhatsapp ? `${c.brightGreen}WA${c.reset}` : `${c.gray}WA${c.reset}`,
+        hasDiscord ? `${c.brightMagenta}DC${c.reset}` : `${c.gray}DC${c.reset}`,
+    ].join(dim(' │ '));
+
+    box([
+        `${dim('Agent')}    ${bold(agentName)}${sudoMode ? `  ${c.bgRed}${c.white}${c.bold} SUDO ${c.reset}` : ''}`,
+        `${dim('Model')}    ${brightCyan(model)} ${dim('via')} ${cyan(provider)}`,
+        `${dim('Channels')} ${channelDots}  ${dim(`(${channelCount}/3 active)`)}`,
+        '',
+        `${dim('Queue')}    ${pendingCount > 0 ? yellow(bold(String(pendingCount))) + dim(' active') : green('idle')}${queueLen > pendingCount ? dim(` │ ${queueLen - pendingCount} completed`) : ''}`,
+        `${dim('Memory')}   ${cyan(String(shortMem))} ${dim('short-term entries')} ${progressBar(shortMem, 100, 12)}`,
+    ], { title: 'DASHBOARD', width: 56 });
     console.log('');
 
     const { action } = await inquirer.prompt([
         {
             type: 'list',
             name: 'action',
-            message: 'What would you like to do?',
+            message: bold('What would you like to do?'),
             choices: [
-                new inquirer.Separator(gray(' ─── Run ───────────────────────────')),
-                { name: '▶  Start Agent Loop', value: 'start' },
-                { name: '📋 Push Task', value: 'push' },
-                { name: '📊 View Status', value: 'status' },
-                new inquirer.Separator(gray(' ─── Configure ─────────────────────')),
-                { name: '🧠 Manage AI Models', value: 'models' },
-                { name: '🔌 Manage Connections', value: 'connections' },
-                { name: '⚡ Manage Skills (Plugins)', value: 'skills' },
-                { name: '🔧 Tooling & APIs', value: 'tooling' },
-                new inquirer.Separator(gray(' ─── Advanced ──────────────────────')),
-                { name: '🌐 Web Gateway', value: 'gateway' },
-                { name: '🪪 Worker Profile (Digital Identity)', value: 'worker' },
-                { name: '🐙 Multi-Agent Orchestration', value: 'orchestration' },
-                { name: '🔒 Security & Permissions', value: 'security' },
-                { name: '📈 Token Usage', value: 'tokens' },
-                new inquirer.Separator(gray(' ─── System ────────────────────────')),
-                { name: '⚙️  Configure Agent', value: 'config' },
-                { name: '⬆️  Update OrcBot', value: 'update' },
+                new inquirer.Separator(cyan(' ─── Run ') + gray('─'.repeat(30))),
+                { name: `${c.green}▶${c.reset}  Start Agent Loop`, value: 'start' },
+                { name: `${c.yellow}📋${c.reset} Push Task`, value: 'push' },
+                { name: `${c.cyan}📊${c.reset} View Status`, value: 'status' },
+                new inquirer.Separator(cyan(' ─── Configure ') + gray('─'.repeat(24))),
+                { name: `${c.magenta}🧠${c.reset} Manage AI Models`, value: 'models' },
+                { name: `${c.blue}🔌${c.reset} Manage Connections`, value: 'connections' },
+                { name: `${c.brightCyan}⚡${c.reset} Manage Skills ${dim(`(${agent.skills.getAgentSkills().length} installed)`)}`, value: 'skills' },
+                { name: `${c.yellow}🔧${c.reset} Tooling & APIs`, value: 'tooling' },
+                new inquirer.Separator(cyan(' ─── Advanced ') + gray('─'.repeat(25))),
+                { name: `${c.brightGreen}🌐${c.reset} Web Gateway`, value: 'gateway' },
+                { name: `${c.brightMagenta}🪪${c.reset}  Worker Profile`, value: 'worker' },
+                { name: `${c.brightCyan}🐙${c.reset} Multi-Agent Orchestration`, value: 'orchestration' },
+                { name: `${c.red}🔒${c.reset} Security & Permissions`, value: 'security' },
+                { name: `${c.green}📈${c.reset} Token Usage`, value: 'tokens' },
+                new inquirer.Separator(cyan(' ─── System ') + gray('─'.repeat(27))),
+                { name: `${c.gray}⚙️ ${c.reset} Configure Agent`, value: 'config' },
+                { name: `${c.gray}⬆️ ${c.reset} Update OrcBot`, value: 'update' },
                 { name: dim('   Exit'), value: 'exit' },
             ],
-            pageSize: 22
+            pageSize: 24
         },
     ]);
 
@@ -1006,15 +1164,19 @@ async function showBrowserMenu() {
         }
     }
     
-    console.log('');
+    console.clear();
+    banner();
     sectionHeader('🐼', 'Browser Engine');
     console.log('');
-    kvLine('Engine    ', currentEngine === 'lightpanda' ? cyan('🐼 Lightpanda') : cyan('🌐 Playwright (Chrome)'));
-    kvLine('Installed ', isInstalled ? green('● Yes') : gray('○ No'));
-    if (isInstalled) {
-        kvLine('Server    ', isRunning ? green(`● Running (PID: ${runningPid})`) : gray('○ Stopped'));
-        kvLine('Endpoint  ', dim(lightpandaEndpoint));
-    }
+    const browserLines = [
+        `${dim('Engine')}     ${currentEngine === 'lightpanda' ? brightCyan(bold('🐼 Lightpanda')) : cyan(bold('🌐 Playwright (Chrome)'))}`,
+        `${dim('Installed')}  ${isInstalled ? green('● Yes') : gray('○ No')}`,
+        ...(isInstalled ? [
+            `${dim('Server')}     ${isRunning ? green(`● Running ${dim(`(PID: ${runningPid})`)}`) : gray('○ Stopped')}`,
+            `${dim('Endpoint')}   ${dim(lightpandaEndpoint)}`,
+        ] : []),
+    ];
+    box(browserLines, { title: '🌐 BROWSER STATUS', width: 50, color: c.cyan });
     console.log('');
 
     const choices = [
@@ -1103,31 +1265,42 @@ async function showBrowserMenu() {
 
 async function showToolingMenu() {
     console.clear();
+    banner();
     sectionHeader('🔧', 'Tooling & APIs');
-    console.log('');
 
     const hasSerper = !!agent.config.get('serperApiKey');
     const hasBrave = !!agent.config.get('braveSearchApiKey');
     const hasSearxng = !!agent.config.get('searxngUrl');
     const hasCaptcha = !!agent.config.get('captchaApiKey');
-    const dot = (ok: boolean) => ok ? green('●') : gray('○');
+    const browserEngine = agent.config.get('browserEngine') || 'playwright';
+
+    console.log('');
+    const toolLines = [
+        `${statusDot(true, '')} ${bold('Browser')}       ${browserEngine === 'lightpanda' ? cyan('🐼 Lightpanda') : cyan('🌐 Playwright')}`,
+        `${statusDot(hasSerper, '')} ${bold('Serper')}        ${hasSerper ? green('Configured') : gray('Not set')}`,
+        `${statusDot(hasBrave, '')} ${bold('Brave Search')}  ${hasBrave ? green('Configured') : gray('Not set')}`,
+        `${statusDot(hasSearxng, '')} ${bold('SearxNG')}       ${hasSearxng ? green('Configured') : gray('Not set')}`,
+        `${statusDot(hasCaptcha, '')} ${bold('2Captcha')}      ${hasCaptcha ? green('Configured') : gray('Not set')}`,
+    ];
+    box(toolLines, { title: '🛠️  TOOL STATUS', width: 52, color: c.yellow });
+    console.log('');
 
     const { tool } = await inquirer.prompt([
         {
             type: 'list',
             name: 'tool',
-            message: 'Select tool to configure:',
+            message: cyan('Select tool to configure:'),
             choices: [
-                { name: '🐼 Browser Engine (Lightpanda/Chrome)', value: 'browser' },
-                new inquirer.Separator(gray(' ─── Search Providers ─────────────')),
-                { name: `${dot(hasSerper)} Serper (Web Search API)`, value: 'serper' },
-                { name: `${dot(hasBrave)} Brave Search`, value: 'brave' },
-                { name: `${dot(hasSearxng)} SearxNG (Self-hosted)`, value: 'searxng' },
-                { name: '  🔀 Search Provider Order', value: 'searchOrder' },
-                new inquirer.Separator(gray(' ─── Other ────────────────────────')),
-                { name: `${dot(hasCaptcha)} 2Captcha (CAPTCHA Solver)`, value: 'captcha' },
-                new inquirer.Separator(gray(' ────────────────────────────────')),
-                { name: dim('  Back'), value: 'back' }
+                { name: `  🐼 ${bold('Browser Engine')} ${dim('(Lightpanda / Chrome)')}`, value: 'browser' },
+                new inquirer.Separator(gradient('  ─── Search Providers ─────────────', [c.yellow, c.gray])),
+                { name: `  ${statusDot(hasSerper, '')} Serper ${dim('(Web Search API)')}`, value: 'serper' },
+                { name: `  ${statusDot(hasBrave, '')} Brave Search`, value: 'brave' },
+                { name: `  ${statusDot(hasSearxng, '')} SearxNG ${dim('(Self-hosted)')}`, value: 'searxng' },
+                { name: `  🔀 ${bold('Search Provider Order')}`, value: 'searchOrder' },
+                new inquirer.Separator(gradient('  ─── Other ────────────────────────', [c.yellow, c.gray])),
+                { name: `  ${statusDot(hasCaptcha, '')} 2Captcha ${dim('(CAPTCHA Solver)')}`, value: 'captcha' },
+                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.yellow, c.gray])),
+                { name: dim('  ← Back'), value: 'back' }
             ]
         }
     ]);
@@ -1183,29 +1356,37 @@ async function showToolingMenu() {
 
 async function showGatewayMenu() {
     console.clear();
+    banner();
     const currentPort = agent.config.get('gatewayPort') || 3100;
     const currentHost = agent.config.get('gatewayHost') || '0.0.0.0';
     const apiKey = agent.config.get('gatewayApiKey');
 
     sectionHeader('🌐', 'Web Gateway');
     console.log('');
-    kvLine('Host     ', cyan(String(currentHost)));
-    kvLine('Port     ', cyan(String(currentPort)));
-    kvLine('Auth     ', apiKey ? green('● API Key set') : yellow('○ No authentication'));
+    const gatewayLines = [
+        `${dim('Host')}       ${bold(String(currentHost))}`,
+        `${dim('Port')}       ${brightCyan(bold(String(currentPort)))}`,
+        `${dim('Endpoint')}   ${cyan(`http://${currentHost}:${currentPort}/api`)}`,
+        `${dim('WebSocket')}  ${cyan(`ws://${currentHost}:${currentPort}`)}`,
+        `${dim('Auth')}       ${apiKey ? green('● API Key set') : yellow('○ No authentication')}`,
+    ];
+    box(gatewayLines, { title: '📡 GATEWAY CONFIG', width: 52, color: c.cyan });
     console.log('');
 
     const { action } = await inquirer.prompt([
         {
             type: 'list',
             name: 'action',
-            message: 'Web Gateway Options:',
+            message: cyan('Gateway Options:'),
             choices: [
-                { name: '🚀 Start Gateway Server', value: 'start' },
-                { name: '🚀 Start Gateway + Agent', value: 'start_with_agent' },
-                { name: `Set Port (current: ${currentPort})`, value: 'port' },
-                { name: `Set Host (current: ${currentHost})`, value: 'host' },
-                { name: apiKey ? 'Update API Key' : 'Set API Key', value: 'apikey' },
-                { name: 'Back', value: 'back' }
+                { name: `  🚀 ${bold('Start Gateway Server')}`, value: 'start' },
+                { name: `  🚀 ${bold('Start Gateway + Agent')}`, value: 'start_with_agent' },
+                new inquirer.Separator(gradient('  ─── Settings ─────────────────────', [c.cyan, c.gray])),
+                { name: `  📌 Set Port ${dim(`(current: ${currentPort})`)}`, value: 'port' },
+                { name: `  🏠 Set Host ${dim(`(current: ${currentHost})`)}`, value: 'host' },
+                { name: `  🔑 ${apiKey ? 'Update' : 'Set'} API Key`, value: 'apikey' },
+                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.cyan, c.gray])),
+                { name: dim('  ← Back'), value: 'back' }
             ]
         }
     ]);
@@ -1265,23 +1446,54 @@ async function showGatewayMenu() {
 }
 
 async function showModelsMenu() {
-    const currentProvider = agent.config.get('llmProvider') || 'auto (inferred from model name)';
-    
+    console.clear();
+    banner();
+    sectionHeader('🤖', 'AI Models & Providers');
+
+    const currentProvider = agent.config.get('llmProvider') || 'auto';
+    const currentModel = agent.config.get('modelName') || '(default)';
+    const hasOpenAI = !!agent.config.get('openaiApiKey');
+    const hasGoogle = !!agent.config.get('googleApiKey');
+    const hasOpenRouter = !!agent.config.get('openrouterApiKey');
+    const hasNvidia = !!agent.config.get('nvidiaApiKey');
+    const hasAnthropic = !!agent.config.get('anthropicApiKey');
+    const hasBedrock = !!agent.config.get('bedrockAccessKeyId');
+
+    console.log('');
+    const modelLines = [
+        `${dim('Provider')}  ${brightCyan(bold(currentProvider.toUpperCase()))}`,
+        `${dim('Model')}     ${bold(currentModel)}`,
+    ];
+    box(modelLines, { title: '⭐ ACTIVE MODEL', width: 52, color: c.brightCyan });
+
+    console.log('');
+    const providerLines = [
+        `${statusDot(hasOpenAI, '')}  ${bold('OpenAI')}       ${hasOpenAI ? green('Key set') : gray('Not configured')}`,
+        `${statusDot(hasOpenRouter, '')}  ${bold('OpenRouter')}   ${hasOpenRouter ? green('Key set') : gray('Not configured')}`,
+        `${statusDot(hasGoogle, '')}  ${bold('Google')}       ${hasGoogle ? green('Key set') : gray('Not configured')}`,
+        `${statusDot(hasNvidia, '')}  ${bold('NVIDIA')}       ${hasNvidia ? green('Key set') : gray('Not configured')}`,
+        `${statusDot(hasAnthropic, '')}  ${bold('Anthropic')}    ${hasAnthropic ? green('Key set') : gray('Not configured')}`,
+        `${statusDot(hasBedrock, '')}  ${bold('AWS Bedrock')}  ${hasBedrock ? green('Keys set') : gray('Not configured')}`,
+    ];
+    box(providerLines, { title: '🏢 PROVIDERS', width: 52, color: c.green });
+    console.log('');
+
     const { provider } = await inquirer.prompt([
         {
             type: 'list',
             name: 'provider',
-            message: `AI Provider Settings (Primary: ${currentProvider}):`,
+            message: cyan('Select provider to configure:'),
             choices: [
-                { name: `⭐ Set Primary Provider (current: ${currentProvider})`, value: 'set_primary' },
-                { name: '─────────────────────────', value: 'sep', disabled: true },
-                { name: 'OpenAI (GPT-4, etc.)', value: 'openai' },
-                { name: 'OpenRouter (multi-model gateway)', value: 'openrouter' },
-                { name: 'Google (Gemini Pro/Flash)', value: 'google' },
-                { name: 'NVIDIA (AI models)', value: 'nvidia' },
-                { name: 'Anthropic (Claude)', value: 'anthropic' },
-                { name: 'AWS Bedrock (foundation models)', value: 'bedrock' },
-                { name: 'Back', value: 'back' }
+                { name: `  ⭐ ${bold('Set Primary Provider')} ${dim(`(current: ${currentProvider})`)}`, value: 'set_primary' },
+                new inquirer.Separator(gradient('  ─── Provider Config ──────────────', [c.green, c.gray])),
+                { name: `  ${statusDot(hasOpenAI, '')} OpenAI ${dim('(GPT-4, etc.)')}`, value: 'openai' },
+                { name: `  ${statusDot(hasOpenRouter, '')} OpenRouter ${dim('(multi-model gateway)')}`, value: 'openrouter' },
+                { name: `  ${statusDot(hasGoogle, '')} Google ${dim('(Gemini Pro/Flash)')}`, value: 'google' },
+                { name: `  ${statusDot(hasNvidia, '')} NVIDIA ${dim('(AI models)')}`, value: 'nvidia' },
+                { name: `  ${statusDot(hasAnthropic, '')} Anthropic ${dim('(Claude)')}`, value: 'anthropic' },
+                { name: `  ${statusDot(hasBedrock, '')} AWS Bedrock ${dim('(foundation models)')}`, value: 'bedrock' },
+                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.green, c.gray])),
+                { name: dim('  ← Back'), value: 'back' }
             ]
         }
     ]);
@@ -1615,8 +1827,13 @@ async function showBedrockConfig() {
 }
 
 async function showPushTaskMenu() {
+    console.clear();
+    banner();
+    sectionHeader('📝', 'Push Task');
+    console.log('');
+
     const { task } = await inquirer.prompt([
-        { type: 'input', name: 'task', message: 'Enter task description (or leave empty to go back):' }
+        { type: 'input', name: 'task', message: cyan('Enter task description (or leave empty to go back):') }
     ]);
 
     if (!task.trim()) {
@@ -1635,25 +1852,36 @@ async function showPushTaskMenu() {
 
 async function showConnectionsMenu() {
     console.clear();
+    banner();
     sectionHeader('🔌', 'Connections');
-    console.log('');
 
     const hasTelegram = !!agent.config.get('telegramToken');
     const hasWhatsapp = !!agent.config.get('whatsappEnabled');
     const hasDiscord = !!agent.config.get('discordToken');
-    const dot = (ok: boolean) => ok ? green('●') : gray('○');
+    const tgAuto = agent.config.get('telegramAutoReplyEnabled');
+    const waAuto = agent.config.get('whatsappAutoReplyEnabled');
+    const dcAuto = agent.config.get('discordAutoReplyEnabled');
+
+    console.log('');
+    const channelLines = [
+        `${statusDot(hasTelegram, '')} ${bold('Telegram')}    ${hasTelegram ? green('Connected') : gray('Not configured')}  ${tgAuto ? dim('auto-reply ✓') : ''}`,
+        `${statusDot(hasWhatsapp, '')} ${bold('WhatsApp')}    ${hasWhatsapp ? green('Enabled') : gray('Disabled')}        ${waAuto ? dim('auto-reply ✓') : ''}`,
+        `${statusDot(hasDiscord, '')} ${bold('Discord')}     ${hasDiscord ? green('Connected') : gray('Not configured')}  ${dcAuto ? dim('auto-reply ✓') : ''}`,
+    ];
+    box(channelLines, { title: '📡 CHANNEL STATUS', width: 58, color: c.cyan });
+    console.log('');
 
     const { channel } = await inquirer.prompt([
         {
             type: 'list',
             name: 'channel',
-            message: 'Select channel to configure:',
+            message: cyan('Select channel to configure:'),
             choices: [
-                { name: `${dot(hasTelegram)} Telegram Bot`, value: 'telegram' },
-                { name: `${dot(hasWhatsapp)} WhatsApp (Baileys)`, value: 'whatsapp' },
-                { name: `${dot(hasDiscord)} Discord Bot`, value: 'discord' },
-                new inquirer.Separator(gray(' ────────────────────────────────')),
-                { name: dim('  Back'), value: 'back' },
+                { name: `  ${hasTelegram ? '✈️ ' : '  '}${bold('Telegram Bot')}      ${hasTelegram ? green('●') : gray('○')}`, value: 'telegram' },
+                { name: `  ${hasWhatsapp ? '💬' : '  '} ${bold('WhatsApp (Baileys)')} ${hasWhatsapp ? green('●') : gray('○')}`, value: 'whatsapp' },
+                { name: `  ${hasDiscord ? '🎮' : '  '} ${bold('Discord Bot')}       ${hasDiscord ? green('●') : gray('○')}`, value: 'discord' },
+                new inquirer.Separator(gradient('  ─────────────────────────────────', [c.cyan, c.gray])),
+                { name: dim('  ← Back'), value: 'back' },
             ]
         }
     ]);
@@ -1672,9 +1900,16 @@ async function showConnectionsMenu() {
 async function showTelegramConfig() {
     const currentToken = agent.config.get('telegramToken') || 'Not Set';
     const autoReply = agent.config.get('telegramAutoReplyEnabled');
-    console.log(`\n--- Telegram Settings ---`);
-    console.log(`Current Token: ${currentToken}`);
-    console.log(`Auto-Reply: ${autoReply ? 'ON' : 'OFF'}`);
+    console.clear();
+    banner();
+    sectionHeader('✈️', 'Telegram Settings');
+    console.log('');
+    const tgLines = [
+        `${dim('Token')}       ${currentToken === 'Not Set' ? gray('Not Set') : green(currentToken.substring(0, 12) + '…')}`,
+        `${dim('Auto-Reply')}  ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
+    ];
+    box(tgLines, { title: '✈️  TELEGRAM', width: 46, color: c.cyan });
+    console.log('');
 
     const { action } = await inquirer.prompt([
         {
@@ -1713,13 +1948,22 @@ async function showWhatsAppConfig() {
     const contextProfiling = agent.config.get('whatsappContextProfilingEnabled');
     const ownerJid = agent.config.get('whatsappOwnerJID') || 'Not Linked';
 
-    console.log(`\n--- WhatsApp Settings ---`);
-    console.log(`Status: ${enabled ? 'ENABLED' : 'DISABLED'}`);
-    console.log(`Auto-Reply (1-on-1): ${autoReply ? 'ON' : 'OFF'}`);
-    console.log(`Status Interactions: ${statusReply ? 'ON' : 'OFF'}`);
-    console.log(`Auto-React (Emojis): ${autoReact ? 'ON' : 'OFF'}`);
-    console.log(`Context Profiling: ${contextProfiling ? 'ON' : 'OFF'}`);
-    console.log(`Linked Account: ${ownerJid}`);
+    console.clear();
+    banner();
+    sectionHeader('💬', 'WhatsApp Settings');
+    console.log('');
+    const onOff = (v: any) => v ? green(bold('● ON')) : gray('○ OFF');
+    const waLines = [
+        `${dim('Status')}            ${enabled ? green(bold('ENABLED')) : red(bold('DISABLED'))}`,
+        `${dim('Linked Account')}    ${ownerJid === 'Not Linked' ? gray(ownerJid) : cyan(ownerJid)}`,
+        ``,
+        `${dim('Auto-Reply (1‑on‑1)')}  ${onOff(autoReply)}`,
+        `${dim('Status Interactions')}  ${onOff(statusReply)}`,
+        `${dim('Auto-React (Emojis)')}  ${onOff(autoReact)}`,
+        `${dim('Context Profiling')}    ${onOff(contextProfiling)}`,
+    ];
+    box(waLines, { title: '💬 WHATSAPP', width: 48, color: c.green });
+    console.log('');
 
     const { action } = await inquirer.prompt([
         {
@@ -1810,9 +2054,16 @@ async function showWhatsAppConfig() {
 async function showDiscordConfig() {
     const currentToken = agent.config.get('discordToken') || 'Not Set';
     const autoReply = agent.config.get('discordAutoReplyEnabled');
-    console.log(`\n--- Discord Settings ---`);
-    console.log(`Current Token: ${currentToken === 'Not Set' ? currentToken : '***' + currentToken.slice(-8)}`);
-    console.log(`Auto-Reply: ${autoReply ? 'ON' : 'OFF'}`);
+    console.clear();
+    banner();
+    sectionHeader('🎮', 'Discord Settings');
+    console.log('');
+    const dcLines = [
+        `${dim('Token')}       ${currentToken === 'Not Set' ? gray('Not Set') : green('***' + currentToken.slice(-8))}`,
+        `${dim('Auto-Reply')}  ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
+    ];
+    box(dcLines, { title: '🎮 DISCORD', width: 46, color: c.magenta });
+    console.log('');
 
     const { action } = await inquirer.prompt([
         {
@@ -1861,10 +2112,17 @@ async function showDiscordConfig() {
 
 async function showWorkerProfileMenu() {
     console.clear();
-    sectionHeader('🪪', 'Worker Profile (Digital Identity)');
+    banner();
+    sectionHeader('🪪', 'Worker Profile');
 
     if (!workerProfile.exists()) {
-        console.log('No worker profile exists yet.\n');
+        console.log('');
+        box([
+            `${dim('No worker profile exists yet.')}`,
+            `${dim('A profile gives your agent a digital identity.')}`,
+        ], { title: '🪪 IDENTITY', width: 48, color: c.gray });
+        console.log('');
+
         const { create } = await inquirer.prompt([
             { type: 'confirm', name: 'create', message: 'Would you like to create a worker profile?', default: true }
         ]);
@@ -1882,23 +2140,35 @@ async function showWorkerProfileMenu() {
         return showWorkerProfileMenu();
     }
 
-    // Show current profile
-    console.log(workerProfile.getSummary());
+    // Show current profile in a box
+    const profile = workerProfile.get()!;
+    console.log('');
+    const profileLines = [
+        `${dim('Handle')}    ${brightCyan(bold('@' + profile.handle))}`,
+        `${dim('Name')}      ${bold(profile.displayName)}`,
+        `${dim('Bio')}       ${profile.bio || gray('(not set)')}`,
+        `${dim('Email')}     ${profile.email || gray('(not set)')}`,
+        `${dim('Password')}  ${profile.password ? green('● Set') : gray('○ Not set')}`,
+        `${dim('Avatar')}    ${profile.avatarUrl || gray('(not set)')}`,
+        `${dim('Websites')}  ${profile.websites.length > 0 ? cyan(String(profile.websites.length) + ' linked') : gray('(none)')}`,
+    ];
+    box(profileLines, { title: '🪪 DIGITAL IDENTITY', width: 52, color: c.brightCyan });
     console.log('');
 
-    const profile = workerProfile.get()!;
     const { action } = await inquirer.prompt([
         {
             type: 'list',
             name: 'action',
-            message: 'Profile Options:',
+            message: cyan('Profile Options:'),
             choices: [
-                { name: 'Edit Basic Info (Handle, Name, Bio)', value: 'edit_basic' },
-                { name: `${profile.email ? 'Update' : 'Set'} Email Address`, value: 'email' },
-                { name: `${profile.password ? 'Update' : 'Set'} Password`, value: 'password' },
-                { name: 'Manage Linked Websites', value: 'websites' },
-                { name: '🗑️ Delete Worker Profile', value: 'delete' },
-                { name: 'Back', value: 'back' }
+                { name: `  ✏️  ${bold('Edit Basic Info')} ${dim('(Handle, Name, Bio)')}`, value: 'edit_basic' },
+                { name: `  📧 ${profile.email ? 'Update' : 'Set'} ${bold('Email Address')}`, value: 'email' },
+                { name: `  🔑 ${profile.password ? 'Update' : 'Set'} ${bold('Password')}`, value: 'password' },
+                { name: `  🌐 ${bold('Manage Linked Websites')} ${dim(`(${profile.websites.length})`)}`, value: 'websites' },
+                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.red, c.gray])),
+                { name: `  🗑️  ${red('Delete Worker Profile')}`, value: 'delete' },
+                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.gray, c.gray])),
+                { name: dim('  ← Back'), value: 'back' }
             ]
         }
     ]);
@@ -1969,16 +2239,19 @@ async function showWorkerWebsitesMenu() {
     if (!profile) return showWorkerProfileMenu();
 
     console.clear();
+    banner();
     sectionHeader('🌐', 'Linked Websites');
 
+    console.log('');
     if (profile.websites.length === 0) {
-        console.log('No websites linked yet.\n');
+        box([dim('No websites linked yet.')], { title: '🌐 WEBSITES', width: 46, color: c.gray });
     } else {
-        profile.websites.forEach((w, i) => {
-            console.log(`${i + 1}. ${w.name}: ${w.url}${w.username ? ` (user: ${w.username})` : ''}`);
-        });
-        console.log('');
+        const siteLines = profile.websites.map((w, i) =>
+            `${cyan(bold(String(i + 1)))}. ${bold(w.name)} ${dim('→')} ${w.url}${w.username ? dim(` (${w.username})`) : ''}`
+        );
+        box(siteLines, { title: `🌐 WEBSITES (${profile.websites.length})`, width: 56, color: c.cyan });
     }
+    console.log('');
 
     const choices: { name: string; value: string }[] = [
         { name: '➕ Add Website', value: 'add' }
@@ -2023,6 +2296,7 @@ async function showWorkerWebsitesMenu() {
 
 async function showOrchestrationMenu() {
     console.clear();
+    banner();
     sectionHeader('🐙', 'Multi-Agent Orchestration');
 
     const orchestrator = agent.orchestrator;
@@ -2031,33 +2305,42 @@ async function showOrchestrationMenu() {
     const detailedWorkers = orchestrator.getDetailedWorkerStatus();
 
     console.log('');
-    kvLine('Active Agents  ', cyan(String(status.activeAgents)));
-    kvLine('Running Workers', status.activeAgents > 0 ? green(String(runningWorkers.length) + ' process(es)') : gray('0'));
-    kvLine('Pending Tasks  ', status.pendingTasks > 0 ? yellow(String(status.pendingTasks)) : green('0'));
-    kvLine('Completed      ', green(String(status.completedTasks)));
-    kvLine('Failed         ', status.failedTasks > 0 ? red(String(status.failedTasks)) : gray('0'));
+    const orchLines = [
+        `${dim('Active Agents')}    ${brightCyan(bold(String(status.activeAgents)))}`,
+        `${dim('Running Workers')}  ${status.activeAgents > 0 ? green(bold(String(runningWorkers.length)) + ' process(es)') : gray('0')}`,
+        `${dim('Pending Tasks')}    ${status.pendingTasks > 0 ? yellow(bold(String(status.pendingTasks))) : green('0')}`,
+        `${dim('Completed')}        ${green(bold(String(status.completedTasks)))}`,
+        `${dim('Failed')}           ${status.failedTasks > 0 ? red(bold(String(status.failedTasks))) : gray('0')}`,
+    ];
+    box(orchLines, { title: '📊 ORCHESTRATION STATUS', width: 46, color: c.magenta });
     console.log('');
 
     const { action } = await inquirer.prompt([
         {
             type: 'list',
             name: 'action',
-            message: 'Orchestration Options:',
+            message: cyan('Orchestration Options:'),
             choices: [
-                { name: '📊 View Detailed Status', value: 'status' },
-                { name: '🤖 List Active Agents', value: 'list' },
-                { name: '⚡ View Running Processes', value: 'processes' },
-                { name: '🔍 View Worker Task Details', value: 'worker_details' },
-                { name: '➕ Spawn New Agent', value: 'spawn' },
-                { name: '▶️ Start Worker Process', value: 'start_worker' },
-                { name: '⏹️ Stop Worker Process', value: 'stop_worker' },
-                { name: '📋 Delegate Task to Agent', value: 'delegate' },
-                { name: '🔀 Distribute Tasks to All', value: 'distribute' },
-                { name: '💬 Broadcast Message', value: 'broadcast' },
-                { name: '🗑️ Terminate Agent', value: 'terminate' },
-                { name: '🧹 Terminate All Agents', value: 'terminate_all' },
-                { name: 'Back', value: 'back' }
-            ]
+                new inquirer.Separator(gradient('  ─── Monitor ──────────────────────', [c.magenta, c.gray])),
+                { name: `  📊 ${bold('View Detailed Status')}`, value: 'status' },
+                { name: `  🤖 ${bold('List Active Agents')}`, value: 'list' },
+                { name: `  ⚡ ${bold('View Running Processes')}`, value: 'processes' },
+                { name: `  🔍 ${bold('View Worker Task Details')}`, value: 'worker_details' },
+                new inquirer.Separator(gradient('  ─── Manage ───────────────────────', [c.cyan, c.gray])),
+                { name: `  ➕ ${bold('Spawn New Agent')}`, value: 'spawn' },
+                { name: `  ▶️  ${bold('Start Worker Process')}`, value: 'start_worker' },
+                { name: `  ⏹️  ${bold('Stop Worker Process')}`, value: 'stop_worker' },
+                new inquirer.Separator(gradient('  ─── Tasks ────────────────────────', [c.yellow, c.gray])),
+                { name: `  📋 ${bold('Delegate Task to Agent')}`, value: 'delegate' },
+                { name: `  🔀 ${bold('Distribute Tasks to All')}`, value: 'distribute' },
+                { name: `  💬 ${bold('Broadcast Message')}`, value: 'broadcast' },
+                new inquirer.Separator(gradient('  ─── Cleanup ──────────────────────', [c.red, c.gray])),
+                { name: `  🗑️  ${bold('Terminate Agent')}`, value: 'terminate' },
+                { name: `  🧹 ${bold('Terminate All Agents')}`, value: 'terminate_all' },
+                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.gray, c.gray])),
+                { name: dim('  ← Back'), value: 'back' }
+            ],
+            pageSize: 20
         }
     ]);
 
@@ -2307,6 +2590,7 @@ async function showOrchestrationMenu() {
 
 async function showSecurityMenu() {
     console.clear();
+    banner();
     sectionHeader('🔐', 'Security & Permissions');
 
     const safeMode = agent.config.get('safeMode');
@@ -2315,27 +2599,37 @@ async function showSecurityMenu() {
     const denyList = (agent.config.get('commandDenyList') || []) as string[];
 
     console.log('');
-    kvLine('Safe Mode       ', safeMode ? red(bold('🔒 ON') + ' (commands disabled)') : green('🔓 OFF'));
-    kvLine('Sudo Mode       ', sudoMode ? yellow(bold('⚠️  ON') + ' (all commands allowed)') : green('✅ OFF (allowList enforced)'));
-    kvLine('Allowed Commands', cyan(String(allowList.length)) + dim(allowList.length > 0 ? ` — ${allowList.slice(0, 8).join(', ')}${allowList.length > 8 ? '...' : ''}` : ''));
-    kvLine('Blocked Commands', cyan(String(denyList.length)) + dim(denyList.length > 0 ? ` — ${denyList.join(', ')}` : ''));
+    const safeBadge = safeMode ? red(bold('🔒 LOCKED')) : green(bold('🔓 OPEN'));
+    const sudoBadge = sudoMode ? yellow(bold('⚠️  ENABLED')) : green(bold('✅ OFF'));
+    const secLines = [
+        `${dim('Safe Mode')}    ${safeBadge}     ${dim(safeMode ? 'commands disabled' : 'commands allowed')}`,
+        `${dim('Sudo Mode')}    ${sudoBadge}  ${dim(sudoMode ? 'all commands allowed' : 'allowList enforced')}`,
+        ``,
+        `${dim('Allow List')}   ${cyan(bold(String(allowList.length)))} commands  ${dim(allowList.length > 0 ? allowList.slice(0, 5).join(', ') + (allowList.length > 5 ? '…' : '') : '(empty)')}`,
+        `${dim('Block List')}   ${cyan(bold(String(denyList.length)))} commands  ${dim(denyList.length > 0 ? denyList.slice(0, 5).join(', ') + (denyList.length > 5 ? '…' : '') : '(empty)')}`,
+    ];
+    box(secLines, { title: '🛡️  SECURITY STATUS', width: 58, color: safeMode ? c.red : (sudoMode ? c.yellow : c.green) });
     console.log('');
 
     const { action } = await inquirer.prompt([
         {
             type: 'list',
             name: 'action',
-            message: 'Security Options:',
+            message: cyan('Security Options:'),
             choices: [
-                { name: safeMode ? '🔓 Disable Safe Mode (allow commands)' : '🔒 Enable Safe Mode (block all commands)', value: 'toggle_safe' },
-                { name: sudoMode ? '✅ Disable Sudo Mode (enforce allowList)' : '⚠️ Enable Sudo Mode (allow ALL commands)', value: 'toggle_sudo' },
-                { name: '➕ Add Command to Allow List', value: 'add_allow' },
-                { name: '➖ Remove Command from Allow List', value: 'remove_allow' },
-                { name: '➕ Add Command to Block List', value: 'add_deny' },
-                { name: '➖ Remove Command from Block List', value: 'remove_deny' },
-                { name: '📋 View Full Allow List', value: 'view_allow' },
-                { name: '📋 View Full Block List', value: 'view_deny' },
-                { name: 'Back', value: 'back' }
+                new inquirer.Separator(gradient('  ─── Mode Toggles ─────────────────', [c.red, c.gray])),
+                { name: safeMode ? `  🔓 ${bold('Disable Safe Mode')} ${dim('(allow commands)')}` : `  🔒 ${bold('Enable Safe Mode')} ${dim('(block all commands)')}`, value: 'toggle_safe' },
+                { name: sudoMode ? `  ✅ ${bold('Disable Sudo Mode')} ${dim('(enforce allowList)')}` : `  ⚠️  ${bold('Enable Sudo Mode')} ${dim('(allow ALL commands)')}`, value: 'toggle_sudo' },
+                new inquirer.Separator(gradient('  ─── Allow List ───────────────────', [c.green, c.gray])),
+                { name: `  ➕ Add Command to Allow List`, value: 'add_allow' },
+                { name: `  ➖ Remove Command from Allow List`, value: 'remove_allow' },
+                { name: `  📋 View Full Allow List ${dim(`(${allowList.length})`)}`, value: 'view_allow' },
+                new inquirer.Separator(gradient('  ─── Block List ───────────────────', [c.red, c.gray])),
+                { name: `  ➕ Add Command to Block List`, value: 'add_deny' },
+                { name: `  ➖ Remove Command from Block List`, value: 'remove_deny' },
+                { name: `  📋 View Full Block List ${dim(`(${denyList.length})`)}`, value: 'view_deny' },
+                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.gray, c.gray])),
+                { name: dim('  ← Back'), value: 'back' }
             ]
         }
     ]);
@@ -2423,6 +2717,7 @@ async function showSecurityMenu() {
 
 async function showConfigMenu() {
     console.clear();
+    banner();
     sectionHeader('⚙️', 'Agent Configuration');
     console.log('');
 
@@ -2490,48 +2785,64 @@ async function showConfigMenu() {
 }
 
 async function showSkillsMenu() {
+    console.clear();
+    banner();
+    sectionHeader('🧩', 'Skills Manager');
+
     const skills = agent.skills.getAllSkills();
     const agentSkills = agent.skills.getAgentSkills();
+    const pluginSkills = skills.filter(s => s.pluginPath);
+    const coreSkills = skills.filter(s => !s.pluginPath);
+
+    // Summary box
+    const activeCount = agentSkills.filter(s => s.activated).length;
+    console.log('');
+    const summaryLines = [
+        `${dim('Agent Skills')}   ${brightCyan(bold(String(agentSkills.length)))} installed  ${green(bold(String(activeCount)))} active`,
+        `${dim('Plugins')}        ${cyan(bold(String(pluginSkills.length)))} loaded`,
+        `${dim('Core Built-in')}  ${gray(bold(String(coreSkills.length)))} available`,
+    ];
+    box(summaryLines, { title: '📦 SKILL INVENTORY', width: 52, color: c.magenta });
+    console.log('');
 
     const choices: any[] = [];
 
     // Section: Agent Skills (SKILL.md format)
     if (agentSkills.length > 0) {
-        choices.push(new inquirer.Separator('── Agent Skills (SKILL.md) ──'));
+        choices.push(new inquirer.Separator(gradient('  ─── Agent Skills (SKILL.md) ──────', [c.brightCyan, c.gray])));
         for (const s of agentSkills) {
-            const status = s.activated ? '🟢' : '⚪';
+            const badge = s.activated ? green('● ') : gray('○ ');
             choices.push({
-                name: `${status} ${s.meta.name}: ${s.meta.description.slice(0, 60)}${s.meta.description.length > 60 ? '...' : ''}`,
+                name: `  ${badge}${bold(s.meta.name)} ${dim('— ' + s.meta.description.slice(0, 50) + (s.meta.description.length > 50 ? '…' : ''))}`,
                 value: `agent:${s.meta.name}`
             });
         }
     }
 
     // Section: Plugin Skills
-    const pluginSkills = skills.filter(s => s.pluginPath);
     if (pluginSkills.length > 0) {
-        choices.push(new inquirer.Separator('── Plugin Skills (.ts/.js) ──'));
+        choices.push(new inquirer.Separator(gradient('  ─── Plugins (.ts/.js) ────────────', [c.yellow, c.gray])));
         for (const s of pluginSkills) {
             choices.push({
-                name: `  ${s.name}: ${s.description.slice(0, 60)}`,
+                name: `  🔌 ${bold(s.name)} ${dim('— ' + s.description.slice(0, 50) + (s.description.length > 50 ? '…' : ''))}`,
                 value: `plugin:${s.name}`
             });
         }
     }
 
     // Section: Core Skills
-    const coreSkills = skills.filter(s => !s.pluginPath);
-    choices.push(new inquirer.Separator(`── Core Skills (${coreSkills.length}) ──`));
-    choices.push({ name: `  Show all ${coreSkills.length} core skills`, value: 'list_core' });
+    choices.push(new inquirer.Separator(gradient(`  ─── Core Skills (${coreSkills.length}) ─────────────`, [c.gray, c.gray])));
+    choices.push({ name: `  📋 ${bold('Show all ' + coreSkills.length + ' core skills')}`, value: 'list_core' });
 
     // Actions
-    choices.push(new inquirer.Separator('── Actions ──'));
-    choices.push({ name: '📦 Install Skill from URL', value: 'install_url' });
-    choices.push({ name: '📁 Install Skill from Local Path', value: 'install_path' });
-    choices.push({ name: '✨ Create New Skill', value: 'create' });
-    choices.push({ name: '🔨 Build Skill from Spec URL (Legacy)', value: 'build' });
-    choices.push({ name: '✅ Validate Skill', value: 'validate' });
-    choices.push({ name: 'Back', value: 'back' });
+    choices.push(new inquirer.Separator(gradient('  ─── Actions ──────────────────────', [c.green, c.gray])));
+    choices.push({ name: `  📦 ${bold('Install Skill from URL')}`, value: 'install_url' });
+    choices.push({ name: `  📁 ${bold('Install Skill from Local Path')}`, value: 'install_path' });
+    choices.push({ name: `  ✨ ${bold('Create New Skill')}`, value: 'create' });
+    choices.push({ name: `  🔨 ${bold('Build Skill from Spec URL')} ${dim('(Legacy)')}`, value: 'build' });
+    choices.push({ name: `  ✅ ${bold('Validate Skill')}`, value: 'validate' });
+    choices.push(new inquirer.Separator(gradient('  ──────────────────────────────────', [c.gray, c.gray])));
+    choices.push({ name: dim('  ← Back'), value: 'back' });
 
     const { selection } = await inquirer.prompt([
         {
@@ -2871,22 +3182,67 @@ function showStatus() {
     sectionHeader('📊', 'Agent Status');
 
     const shortMem = agent.memory.searchMemory('short').length;
-    const queueLen = agent.actionQueue.getQueue().length;
+    const episodicMem = agent.memory.searchMemory('episodic').length;
+    const queueItems = agent.actionQueue.getQueue();
+    const queueLen = queueItems.length;
     const hasTelegram = !!agent.telegram;
     const hasWhatsapp = !!agent.whatsapp;
     const hasDiscord = !!agent.discord;
     const model = agent.config.get('modelName') || 'gpt-4o';
     const provider = agent.config.get('llmProvider') || 'auto';
+    const agentName = agent.config.get('agentName') || 'OrcBot';
+    const safeMode = agent.config.get('safeMode');
+    const sudoMode = agent.config.get('sudoMode');
 
+    // AI Model Panel
     console.log('');
-    kvLine('Active Model    ', cyan(model));
-    kvLine('LLM Provider    ', cyan(provider));
-    kvLine('Memory Entries  ', yellow(String(shortMem)) + dim(' (short-term)'));
-    kvLine('Action Queue    ', queueLen > 0 ? yellow(String(queueLen)) + ' pending' : green('0 pending'));
+    box([
+        `${dim('Model')}      ${brightCyan(bold(model))}`,
+        `${dim('Provider')}   ${cyan(provider)}`,
+        `${dim('Agent')}      ${bold(agentName)}`,
+        `${dim('Mode')}       ${sudoMode ? `${c.bgRed}${c.white}${c.bold} SUDO ${c.reset} ${dim('(unrestricted)')}` : safeMode ? `${c.bgYellow}${c.white}${c.bold} SAFE ${c.reset} ${dim('(commands blocked)')}` : `${c.bgGreen}${c.white}${c.bold} NORMAL ${c.reset}`}`,
+    ], { title: '🤖 AI ENGINE', width: 52, color: c.brightCyan });
+
+    // Memory Panel
+    const memTotal = shortMem + episodicMem;
     console.log('');
-    kvLine('Telegram        ', statusBadge(hasTelegram, 'Connected', 'Not connected'));
-    kvLine('WhatsApp        ', statusBadge(hasWhatsapp, 'Connected', 'Not connected'));
-    kvLine('Discord         ', statusBadge(hasDiscord, 'Connected', 'Not connected'));
+    box([
+        `${dim('Short-term')} ${yellow(bold(String(shortMem).padStart(4)))} entries  ${progressBar(shortMem, 200, 16)}`,
+        `${dim('Episodic')}   ${cyan(bold(String(episodicMem).padStart(4)))} entries  ${progressBar(episodicMem, 50, 16, { colorFn: cyan })}`,
+        `${dim('Total')}      ${bold(String(memTotal).padStart(4))} entries`,
+    ], { title: '🧠 MEMORY', width: 52, color: c.magenta });
+
+    // Channels Panel
+    console.log('');
+    box([
+        `${statusDot(hasTelegram, hasTelegram ? brightCyan('Telegram') : 'Telegram')}${' '.repeat(12)}${hasTelegram ? green('Connected') : dim('Not configured')}`,
+        `${statusDot(hasWhatsapp, hasWhatsapp ? brightGreen('WhatsApp') : 'WhatsApp')}${' '.repeat(12)}${hasWhatsapp ? green('Connected') : dim('Not configured')}`,
+        `${statusDot(hasDiscord, hasDiscord ? brightMagenta('Discord') : 'Discord')}${' '.repeat(13)}${hasDiscord ? green('Connected') : dim('Not configured')}`,
+    ], { title: '🔌 CHANNELS', width: 52, color: c.blue });
+
+    // Action Queue Panel
+    const completed = queueItems.filter((a: any) => a.status === 'completed').length;
+    const failed = queueItems.filter((a: any) => a.status === 'failed').length;
+    const pending = queueItems.filter((a: any) => a.status === 'queued').length;
+    const inProgress = queueItems.filter((a: any) => a.status === 'in-progress').length;
+    const waiting = queueItems.filter((a: any) => a.status === 'waiting').length;
+    console.log('');
+    const queueLines: string[] = [
+        `${green('●')} Completed ${green(bold(String(completed).padStart(3)))}  ${yellow('●')} Pending ${yellow(bold(String(pending).padStart(3)))}  ${cyan('●')} Active ${cyan(bold(String(inProgress).padStart(3)))}`,
+        `${red('●')} Failed    ${red(bold(String(failed).padStart(3)))}  ${magenta('●')} Waiting ${magenta(bold(String(waiting).padStart(3)))}  ${dim('Total')}  ${bold(String(queueLen).padStart(3))}`,
+    ];
+    if (queueLen > 0) {
+        queueLines.push('');
+        queueLines.push(dim('Recent:'));
+        const recentActions = queueItems.slice(-3).reverse();
+        for (const a of recentActions) {
+            const statusIcon = a.status === 'completed' ? green('✓') : a.status === 'failed' ? red('✗') : a.status === 'in-progress' ? cyan('▶') : a.status === 'waiting' ? magenta('⏸') : yellow('…');
+            const desc = ((a as any).payload?.description || 'Unknown').slice(0, 38);
+            queueLines.push(`  ${statusIcon} ${dim(a.id.slice(0, 6))} ${desc}`);
+        }
+    }
+    box(queueLines, { title: '📋 ACTION QUEUE', width: 52, color: c.yellow });
+
     console.log('');
 }
 
@@ -2901,32 +3257,47 @@ function showTokenUsage() {
     );
     const summary = tracker.getSummary();
 
+    // Totals Panel
     console.log('');
-    kvLine('Prompt Tokens     ', bold(summary.totals.promptTokens.toLocaleString()));
-    kvLine('Completion Tokens ', bold(summary.totals.completionTokens.toLocaleString()));
-    kvLine('Total Tokens      ', cyan(bold(summary.totals.totalTokens.toLocaleString())));
+    const totalTokens = summary.totals.totalTokens;
+    box([
+        `${dim('Prompt')}      ${bold(summary.totals.promptTokens.toLocaleString().padStart(12))} tokens`,
+        `${dim('Completion')}  ${bold(summary.totals.completionTokens.toLocaleString().padStart(12))} tokens`,
+        `${dim('─'.repeat(34))}`,
+        `${dim('Total')}       ${brightCyan(bold(totalTokens.toLocaleString().padStart(12)))} tokens`,
+    ], { title: '🔢 TOKEN TOTALS', width: 42, color: c.brightCyan });
 
+    // Provider breakdown
     const providers = Object.entries(summary.byProvider);
     if (providers.length > 0) {
         console.log('');
-        console.log(gray('  By Provider:'));
-        providers.forEach(([prov, totals]) => {
-            const bar = '█'.repeat(Math.min(20, Math.ceil((totals.totalTokens / Math.max(summary.totals.totalTokens, 1)) * 20)));
-            console.log(`    ${cyan(prov.padEnd(12))} ${green(bar)} ${dim(totals.totalTokens.toLocaleString())}`);
-        });
+        const providerLines: string[] = [];
+        const maxProviderTokens = Math.max(...providers.map(([, t]) => t.totalTokens), 1);
+        for (const [prov, totals] of providers) {
+            const ratio = totals.totalTokens / Math.max(totalTokens, 1);
+            const pct = Math.round(ratio * 100);
+            const bar = progressBar(totals.totalTokens, maxProviderTokens, 18, { colorFn: cyan });
+            providerLines.push(`${bold(prov.padEnd(14))} ${bar} ${dim(totals.totalTokens.toLocaleString().padStart(10))} ${dim(`(${pct}%)`)}`);
+        }
+        box(providerLines, { title: '🏢 BY PROVIDER', width: 56, color: c.green });
     }
 
-    const models = Object.entries(summary.byModel).slice(0, 6);
+    // Model breakdown
+    const models = Object.entries(summary.byModel).slice(0, 8);
     if (models.length > 0) {
         console.log('');
-        console.log(gray('  Top Models:'));
-        models.forEach(([mdl, totals]) => {
-            console.log(`    ${mdl.padEnd(30)} ${dim(totals.totalTokens.toLocaleString() + ' tokens')}`);
-        });
+        const modelLines: string[] = [];
+        const maxModelTokens = Math.max(...models.map(([, t]) => t.totalTokens), 1);
+        for (const [mdl, totals] of models) {
+            const bar = progressBar(totals.totalTokens, maxModelTokens, 14, { colorFn: magenta });
+            const displayName = mdl.length > 26 ? mdl.slice(0, 24) + '…' : mdl;
+            modelLines.push(`${displayName.padEnd(26)} ${bar} ${dim(totals.totalTokens.toLocaleString().padStart(10))}`);
+        }
+        box(modelLines, { title: '🤖 TOP MODELS', width: 56, color: c.magenta });
     }
 
     console.log('');
-    kvLine('Last Updated      ', dim(summary.lastUpdated));
+    console.log(gray(`  Last updated: ${summary.lastUpdated}`));
     console.log('');
 }
 

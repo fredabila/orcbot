@@ -120,27 +120,64 @@ export class DiscordChannel implements IChannel {
             }
         });
 
-        // Handle attachments
+        // Handle attachments — download locally so the agent can analyze them
+        const mediaPaths: string[] = [];
         if (message.attachments.size > 0) {
             for (const attachment of message.attachments.values()) {
                 const fileName = attachment.name || 'attachment';
                 const fileUrl = attachment.url;
                 
                 logger.info(`Discord attachment: ${fileName} from ${username}`);
+
+                // Download attachment to local storage
+                let localPath = '';
+                try {
+                    const response = await fetch(fileUrl);
+                    const buffer = Buffer.from(await response.arrayBuffer());
+                    const ext = path.extname(fileName) || '.bin';
+                    localPath = path.join(this.downloadPath, `discord_${messageId}_${fileName}`);
+                    fs.writeFileSync(localPath, buffer);
+                    mediaPaths.push(localPath);
+                    logger.info(`Discord attachment downloaded: ${localPath}`);
+                } catch (e) {
+                    logger.error(`Failed to download Discord attachment ${fileName}: ${e}`);
+                }
+
+                // Auto-transcribe audio attachments
+                let transcription = '';
+                const audioExts = ['.ogg', '.mp3', '.m4a', '.wav', '.opus', '.flac'];
+                if (localPath && audioExts.includes(path.extname(fileName).toLowerCase())) {
+                    try {
+                        logger.info(`Discord: Auto-transcribing audio from ${username}...`);
+                        const result = await this.agent.llm.analyzeMedia(localPath, 'Transcribe this audio message exactly. Return only the transcription text.');
+                        transcription = result.replace(/^Transcription result:\n/i, '').trim();
+                        if (transcription) {
+                            logger.info(`Discord: Transcribed audio from ${username}: "${transcription.substring(0, 100)}..."`);
+                        }
+                    } catch (e) {
+                        logger.warn(`Discord: Auto-transcription failed: ${e}`);
+                    }
+                }
                 
                 this.agent.memory.saveMemory({
                     id: `discord-attach-${messageId}-${fileName}`,
                     type: 'short',
-                    content: `Discord attachment from ${username}: ${fileName} (${fileUrl})`,
+                    content: transcription
+                        ? `Discord voice/audio from ${username}: "${transcription}" (saved to: ${localPath})`
+                        : localPath 
+                            ? `Discord attachment from ${username}: ${fileName} (saved to: ${localPath})`
+                            : `Discord attachment from ${username}: ${fileName} (${fileUrl})`,
                     timestamp: new Date().toISOString(),
                     metadata: {
                         source: 'discord',
-                        attachmentType: 'attachment',
+                        attachmentType: transcription ? 'audio' : 'attachment',
                         channelId,
                         userId,
                         username,
                         fileName,
                         fileUrl,
+                        mediaPath: localPath || undefined,
+                        transcription: transcription || undefined,
                         messageId
                     }
                 });
@@ -156,10 +193,11 @@ export class DiscordChannel implements IChannel {
                 // Ignore typing indicator errors
             }
 
+            const mediaNote = mediaPaths.length > 0 ? ` (Files stored at: ${mediaPaths.join(', ')})` : '';
             const priority = 10; // High priority for user messages (same as Telegram)
             const taskDescription = replyContext
-                ? `Respond to Discord message from ${username} in ${channelName}: "${content}" ${replyContext}`
-                : `Respond to Discord message from ${username} in ${channelName}: "${content}"`;
+                ? `Respond to Discord message from ${username} in ${channelName}: "${content || '[Media]'}" ${replyContext}${mediaNote}`
+                : `Respond to Discord message from ${username} in ${channelName}: "${content || '[Media]'}"${mediaNote}`;
             
             await this.agent.pushTask(
                 taskDescription,

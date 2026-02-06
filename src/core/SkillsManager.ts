@@ -213,6 +213,24 @@ export class SkillsManager {
     // ─── Agent Skills (SKILL.md format) ──────────────────────────────────
 
     /**
+     * Find the SKILL.md file in a directory, case-insensitively.
+     * Returns the full path if found, or null.
+     */
+    private findSkillMdFile(dir: string): string | null {
+        // Fast path: check canonical name first
+        const canonical = path.join(dir, 'SKILL.md');
+        if (fs.existsSync(canonical)) return canonical;
+        // Case-insensitive fallback: scan for skill.md / Skill.md / etc.
+        try {
+            const entries = fs.readdirSync(dir);
+            const match = entries.find(e => e.toLowerCase() === 'skill.md');
+            return match ? path.join(dir, match) : null;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
      * Discover SKILL.md-based skills in the plugins directory.
      * Scans for directories containing a SKILL.md file and parses their frontmatter.
      */
@@ -229,8 +247,8 @@ export class SkillsManager {
         for (const entry of entries) {
             if (!entry.isDirectory()) continue;
             const skillDir = path.join(skillsDir, entry.name);
-            const skillMdPath = path.join(skillDir, 'SKILL.md');
-            if (!fs.existsSync(skillMdPath)) continue;
+            const skillMdPath = this.findSkillMdFile(skillDir);
+            if (!skillMdPath) continue;
 
             try {
                 const content = fs.readFileSync(skillMdPath, 'utf8');
@@ -373,10 +391,10 @@ export class SkillsManager {
      */
     public validateSkill(skillDir: string): { valid: boolean; errors: string[] } {
         const errors: string[] = [];
-        const skillMdPath = path.join(skillDir, 'SKILL.md');
+        const skillMdPath = this.findSkillMdFile(skillDir);
 
-        if (!fs.existsSync(skillMdPath)) {
-            return { valid: false, errors: ['SKILL.md not found'] };
+        if (!skillMdPath) {
+            return { valid: false, errors: ['SKILL.md not found (checked case-insensitively)'] };
         }
 
         const content = fs.readFileSync(skillMdPath, 'utf8');
@@ -405,9 +423,10 @@ export class SkillsManager {
         // Compatibility
         if (meta.compatibility && meta.compatibility.length > 500) errors.push('compatibility must be 500 characters or fewer');
 
-        // Body validation
-        if (parsed.body.split('\n').length > 500) {
-            errors.push('SKILL.md body exceeds 500 lines — consider moving content to references/');
+        // Body validation (warning, not a hard error — large skills are valid)
+        const bodyLines = parsed.body.split('\n').length;
+        if (bodyLines > 500) {
+            logger.warn(`SkillsManager: SKILL.md body for "${meta.name}" is ${bodyLines} lines — consider moving content to references/`);
         }
 
         return { valid: errors.length === 0, errors };
@@ -447,6 +466,19 @@ export class SkillsManager {
         skill.activated = false;
         logger.info(`SkillsManager: Deactivated agent skill: ${name}`);
         return true;
+    }
+
+    /**
+     * Deactivate all skills that are NOT marked autoActivate.
+     * Called at the start of each new action to prevent stale skill context from leaking across tasks.
+     */
+    public deactivateNonStickySkills(): void {
+        for (const skill of this.agentSkills.values()) {
+            if (skill.activated && !skill.meta.orcbot?.autoActivate) {
+                skill.activated = false;
+                logger.debug(`SkillsManager: Auto-deactivated skill "${skill.meta.name}" (not sticky)`);
+            }
+        }
     }
 
     /**
@@ -505,26 +537,41 @@ export class SkillsManager {
     public matchSkillsForTask(taskDescription: string): AgentSkill[] {
         const lower = taskDescription.toLowerCase();
         const matches: AgentSkill[] = [];
+        const matched = new Set<string>();
 
         for (const skill of this.agentSkills.values()) {
-            // Check trigger patterns first
+            // Strongest signal: task mentions the skill name directly
+            if (lower.includes(skill.meta.name.toLowerCase())) {
+                matches.push(skill);
+                matched.add(skill.meta.name);
+                continue;
+            }
+
+            // Check trigger patterns
+            let triggeredByPattern = false;
             if (skill.meta.orcbot?.triggerPatterns) {
                 for (const pattern of skill.meta.orcbot.triggerPatterns) {
                     try {
                         if (new RegExp(pattern, 'i').test(taskDescription)) {
                             matches.push(skill);
+                            matched.add(skill.meta.name);
+                            triggeredByPattern = true;
                             break;
                         }
                     } catch (e) { /* invalid regex, skip */ }
                 }
-                continue;
+                if (triggeredByPattern) continue;
+                // Fall through to fuzzy matching if no pattern matched
             }
 
             // Fuzzy match: check if description keywords overlap with task
-            const descWords = skill.meta.description.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-            const matchCount = descWords.filter(w => lower.includes(w)).length;
-            if (matchCount >= 3 || (matchCount >= 2 && descWords.length <= 8)) {
-                matches.push(skill);
+            if (!matched.has(skill.meta.name)) {
+                const descWords = skill.meta.description.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+                const matchCount = descWords.filter(w => lower.includes(w)).length;
+                if (matchCount >= 3 || (matchCount >= 2 && descWords.length <= 8)) {
+                    matches.push(skill);
+                    matched.add(skill.meta.name);
+                }
             }
         }
 
@@ -579,9 +626,9 @@ export class SkillsManager {
 
         // Handle directory copy
         if (fs.existsSync(sourcePath) && fs.statSync(sourcePath).isDirectory()) {
-            const skillMdPath = path.join(sourcePath, 'SKILL.md');
-            if (!fs.existsSync(skillMdPath)) {
-                return { success: false, message: 'No SKILL.md found in source directory' };
+            const skillMdPath = this.findSkillMdFile(sourcePath);
+            if (!skillMdPath) {
+                return { success: false, message: 'No SKILL.md found in source directory (checked case-insensitively)' };
             }
 
             const content = fs.readFileSync(skillMdPath, 'utf8');
@@ -810,8 +857,8 @@ main().catch(console.error);
     private findSkillMdRecursive(dir: string, maxDepth: number = 3, depth: number = 0): string[] {
         if (depth > maxDepth) return [];
         const results: string[] = [];
-        const skillMd = path.join(dir, 'SKILL.md');
-        if (fs.existsSync(skillMd)) results.push(skillMd);
+        const skillMd = this.findSkillMdFile(dir);
+        if (skillMd) results.push(skillMd);
 
         try {
             const entries = fs.readdirSync(dir, { withFileTypes: true });

@@ -83,13 +83,33 @@ export class TelegramChannel implements IChannel {
                 }
             }
 
+            // Auto-transcribe voice/audio messages so the agent can "hear" them
+            let transcription = '';
+            if (mediaPath && (message.voice || message.audio)) {
+                try {
+                    logger.info(`Telegram: Auto-transcribing audio from ${userName}...`);
+                    const result = await this.agent.llm.analyzeMedia(mediaPath, 'Transcribe this audio message exactly. Return only the transcription text.');
+                    // Strip "Transcription result:\n" prefix that Whisper path adds
+                    transcription = result.replace(/^Transcription result:\n/i, '').trim();
+                    if (transcription) {
+                        logger.info(`Telegram: Transcribed voice from ${userName}: "${transcription.substring(0, 100)}..."`);
+                    }
+                } catch (e) {
+                    logger.warn(`Telegram: Auto-transcription failed: ${e}`);
+                }
+            }
+
             if (!text && !mediaPath) return;
 
-            logger.info(`Telegram: Message from ${userName} (${userId}): ${text || '[Media]'} | autoReply=${autoReplyEnabled}`);
+            logger.info(`Telegram: Message from ${userName} (${userId}): ${text || transcription || '[Media]'} | autoReply=${autoReplyEnabled}`);
 
+            // Build content with transcription if available
+            const voiceLabel = transcription ? ` [Voice message transcription: "${transcription}"]` : '';
             const content = text 
-                ? `User ${userName} (Telegram ${userId}) said: ${text}${replyContext ? ' ' + replyContext : ''}`
-                : `User ${userName} (Telegram ${userId}) sent a file: ${path.basename(mediaPath)}${replyContext ? ' ' + replyContext : ''}`;
+                ? `User ${userName} (Telegram ${userId}) said: ${text}${voiceLabel}${replyContext ? ' ' + replyContext : ''}`
+                : transcription
+                    ? `User ${userName} (Telegram ${userId}) sent a voice message: "${transcription}"${replyContext ? ' ' + replyContext : ''}`
+                    : `User ${userName} (Telegram ${userId}) sent a file: ${path.basename(mediaPath)}${replyContext ? ' ' + replyContext : ''}`;
 
             // Store user message in memory
             this.agent.memory.saveMemory({
@@ -115,10 +135,11 @@ export class TelegramChannel implements IChannel {
                 return;
             }
 
-            // Push task to agent
+            // Push task to agent — include transcription in task so agent knows what was said
+            const displayText = text || (transcription ? `[Voice: "${transcription}"]` : '[Media]');
             const taskDescription = replyContext
-                ? `Telegram message from ${userName}: "${text || '[Media]'}" ${replyContext}${mediaPath ? ` (File stored at: ${mediaPath})` : ''}`
-                : `Telegram message from ${userName}: "${text || '[Media]'}"${mediaPath ? ` (File stored at: ${mediaPath})` : ''}`;
+                ? `Telegram message from ${userName}: "${displayText}" ${replyContext}${mediaPath ? ` (File stored at: ${mediaPath})` : ''}`
+                : `Telegram message from ${userName}: "${displayText}"${mediaPath ? ` (File stored at: ${mediaPath})` : ''}`;
             
             await this.agent.pushTask(
                 taskDescription,
@@ -234,6 +255,24 @@ export class TelegramChannel implements IChannel {
             logger.info(`TelegramChannel: Sent file ${filePath} to ${to}`);
         } catch (error) {
             logger.error(`TelegramChannel: Error sending file: ${error}`);
+            throw error;
+        }
+    }
+
+    /**
+     * Send a voice note to a Telegram chat.
+     * Uses sendVoice API so it appears as a playable voice message bubble.
+     */
+    public async sendVoiceNote(to: string, filePath: string): Promise<void> {
+        try {
+            if (!fs.existsSync(filePath)) {
+                throw new Error(`File not found: ${filePath}`);
+            }
+
+            await this.bot.telegram.sendVoice(to, { source: filePath });
+            logger.info(`TelegramChannel: Sent voice note ${filePath} to ${to}`);
+        } catch (error) {
+            logger.error(`TelegramChannel: Error sending voice note: ${error}`);
             throw error;
         }
     }
