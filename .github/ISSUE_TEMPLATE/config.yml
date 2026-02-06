@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 💬 Discord Community
+    url: https://discord.gg/orcbot
+    about: Join our Discord server for questions and community support
+  - name: 📚 Documentation
+    url: https://fredabila.github.io/orcbot/docs/
+    about: Check the official documentation for guides and API reference
+  - name: 🤝 Contributing Guide
+    url: https://github.com/fredabila/orcbot/blob/main/CONTRIBUTING.md
+    about: Read the contributing guidelines before submitting issues
