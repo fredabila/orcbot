@@ -36,4 +36,9 @@ ENV ORCBOT_DATA_DIR=/root/.orcbot
 
 EXPOSE 3100
 
+STOPSIGNAL SIGTERM
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+  CMD node -e "fetch('http://localhost:3100/api/status').then(r=>{if(!r.ok)throw 1})" || exit 1
+
 CMD ["node", "dist/cli/index.js", "gateway", "--with-agent", "-s", "./apps/dashboard"]

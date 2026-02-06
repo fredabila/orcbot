@@ -391,6 +391,96 @@ skillCmd
     });
 
 program
+    .command('stop')
+    .description('Stop all running OrcBot instances (daemon, background, gateway)')
+    .option('-f, --force', 'Force kill (SIGKILL) if graceful shutdown fails')
+    .action(async (options) => {
+        const dataDir = path.join(os.homedir(), '.orcbot');
+        let killed = 0;
+        let failed = 0;
+
+        const tryKill = (pid: number, label: string): boolean => {
+            try {
+                process.kill(pid, 0); // check alive
+            } catch {
+                return false; // not running
+            }
+            try {
+                process.kill(pid, 'SIGTERM');
+                console.log(`   ✅ Sent SIGTERM to ${label} (PID: ${pid})`);
+
+                // If --force, also send SIGKILL after a short wait
+                if (options.force) {
+                    setTimeout(() => {
+                        try {
+                            process.kill(pid, 0);
+                            process.kill(pid, 'SIGKILL');
+                            console.log(`   🔪 Force-killed ${label} (PID: ${pid})`);
+                        } catch {}
+                    }, 2000);
+                }
+                return true;
+            } catch (e: any) {
+                console.log(`   ❌ Failed to stop ${label} (PID: ${pid}): ${e.message}`);
+                return false;
+            }
+        };
+
+        console.log('\n🛑 Stopping all OrcBot processes...\n');
+
+        // 1. Lock file (main agent / background / gateway processes)
+        const lockPath = path.join(dataDir, 'orcbot.lock');
+        if (fs.existsSync(lockPath)) {
+            try {
+                const lockData = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+                const pid = Number(lockData.pid);
+                if (pid && tryKill(pid, `agent (started ${lockData.startedAt || 'unknown'})`)) {
+                    killed++;
+                }
+                fs.unlinkSync(lockPath);
+            } catch {
+                try { fs.unlinkSync(lockPath); } catch {}
+            }
+        }
+
+        // 2. Daemon PID file
+        const daemonPidPath = path.join(dataDir, 'orcbot.pid');
+        if (fs.existsSync(daemonPidPath)) {
+            try {
+                const pid = parseInt(fs.readFileSync(daemonPidPath, 'utf8').trim(), 10);
+                if (pid && tryKill(pid, 'daemon')) {
+                    killed++;
+                }
+                fs.unlinkSync(daemonPidPath);
+            } catch {
+                try { fs.unlinkSync(daemonPidPath); } catch {}
+            }
+        }
+
+        // 3. Lightpanda PID file
+        const lightpandaPidPath = path.join(dataDir, 'lightpanda.pid');
+        if (fs.existsSync(lightpandaPidPath)) {
+            try {
+                const pid = parseInt(fs.readFileSync(lightpandaPidPath, 'utf8').trim(), 10);
+                if (pid && tryKill(pid, 'lightpanda browser')) {
+                    killed++;
+                }
+                fs.unlinkSync(lightpandaPidPath);
+            } catch {
+                try { fs.unlinkSync(lightpandaPidPath); } catch {}
+            }
+        }
+
+        if (killed === 0) {
+            console.log('   No running OrcBot processes found.');
+        } else {
+            console.log(`\n   Stopped ${killed} process(es).`);
+        }
+
+        console.log('');
+    });
+
+program
     .command('run')
     .description('Start the agent autonomous loop (checks for daemon conflicts)')
     .option('-d, --daemon', 'Run in background as a daemon')
@@ -465,7 +555,7 @@ program
             child.unref();
             console.log('\n✅ OrcBot is running in the background.');
             console.log(`   Log file: ${logPath}`);
-            console.log('   Stop with: pkill -f "orcbot run --background-child"');
+            console.log('   Stop with: orcbot stop');
             return;
         }
 
@@ -622,7 +712,7 @@ program
                     console.log(`   Started: ${lockData.startedAt}`);
                     console.log(`   Host: ${lockData.host}`);
                     console.log(`   Working Dir: ${lockData.cwd}`);
-                    console.log('\n   To stop: pkill -f "orcbot" OR systemctl stop orcbot');
+                    console.log('\n   To stop: orcbot stop');
                 } else {
                     console.log('🔴 OrcBot is NOT running (stale lock file found)');
                     fs.unlinkSync(lockPath);
@@ -686,6 +776,7 @@ program
                         process.kill(status.pid, 'SIGTERM');
                         console.log(`✅ Sent stop signal to daemon (PID: ${status.pid})`);
                         console.log('   Use "orcbot daemon status" to verify it stopped');
+                        console.log('   Or use "orcbot stop" to stop all OrcBot processes');
                     } catch (error) {
                         console.error(`❌ Failed to stop daemon: ${error}`);
                         process.exit(1);

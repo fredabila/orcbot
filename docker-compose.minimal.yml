@@ -14,10 +14,15 @@ services:
     volumes:
       - orcbot-data:/root/.orcbot
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN:-}
+      - DISCORD_TOKEN=${DISCORD_TOKEN:-}
+      - SERPER_API_KEY=${SERPER_API_KEY:-}
+      - GATEWAY_API_KEY=${GATEWAY_API_KEY:-}
       # Connect to Lightpanda container
       - LIGHTPANDA_ENDPOINT=ws://lightpanda:9222
     depends_on:

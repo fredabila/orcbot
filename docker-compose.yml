@@ -15,21 +15,29 @@ services:
       # Mount local config (optional - create this file first)
       # - ./orcbot.config.yaml:/root/.orcbot/orcbot.config.yaml:ro
     environment:
-      # Required: Set your API keys
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      # Required: LLM API keys (at least one)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       # Optional: Channel tokens
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN:-}
+      - DISCORD_TOKEN=${DISCORD_TOKEN:-}
+      # Optional: Search API keys
+      - SERPER_API_KEY=${SERPER_API_KEY:-}
+      # Optional: Gateway security
+      - GATEWAY_API_KEY=${GATEWAY_API_KEY:-}
       # Optional: Browser settings
       - LIGHTPANDA_ENDPOINT=${LIGHTPANDA_ENDPOINT:-}
     networks:
       - orcbot-network
-    # healthcheck:
-    #   test: ["CMD", "curl", "-f", "http://localhost:3100/api/status"]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 3
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3100/api/status').then(r=>{if(!r.ok)throw 1})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
   # Optional: Lightpanda browser (lightweight alternative to Playwright)
   lightpanda:

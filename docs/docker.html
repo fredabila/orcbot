@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Docker Deployment | OrcBot Docs</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <a href="index.html" class="sidebar-logo">
+          <div class="sidebar-logo-icon">🤖</div>
+          OrcBot
+        </a>
+        <span class="sidebar-version">v1.0.0</span>
+      </div>
+      
+      <nav class="sidebar-nav">
+        <div class="nav-section">
+          <div class="nav-section-title">Getting Started</div>
+          <ul class="nav-links">
+            <li><a href="index.html" class="nav-link"><span class="nav-link-icon">📚</span> Introduction</a></li>
+            <li><a href="getting-started.html" class="nav-link"><span class="nav-link-icon">🚀</span> Quick Start</a></li>
+            <li><a href="configuration.html" class="nav-link"><span class="nav-link-icon">⚙️</span> Configuration</a></li>
+          </ul>
+        </div>
+        
+        <div class="nav-section">
+          <div class="nav-section-title">Core Concepts</div>
+          <ul class="nav-links">
+            <li><a href="architecture.html" class="nav-link"><span class="nav-link-icon">🏗️</span> Architecture</a></li>
+            <li><a href="skills.html" class="nav-link"><span class="nav-link-icon">🧩</span> Skills & Plugins</a></li>
+            <li><a href="autonomy.html" class="nav-link"><span class="nav-link-icon">🤖</span> Autonomy</a></li>
+          </ul>
+        </div>
+        
+        <div class="nav-section">
+          <div class="nav-section-title">Deployment</div>
+          <ul class="nav-links">
+            <li><a href="docker.html" class="nav-link active"><span class="nav-link-icon">🐳</span> Docker</a></li>
+            <li><a href="gateway.html" class="nav-link"><span class="nav-link-icon">🌐</span> Web Gateway</a></li>
+            <li><a href="operations.html" class="nav-link"><span class="nav-link-icon">📊</span> Operations</a></li>
+          </ul>
+        </div>
+      </nav>
+      
+      <div class="sidebar-footer">
+        <a href="https://github.com/fredabila/orcbot" target="_blank"><span>⭐</span> GitHub</a>
+        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank"><span>💬</span> Community</a>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <header class="content-header">
+        <button class="mobile-menu-toggle">☰</button>
+        <div class="breadcrumb">
+          <a href="index.html">Docs</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Deployment</span>
+          <span class="breadcrumb-sep">/</span>
+          <span>Docker</span>
+        </div>
+        <div class="header-actions">
+          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank">
+            <span>⭐</span> Star on GitHub
+          </a>
+        </div>
+      </header>
+
+      <div class="page-content">
+        <h1>🐳 Docker Deployment</h1>
+        <p>Docker is the recommended way to deploy OrcBot on servers. It packages everything into a single container — no need to install Node.js, npm, or system dependencies manually.</p>
+
+        <!-- Benefits -->
+        <div class="card" style="margin-top: 24px;">
+          <h2>Why Docker?</h2>
+          <ul>
+            <li><strong>Zero setup</strong> — No Node.js or npm installation needed</li>
+            <li><strong>Portable</strong> — Runs identically on any machine (Windows, Mac, Linux, cloud)</li>
+            <li><strong>Isolated</strong> — Won't interfere with other software on your system</li>
+            <li><strong>Easy updates</strong> — <code>git pull && docker compose build && docker compose up -d</code></li>
+            <li><strong>Persistent data</strong> — Docker volumes survive container restarts</li>
+          </ul>
+        </div>
+
+        <!-- Prerequisites -->
+        <h2>Prerequisites</h2>
+        <ol>
+          <li>
+            Install <a href="https://www.docker.com/products/docker-desktop/" target="_blank">Docker Desktop</a> (Windows/Mac) or Docker Engine (Linux):
+            <pre><code># Linux — install Docker Engine
+curl -fsSL https://get.docker.com | sh
+
+# Verify
+docker --version
+docker compose version</code></pre>
+          </li>
+          <li>At least one LLM API key (OpenAI or Google Gemini)</li>
+        </ol>
+
+        <!-- Quick Start -->
+        <h2>Quick Start</h2>
+
+        <div class="card">
+          <h3>Option A: Minimal (Recommended)</h3>
+          <p>Uses Alpine Linux + Lightpanda browser. Smallest footprint (~150MB):</p>
+          <pre><code># 1. Clone and configure
+git clone https://github.com/fredabila/orcbot.git
+cd orcbot
+
+# 2. Copy environment file and add your API keys
+cp .env.example .env
+nano .env
+
+# 3. Start OrcBot + Lightpanda
+docker compose -f docker-compose.minimal.yml up -d
+
+# 4. View logs
+docker logs -f orcbot
+
+# 5. Open dashboard
+# http://localhost:3100</code></pre>
+        </div>
+
+        <div class="card" style="margin-top: 16px;">
+          <h3>Option B: Full Setup</h3>
+          <p>Includes Playwright/Chrome browser support for full web automation (~500MB):</p>
+          <pre><code># Start OrcBot with Playwright
+docker compose up -d
+
+# Optionally also start Lightpanda
+docker compose --profile lightpanda up -d</code></pre>
+        </div>
+
+        <!-- Environment Variables -->
+        <h2>Environment Variables</h2>
+        <p>Create a <code>.env</code> file from the example template:</p>
+        <pre><code>cp .env.example .env</code></pre>
+        <p>Then set the following variables:</p>
+
+        <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+          <thead>
+            <tr style="border-bottom: 2px solid var(--border-color, #333);">
+              <th style="text-align: left; padding: 8px;">Variable</th>
+              <th style="text-align: left; padding: 8px;">Required</th>
+              <th style="text-align: left; padding: 8px;">Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom: 1px solid var(--border-color, #333);">
+              <td style="padding: 8px;"><code>OPENAI_API_KEY</code></td>
+              <td style="padding: 8px;">One of these</td>
+              <td style="padding: 8px;">OpenAI API key (GPT-4o, etc.)</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-color, #333);">
+              <td style="padding: 8px;"><code>GOOGLE_API_KEY</code></td>
+              <td style="padding: 8px;">One of these</td>
+              <td style="padding: 8px;">Google Gemini API key</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-color, #333);">
+              <td style="padding: 8px;"><code>NVIDIA_API_KEY</code></td>
+              <td style="padding: 8px;">Optional</td>
+              <td style="padding: 8px;">NVIDIA AI API key</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-color, #333);">
+              <td style="padding: 8px;"><code>ANTHROPIC_API_KEY</code></td>
+              <td style="padding: 8px;">Optional</td>
+              <td style="padding: 8px;">Anthropic Claude API key</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-color, #333);">
+              <td style="padding: 8px;"><code>OPENROUTER_API_KEY</code></td>
+              <td style="padding: 8px;">Optional</td>
+              <td style="padding: 8px;">OpenRouter API key</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-color, #333);">
+              <td style="padding: 8px;"><code>TELEGRAM_TOKEN</code></td>
+              <td style="padding: 8px;">Optional</td>
+              <td style="padding: 8px;">Telegram Bot token</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-color, #333);">
+              <td style="padding: 8px;"><code>DISCORD_TOKEN</code></td>
+              <td style="padding: 8px;">Optional</td>
+              <td style="padding: 8px;">Discord Bot token</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-color, #333);">
+              <td style="padding: 8px;"><code>SERPER_API_KEY</code></td>
+              <td style="padding: 8px;">Optional</td>
+              <td style="padding: 8px;">Serper.dev key for web search</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-color, #333);">
+              <td style="padding: 8px;"><code>GATEWAY_API_KEY</code></td>
+              <td style="padding: 8px;">Optional</td>
+              <td style="padding: 8px;">Secure the dashboard/API</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- Commands Reference -->
+        <h2>Docker Commands Reference</h2>
+        <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+          <thead>
+            <tr style="border-bottom: 2px solid var(--border-color, #333);">
+              <th style="text-align: left; padding: 8px;">Command</th>
+              <th style="text-align: left; padding: 8px;">Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom: 1px solid var(--border-color, #333);">
+              <td style="padding: 8px;"><code>docker compose up -d</code></td>
+              <td style="padding: 8px;">Start containers in background</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-color, #333);">
+              <td style="padding: 8px;"><code>docker compose down</code></td>
+              <td style="padding: 8px;">Stop and remove containers</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-color, #333);">
+              <td style="padding: 8px;"><code>docker compose logs -f</code></td>
+              <td style="padding: 8px;">Follow live logs</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-color, #333);">
+              <td style="padding: 8px;"><code>docker compose restart</code></td>
+              <td style="padding: 8px;">Restart containers</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-color, #333);">
+              <td style="padding: 8px;"><code>docker compose build --no-cache</code></td>
+              <td style="padding: 8px;">Rebuild from scratch</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-color, #333);">
+              <td style="padding: 8px;"><code>docker compose down -v</code></td>
+              <td style="padding: 8px;">Stop + delete all data</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- Architecture -->
+        <h2>Container Architecture</h2>
+        <div class="card">
+          <pre><code>┌─────────────────────────────────────────────┐
+│              Docker Network                 │
+│                                             │
+│  ┌─────────────┐      ┌─────────────────┐  │
+│  │   OrcBot    │      │   Lightpanda    │  │
+│  │  Container  │─────▶│    Container    │  │
+│  │  :3100      │      │    :9222        │  │
+│  └─────────────┘      └─────────────────┘  │
+│         │                                   │
+└─────────┼───────────────────────────────────┘
+          │
+          ▼
+    ┌───────────┐
+    │  Volume   │  (persistent data)
+    │orcbot-data│
+    └───────────┘</code></pre>
+          <p>The <strong>OrcBot</strong> container runs the agent + gateway (dashboard on port 3100). The <strong>Lightpanda</strong> container provides a lightweight browser for web automation. Both share a Docker network so OrcBot can reach Lightpanda at <code>ws://lightpanda:9222</code>.</p>
+        </div>
+
+        <!-- Persistent Data -->
+        <h2>Data Persistence &amp; Backups</h2>
+        <p>All OrcBot data is stored in a Docker volume (<code>orcbot-data</code>) that survives container restarts and rebuilds.</p>
+        <pre><code># View volume location
+docker volume inspect orcbot-data
+
+# Backup data to a tar archive
+docker run --rm -v orcbot-data:/data -v $(pwd):/backup \
+  alpine tar czf /backup/orcbot-backup.tar.gz /data
+
+# Restore from backup
+docker run --rm -v orcbot-data:/data -v $(pwd):/backup \
+  alpine tar xzf /backup/orcbot-backup.tar.gz -C /</code></pre>
+
+        <!-- Custom Config -->
+        <h2>Custom Configuration</h2>
+        <p>Mount a local config file for advanced settings:</p>
+        <pre><code># Create your config file
+cat > my-config.yaml << 'EOF'
+agentName: MyBot
+modelName: gpt-4o
+llmProvider: openai
+autonomyEnabled: true
+autonomyInterval: 15
+telegramAutoReplyEnabled: true
+whatsappEnabled: false
+discordAutoReplyEnabled: false
+EOF
+
+# Mount it (add to docker-compose.yml volumes section)
+volumes:
+  - orcbot-data:/root/.orcbot
+  - ./my-config.yaml:/root/.orcbot/orcbot.config.yaml:ro</code></pre>
+
+        <!-- DigitalOcean Specific -->
+        <h2>Deploy on DigitalOcean</h2>
+        <div class="card">
+          <p>Docker is the easiest way to run OrcBot on a DigitalOcean Droplet:</p>
+          <pre><code># 1. Create a Droplet: Ubuntu 22.04, $6/mo (1GB RAM)
+# 2. SSH in and install Docker
+ssh root@YOUR_DROPLET_IP
+curl -fsSL https://get.docker.com | sh
+
+# 3. Clone, configure, and start
+git clone https://github.com/fredabila/orcbot.git
+cd orcbot
+cp .env.example .env
+nano .env   # add your API keys
+
+# 4. Start with minimal setup (best for $6/mo droplets)
+docker compose -f docker-compose.minimal.yml up -d
+
+# 5. Verify
+docker ps
+docker logs orcbot</code></pre>
+          <p>That's it! Dashboard available at <code>http://YOUR_DROPLET_IP:3100</code>.</p>
+        </div>
+
+        <!-- Building Custom Image -->
+        <h2>Building a Custom Image</h2>
+        <pre><code># Build locally
+docker build -t my-orcbot .
+
+# Build minimal version
+docker build -f Dockerfile.minimal -t my-orcbot:minimal .
+
+# Run custom image
+docker run -d --name orcbot -p 3100:3100 --env-file .env my-orcbot</code></pre>
+
+        <!-- Updating -->
+        <h2>Updating</h2>
+        <pre><code># Pull latest code
+git pull
+
+# Rebuild and restart (data is preserved in volume)
+docker compose build --no-cache
+docker compose up -d</code></pre>
+
+        <!-- Troubleshooting -->
+        <h2>Troubleshooting</h2>
+        
+        <div class="card" style="margin-bottom: 12px;">
+          <h3>Container won't start</h3>
+          <pre><code># Check logs for errors
+docker logs orcbot
+
+# Common: missing API keys in .env
+# Common: port 3100 already in use</code></pre>
+        </div>
+
+        <div class="card" style="margin-bottom: 12px;">
+          <h3>Can't connect to dashboard</h3>
+          <pre><code># Verify container is running
+docker ps
+
+# Check port mapping
+docker port orcbot
+
+# If on a server, ensure firewall allows port 3100
+ufw allow 3100</code></pre>
+        </div>
+
+        <div class="card" style="margin-bottom: 12px;">
+          <h3>WhatsApp QR code</h3>
+          <p>WhatsApp requires QR code scanning on first launch. View the QR in the logs:</p>
+          <pre><code>docker logs orcbot</code></pre>
+        </div>
+
+        <div class="card" style="margin-bottom: 12px;">
+          <h3>Out of memory</h3>
+          <p>Use the minimal image (<code>Dockerfile.minimal</code>) with Lightpanda — it uses 9x less RAM than Chrome/Playwright. Add swap on low-memory servers:</p>
+          <pre><code>fallocate -l 2G /swapfile && chmod 600 /swapfile
+mkswap /swapfile && swapon /swapfile</code></pre>
+        </div>
+
+        <div class="card" style="margin-bottom: 12px;">
+          <h3>Reset everything</h3>
+          <pre><code># Stop containers and delete all data
+docker compose down -v
+
+# Remove image to force full rebuild
+docker rmi orcbot-orcbot</code></pre>
+        </div>
+
+        <!-- Production Tips -->
+        <h2>Production Tips</h2>
+        <div class="grid grid-3">
+          <div class="card">
+            <h3>🔐 Secrets</h3>
+            <p>Never commit <code>.env</code> files. Use Docker secrets or a secrets manager in production.</p>
+          </div>
+          <div class="card">
+            <h3>🔄 Restart Policy</h3>
+            <p><code>restart: unless-stopped</code> is set by default — containers auto-restart after crashes or reboots.</p>
+          </div>
+          <div class="card">
+            <h3>📊 Monitoring</h3>
+            <p>Use <code>docker stats orcbot</code> for real-time resource usage. Health checks are built into both Dockerfiles.</p>
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="page-footer">
+          <span>© 2026 OrcBot Project</span>
+          <div class="footer-nav">
+            <a href="https://github.com/fredabila/orcbot">GitHub</a>
+            <a href="https://github.com/fredabila/orcbot/discussions">Community</a>
+          </div>
+        </footer>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const menuToggle = document.querySelector('.mobile-menu-toggle');
+    const sidebar = document.querySelector('.sidebar');
+    if (menuToggle) {
+      menuToggle.addEventListener('click', () => sidebar.classList.toggle('open'));
+    }
+  </script>
+</body>
+</html>

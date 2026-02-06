@@ -72,5 +72,12 @@ ENV ORCBOT_DATA_DIR=/root/.orcbot
 # Expose gateway port
 EXPOSE 3100
 
+# Graceful shutdown
+STOPSIGNAL SIGTERM
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+  CMD node -e "fetch('http://localhost:3100/api/status').then(r=>{if(!r.ok)throw 1})" || exit 1
+
 # Default command - start gateway with agent
 CMD ["node", "dist/cli/index.js", "gateway", "--with-agent", "-s", "./apps/dashboard"]

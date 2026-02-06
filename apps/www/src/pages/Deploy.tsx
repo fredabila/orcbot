@@ -3,9 +3,10 @@ import { Link } from 'react-router-dom';
 import '../index.css';
 import './Deploy.css';
 
-type Provider = 'digitalocean' | 'aws' | 'railway' | 'hetzner' | 'local';
+type Provider = 'digitalocean' | 'docker' | 'aws' | 'railway' | 'hetzner' | 'local';
 
 const providers: { id: Provider; name: string; icon: string; available: boolean }[] = [
+  { id: 'docker', name: 'Docker', icon: '🐳', available: true },
   { id: 'digitalocean', name: 'DigitalOcean', icon: '🌊', available: true },
   { id: 'aws', name: 'AWS EC2', icon: '☁️', available: false },
   { id: 'railway', name: 'Railway', icon: '🚂', available: false },
@@ -14,7 +15,7 @@ const providers: { id: Provider; name: string; icon: string; available: boolean 
 ];
 
 function Deploy() {
-  const [selectedProvider, setSelectedProvider] = useState<Provider>('digitalocean');
+  const [selectedProvider, setSelectedProvider] = useState<Provider>('docker');
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
   const copyToClipboard = (text: string, index: number) => {
@@ -97,8 +98,8 @@ orcbot lightpanda status`,
 # View logs
 tail -f ~/.orcbot/foreground.log
 
-# Stop
-pkill -f "orcbot run --background-child"`,
+# Stop all OrcBot processes
+orcbot stop`,
     },
     {
       title: 'Create a systemd service (optional but recommended)',
@@ -209,6 +210,186 @@ ufw enable`,
             ))}
           </div>
         </section>
+
+        {selectedProvider === 'docker' && (
+          <section className="deployment-guide">
+            <div className="guide-header">
+              <h2>🐳 Docker Deployment Guide</h2>
+              <p>Run OrcBot anywhere with Docker — the fastest way to deploy.</p>
+              <div className="requirements">
+                <h4>Requirements</h4>
+                <ul>
+                  <li><a href="https://www.docker.com/products/docker-desktop/" target="_blank" rel="noopener noreferrer">Docker Desktop</a> (Windows/Mac) or Docker Engine (Linux)</li>
+                  <li>At least one LLM API key (OpenAI or Google Gemini)</li>
+                  <li>Optional: Telegram/Discord bot tokens</li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="steps-container">
+              {[
+                {
+                  title: 'Install Docker',
+                  description: 'Install Docker on your system if you haven\'t already:',
+                  details: [
+                    '**Windows/Mac**: Download <a href="https://www.docker.com/products/docker-desktop/">Docker Desktop</a>',
+                    '**Linux**: Run the install script below',
+                  ],
+                  code: `# Linux only — install Docker Engine
+curl -fsSL https://get.docker.com | sh
+
+# Verify installation
+docker --version
+docker compose version`,
+                },
+                {
+                  title: 'Clone & configure',
+                  description: 'Clone the repo and set up your environment variables:',
+                  code: `git clone https://github.com/fredabila/orcbot.git
+cd orcbot
+
+# Copy the example env and edit with your API keys
+cp .env.example .env
+nano .env   # or use any text editor`,
+                },
+                {
+                  title: 'Option A: Minimal (recommended)',
+                  description: 'Uses Alpine Linux + Lightpanda browser. Smallest footprint (~150MB):',
+                  code: `# Start OrcBot + Lightpanda browser
+docker compose -f docker-compose.minimal.yml up -d
+
+# View logs
+docker logs -f orcbot
+
+# Dashboard available at http://localhost:3100`,
+                },
+                {
+                  title: 'Option B: Full (with Playwright/Chrome)',
+                  description: 'Includes Playwright browser for full web automation (~500MB):',
+                  code: `# Start OrcBot with Playwright
+docker compose up -d
+
+# Optionally add Lightpanda too
+docker compose --profile lightpanda up -d`,
+                },
+                {
+                  title: 'Managing containers',
+                  description: 'Common Docker commands for day-to-day management:',
+                  code: `# View logs
+docker logs -f orcbot
+
+# Stop containers
+docker compose down
+
+# Restart
+docker compose restart
+
+# Rebuild after updates
+git pull
+docker compose build --no-cache
+docker compose up -d`,
+                },
+                {
+                  title: 'Persistent data & backups',
+                  description: 'All OrcBot data lives in a Docker volume that survives container restarts:',
+                  code: `# Backup your data
+docker run --rm -v orcbot-data:/data -v $(pwd):/backup \\
+  alpine tar czf /backup/orcbot-backup.tar.gz /data
+
+# Restore from backup
+docker run --rm -v orcbot-data:/data -v $(pwd):/backup \\
+  alpine tar xzf /backup/orcbot-backup.tar.gz -C /`,
+                },
+                {
+                  title: 'Custom configuration',
+                  description: 'Mount a local config file for advanced settings:',
+                  code: `# Create a config file
+cat > my-config.yaml << 'EOF'
+agentName: MyBot
+modelName: gpt-4o
+autonomyEnabled: true
+autonomyInterval: 15
+telegramAutoReplyEnabled: true
+EOF
+
+# Mount it when running
+docker compose -f docker-compose.minimal.yml \\
+  -v ./my-config.yaml:/root/.orcbot/orcbot.config.yaml:ro \\
+  up -d`,
+                },
+              ].map((step, index) => (
+                <div key={index} className="step-card">
+                  <div className="step-number">{String(index + 1).padStart(2, '0')}</div>
+                  <div className="step-content">
+                    <h3>{step.title}</h3>
+                    <p>{step.description}</p>
+                    {step.details && (
+                      <ul className="step-details">
+                        {step.details.map((detail, i) => (
+                          <li key={i} dangerouslySetInnerHTML={{ __html: detail.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') }} />
+                        ))}
+                      </ul>
+                    )}
+                    {step.code && (
+                      <div className="code-block">
+                        <pre><code>{step.code}</code></pre>
+                        <button
+                          className="copy-btn"
+                          onClick={() => copyToClipboard(step.code!, index)}
+                        >
+                          {copiedIndex === index ? '✓ Copied' : 'Copy'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="post-deploy">
+              <h3>🎉 You're running with Docker!</h3>
+              <p>Your OrcBot container is now running. Here are some next steps:</p>
+              <div className="next-steps-grid">
+                <div className="next-step">
+                  <h4>Open Dashboard</h4>
+                  <p>Visit <code>http://localhost:3100</code> to manage your agent.</p>
+                </div>
+                <div className="next-step">
+                  <h4>Configure Channels</h4>
+                  <p>Add Telegram, Discord, or WhatsApp tokens in your <code>.env</code> file.</p>
+                </div>
+                <div className="next-step">
+                  <h4>View Logs</h4>
+                  <p>Use <code>docker logs -f orcbot</code> to watch your agent in action.</p>
+                </div>
+                <div className="next-step">
+                  <h4>Update</h4>
+                  <p>Run <code>git pull && docker compose build --no-cache && docker compose up -d</code></p>
+                </div>
+              </div>
+            </div>
+
+            <div className="troubleshooting">
+              <h3>Troubleshooting</h3>
+              <div className="trouble-item">
+                <h4>Container won't start</h4>
+                <p>Check logs with <code>docker logs orcbot</code>. Most common issue: missing API keys in <code>.env</code>.</p>
+              </div>
+              <div className="trouble-item">
+                <h4>Port 3100 already in use</h4>
+                <p>Change the port mapping in <code>docker-compose.yml</code>: <code>ports: ["8080:3100"]</code></p>
+              </div>
+              <div className="trouble-item">
+                <h4>WhatsApp QR code</h4>
+                <p>View QR code via: <code>docker logs orcbot</code></p>
+              </div>
+              <div className="trouble-item">
+                <h4>Reset everything</h4>
+                <p>Remove containers + data: <code>docker compose down -v</code></p>
+              </div>
+            </div>
+          </section>
+        )}
 
         {selectedProvider === 'digitalocean' && (
           <section className="deployment-guide">
