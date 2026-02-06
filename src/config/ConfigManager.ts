@@ -60,6 +60,7 @@ export interface AgentConfig {
     sudoMode?: boolean;
     pluginAllowList?: string[];
     pluginDenyList?: string[];
+    pluginHealthCheckIntervalMinutes?: number; // Plugin health check interval (default 15)
     browserProfileDir?: string;
     browserProfileName?: string;
     browserEngine?: 'playwright' | 'lightpanda';  // Browser engine to use (default: playwright)
@@ -67,6 +68,11 @@ export interface AgentConfig {
     lightpandaPath?: string;                      // Path to Lightpanda binary
     tokenUsagePath?: string;
     tokenLogPath?: string;
+    // Discord
+    discordToken?: string;                // Discord bot token
+    discordAutoReplyEnabled?: boolean;    // Auto-reply in Discord (default false)
+    // Operational
+    autoExecuteCommands?: boolean;        // Auto-execute commands without confirmation (default false)
     skillRoutingRules?: Array<{
         match: string;
         prefer?: string[];
@@ -198,6 +204,7 @@ export class ConfigManager {
             serperApiKey: process.env.SERPER_API_KEY,
             captchaApiKey: process.env.CAPTCHA_API_KEY,
             telegramToken: process.env.TELEGRAM_TOKEN,
+            discordToken: process.env.DISCORD_TOKEN,
             bedrockRegion: process.env.BEDROCK_REGION || process.env.AWS_REGION,
             bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
             bedrockSecretAccessKey: process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY,
@@ -393,10 +400,15 @@ export class ConfigManager {
             safeMode: false,
             pluginAllowList: [],
             pluginDenyList: [],
+            pluginHealthCheckIntervalMinutes: 15,
             browserProfileDir: path.join(this.dataHome, 'browser-profiles'),
             browserProfileName: 'default',
+            browserEngine: 'playwright',
+            lightpandaEndpoint: 'ws://127.0.0.1:9222',
             tokenUsagePath: path.join(this.dataHome, 'token-usage-summary.json'),
             tokenLogPath: path.join(this.dataHome, 'token-usage.log'),
+            discordAutoReplyEnabled: false,
+            autoExecuteCommands: false,
             bedrockRegion: process.env.BEDROCK_REGION || process.env.AWS_REGION,
             bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
             bedrockSecretAccessKey: process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY,

@@ -24,77 +24,132 @@ export async function runSetup() {
         }
     }
 
-    const answers = await inquirer.prompt([
+    // Load existing .env values so we can show masked hints
+    let existingEnv: Record<string, string> = {};
+    if (fs.existsSync(envPath)) {
+        try {
+            const lines = fs.readFileSync(envPath, 'utf8').split('\n');
+            for (const line of lines) {
+                const match = line.match(/^([A-Z_]+)=(.+)$/);
+                if (match) existingEnv[match[1]] = match[2];
+            }
+        } catch {}
+    }
+
+    const maskHint = (key: string) => existingEnv[key] ? '(configured - press Enter to keep)' : '(optional)';
+
+    // ── Section 1: Identity & LLM ──
+    console.log('─── Agent Identity & LLM Provider ───\n');
+
+    const identityAnswers = await inquirer.prompt([
         {
             type: 'input',
-            name: 'modelName',
-            message: 'Default LLM Model Name:',
-            default: currentConfig.modelName || 'gpt-4o'
+            name: 'agentName',
+            message: 'Agent Name:',
+            default: currentConfig.agentName || 'OrcBot'
+        },
+        {
+            type: 'list',
+            name: 'llmProvider',
+            message: 'Primary LLM Provider:',
+            choices: [
+                { name: 'Auto-detect (from available API keys)', value: '' },
+                { name: 'OpenAI (GPT-4o, etc.)', value: 'openai' },
+                { name: 'Google (Gemini)', value: 'google' },
+                { name: 'OpenRouter', value: 'openrouter' },
+                { name: 'NVIDIA', value: 'nvidia' },
+                { name: 'Anthropic (Claude)', value: 'anthropic' },
+                { name: 'AWS Bedrock', value: 'bedrock' }
+            ],
+            default: currentConfig.llmProvider || ''
         },
         {
             type: 'input',
+            name: 'modelName',
+            message: 'Default Model Name:',
+            default: currentConfig.modelName || 'gpt-4o'
+        }
+    ]);
+
+    // ── Section 2: API Keys ──
+    console.log('\n─── API Keys (press Enter to skip/keep existing) ───\n');
+
+    const keyAnswers = await inquirer.prompt([
+        {
+            type: 'input',
             name: 'openaiApiKey',
-            message: 'OpenAI API Key (optional):',
+            message: `OpenAI API Key ${maskHint('OPENAI_API_KEY')}:`,
             mask: '*'
         },
         {
             type: 'input',
             name: 'googleApiKey',
-            message: 'Google (Gemini) API Key (optional):',
+            message: `Google (Gemini) API Key ${maskHint('GOOGLE_API_KEY')}:`,
             mask: '*'
         },
         {
             type: 'input',
+            name: 'openrouterApiKey',
+            message: `OpenRouter API Key ${maskHint('OPENROUTER_API_KEY')}:`,
+            mask: '*',
+            when: () => identityAnswers.llmProvider === 'openrouter' || !identityAnswers.llmProvider
+        },
+        {
+            type: 'input',
             name: 'nvidiaApiKey',
-            message: 'NVIDIA API Key (optional):',
+            message: `NVIDIA API Key ${maskHint('NVIDIA_API_KEY')}:`,
             mask: '*'
         },
         {
             type: 'input',
             name: 'anthropicApiKey',
-            message: 'Anthropic (Claude) API Key (optional):',
+            message: `Anthropic (Claude) API Key ${maskHint('ANTHROPIC_API_KEY')}:`,
             mask: '*'
         },
         {
             type: 'input',
             name: 'bedrockRegion',
-            message: 'AWS Bedrock Region (optional, e.g., us-east-1):'
+            message: 'AWS Bedrock Region (e.g., us-east-1):',
+            when: () => identityAnswers.llmProvider === 'bedrock'
         },
         {
             type: 'input',
             name: 'bedrockAccessKeyId',
-            message: 'Bedrock Access Key ID (optional):',
-            mask: '*'
+            message: `Bedrock Access Key ID ${maskHint('BEDROCK_ACCESS_KEY_ID')}:`,
+            mask: '*',
+            when: () => identityAnswers.llmProvider === 'bedrock'
         },
         {
             type: 'input',
             name: 'bedrockSecretAccessKey',
-            message: 'Bedrock Secret Access Key (optional):',
-            mask: '*'
-        },
-        {
-            type: 'input',
-            name: 'bedrockSessionToken',
-            message: 'Bedrock Session Token (optional):',
-            mask: '*'
+            message: `Bedrock Secret Access Key ${maskHint('BEDROCK_SECRET_ACCESS_KEY')}:`,
+            mask: '*',
+            when: () => identityAnswers.llmProvider === 'bedrock'
         },
         {
             type: 'input',
             name: 'serperApiKey',
-            message: 'Serper.dev API Key (for web search):',
+            message: `Serper.dev API Key (web search) ${maskHint('SERPER_API_KEY')}:`,
             mask: '*'
-        },
+        }
+    ]);
+
+    // ── Section 3: Channels ──
+    console.log('\n─── Communication Channels ───\n');
+
+    const channelAnswers = await inquirer.prompt([
         {
             type: 'input',
             name: 'telegramToken',
-            message: 'Telegram Bot Token:',
+            message: `Telegram Bot Token ${maskHint('TELEGRAM_TOKEN')}:`,
             mask: '*'
         },
         {
-            type: 'input',
-            name: 'pluginsPath',
-            message: 'Plugins Directory:',
-            default: currentConfig.pluginsPath || './plugins'
+            type: 'confirm',
+            name: 'telegramAutoReplyEnabled',
+            message: 'Enable Telegram AI Auto-Reply?',
+            default: currentConfig.telegramAutoReplyEnabled || false,
+            when: (ans) => !!ans.telegramToken || !!existingEnv['TELEGRAM_TOKEN']
         },
         {
             type: 'confirm',
@@ -105,44 +160,163 @@ export async function runSetup() {
         {
             type: 'confirm',
             name: 'whatsappAutoReplyEnabled',
-            message: 'Enable AI Auto-Reply for 1-on-1 WhatsApp chats?',
+            message: 'Enable WhatsApp AI Auto-Reply?',
             default: currentConfig.whatsappAutoReplyEnabled || false,
             when: (ans) => ans.whatsappEnabled
+        },
+        {
+            type: 'input',
+            name: 'discordToken',
+            message: `Discord Bot Token ${maskHint('DISCORD_TOKEN')}:`,
+            mask: '*'
+        },
+        {
+            type: 'confirm',
+            name: 'discordAutoReplyEnabled',
+            message: 'Enable Discord AI Auto-Reply?',
+            default: currentConfig.discordAutoReplyEnabled || false,
+            when: (ans) => !!ans.discordToken || !!existingEnv['DISCORD_TOKEN']
         }
     ]);
 
+    // ── Section 4: Gateway & Safety ──
+    console.log('\n─── Gateway & Safety ───\n');
+
+    const safetyAnswers = await inquirer.prompt([
+        {
+            type: 'confirm',
+            name: 'gatewayEnabled',
+            message: 'Enable Web Gateway (REST API + WebSocket)?',
+            default: !!currentConfig.gatewayPort || false
+        },
+        {
+            type: 'number',
+            name: 'gatewayPort',
+            message: 'Gateway Port:',
+            default: currentConfig.gatewayPort || 3100,
+            when: (ans) => ans.gatewayEnabled
+        },
+        {
+            type: 'confirm',
+            name: 'autonomyEnabled',
+            message: 'Enable autonomous task processing (agent works on queued tasks)?',
+            default: currentConfig.autonomyEnabled !== false
+        },
+        {
+            type: 'number',
+            name: 'autonomyInterval',
+            message: 'Autonomy check interval (minutes, 0=continuous):',
+            default: currentConfig.autonomyInterval || 15,
+            when: (ans) => ans.autonomyEnabled
+        },
+        {
+            type: 'input',
+            name: 'pluginsPath',
+            message: 'Plugins Directory:',
+            default: currentConfig.pluginsPath || path.join(dataHome, 'plugins')
+        }
+    ]);
+
+    // ── Build config ──
+    const answers = { ...identityAnswers, ...keyAnswers, ...channelAnswers, ...safetyAnswers };
+
     // Save YAML Config
-    const newConfig = {
+    const newConfig: Record<string, any> = {
+        agentName: answers.agentName,
+        llmProvider: answers.llmProvider || undefined,
         modelName: answers.modelName,
-        pluginsPath: path.join(dataHome, 'plugins'),
+        pluginsPath: answers.pluginsPath || path.join(dataHome, 'plugins'),
         memoryPath: path.join(dataHome, 'memory.json'),
         userProfilePath: path.join(dataHome, 'USER.md'),
         journalPath: path.join(dataHome, 'JOURNAL.md'),
         learningPath: path.join(dataHome, 'LEARNING.md'),
         agentIdentityPath: path.join(dataHome, '.AI.md'),
-        whatsappEnabled: answers.whatsappEnabled,
-        whatsappAutoReplyEnabled: answers.whatsappAutoReplyEnabled,
-        bedrockRegion: answers.bedrockRegion || undefined
+        actionQueuePath: path.join(dataHome, 'actions.json'),
+        tokenUsagePath: path.join(dataHome, 'token-usage-summary.json'),
+        tokenLogPath: path.join(dataHome, 'token-usage.log'),
+        // Channels
+        telegramAutoReplyEnabled: answers.telegramAutoReplyEnabled || false,
+        whatsappEnabled: answers.whatsappEnabled || false,
+        whatsappAutoReplyEnabled: answers.whatsappAutoReplyEnabled || false,
+        discordAutoReplyEnabled: answers.discordAutoReplyEnabled || false,
+        // Autonomy
+        autonomyEnabled: answers.autonomyEnabled !== false,
+        autonomyInterval: answers.autonomyInterval ?? 15,
+        // Gateway
+        ...(answers.gatewayEnabled ? { gatewayPort: answers.gatewayPort || 3100 } : {}),
+        // Bedrock (non-secret)
+        ...(answers.bedrockRegion ? { bedrockRegion: answers.bedrockRegion } : {})
     };
 
-    fs.writeFileSync(configPath, yaml.stringify(newConfig));
-    console.log(`✅ Config saved to ${configPath}`);
+    // Remove undefined values for clean YAML
+    const cleanConfig = Object.fromEntries(
+        Object.entries(newConfig).filter(([_, v]) => v !== undefined)
+    );
 
-    // Save .env
-    let envContent = '';
-    if (answers.openaiApiKey) envContent += `OPENAI_API_KEY=${answers.openaiApiKey}\n`;
-    if (answers.googleApiKey) envContent += `GOOGLE_API_KEY=${answers.googleApiKey}\n`;
-    if (answers.nvidiaApiKey) envContent += `NVIDIA_API_KEY=${answers.nvidiaApiKey}\n`;
-    if (answers.anthropicApiKey) envContent += `ANTHROPIC_API_KEY=${answers.anthropicApiKey}\n`;
-    if (answers.bedrockRegion) envContent += `BEDROCK_REGION=${answers.bedrockRegion}\n`;
-    if (answers.bedrockAccessKeyId) envContent += `BEDROCK_ACCESS_KEY_ID=${answers.bedrockAccessKeyId}\n`;
-    if (answers.bedrockSecretAccessKey) envContent += `BEDROCK_SECRET_ACCESS_KEY=${answers.bedrockSecretAccessKey}\n`;
-    if (answers.bedrockSessionToken) envContent += `BEDROCK_SESSION_TOKEN=${answers.bedrockSessionToken}\n`;
-    if (answers.serperApiKey) envContent += `SERPER_API_KEY=${answers.serperApiKey}\n`;
-    if (answers.telegramToken) envContent += `TELEGRAM_TOKEN=${answers.telegramToken}\n`;
+    fs.writeFileSync(configPath, yaml.stringify(cleanConfig));
+    console.log(`\n✅ Config saved to ${configPath}`);
+
+    // Save .env (merge with existing — don't wipe keys user didn't update)
+    const envEntries: Record<string, string> = { ...existingEnv };
+    const envMap: Record<string, string> = {
+        openaiApiKey: 'OPENAI_API_KEY',
+        googleApiKey: 'GOOGLE_API_KEY',
+        openrouterApiKey: 'OPENROUTER_API_KEY',
+        nvidiaApiKey: 'NVIDIA_API_KEY',
+        anthropicApiKey: 'ANTHROPIC_API_KEY',
+        bedrockAccessKeyId: 'BEDROCK_ACCESS_KEY_ID',
+        bedrockSecretAccessKey: 'BEDROCK_SECRET_ACCESS_KEY',
+        serperApiKey: 'SERPER_API_KEY',
+        telegramToken: 'TELEGRAM_TOKEN',
+        discordToken: 'DISCORD_TOKEN'
+    };
+
+    for (const [field, envKey] of Object.entries(envMap)) {
+        const value = (answers as any)[field];
+        if (value) {
+            envEntries[envKey] = value;
+        }
+    }
+
+    const envContent = Object.entries(envEntries)
+        .map(([k, v]) => `${k}=${v}`)
+        .join('\n') + '\n';
 
     fs.writeFileSync(envPath, envContent);
     console.log(`✅ Environment variables saved to ${envPath}`);
 
+    // Scaffold essential files if they don't exist
+    scaffoldFiles(dataHome);
+
     console.log('\n🚀 Setup complete! You can now run "orcbot start" to begin.\n');
+}
+
+/**
+ * Create essential files for a new environment if they don't exist.
+ */
+export function scaffoldFiles(dataHome: string) {
+    const files: Array<{ name: string; content: string }> = [
+        { name: 'USER.md', content: '# User Profile\n\nDescribe yourself here so the agent knows who you are.\n' },
+        { name: '.AI.md', content: '# Agent Identity\n\nI am OrcBot, an autonomous AI assistant.\n' },
+        { name: 'JOURNAL.md', content: '# Agent Journal\n\n' },
+        { name: 'LEARNING.md', content: '# Agent Learning\n\n' },
+        { name: 'SKILLS.md', content: '# Skills\n\nAvailable skills are auto-discovered at runtime.\n' }
+    ];
+
+    const dirs = ['plugins', 'profiles', 'memory', 'downloads'];
+
+    for (const dir of dirs) {
+        const dirPath = path.join(dataHome, dir);
+        if (!fs.existsSync(dirPath)) {
+            fs.mkdirSync(dirPath, { recursive: true });
+        }
+    }
+
+    for (const file of files) {
+        const filePath = path.join(dataHome, file.name);
+        if (!fs.existsSync(filePath)) {
+            fs.writeFileSync(filePath, file.content);
+            console.log(`   Created ${file.name}`);
+        }
+    }
 }

@@ -223,10 +223,19 @@ program
 program
     .command('init')
     .description('Initialize a new agent environment')
-    .action(() => {
-        console.log('Initializing agent environment...');
-        console.log('Files created: .env, USER.md, SKILLS.md, .AI.md, memory.json, orcbot.config.yaml');
-        logger.info('Agent environment initialized');
+    .action(async () => {
+        const os = require('os');
+        const dataHome = path.join(os.homedir(), '.orcbot');
+        const configPath = path.join(dataHome, 'orcbot.config.yaml');
+
+        if (fs.existsSync(configPath)) {
+            console.log('An existing OrcBot environment was found. Launching setup wizard to update it.\n');
+        } else {
+            console.log('No existing environment found. Starting interactive setup.\n');
+        }
+
+        const { runSetup, scaffoldFiles } = require('./setup');
+        await runSetup();
     });
 
 program
