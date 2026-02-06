@@ -311,7 +311,23 @@ export class DecisionEngine {
         // Filter context to only include memories for THIS action (step observations)
         const actionPrefix = `${actionId}-step-`;
         const actionMemories = recentContext.filter(c => c.id && c.id.startsWith(actionPrefix));
-        const otherMemories = recentContext.filter(c => !c.id || !c.id.startsWith(actionPrefix)).slice(0, 5);
+        // Other memories for background awareness — but EXCLUDE step-injection [SYSTEM:]
+        // memories from other actions. These contain action-specific guidance (error feedback,
+        // pivot suggestions, "DO NOT call X again") that is MISLEADING in a new action context.
+        // Without this filter, old error warnings from prior actions override current step results.
+        const otherMemories = recentContext
+            .filter(c => !c.id || !c.id.startsWith(actionPrefix))
+            .filter(c => {
+                const content = (c.content || '').toString();
+                const id = (c.id || '').toString();
+                // Step-scoped SYSTEM injections (e.g. "abc123-step-3-send_file-error-feedback")
+                // are guidance for THAT action only — don't leak them into new actions.
+                if (content.startsWith('[SYSTEM:') && id.includes('-step-')) {
+                    return false;
+                }
+                return true;
+            })
+            .slice(0, 5);
 
         // Thread context: last N user/assistant messages from the same source+thread.
         // This is the main mechanism for grounding follow-ups (e.g., pronouns like "he") across actions.
@@ -393,7 +409,9 @@ export class DecisionEngine {
             const MAX_LINE_LEN = 420;
 
             const recent = candidates.slice(0, RECENT_N);
-            const relevant = [...candidates]
+
+            // Keyword-scored relevance (fallback when vector memory unavailable)
+            const getKeywordRelevant = () => [...candidates]
                 .sort((a, b) => {
                     const sa = scoreRelevance((a as any).content || '');
                     const sb = scoreRelevance((b as any).content || '');
@@ -403,6 +421,30 @@ export class DecisionEngine {
                     return tb - ta;
                 })
                 .slice(0, RELEVANT_N);
+
+            // Prefer semantic similarity when vector memory is available.
+            // Semantic search understands meaning (not just keyword overlap), so it
+            // surfaces genuinely relevant thread messages even when wording differs.
+            let relevant: any[];
+            if (this.memory.vectorMemory?.isEnabled() && candidates.length > RECENT_N) {
+                try {
+                    const candidateIds = new Set(candidates.map((m: any) => m.id).filter(Boolean));
+                    const semanticHits = await this.memory.semanticSearch(
+                        taskDescription, RELEVANT_N * 3, { source }
+                    );
+                    const matched = semanticHits
+                        .filter(h => candidateIds.has(h.id))
+                        .slice(0, RELEVANT_N);
+                    // Need at least 2 semantic hits to be useful; otherwise keyword fallback
+                    relevant = matched.length >= 2
+                        ? matched.map(h => candidates.find((c: any) => c.id === h.id)).filter(Boolean)
+                        : getKeywordRelevant();
+                } catch {
+                    relevant = getKeywordRelevant();
+                }
+            } else {
+                relevant = getKeywordRelevant();
+            }
 
             const merged: any[] = [];
             const seen = new Set<string>();
@@ -432,9 +474,56 @@ export class DecisionEngine {
         }
         
         // Build step history specific to this action
-        const stepHistoryString = actionMemories.length > 0 
-            ? actionMemories.map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${c.content}`).join('\n')
-            : 'No previous steps taken yet.';
+        // Apply PROACTIVE COMPACTION when step history is large to prevent context overflow.
+        // Strategy: always preserve first 2 steps (task orientation) and last 5 steps (recent context).
+        // Middle steps get compressed: consecutive same-tool calls are merged, system injections summarized.
+        let stepHistoryString: string;
+        if (actionMemories.length === 0) {
+            stepHistoryString = 'No previous steps taken yet.';
+        } else if (actionMemories.length <= 10) {
+            // Small enough — include everything
+            stepHistoryString = actionMemories
+                .map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${c.content}`)
+                .join('\n');
+        } else {
+            // COMPACTION: preserve first 2 + last 5, summarize middle
+            const first = actionMemories.slice(0, 2);
+            const last = actionMemories.slice(-5);
+            const middle = actionMemories.slice(2, -5);
+
+            // Compress middle: group by tool, count successes/failures
+            const middleSummary: string[] = [];
+            let currentTool = '';
+            let toolCount = 0;
+            let toolSuccesses = 0;
+            let toolFailures = 0;
+            const flushGroup = () => {
+                if (currentTool && toolCount > 0) {
+                    middleSummary.push(`  ... ${currentTool} x${toolCount} (${toolSuccesses} ok, ${toolFailures} err)`);
+                }
+            };
+            for (const m of middle) {
+                const content = m.content || '';
+                // Detect tool name from observation
+                const toolMatch = content.match(/Tool (\S+) (?:succeeded|returned|FAILED)/);
+                const tool = toolMatch ? toolMatch[1] : (content.startsWith('[SYSTEM:') ? '[SYSTEM]' : 'other');
+                if (tool !== currentTool) {
+                    flushGroup();
+                    currentTool = tool;
+                    toolCount = 0;
+                    toolSuccesses = 0;
+                    toolFailures = 0;
+                }
+                toolCount++;
+                if (content.includes('succeeded') || content.includes('returned')) toolSuccesses++;
+                if (content.includes('FAILED') || content.includes('ERROR')) toolFailures++;
+            }
+            flushGroup();
+
+            const firstStr = first.map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${c.content}`).join('\n');
+            const lastStr = last.map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${c.content}`).join('\n');
+            stepHistoryString = `${firstStr}\n  --- [${middle.length} middle steps compacted] ---\n${middleSummary.join('\n')}\n  --- [recent steps below] ---\n${lastStr}`;
+        }
         
         // Include limited other context for background awareness
         const otherContextString = otherMemories.length > 0
@@ -518,11 +607,12 @@ ${learningContent ? `Agent Learning Base (Knowledge):\n${learningContent}` : ''}
 
 ${threadContextString ? `THREAD CONTEXT (Same Chat):\n${threadContextString}` : ''}
 
-⚠️ STEP HISTORY FOR THIS ACTION (Action ${actionId}) — READ BEFORE ACTING:
-(If any tool FAILED below, DO NOT repeat the same call. Fix params or change approach.)
+⚠️ STEP HISTORY FOR THIS ACTION (Action ${actionId}) — THIS IS YOUR GROUND TRUTH:
+(If a tool SUCCEEDED here, that result is REAL and CONFIRMED. If a tool FAILED, DO NOT repeat the same call.)
+(STEP HISTORY always takes priority over background context below.)
 ${stepHistoryString}
 
-${otherContextString ? `RECENT BACKGROUND CONTEXT:\n${otherContextString}` : ''}
+${otherContextString ? `RECENT BACKGROUND CONTEXT (reference only — may describe older/different actions):\n${otherContextString}` : ''}
 `;
 
         logger.info(`DecisionEngine: Deliberating on task: "${taskDescription}"`);

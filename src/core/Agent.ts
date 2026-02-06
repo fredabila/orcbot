@@ -87,6 +87,13 @@ export class Agent {
             consolidationThreshold: this.config.get('memoryConsolidationThreshold'),
             consolidationBatch: this.config.get('memoryConsolidationBatch')
         });
+
+        // Initialize vector memory for semantic search (gracefully disabled if no API key)
+        this.memory.initVectorMemory({
+            openaiApiKey: this.config.get('openaiApiKey'),
+            googleApiKey: this.config.get('googleApiKey'),
+            preferredProvider: this.config.get('llmProvider')
+        });
         
         const tokenTracker = new TokenTracker(
             this.config.get('tokenUsagePath'),
@@ -4415,6 +4422,11 @@ Respond with a single actionable task description (one sentence):`;
         // ── Reload managers ──
         if (opts.memory || opts.identity) {
             this.memory = new MemoryManager(memoryPath, userPath);
+            this.memory.initVectorMemory({
+                openaiApiKey: this.config.get('openaiApiKey'),
+                googleApiKey: this.config.get('googleApiKey'),
+                preferredProvider: this.config.get('llmProvider')
+            });
             this.actionQueue = new ActionQueue(actionPath);
             this.decisionEngine = new DecisionEngine(
                 this.memory,
@@ -4635,7 +4647,13 @@ Respond with a single actionable task description (one sentence):`;
             fs.writeFileSync(lockPath, JSON.stringify(payload, null, 2));
             this.instanceLockAcquired = true;
 
-            const cleanup = () => this.releaseInstanceLock();
+            const cleanup = () => {
+                this.actionQueue.shutdown();
+                if (this.memory.vectorMemory) {
+                    this.memory.vectorMemory.shutdown();
+                }
+                this.releaseInstanceLock();
+            };
             process.once('exit', cleanup);
             process.once('SIGINT', cleanup);
             process.once('SIGTERM', cleanup);
@@ -5470,9 +5488,23 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             break;
                         }
 
+                        // DELIVERY COMPLETION: send_file is a terminal delivery action.
+                        // When a file is successfully sent to the user, inject a strong completion signal
+                        // so the LLM recognizes that the delivery goal has been met.
+                        if (toolCall.name === 'send_file' && !resultIndicatesError) {
+                            logger.info(`Agent: File successfully delivered in action ${action.id}. Injecting delivery completion signal.`);
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-file-delivered`,
+                                type: 'short',
+                                content: `[SYSTEM: FILE DELIVERED SUCCESSFULLY via ${resultString.includes('Telegram') ? 'Telegram' : resultString.includes('WhatsApp') ? 'WhatsApp' : 'channel'}. The user has received the file. If the task was to send/deliver/resend this file, the goal is NOW COMPLETE — set goals_met=true. Do NOT re-read or re-send the same file.]`,
+                                metadata: { actionId: action.id, step: currentStep, skill: 'send_file', delivered: true }
+                            });
+                        }
+
                         // HARD BREAK after successful channel message send for "respond to" tasks
                         // This prevents duplicate messages when the LLM doesn't set goals_met correctly
                         const isChannelSend = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_gateway_chat'].includes(toolCall.name);
+                        const isFileDelivery = toolCall.name === 'send_file';
                         const isResponseTask = action.payload?.description?.toLowerCase().includes('respond to') ||
                                                action.payload?.requiresResponse === true;
                         const wasSuccessful = toolResult && !JSON.stringify(toolResult).toLowerCase().includes('error');
@@ -5481,6 +5513,21 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             logger.info(`Agent: Channel message sent for response task ${action.id}. Terminating to prevent duplicates.`);
                             forceBreak = true;
                             break;
+                        }
+
+                        // HARD BREAK after successful file delivery for file-centric tasks
+                        // Prevents the agent from looping on read_file after the file has already been sent
+                        if (isFileDelivery && wasSuccessful) {
+                            const taskDesc = (action.payload?.description || '').toLowerCase();
+                            const isFileCentricTask = taskDesc.includes('send') || taskDesc.includes('file') ||
+                                                      taskDesc.includes('cut short') || taskDesc.includes('resend') ||
+                                                      taskDesc.includes('deliver') || taskDesc.includes('share') ||
+                                                      taskDesc.includes('truncat') || taskDesc.includes('incomplete');
+                            if (isFileCentricTask) {
+                                logger.info(`Agent: File delivered for file-centric task ${action.id}. Terminating.`);
+                                forceBreak = true;
+                                break;
+                            }
                         }
                     }
 
@@ -5641,9 +5688,25 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
             });
 
             this.actionQueue.updateStatus(action.id, 'completed');
+
+            // CLEANUP: Remove step-scoped memories for this completed action.
+            // These are ground-truth during execution but become cross-action pollution after.
+            // The episodic summary (-conclusion) persists the outcome; step details are no longer needed.
+            try {
+                this.memory.cleanupActionMemories(action.id);
+            } catch (e) {
+                logger.warn(`Agent: Failed to cleanup action memories for ${action.id}: ${e}`);
+            }
         } catch (error: any) {
             logger.error(`Error processing action ${action.id}: ${error}`);
             this.actionQueue.updateStatus(action.id, 'failed');
+
+            // Cleanup step memories even on failure to prevent pollution
+            try {
+                this.memory.cleanupActionMemories(action.id);
+            } catch (e) {
+                logger.warn(`Agent: Failed to cleanup action memories for ${action.id}: ${e}`);
+            }
 
             // SOS Notification
             const sosMessage = `⚠️ *Action Failed*: I encountered a persistent error while processing your request: "${action.payload.description}"\n\n*Error*: ${error.message}`;

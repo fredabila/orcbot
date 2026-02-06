@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import { MultiLLM } from '../core/MultiLLM';
 import path from 'path';
 import { DailyMemory } from './DailyMemory';
+import { VectorMemory, ScoredVectorEntry } from './VectorMemory';
 
 dotenv.config();
 
@@ -21,8 +22,10 @@ export class MemoryManager {
     private userContext: any = {};
     private profilesDir: string;
     private dailyMemory: DailyMemory;
+    private dataHome: string;
     private lastMemoryFlushAt: number = 0;
     private memoryFlushEnabled: boolean = true;
+    public vectorMemory: VectorMemory | null = null;
     
     // Configurable limits (can be updated via setLimits)
     private contextLimit: number = 20;
@@ -38,6 +41,7 @@ export class MemoryManager {
         // Derive data directory from the configured memory database location.
         // This keeps *all* file-backed state co-located (and supports ORCBOT_DATA_DIR).
         const dataHome = path.dirname(path.resolve(dbPath));
+        this.dataHome = dataHome;
         this.profilesDir = path.join(dataHome, 'profiles');
         if (!fs.existsSync(this.profilesDir)) {
             fs.mkdirSync(this.profilesDir, { recursive: true });
@@ -67,6 +71,22 @@ export class MemoryManager {
         logger.info(`MemoryManager limits: context=${this.contextLimit}, episodic=${this.episodicLimit}, consolidationThreshold=${this.consolidationThreshold}, consolidationBatch=${this.consolidationBatch}, memoryFlush=${this.memoryFlushEnabled}`);
     }
 
+    /**
+     * Initialize vector memory for semantic search.
+     * Call after construction with API keys from config.
+     * If no embedding API key is available, vector memory silently remains disabled.
+     */
+    public initVectorMemory(config: { openaiApiKey?: string; googleApiKey?: string; preferredProvider?: string; dimensions?: number; maxEntries?: number }): void {
+        const vectorPath = path.join(this.dataHome, 'vector_memory.json');
+        this.vectorMemory = new VectorMemory(vectorPath, {
+            openaiApiKey: config.openaiApiKey,
+            googleApiKey: config.googleApiKey,
+            preferredProvider: config.preferredProvider,
+            dimensions: config.dimensions,
+            maxEntries: config.maxEntries
+        });
+    }
+
     public refreshUserContext(userPath: string) {
         this.loadUserContext(userPath);
     }
@@ -91,9 +111,15 @@ export class MemoryManager {
 
     public saveMemory(entry: MemoryEntry) {
         const memories = this.storage.get('memories') || [];
-        memories.push({ ...entry, timestamp: new Date().toISOString() });
+        const ts = new Date().toISOString();
+        memories.push({ ...entry, timestamp: ts });
         this.storage.save('memories', memories);
         logger.info(`Memory saved: [${entry.type}] ${entry.id}`);
+
+        // Queue for vector embedding (non-blocking, skips short/system content automatically)
+        if (this.vectorMemory?.isEnabled()) {
+            this.vectorMemory.queue(entry.id, entry.content, entry.type, entry.metadata, ts);
+        }
 
         // Also save important memories to daily log
         if (entry.type === 'long' || entry.metadata?.important) {
@@ -181,6 +207,19 @@ Otherwise, write the important information to memory and confirm.
 
         const toSummarize = shortMemories.slice(0, this.consolidationBatch);
 
+        // Preserve metadata index: which conversations, channels, and contacts are referenced
+        const metaIndex: { sources: Set<string>; contacts: Set<string>; skills: Set<string> } = {
+            sources: new Set(),
+            contacts: new Set(),
+            skills: new Set()
+        };
+        for (const m of toSummarize) {
+            if (m.metadata?.source) metaIndex.sources.add(m.metadata.source);
+            if (m.metadata?.sourceId) metaIndex.contacts.add(m.metadata.sourceId);
+            if (m.metadata?.senderId) metaIndex.contacts.add(m.metadata.senderId);
+            if (m.metadata?.tool) metaIndex.skills.add(m.metadata.tool);
+        }
+
         const summaryPrompt = `
 Summarize the following conversation history concisely. 
 Identify key actions taken, facts learned, and the current state of tasks.
@@ -191,11 +230,21 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
 `;
         const summary = await llm.call(summaryPrompt, "You are a memory consolidation engine.");
 
-        // Save episodic summary to both JSON and daily log
+        // Save episodic summary WITH metadata so thread context can still find it
         this.saveMemory({
             id: `summary-${Date.now()}`,
             type: 'episodic',
-            content: `Summary of ${this.consolidationBatch} historical events: ${summary}`
+            content: `Summary of ${this.consolidationBatch} historical events: ${summary}`,
+            metadata: {
+                consolidatedFrom: toSummarize.length,
+                sources: Array.from(metaIndex.sources),
+                contacts: Array.from(metaIndex.contacts),
+                skills: Array.from(metaIndex.skills),
+                timeRange: {
+                    from: toSummarize[0]?.timestamp,
+                    to: toSummarize[toSummarize.length - 1]?.timestamp
+                }
+            }
         });
 
         // Also store in daily log
@@ -310,6 +359,74 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
      */
     public getDailyMemory(): DailyMemory {
         return this.dailyMemory;
+    }
+
+    /**
+     * Get all memories for a specific action (step observations + system injections).
+     * This is the authoritative source for action-scoped context.
+     */
+    public getActionMemories(actionId: string): MemoryEntry[] {
+        const prefix = `${actionId}-step-`;
+        const all = this.searchMemory('short');
+        return all.filter(m => m.id && m.id.startsWith(prefix))
+            .sort((a, b) => {
+                const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+                const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+                return ta - tb; // Chronological (oldest first)
+            });
+    }
+
+    /**
+     * Count how many step-observation memories exist for an action.
+     * Useful for deciding when to compact step history.
+     */
+    public getActionStepCount(actionId: string): number {
+        const prefix = `${actionId}-step-`;
+        const all = this.searchMemory('short');
+        return all.filter(m => m.id && m.id.startsWith(prefix)).length;
+    }
+
+    /**
+     * Remove all step-scoped memories for a completed action.
+     * Prevents stale action context from polluting future decisions.
+     * Should be called after an action completes and its episodic summary is saved.
+     */
+    public cleanupActionMemories(actionId: string): number {
+        const prefix = `${actionId}-step-`;
+        const allMemories = this.storage.get('memories') || [];
+        const before = allMemories.length;
+        const removedIds: string[] = [];
+        const filtered = allMemories.filter((m: MemoryEntry) => {
+            if (m.id && m.id.startsWith(prefix)) {
+                removedIds.push(m.id);
+                return false;
+            }
+            return true;
+        });
+        if (filtered.length < before) {
+            this.storage.save('memories', filtered);
+            // Also remove from vector store
+            if (this.vectorMemory?.isEnabled() && removedIds.length > 0) {
+                this.vectorMemory.remove(removedIds);
+            }
+            logger.info(`MemoryManager: Cleaned up ${removedIds.length} step memories for completed action ${actionId}`);
+            return removedIds.length;
+        }
+        return 0;
+    }
+
+    /**
+     * Semantic search over all indexed memories using vector embeddings.
+     * Returns results ranked by cosine similarity to the query.
+     * Falls back to empty array if vector memory is not enabled.
+     */
+    public async semanticSearch(
+        query: string,
+        limit: number = 10,
+        filter?: { type?: string; source?: string; excludeIds?: Set<string> }
+    ): Promise<ScoredVectorEntry[]> {
+        if (!this.vectorMemory?.isEnabled()) return [];
+        return this.vectorMemory.search(query, limit, filter);
     }
 
     /**
