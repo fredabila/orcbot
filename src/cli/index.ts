@@ -505,14 +505,75 @@ program
 
 program
     .command('reset')
-    .description('Reset agent memory, identity, and task history')
-    .action(async () => {
-        const { confirm } = await inquirer.prompt([
-            { type: 'confirm', name: 'confirm', message: 'Are you sure you want to reset ALL memory? This cannot be undone.', default: false }
-        ]);
-        if (confirm) {
-            await agent.resetMemory();
-            console.log('Agent has been reset to factory settings.');
+    .description('Reset agent memory, identity, plugins, skills, and all persisted state')
+    .option('--all', 'Reset everything (default when no flags provided)')
+    .option('--memory', 'Clear memory.json and actions.json')
+    .option('--identity', 'Reset USER.md, .AI.md, JOURNAL.md, LEARNING.md')
+    .option('--plugins', 'Remove custom plugins (.ts/.js)')
+    .option('--skills', 'Remove installed Agent Skills (SKILL.md packages)')
+    .option('--profiles', 'Clear contact profiles')
+    .option('--downloads', 'Clear downloaded media files')
+    .option('--bootstrap', 'Reset bootstrap files (AGENTS.md, SOUL.md, etc.) to defaults')
+    .option('--schedules', 'Clear heartbeat schedules and scheduled tasks')
+    .action(async (opts) => {
+        const hasSelectiveFlag = opts.memory || opts.identity || opts.plugins || opts.skills ||
+            opts.profiles || opts.downloads || opts.bootstrap || opts.schedules;
+        const isFullReset = opts.all || !hasSelectiveFlag;
+
+        if (isFullReset) {
+            console.log('');
+            box([
+                    `${c.red}${c.bold}⚠  This will clear EVERYTHING:${c.reset}`,
+                    '',
+                    `  ${c.yellow}●${c.reset} Memory & action queue`,
+                    `  ${c.yellow}●${c.reset} Identity files (USER.md, .AI.md, JOURNAL, LEARNING)`,
+                    `  ${c.yellow}●${c.reset} Custom plugins & agent skills`,
+                    `  ${c.yellow}●${c.reset} Contact profiles`,
+                    `  ${c.yellow}●${c.reset} Downloaded media files`,
+                    `  ${c.yellow}●${c.reset} Bootstrap files (reset to defaults)`,
+                    `  ${c.yellow}●${c.reset} Schedules & heartbeat data`,
+                ], {
+                title: 'FULL RESET',
+                color: c.red,
+                width: 54
+            });
+            console.log('');
+            const { confirm } = await inquirer.prompt([
+                { type: 'confirm', name: 'confirm', message: 'Are you sure you want to reset EVERYTHING? This cannot be undone.', default: false }
+            ]);
+            if (confirm) {
+                await agent.resetMemory();
+                console.log(`\n  ${c.green}✔${c.reset} Agent has been ${c.bold}fully reset${c.reset} to factory settings.\n`);
+            }
+        } else {
+            const selected = Object.entries({
+                memory: opts.memory,
+                identity: opts.identity,
+                plugins: opts.plugins,
+                agentSkills: opts.skills,
+                profiles: opts.profiles,
+                downloads: opts.downloads,
+                bootstrap: opts.bootstrap,
+                schedules: opts.schedules,
+            }).filter(([, v]) => v).map(([k]) => k);
+
+            console.log(`\n  Resetting: ${selected.map(s => c.yellow + s + c.reset).join(', ')}`);
+            const { confirm } = await inquirer.prompt([
+                { type: 'confirm', name: 'confirm', message: `Reset ${selected.length} category(ies)? This cannot be undone.`, default: false }
+            ]);
+            if (confirm) {
+                await agent.resetMemory({
+                    memory: opts.memory,
+                    identity: opts.identity,
+                    plugins: opts.plugins,
+                    agentSkills: opts.skills,
+                    profiles: opts.profiles,
+                    downloads: opts.downloads,
+                    bootstrap: opts.bootstrap,
+                    schedules: opts.schedules,
+                });
+                console.log(`\n  ${c.green}✔${c.reset} Reset complete for: ${selected.join(', ')}\n`);
+            }
         }
     });
 

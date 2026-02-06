@@ -95,6 +95,64 @@ export class SkillsManager {
         }
     }
 
+    /**
+     * Remove all custom plugins (.ts/.js files) from the plugins directory
+     * and clear the in-memory plugin registry.
+     */
+    public clearPlugins(): number {
+        let removed = 0;
+        // Clear in-memory dynamic skills (plugins only — not the core built-in skills)
+        // We can't easily distinguish which Map entries are plugins vs core,
+        // so we clear plugin files from disk and let the next loadPlugins reload only what's left.
+        if (this.pluginsDir && fs.existsSync(this.pluginsDir)) {
+            const files = fs.readdirSync(this.pluginsDir);
+            for (const file of files) {
+                if (file.endsWith('.js') || file.endsWith('.ts')) {
+                    const fullPath = path.resolve(this.pluginsDir, file);
+                    try {
+                        // Clear from require cache
+                        delete require.cache[fullPath];
+                        fs.unlinkSync(fullPath);
+                        removed++;
+                        logger.info(`SkillsManager: Removed plugin: ${file}`);
+                    } catch (e) {
+                        logger.error(`SkillsManager: Failed to remove plugin ${file}: ${e}`);
+                    }
+                }
+            }
+        }
+        this.lastLoadErrors.clear();
+        return removed;
+    }
+
+    /**
+     * Remove all installed Agent Skills (SKILL.md packages) from the plugins/skills directory
+     * and clear the in-memory agent skills registry.
+     */
+    public clearAgentSkills(): number {
+        let removed = 0;
+        if (this.pluginsDir) {
+            const skillsDir = path.join(this.pluginsDir, 'skills');
+            if (fs.existsSync(skillsDir)) {
+                const entries = fs.readdirSync(skillsDir, { withFileTypes: true });
+                for (const entry of entries) {
+                    if (entry.isDirectory()) {
+                        const skillDir = path.join(skillsDir, entry.name);
+                        try {
+                            fs.rmSync(skillDir, { recursive: true, force: true });
+                            removed++;
+                            logger.info(`SkillsManager: Removed agent skill: ${entry.name}`);
+                        } catch (e) {
+                            logger.error(`SkillsManager: Failed to remove skill ${entry.name}: ${e}`);
+                        }
+                    }
+                }
+            }
+        }
+        this.agentSkills.clear();
+        return removed;
+    }
+
     public loadPlugins() {
         if (!this.pluginsDir) return;
 

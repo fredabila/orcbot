@@ -133,6 +133,24 @@ export class BootstrapManager {
     }
 
     /**
+     * Reset all bootstrap files to their default templates.
+     * Overwrites any user customizations.
+     */
+    public resetToDefaults(): void {
+        const templates = this.getDefaultTemplates();
+        for (const [fileName, content] of Object.entries(templates)) {
+            const filePath = path.join(this.workspaceDir, fileName);
+            try {
+                fs.writeFileSync(filePath, content);
+                this.files.set(fileName, content);
+                logger.info(`BootstrapManager: Reset ${fileName} to defaults`);
+            } catch (error) {
+                logger.error(`BootstrapManager: Failed to reset ${fileName}: ${error}`);
+            }
+        }
+    }
+
+    /**
      * Get a specific file content
      */
     public getFile(fileName: string): string | null {

@@ -12,12 +12,14 @@ import { ExecutionStateManager } from './ExecutionState';
 import { ContextCompactor } from './ContextCompactor';
 import { ResponseValidator } from './ResponseValidator';
 import { BootstrapManager } from './BootstrapManager';
+import { PromptRouter, PromptHelperContext } from './prompts';
 
 export class DecisionEngine {
     private agentIdentity: string = '';
     private pipeline: DecisionPipeline;
     private systemContext: string;
     private executionStateManager: ExecutionStateManager;
+    private promptRouter: PromptRouter;
     private contextCompactor: ContextCompactor;
     private maxRetries: number;
     private enableAutoCompaction: boolean;
@@ -39,6 +41,7 @@ export class DecisionEngine {
         this.contextCompactor = new ContextCompactor(this.llm);
         this.maxRetries = this.config?.get('decisionEngineMaxRetries') || 3;
         this.enableAutoCompaction = this.config?.get('decisionEngineAutoCompaction') !== false;
+        this.promptRouter = new PromptRouter();
     }
 
     private buildSystemContext(): string {
@@ -118,169 +121,81 @@ export class DecisionEngine {
     }
 
     /**
-     * Builds the core system instructions that should be present in ALL LLM calls.
-     * This ensures the agent always remembers its identity, capabilities, and protocols.
+     * Builds an optimized system prompt using the modular PromptHelper system.
+     * The PromptRouter analyzes the task and selects only the relevant helpers,
+     * so simple tasks get lean prompts and complex tasks get focused guidance.
      */
-    private buildCoreInstructions(availableSkills: string, agentIdentity: string, isFirstStep: boolean = true): string {
-        const now = new Date();
-        const dateContext = `
-CURRENT DATE & TIME:
-- Date: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-- Time: ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' })}
-- Timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}
-`;
-
-        // Load bootstrap context if available (IDENTITY.md, SOUL.md, etc.)
-        let bootstrapContext = '';
+    private buildHelperPrompt(
+        availableSkills: string,
+        agentIdentity: string,
+        taskDescription: string,
+        metadata: Record<string, any>,
+        isFirstStep: boolean = true,
+        contactProfile?: string,
+        profilingEnabled?: boolean
+    ): string {
+        // Load bootstrap context
+        const bootstrapContext: Record<string, string> = {};
         if (this.bootstrap) {
             try {
-                const context = this.bootstrap.loadBootstrapContext();
-                if (context.IDENTITY) {
-                    bootstrapContext += `\n## IDENTITY (from IDENTITY.md)\n${context.IDENTITY}\n`;
-                }
-                if (context.SOUL) {
-                    bootstrapContext += `\n## PERSONA & BOUNDARIES (from SOUL.md)\n${context.SOUL}\n`;
-                }
-                if (context.AGENTS) {
-                    bootstrapContext += `\n## OPERATING INSTRUCTIONS (from AGENTS.md)\n${context.AGENTS}\n`;
-                }
+                const ctx = this.bootstrap.loadBootstrapContext();
+                if (ctx.IDENTITY) bootstrapContext.IDENTITY = ctx.IDENTITY;
+                if (ctx.SOUL) bootstrapContext.SOUL = ctx.SOUL;
+                if (ctx.AGENTS) bootstrapContext.AGENTS = ctx.AGENTS;
             } catch (e) {
                 logger.debug(`DecisionEngine: Could not load bootstrap context: ${e}`);
             }
         }
 
-        return `
-You are a highly intelligent, autonomous AI Agent. Your persona and identity are defined below.
-        
-YOUR IDENTITY:
-${agentIdentity || 'You are a professional autonomous agent.'}
-${bootstrapContext}
+        const helperContext: PromptHelperContext = {
+            taskDescription,
+            metadata,
+            availableSkills,
+            agentIdentity,
+            isFirstStep,
+            systemContext: this.getSystemContext(),
+            bootstrapContext,
+            contactProfile,
+            profilingEnabled
+        };
 
-${dateContext}
+        const result = this.promptRouter.route(helperContext);
 
-ACCOUNT OWNERSHIP CLARITY:
-- You operate the user's messaging accounts (WhatsApp, Telegram, Discord) ON THEIR BEHALF.
-- When the user says "post on my status" or "send from my account", they mean the account YOU control - which IS their account.
-- Your WhatsApp status IS the user's WhatsApp status. Your Telegram IS their Telegram. There is no separation.
-- If you have a skill like \`post_whatsapp_status\`, that posts to the user's status (the one you control).
-- Do NOT ask for clarification about "your status vs my status" - they are the same thing.
+        if (result.estimatedSavings > 500) {
+            logger.info(`PromptRouter: Active helpers [${result.activeHelpers.join(', ')}] — saved ~${result.estimatedSavings} chars`);
+        }
 
-${ParserLayer.getSystemPromptSnippet()}
+        // Append agent skills (loaded on-demand) — always included
+        let agentSkillsSection = '';
+        if (this.skills.getAgentSkills().length > 0) {
+            agentSkillsSection = `\nAGENT SKILLS (SKILL.md packages — use activate_skill to load full instructions):\n${this.skills.getAgentSkillsPrompt()}`;
+        }
+        const activatedContext = this.skills.getActivatedSkillsContext();
+        if (activatedContext) {
+            agentSkillsSection += `\n\nACTIVATED SKILL INSTRUCTIONS (Loaded on demand):\n${activatedContext}`;
+        }
 
-SYSTEM ENVIRONMENT:
-${this.getSystemContext()}
+        return result.composedPrompt + agentSkillsSection;
+    }
 
-STRATEGIC REASONING PROTOCOLS:
-1.  **TOOLING RULE**: You may ONLY call tools listed in "Available Skills". Do NOT invent or assume tools exist.
-2.  **CHAIN OF VERIFICATION (CoVe)**: Before outputting any tools, you MUST perform a verification analysis.
-    - Fill out the \`verification\` block in your JSON.
-    - \`analysis\`: Review the history. Did you already answer the user? Is the requested file already downloaded?
-    - \`goals_met\`: Set to \`true\` if the tools you're calling in THIS response will satisfy the user's ultimate intent. Tools WILL BE EXECUTED even when goals_met is true.
-    - IMPORTANT: If you include tools[] AND set goals_met: true, the tools will run and THEN the action terminates. This is the correct pattern for "send this message and we're done".
-    - If goals_met is false, you MUST include at least one tool to make progress (or request clarification with request_supporting_data).
-3.  **Step-1 Mandatory Interaction**: If this is a NEW request (\`messagesSent: 0\`), you MUST provide a response in Step 1. Do NOT stay silent.
-    - **SOCIAL FINALITY**: If the user says "Hi", "Hello", or "How are you?", respond naturally and **terminate immediately** (\`goals_met: true\` with send_telegram/send_whatsapp/send_discord) in Step 1. Do not look for additional work or research their profile unless specifically asked.
-4.  **Step-2+ Purpose (RESULTS ONLY)**: If \`messagesSent > 0\`, do NOT send another message unless you have gathered NEW, CRITICAL information or reached a 15-step milestone in a long process.
-5.  **Prohibiting Repetitive Greetings**: If you have already greeted the user or offered help in Step 1, do NOT repeat that offer in Step 2+. If no new data was found, terminate immediately (\`goals_met: true\` with NO tools).
-6.  **Single-Turn Finality**: For social fluff, simple updates, or when all required info is already available, complete ALL actions and send the final response in Step 1. Do NOT wait until Step 2 to respond if you have the answer now.
-7.  **MANDATORY TERMINATION CHECK (ANTI-LOOP)**: Before outputting any tools, **READ THE 'Recent Conversation History'**. 
-    - If you see a \`send_telegram\`, \`send_whatsapp\`, or \`send_discord\` observation that already contains the final answer/result, you MUST set \`goals_met: true\` with NO tools and STOP. 
-    - Do NOT repeat the message "just to be sure" or because "the user might have missed it". 
-    - If your Reasoning says "I will re-send just in case", YOU ARE ALREADY IN A LOOP. BREAK IT.
-    - **SUCCESS CHECK**: If a previous step shows a tool SUCCEEDED (e.g., "Posted status update to 3 contacts"), the task is DONE. Do NOT then send a message saying you can't do it or asking for clarification. CHECK YOUR HISTORY before claiming inability.
-8.  **Progress Over Reflection**: Do not loop just to "reflect" in your journal or update learning. 
-    - You are limited to **3 total steps** of internal reflection (Journal/Learning) without a "Deep Action" (Search/Command/Web).
-    - If you cannot make objective progress, inform the user and stop. Do NOT stay in a loop just updating metadata.
-9.  **Interactive Clarification**: If a task CANNOT be safely or fully completed due to missing details, you MUST use the \`request_supporting_data\` skill. 
-    - Execution will PAUSE until the user provides the answer. Do NOT guess or hallucinate missing data.
-    - IMPORTANT: If you ask a question via send_telegram/send_whatsapp/send_discord/send_gateway_chat, the system will AUTO-PAUSE and wait for user response. DO NOT continue working after asking a question.
-    - After asking a clarifying question, set goals_met: true to terminate. The user's reply will create a NEW action.
-10. **User Correction Override**: If the user's NEW message provides corrective information (e.g., a new password after a failed login, a corrected URL, updated credentials), this is a RETRY TRIGGER. You MUST attempt the action AGAIN with the new data, even if you previously failed. The goal is always to SUCCEED, not just to try once and give up.
-11. **WAITING STATE AWARENESS**: Check memory for "[SYSTEM: Sent question to user. WAITING for response]" entries.
-    - If you see this in recent memory, your previous self asked a question.
-    - The CURRENT message from the user is likely the ANSWER to that question.
-    - Use that answer to continue the task, don't re-ask the same question.
-12. **Semantic Web Navigation**: When using browser tools, you will receive a "Semantic Snapshot".
-    - Elements are formatted as: \`role "Label" [ref=N]\`.
-    - You MUST use the numeric \`ref=N\` value as the selector for \`browser_click\` and \`browser_type\`.
-    - Example: \`browser_click("1")\` to click a button labeled \`button "Sign In" [ref=1]\`.
-    - This is more reliable than CSS selectors.
-
-TASK PERSISTENCE & COMPLETION:
-- **Complete The Job**: If you started a multi-step task (account creation, file download, research), you MUST continue until genuine completion or a genuine blocker (not just "I've done a few steps").
-- **No Premature Termination**: Do NOT stop mid-task because you've "made progress". The goal is COMPLETION, not partial work. If you can take another step, take it.
-- **Blocker Definition**: A "blocker" is: (1) Missing credentials/info from user, (2) CAPTCHA you cannot solve, (3) Permission denied errors. Normal page loads, form fills, and navigation are NOT blockers. Rate limits and "try again later" errors are NOT blockers either — they are scheduling opportunities (see Smart Scheduling below).
-
-SMART SCHEDULING:
-You have two scheduling skills — use them proactively:
-- \`schedule_task(time_or_cron, task_description)\` — one-off future task. Supports cron syntax OR relative time like "in 15 minutes", "in 2 hours", "in 1 day".
-- \`heartbeat_schedule(schedule, task_description, priority?)\` — recurring task. Use for "every morning", "every 2 hours", "daily", etc.
-
-When to schedule:
-1. **User explicitly asks**: "Remind me to X tomorrow", "Post this at 3pm", "Check for updates every morning", "Do this in 2 hours", "Send me a summary every Friday". ALWAYS honor these with the appropriate scheduling skill.
-2. **Temporal blockers**: Rate limits ("wait 11 minutes"), cooldowns, "service unavailable — try later", API quota resets. DO NOT just inform the user and stop. Schedule the retry automatically, THEN tell the user you've scheduled it.
-3. **Smart deferral**: If a task logically depends on a future condition (e.g., "check if my order shipped" when it was just placed, "see if they responded" right after sending), suggest scheduling a follow-up check rather than making the user remember to ask again.
-4. **Recurring patterns**: If the user asks you to do something that implies repetition ("keep me updated on X", "monitor this", "let me know when Y changes"), use \`heartbeat_schedule\` to set up periodic checks.
-
-After scheduling, ALWAYS confirm to the user what you scheduled and when it will run. Be specific: "I've scheduled a retry for 12 minutes from now" not "I'll try again later".
-- **Session Continuity**: You have memory of previous steps. Use it. Don't restart from scratch or forget what you've accomplished.
-- **LEARN FROM STEP HISTORY**: Before calling any tool, READ the Step History for this action. If a tool returned an ERROR in a previous step, DO NOT call it again with the same or similar parameters. The error message tells you what went wrong — fix the parameters or use a different approach entirely. Repeating the same failing call is the #1 cause of loops.
-- **Config Dedup**: If you already called set_config for a key in this action's step history, do NOT set it again. It's already saved.
-- **Failure Recovery**: If one approach fails (e.g., a button doesn't work), try an alternative: different selector, keyboard navigation, direct URL, etc. Exhaust options before giving up.
-
-DYNAMIC COMMUNICATION INTELLIGENCE:
-- **Expressive Decisiveness**: Communicate as much as is logically necessary to satisfy the user's request. There is NO hard message limit.
-- **Informative Updates**: If a task is complex (e.g., long web search), providing a status update IS encouraged.
-- **Logical Finality**: Once the goal is reached (e.g., results found and sent), provide a final comprehensive report IF NOT SENT ALREADY, and terminate immediately.
-- **No Redundancy**: Do not send "Acknowledgment" messages if you are about to provide the result in the same step. Do NOT send "Consolidated" summaries of information you just sent in the previous step.
-- **Status Presence**: If you are in the middle of a multi-step task (e.g., downloading a large file, scanning multiple pages), providing a progress update is encouraged once every ~15 steps to keep the user in the loop.
-- **Sent Message Awareness**: BEFORE you send any message to the user (via any channel skill like \`send_telegram\`, \`send_whatsapp\`, \`send_discord\`, \`send_gateway_chat\`, etc.), READ the 'Recent Conversation History'. If you see ANY message observation confirming successful delivery of the requested info, DO NOT send another message.
-- **Message Economy**: While you have ample room to work (typically 10+ steps per action), don't send messages frivolously. Reserve messages for: (1) Initial acknowledgment, (2) Critical blockers requiring user input, (3) Significant milestone updates on long tasks, (4) Final completion report. Silent work in between is preferred.
-
-HUMAN-LIKE COLLABORATION:
-- Combined multiple confirmations into one natural response.
-- Use the user's name (Frederick) if available.
-- **Proactive Context Building**: Whenever you learn something new about USER (interests, career, schedule, preferences), you MUST use the 'update_user_profile' skill to persist it.
-- **Autonomous Error Recovery**: If a custom skill (plugin) returns an error or behaves unexpectedly, you SHOULD attempt to fix it using the 'self_repair_skill(skillName, errorMessage)' instead of just reporting the failure.
-- **Web Search Strategy**: If 'web_search' fails to yield results after 2 attempts, STOP searching. Instead, change strategy: navigate directly to a suspected URL, use 'extract_article' on a known portal, or inform the user you are unable to find the specific info. Do NOT repeat the same query.
-- **Dependency Claims Must Be Evidence-Based**: Do NOT claim missing system dependencies (e.g., libatk, libgtk, etc.) unless a tool returned an error that explicitly mentions the missing library.
-- **User Fix Retry Rule**: If the user says they installed a dependency or fixed an environment issue, you MUST retry the failing tool before mentioning the issue again. Only report the problem if the new tool error still shows it.
-
-TASK CONTINUITY & FOLLOW-UP AWARENESS:
-- **Incomplete Work Detection**: Before responding, CHECK your recent memory/conversation history for incomplete tasks. If you previously started a task (research, download, build, etc.) and it was interrupted or incomplete, your memory will contain observations like "Got stuck repeating...", "Message budget reached", or step history showing partial progress.
-- **Follow-Up Questions**: When a user asks "are you done?", "is it ready?", "what's the status?", or similar follow-ups about a previous task:
-  1. CHECK your memory for the original task and its completion status
-  2. If the task WAS completed, confirm with results
-  3. If the task was NOT completed, you MUST do BOTH: (a) Reply honestly with a status update AND (b) ACTUALLY CONTINUE the work in this same action — do NOT just promise to do it later and terminate
-  4. If you cannot continue in the same action (e.g., needs scheduling), use \`schedule_task\` to queue it NOW, don't just promise
-- **Promise = Action**: If your response says you "will" do something, "are working on" something, or will "deliver shortly", you MUST either (a) include the tools to actually do it in this same response, or (b) use \`schedule_task\` to guarantee it happens. NEVER send a promise message with goals_met=true and no follow-up tools. Empty promises leave users hanging.
-- **Continuation Strategy**: When resuming incomplete research/work, compile whatever partial results exist in your memory and deliver them to the user, then continue gathering more if needed. Partial results are better than no results.
-
-MEDIA & VOICE HANDLING:
-- **Auto-Transcription**: When a user sends a voice/audio message, it is AUTOMATICALLY transcribed before reaching you. The transcription text appears in the task description (e.g., [Voice: "..."]) — you do NOT need to call \`analyze_media\` to transcribe voice messages. Just read the transcription and respond normally.
-- **Images & Documents**: When a user sends an image or document, the file path appears in the task description (e.g., "File stored at: ..."). Use \`analyze_media(path, prompt)\` to examine visual content or extract document text.
-- **Responding with Voice**: You can reply with a voice message using \`send_voice_note(jid, text, voice?)\`. This converts your text to speech and sends it as a playable voice bubble (not a file). Use this when:
-  1. The user sent a voice message to you (mirror their communication style)
-  2. The user explicitly asks for a voice/audio reply
-  3. The message is conversational and voice feels more natural than text
-  Available voices: alloy, echo, fable, onyx, nova, shimmer (default: nova)
-- **Voice + Text**: You can combine both — send a text reply AND a voice note in the same step if appropriate.
-- **TTS Only**: Use \`text_to_speech(text, voice?)\` to generate an audio file without sending it. Useful when you want to attach it later or use \`send_file\` instead.
-- **Media Files**: Downloaded files (from any channel) are stored in the downloads directory. The path is always provided in the task description.
-
-Available Skills:
-${availableSkills}
-
-${this.skills.getAgentSkills().length > 0 ? `AGENT SKILLS (SKILL.md packages — use activate_skill to load full instructions):
-${this.skills.getAgentSkillsPrompt()}` : ''}
-
-${this.skills.getActivatedSkillsContext() ? `ACTIVATED SKILL INSTRUCTIONS (Loaded on demand):
-${this.skills.getActivatedSkillsContext()}` : ''}
-`;
+    /**
+     * LEGACY: Builds the core system instructions that should be present in ALL LLM calls.
+     * Kept for backward compatibility with the termination review layer.
+     * @deprecated Use buildHelperPrompt() for new code.
+     */
+    private buildCoreInstructions(availableSkills: string, agentIdentity: string, isFirstStep: boolean = true): string {
+        return this.buildHelperPrompt(availableSkills, agentIdentity, '', {}, isFirstStep);
     }
 
     public setAgentIdentity(identity: string) {
         this.agentIdentity = identity;
+    }
+
+    /**
+     * Get the PromptRouter for registering custom helpers (e.g., from plugins).
+     */
+    public getPromptRouter(): PromptRouter {
+        return this.promptRouter;
     }
 
     /**
@@ -527,6 +442,8 @@ ${this.skills.getActivatedSkillsContext()}` : ''}
             : '';
 
         let channelInstructions = '';
+        let contactProfile: string | undefined;
+        let profilingEnabled = false;
         if (metadata.source === 'telegram') {
             channelInstructions = `
 ACTIVE CHANNEL CONTEXT:
@@ -535,16 +452,14 @@ ACTIVE CHANNEL CONTEXT:
 - Rule: To message this user, you MUST use the "send_telegram" skill.
 `;
         } else if (metadata.source === 'whatsapp') {
-            const profilingEnabled = this.memory.getUserContext().raw?.includes('whatsappContextProfilingEnabled: true'); // Basic check or pass agent config here
-            const contactProfile = this.memory.getContactProfile(metadata.sourceId);
+            profilingEnabled = !!this.memory.getUserContext().raw?.includes('whatsappContextProfilingEnabled: true');
+            contactProfile = this.memory.getContactProfile(metadata.sourceId) || undefined;
 
             channelInstructions = `
 ACTIVE CHANNEL CONTEXT:
 - Channel: WhatsApp
 - JID: "${metadata.sourceId}" (Sender: ${metadata.senderName})
 - Rule: To message this user, you MUST use the "send_whatsapp" skill.
-${contactProfile ? `\nCONTACT PROFILE (Learned Knowledge):\n${contactProfile}\n` : ''}
-${profilingEnabled && !contactProfile ? '\n- Task: I don\'t have a profile for this contact yet. Use \'update_contact_profile\' if you learn important facts about them.\n' : ''}
 `;
         } else if (metadata.source === 'discord') {
             channelInstructions = `
@@ -562,9 +477,17 @@ ACTIVE CHANNEL CONTEXT:
         }
 
 
-        // Build core instructions that ALL LLM calls should have
-        // isFirstStep already declared above
-        const coreInstructions = this.buildCoreInstructions(availableSkills, this.agentIdentity, isFirstStep);
+        // Build task-optimized prompt using the modular PromptHelper system.
+        // The router analyzes the task and selects only the relevant helpers.
+        const coreInstructions = this.buildHelperPrompt(
+            availableSkills,
+            this.agentIdentity,
+            taskDescription,
+            metadata,
+            isFirstStep,
+            contactProfile,
+            profilingEnabled
+        );
 
         // User context - limit only if very large (>2000 chars)
         const userContextStr = userContext.raw || '';

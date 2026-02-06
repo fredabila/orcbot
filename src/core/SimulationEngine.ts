@@ -31,6 +31,7 @@ Think about:
 2. What is the most direct tool to use from AVAILABLE TOOLS?
 3. What if that tool fails? (Fallback layers)
 4. What is the success criteria?
+5. DELIVERY: If the task produces a file or downloadable content for the user, the plan MUST include a step to SEND the file to the user via their channel using \`send_file\`, NOT just save it locally. A file saved to disk without being sent is a dead end — the user cannot access the agent's filesystem.
 
 OUTPUT FORMAT:
 Provide a concise "Execution Plan" with contingency steps.

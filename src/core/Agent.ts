@@ -50,6 +50,7 @@ export class Agent {
     private lastHeartbeatAt: number = 0;
     private consecutiveIdleHeartbeats: number = 0;
     private lastHeartbeatProductive: boolean = true;
+    private _blankPageCount: number = 0;
     private agentConfigFile: string;
     private agentIdentity: string = '';
     private isBusy: boolean = false;
@@ -1561,7 +1562,20 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 if (!url) return 'Error: Missing url.';
                 const res = await this.browser.navigate(url);
                 if (res.startsWith('Error')) return res;
-                return await this.browser.getSemanticSnapshot();
+                const snapshot = await this.browser.getSemanticSnapshot();
+
+                // Track blank-page results and warn the agent to switch strategy
+                const looksBlank = snapshot.includes('(No interactive elements found)') ||
+                    (snapshot.includes('HTML length:') && parseInt((snapshot.match(/HTML length: (\d+)/) || ['', '0'])[1]) < 500);
+                if (looksBlank) {
+                    this._blankPageCount = (this._blankPageCount || 0) + 1;
+                    if (this._blankPageCount >= 2) {
+                        return snapshot + '\n\n[SYSTEM WARNING: The browser has returned blank/empty pages ' + this._blankPageCount + ' times. The target site may be blocking headless browsers or requires JavaScript that cannot render. STOP using the browser for this task and switch to web_search instead. Do NOT fabricate or hallucinate page content.]';
+                    }
+                } else {
+                    this._blankPageCount = 0; // Reset on successful page load
+                }
+                return snapshot;
             }
         });
 
@@ -1571,7 +1585,14 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             description: 'Get a text-based semantic snapshot of the current page including all interactive elements with reference IDs.',
             usage: 'browser_examine_page()',
             handler: async () => {
-                return await this.browser.getSemanticSnapshot();
+                const snapshot = await this.browser.getSemanticSnapshot();
+                // Also track blank pages from examine_page calls
+                const looksBlank = snapshot.includes('(No interactive elements found)') ||
+                    (snapshot.includes('HTML length:') && parseInt((snapshot.match(/HTML length: (\d+)/) || ['', '0'])[1]) < 500);
+                if (looksBlank && this._blankPageCount >= 2) {
+                    return snapshot + '\n\n[SYSTEM WARNING: Browser is consistently returning blank pages. STOP using browser tools for this task and switch to web_search instead. Do NOT fabricate or hallucinate page content.]';
+                }
+                return snapshot;
             }
         });
 
@@ -4225,107 +4246,194 @@ Respond with a single actionable task description (one sentence):`;
         }
     }
 
-    public async resetMemory() {
-        logger.info('Agent: Resetting all memory and identity files...');
+    public async resetMemory(options?: {
+        memory?: boolean;       // memory.json, actions.json
+        identity?: boolean;     // .AI.md, USER.md, JOURNAL.md, LEARNING.md
+        plugins?: boolean;      // Custom plugins (.ts/.js in plugins dir)
+        agentSkills?: boolean;  // Installed SKILL.md packages (plugins/skills/*)
+        profiles?: boolean;     // Contact profiles (profiles/*.json)
+        downloads?: boolean;    // Downloaded media files (downloads/*)
+        bootstrap?: boolean;    // Bootstrap files (AGENTS.md, SOUL.md, IDENTITY.md, TOOLS.md)
+        schedules?: boolean;    // Heartbeat schedules and scheduled tasks
+    }) {
+        // Default: clear everything when no options provided
+        const clearAll = !options;
+        const opts = {
+            memory: clearAll || options?.memory || false,
+            identity: clearAll || options?.identity || false,
+            plugins: clearAll || options?.plugins || false,
+            agentSkills: clearAll || options?.agentSkills || false,
+            profiles: clearAll || options?.profiles || false,
+            downloads: clearAll || options?.downloads || false,
+            bootstrap: clearAll || options?.bootstrap || false,
+            schedules: clearAll || options?.schedules || false,
+        };
+
+        logger.info(`Agent: Resetting${clearAll ? ' ALL' : ''} — ${Object.entries(opts).filter(([,v]) => v).map(([k]) => k).join(', ')}`);
         const dataHome = this.config.getDataHome();
-
-        // Clear memory.json
         const memoryPath = this.config.get('memoryPath') || path.join(dataHome, 'memory.json');
-        if (fs.existsSync(memoryPath)) fs.writeFileSync(memoryPath, JSON.stringify({}, null, 2));
-
-        // Clear actions.json
         const actionPath = this.config.get('actionQueuePath') || path.join(dataHome, 'actions.json');
-        if (fs.existsSync(actionPath)) fs.writeFileSync(actionPath, JSON.stringify([], null, 2));
-
-        // Reset USER.md
         const userPath = this.config.get('userProfilePath') || path.join(dataHome, 'USER.md');
-        const localUserPath = path.resolve(process.cwd(), 'USER.md');
-        const defaultUser = fs.existsSync(localUserPath)
-            ? fs.readFileSync(localUserPath, 'utf-8')
-            : '# User Profile\n\nThis file contains information about the user.\n';
-        fs.writeFileSync(userPath, defaultUser);
-
-        // Reset .AI.md
-        const localAIPath = path.resolve(process.cwd(), '.AI.md');
-        const defaultAI = fs.existsSync(localAIPath)
-            ? fs.readFileSync(localAIPath, 'utf-8')
-            : '# .AI.md\nName: OrcBot\nPersonality: proactive, concise, professional\nAutonomyLevel: high\nDefaultBehavior: \n  - prioritize tasks based on user goals\n  - act proactively when deadlines are near\n  - consult SKILLS.md tools to accomplish actions\n';
-        fs.writeFileSync(this.agentConfigFile, defaultAI);
-
-        // Reset JOURNAL.md
         const journalPath = this.config.get('journalPath') || path.join(dataHome, 'JOURNAL.md');
-        const localJournalPath = path.resolve(process.cwd(), 'JOURNAL.md');
-        const defaultJournal = fs.existsSync(localJournalPath)
-            ? fs.readFileSync(localJournalPath, 'utf-8')
-            : '# Agent Journal\nThis file contains self-reflections and activity logs.\n';
-        fs.writeFileSync(journalPath, defaultJournal);
-
-        // Reset LEARNING.md
         const learningPath = this.config.get('learningPath') || path.join(dataHome, 'LEARNING.md');
-        const localLearningPath = path.resolve(process.cwd(), 'LEARNING.md');
-        const defaultLearning = fs.existsSync(localLearningPath)
-            ? fs.readFileSync(localLearningPath, 'utf-8')
-            : '# Agent Learning Base\nThis file contains structured knowledge on various topics.\n';
-        fs.writeFileSync(learningPath, defaultLearning);
 
-        // Clear heartbeat data
-        const heartbeatDir = path.dirname(actionPath);
-        const lastHeartbeatPath = path.join(heartbeatDir, 'last_heartbeat');
-        const lastHeartbeatAutonomyPath = path.join(heartbeatDir, 'last_heartbeat_autonomy');
-        const heartbeatSchedulesPath = path.join(heartbeatDir, 'heartbeat-schedules.json');
-        
-        if (fs.existsSync(lastHeartbeatPath)) {
-            fs.unlinkSync(lastHeartbeatPath);
-            logger.info('Agent: Cleared last_heartbeat file');
-        }
-        if (fs.existsSync(lastHeartbeatAutonomyPath)) {
-            fs.unlinkSync(lastHeartbeatAutonomyPath);
-            logger.info('Agent: Cleared last_heartbeat_autonomy file');
-        }
-        if (fs.existsSync(heartbeatSchedulesPath)) {
-            fs.writeFileSync(heartbeatSchedulesPath, '[]', 'utf8');
-            logger.info('Agent: Cleared heartbeat schedules');
+        // ── Memory & Actions ──
+        if (opts.memory) {
+            if (fs.existsSync(memoryPath)) fs.writeFileSync(memoryPath, JSON.stringify({}, null, 2));
+            if (fs.existsSync(actionPath)) fs.writeFileSync(actionPath, JSON.stringify([], null, 2));
+            logger.info('Agent: Cleared memory.json and actions.json');
         }
 
-        // Stop and clear all running heartbeat jobs
-        for (const [id, cron] of this.heartbeatJobs.entries()) {
-            cron.stop();
-            logger.info(`Agent: Stopped heartbeat job: ${id}`);
+        // ── Identity Files ──
+        if (opts.identity) {
+            const localUserPath = path.resolve(process.cwd(), 'USER.md');
+            const defaultUser = fs.existsSync(localUserPath)
+                ? fs.readFileSync(localUserPath, 'utf-8')
+                : '# User Profile\n\nThis file contains information about the user.\n';
+            fs.writeFileSync(userPath, defaultUser);
+
+            const localAIPath = path.resolve(process.cwd(), '.AI.md');
+            const defaultAI = fs.existsSync(localAIPath)
+                ? fs.readFileSync(localAIPath, 'utf-8')
+                : '# .AI.md\nName: OrcBot\nPersonality: proactive, concise, professional\nAutonomyLevel: high\nDefaultBehavior: \n  - prioritize tasks based on user goals\n  - act proactively when deadlines are near\n  - consult SKILLS.md tools to accomplish actions\n';
+            fs.writeFileSync(this.agentConfigFile, defaultAI);
+
+            const localJournalPath = path.resolve(process.cwd(), 'JOURNAL.md');
+            const defaultJournal = fs.existsSync(localJournalPath)
+                ? fs.readFileSync(localJournalPath, 'utf-8')
+                : '# Agent Journal\nThis file contains self-reflections and activity logs.\n';
+            fs.writeFileSync(journalPath, defaultJournal);
+
+            const localLearningPath = path.resolve(process.cwd(), 'LEARNING.md');
+            const defaultLearning = fs.existsSync(localLearningPath)
+                ? fs.readFileSync(localLearningPath, 'utf-8')
+                : '# Agent Learning Base\nThis file contains structured knowledge on various topics.\n';
+            fs.writeFileSync(learningPath, defaultLearning);
+            logger.info('Agent: Reset identity files (USER.md, .AI.md, JOURNAL.md, LEARNING.md)');
         }
-        this.heartbeatJobs.clear();
-        this.heartbeatJobMeta.clear();
 
-        // Stop and clear all one-off scheduled tasks
-        for (const [id, cron] of this.scheduledTasks.entries()) {
-            cron.stop();
-            logger.info(`Agent: Stopped scheduled task: ${id}`);
-        }
-        this.scheduledTasks.clear();
-        this.scheduledTaskMeta.clear();
-        if (fs.existsSync(this.scheduledTasksPath)) {
-            fs.writeFileSync(this.scheduledTasksPath, '[]', 'utf8');
+        // ── Custom Plugins ──
+        if (opts.plugins) {
+            const removed = this.skills.clearPlugins();
+            logger.info(`Agent: Removed ${removed} custom plugin(s)`);
         }
 
-        // Reset heartbeat tracking variables
-        this.lastHeartbeatAt = Date.now();
-        this.lastActionTime = Date.now();
-        this.consecutiveIdleHeartbeats = 0;
-        this.lastHeartbeatProductive = true;
+        // ── Agent Skills (SKILL.md packages) ──
+        if (opts.agentSkills) {
+            const removed = this.skills.clearAgentSkills();
+            logger.info(`Agent: Removed ${removed} agent skill(s)`);
+        }
 
-        // Reload managers
-        this.memory = new MemoryManager(memoryPath, userPath);
-        this.actionQueue = new ActionQueue(actionPath);
-        this.decisionEngine = new DecisionEngine(
-            this.memory,
-            this.llm,
-            this.skills,
-            journalPath,
-            learningPath,
-            this.config,
-            this.bootstrap
-        );
+        // ── Contact Profiles ──
+        if (opts.profiles) {
+            const profilesDir = path.join(dataHome, 'profiles');
+            if (fs.existsSync(profilesDir)) {
+                const files = fs.readdirSync(profilesDir);
+                let count = 0;
+                for (const file of files) {
+                    if (file.endsWith('.json')) {
+                        try {
+                            fs.unlinkSync(path.join(profilesDir, file));
+                            count++;
+                        } catch (e) {
+                            logger.error(`Agent: Failed to remove profile ${file}: ${e}`);
+                        }
+                    }
+                }
+                logger.info(`Agent: Cleared ${count} contact profile(s)`);
+            }
+        }
 
-        logger.info('Agent: Memory and Identity have been reset.');
+        // ── Downloads ──
+        if (opts.downloads) {
+            const downloadsDir = path.join(dataHome, 'downloads');
+            if (fs.existsSync(downloadsDir)) {
+                try {
+                    const files = fs.readdirSync(downloadsDir);
+                    for (const file of files) {
+                        fs.unlinkSync(path.join(downloadsDir, file));
+                    }
+                    logger.info(`Agent: Cleared ${files.length} downloaded file(s)`);
+                } catch (e) {
+                    logger.error(`Agent: Failed to clear downloads: ${e}`);
+                }
+            }
+        }
+
+        // ── Bootstrap Files ──
+        if (opts.bootstrap) {
+            if (this.bootstrap) {
+                this.bootstrap.resetToDefaults();
+                logger.info('Agent: Reset bootstrap files (AGENTS.md, SOUL.md, IDENTITY.md, TOOLS.md) to defaults');
+            }
+        }
+
+        // ── Schedules & Heartbeats ──
+        if (opts.schedules) {
+            const heartbeatDir = path.dirname(actionPath);
+            const lastHeartbeatPath = path.join(heartbeatDir, 'last_heartbeat');
+            const lastHeartbeatAutonomyPath = path.join(heartbeatDir, 'last_heartbeat_autonomy');
+            const heartbeatSchedulesPath = path.join(heartbeatDir, 'heartbeat-schedules.json');
+
+            if (fs.existsSync(lastHeartbeatPath)) {
+                fs.unlinkSync(lastHeartbeatPath);
+            }
+            if (fs.existsSync(lastHeartbeatAutonomyPath)) {
+                fs.unlinkSync(lastHeartbeatAutonomyPath);
+            }
+            if (fs.existsSync(heartbeatSchedulesPath)) {
+                fs.writeFileSync(heartbeatSchedulesPath, '[]', 'utf8');
+            }
+
+            // Stop and clear all running heartbeat jobs
+            for (const [id, cron] of this.heartbeatJobs.entries()) {
+                cron.stop();
+                logger.info(`Agent: Stopped heartbeat job: ${id}`);
+            }
+            this.heartbeatJobs.clear();
+            this.heartbeatJobMeta.clear();
+
+            // Stop and clear all one-off scheduled tasks
+            for (const [id, cron] of this.scheduledTasks.entries()) {
+                cron.stop();
+                logger.info(`Agent: Stopped scheduled task: ${id}`);
+            }
+            this.scheduledTasks.clear();
+            this.scheduledTaskMeta.clear();
+            if (fs.existsSync(this.scheduledTasksPath)) {
+                fs.writeFileSync(this.scheduledTasksPath, '[]', 'utf8');
+            }
+
+            // Reset heartbeat tracking variables
+            this.lastHeartbeatAt = Date.now();
+            this.lastActionTime = Date.now();
+            this.consecutiveIdleHeartbeats = 0;
+            this.lastHeartbeatProductive = true;
+            logger.info('Agent: Cleared all schedules and heartbeat data');
+        }
+
+        // ── Reload managers ──
+        if (opts.memory || opts.identity) {
+            this.memory = new MemoryManager(memoryPath, userPath);
+            this.actionQueue = new ActionQueue(actionPath);
+            this.decisionEngine = new DecisionEngine(
+                this.memory,
+                this.llm,
+                this.skills,
+                journalPath,
+                learningPath,
+                this.config,
+                this.bootstrap
+            );
+        }
+
+        // Reload plugins if we cleared them (so core skills still work)
+        if (opts.plugins || opts.agentSkills) {
+            this.skills.loadPlugins();
+            this.skills.discoverAgentSkills();
+        }
+
+        logger.info('Agent: Reset complete.');
     }
 
     /**
@@ -4740,6 +4848,7 @@ Respond with a single actionable task description (one sentence):`;
                 'web_search', 'browser_navigate', 'browser_click', 'browser_type',
                 'browser_examine_page', 'browser_screenshot', 'browser_back',
                 'extract_article', 'download_file', 'read_file', 'write_to_file',
+                'write_file', 'create_file', 'send_file',
                 'run_command', 'analyze_media'
             ]);
             const taskDesc = (action.payload.description || '').toLowerCase();
@@ -4752,8 +4861,10 @@ Respond with a single actionable task description (one sentence):`;
             ];
             const isResearchTask = !isSocialFastPath && researchKeywords.some(kw => taskDesc.includes(kw));
 
-            const MAX_STEPS = isSocialFastPath ? 1 : (this.config.get('maxStepsPerAction') || 15);
-            const MAX_MESSAGES = isSocialFastPath ? 1 : isResearchTask ? 8 : (this.config.get('maxMessagesPerAction') || 3);
+            const configMaxSteps = this.config.get('maxStepsPerAction') || 25;
+            const configMaxMessages = this.config.get('maxMessagesPerAction') || 5;
+            const MAX_STEPS = isSocialFastPath ? 1 : configMaxSteps;
+            const MAX_MESSAGES = isSocialFastPath ? 1 : isResearchTask ? Math.max(configMaxMessages, 8) : configMaxMessages;
             const MAX_NO_TOOLS_RETRIES = 3; // Max retries when LLM returns no tools but goals_met=false
             const MAX_SKILL_REPEATS = 5; // Max times any single skill can be called in one action
             const MAX_RESEARCH_SKILL_REPEATS = 15; // Higher ceiling for research tools (web_search, browser_*, etc.)
@@ -4772,10 +4883,13 @@ Respond with a single actionable task description (one sentence):`;
             const skillCallCounts: Record<string, number> = {}; // Track how many times each skill is called
             const skillFailCounts: Record<string, number> = {}; // Track consecutive failures per skill
             const recentSkillNames: string[] = []; // Track skill name sequence for pattern detection
+            const recentSkillSignatures: string[] = []; // Track skill name+args for smarter pattern detection
+            this._blankPageCount = 0; // Reset blank-page counter for each new action
 
             const nonDeepSkills = [
                 'send_telegram',
                 'send_whatsapp',
+                'send_discord',
                 'send_gateway_chat',
                 'update_journal',
                 'update_learning',
@@ -4783,7 +4897,6 @@ Respond with a single actionable task description (one sentence):`;
                 'update_agent_identity',
                 'get_system_info',
                 'system_check',
-                'manage_config',  // Config reads are not progress-making actions
                 'read_bootstrap_file', // Reading bootstrap files is not progress
                 'browser_examine_page', // Examining without action is low info
                 'browser_screenshot',
@@ -4894,8 +5007,8 @@ Respond with a single actionable task description (one sentence):`;
                     const hasDeepToolThisTurn = decision.tools.some((t: any) => !nonDeepSkills.includes(t.name));
                     if (!hasDeepToolThisTurn) {
                         consecutiveNonDeepTurns++;
-                        if (consecutiveNonDeepTurns >= 3) {
-                            logger.warn(`Agent: Detected planning loop (3 turns without deep action). Terminating action ${action.id}.`);
+                        if (consecutiveNonDeepTurns >= 5) {
+                            logger.warn(`Agent: Detected planning loop (5 turns without deep action). Terminating action ${action.id}.`);
                             break;
                         }
                     } else {
@@ -4936,6 +5049,10 @@ Respond with a single actionable task description (one sentence):`;
                     for (const t of decision.tools) {
                         skillCallCounts[t.name] = (skillCallCounts[t.name] || 0) + 1;
                         recentSkillNames.push(t.name);
+                        // Build a short fingerprint: name + key argument (e.g., command, url, query)
+                        const meta = t.metadata || {};
+                        const argHint = (meta.command || meta.url || meta.query || meta.message || meta.path || '').toString().slice(0, 80);
+                        recentSkillSignatures.push(`${t.name}:${argHint}`);
                     }
                     
                     // Research tools (web_search, browser_*, extract_article) get a higher ceiling
@@ -5001,14 +5118,27 @@ Respond with a single actionable task description (one sentence):`;
 
                     // 5. PATTERN-BASED LOOP DETECTION
                     // Detect repeating patterns like [manage_config, run_command, manage_config, run_command]
+                    // BUT only break if the arguments are also the same — different args = different work.
                     if (recentSkillNames.length >= 6) {
-                        const last6 = recentSkillNames.slice(-6);
-                        const pattern2 = `${last6[0]},${last6[1]}`;
-                        const isRepeating2 = `${last6[2]},${last6[3]}` === pattern2 && `${last6[4]},${last6[5]}` === pattern2;
-                        if (isRepeating2) {
-                            logger.warn(`Agent: Detected repeating skill pattern [${pattern2}] x3 in action ${action.id}. Breaking loop.`);
-                            await this.sendProgressFeedback(action, 'recovering', 'Detected repeating pattern. Trying a different approach...');
-                            break;
+                        const last6Names = recentSkillNames.slice(-6);
+                        const namePattern2 = `${last6Names[0]},${last6Names[1]}`;
+                        const nameRepeating = `${last6Names[2]},${last6Names[3]}` === namePattern2 && `${last6Names[4]},${last6Names[5]}` === namePattern2;
+
+                        if (nameRepeating) {
+                            // Names repeat — but are the arguments also the same?
+                            const last6Sigs = recentSkillSignatures.slice(-6);
+                            const sigPattern2 = `${last6Sigs[0]}|${last6Sigs[1]}`;
+                            const sigsIdentical = `${last6Sigs[2]}|${last6Sigs[3]}` === sigPattern2 && `${last6Sigs[4]}|${last6Sigs[5]}` === sigPattern2;
+
+                            if (sigsIdentical) {
+                                // Same skills with same arguments 3x = genuine loop
+                                logger.warn(`Agent: Detected repeating skill+args pattern [${namePattern2}] x3 in action ${action.id}. Breaking loop.`);
+                                await this.sendProgressFeedback(action, 'recovering', 'Detected repeating pattern. Trying a different approach...');
+                                break;
+                            } else {
+                                // Same skill names but different arguments — not a loop, just sequential work
+                                logger.debug(`Agent: Skill name pattern [${namePattern2}] repeats but args differ — allowing (sequential work, not a loop).`);
+                            }
                         }
                     }
 
@@ -5023,6 +5153,20 @@ Respond with a single actionable task description (one sentence):`;
 
                         if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_gateway_chat') {
                             const currentMessage = (toolCall.metadata?.message || '').trim();
+
+                            // 0. HALLUCINATION / TEMPLATE PLACEHOLDER GUARD
+                            // Block messages containing {{PLACEHOLDER}} or similar template syntax — these are fabricated, not real data.
+                            const templatePlaceholderPattern = /\{\{[A-Z_]+\}\}|\[\[\w+\]\]|<<[A-Z_]+>>|\{%.*?%\}/;
+                            if (templatePlaceholderPattern.test(currentMessage)) {
+                                logger.warn(`Agent: Blocked hallucinated message in action ${action.id}. Message contains template placeholders: "${currentMessage.slice(0, 120)}..."`);
+                                this.memory.saveMemory({
+                                    id: `${action.id}-step-${currentStep}-blocked-hallucination`,
+                                    type: 'short',
+                                    content: `[SYSTEM: BLOCKED hallucinated message. Your message contained template placeholders like {{VARIABLE}} instead of real data. You MUST use ACTUAL data from tool results. If the browser returned blank pages, switch to web_search instead of fabricating results. NEVER send messages with placeholder text to the user.]`,
+                                    metadata: { actionId: action.id, step: currentStep }
+                                });
+                                continue;
+                            }
 
                             // 1. Block exact duplicates across any step in this action
                             if (sentMessagesInAction.includes(currentMessage)) {
