@@ -36,6 +36,7 @@ This file lists the available skills for the agent.
 - **browser_run_js(script)**: Execute custom JavaScript on the current page.
 - **switch_browser_profile(profileName, profileDir?)**: Switch to a persistent browser profile.
 - **extract_article(url?)**: Extract clean article text from a URL or the current page.
+- **http_fetch(url, method?, headers?, body?, timeout?)**: Lightweight HTTP request (no browser). Supports GET/POST/PUT/PATCH/DELETE. Returns status + body. Ideal for APIs and simple pages.
 - **youtube_trending(region?, category?)**: Fetch YouTube trending videos via API fallbacks.
 
 ## Memory, Journal & Learning

@@ -39,6 +39,7 @@ export class BrowserHelper implements PromptHelper {
     - NEVER fabricate or hallucinate page content. If you didn't see real data in the browser result, you don't have it.
     - NEVER use template placeholders like {{VARIABLE}}, [[PLACEHOLDER]], or similar in messages to users. Every piece of data you send must come from an actual tool result.
     - If neither browser nor web_search produces results, tell the user honestly that the search could not be completed.
-- **Web Search Strategy**: If 'web_search' fails to yield results after 2 attempts, STOP searching. Instead, change strategy: navigate directly to a suspected URL, use 'extract_article' on a known portal, or inform the user you are unable to find the specific info. Do NOT repeat the same query.`;
+- **Web Search Strategy**: If 'web_search' fails to yield results after 2 attempts, STOP searching. Instead, change strategy: navigate directly to a suspected URL, use 'extract_article' on a known portal, or inform the user you are unable to find the specific info. Do NOT repeat the same query.
+- **Lightweight HTTP Fetch**: For APIs, JSON endpoints, or simple pages that don't need JavaScript rendering, prefer \`http_fetch(url)\` over \`browser_navigate\`. It's faster, uses no browser resources, and supports GET/POST/PUT/PATCH/DELETE with custom headers and body.`;
     }
 }

@@ -72,6 +72,9 @@ export class WebBrowser {
             this.profileDir = profileRoot;
             this.profileName = profileName;
 
+            // Clean up stale Chromium lock files left by crashes / unclean shutdowns
+            this.cleanStaleLockFiles(userDataDir);
+
             this.context = await chromium.launchPersistentContext(userDataDir, {
                 headless: this.headlessMode,
                 args: ['--disable-blink-features=AutomationControlled'],
@@ -142,6 +145,25 @@ export class WebBrowser {
             this.context = null;
             this._page = null;
             await this.ensureBrowser();
+        }
+    }
+
+    /**
+     * Remove stale Chromium lock files (SingletonLock, SingletonSocket, SingletonCookie)
+     * that prevent browser launch after a crash or unclean shutdown.
+     */
+    private cleanStaleLockFiles(userDataDir: string): void {
+        const lockFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
+        for (const name of lockFiles) {
+            const lockPath = path.join(userDataDir, name);
+            try {
+                if (fs.existsSync(lockPath)) {
+                    fs.unlinkSync(lockPath);
+                    logger.info(`Browser: Removed stale lock file ${name}`);
+                }
+            } catch (err: any) {
+                logger.warn(`Browser: Could not remove lock file ${name}: ${err.message}`);
+            }
         }
     }
 

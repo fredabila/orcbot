@@ -2190,6 +2190,94 @@ export default ${name};
             }
         });
 
+        // Skill: HTTP Fetch (lightweight, no browser)
+        this.skills.registerSkill({
+            name: 'http_fetch',
+            description: 'Fetch a URL using a simple HTTP request (no browser needed). Supports GET, POST, PUT, PATCH, DELETE. Returns the response body as text or JSON. Much faster and lighter than browser_navigate for APIs, JSON endpoints, and simple web pages.',
+            usage: 'http_fetch(url, method?, headers?, body?, timeout?)',
+            handler: async (args: any) => {
+                const url = args.url || args.link;
+                if (!url) return 'Error: Missing url.';
+
+                const method = (args.method || 'GET').toUpperCase();
+                const timeoutMs = parseInt(args.timeout || '30000', 10);
+                let headers: Record<string, string> = {};
+
+                // Parse headers
+                if (args.headers) {
+                    if (typeof args.headers === 'string') {
+                        try { headers = JSON.parse(args.headers); } catch { /* ignore */ }
+                    } else if (typeof args.headers === 'object') {
+                        headers = args.headers;
+                    }
+                }
+
+                // Set a default User-Agent if none provided
+                if (!headers['User-Agent'] && !headers['user-agent']) {
+                    headers['User-Agent'] = 'OrcBot/1.0';
+                }
+
+                try {
+                    const controller = new AbortController();
+                    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+                    const fetchOptions: RequestInit = {
+                        method,
+                        headers,
+                        signal: controller.signal,
+                        redirect: 'follow',
+                    };
+
+                    // Attach body for non-GET methods
+                    if (args.body && method !== 'GET' && method !== 'HEAD') {
+                        if (typeof args.body === 'object') {
+                            fetchOptions.body = JSON.stringify(args.body);
+                            if (!headers['Content-Type'] && !headers['content-type']) {
+                                (fetchOptions.headers as Record<string, string>)['Content-Type'] = 'application/json';
+                            }
+                        } else {
+                            fetchOptions.body = String(args.body);
+                        }
+                    }
+
+                    const response = await fetch(url, fetchOptions);
+                    clearTimeout(timer);
+
+                    const status = response.status;
+                    const statusText = response.statusText;
+                    const contentType = response.headers.get('content-type') || '';
+                    const responseHeaders: Record<string, string> = {};
+                    response.headers.forEach((v, k) => { responseHeaders[k] = v; });
+
+                    let body: string;
+                    if (contentType.includes('application/json')) {
+                        try {
+                            const json = await response.json();
+                            body = JSON.stringify(json, null, 2);
+                        } catch {
+                            body = await response.text();
+                        }
+                    } else {
+                        body = await response.text();
+                    }
+
+                    // Truncate very large responses
+                    const maxLen = 8000;
+                    const truncated = body.length > maxLen;
+                    if (truncated) {
+                        body = body.substring(0, maxLen);
+                    }
+
+                    return `HTTP ${status} ${statusText}\nContent-Type: ${contentType}\n\n${body}${truncated ? '\n\n[...truncated, response was ' + body.length + '+ chars]' : ''}`;
+                } catch (e: any) {
+                    if (e.name === 'AbortError') {
+                        return `Error: Request timed out after ${timeoutMs}ms`;
+                    }
+                    return `Error: ${e.message}`;
+                }
+            }
+        });
+
         // Skill: Schedule Task (one-off, tracked + persisted)
         this.skills.registerSkill({
             name: 'schedule_task',
@@ -3504,7 +3592,7 @@ Respond with ONLY valid JSON:
         const coreSkills = new Set([
             'web_search', 'browser_navigate', 'browser_click', 'browser_type',
             'browser_examine_page', 'browser_screenshot', 'browser_back',
-            'extract_article', 'download_file', 'read_file', 'write_to_file',
+            'extract_article', 'http_fetch', 'download_file', 'read_file', 'write_to_file',
             'write_file', 'create_file', 'delete_file', 'run_command',
             'send_telegram', 'send_whatsapp', 'send_discord', 'send_gateway_chat',
             'send_voice_note', 'text_to_speech', 'analyze_media',
@@ -4865,7 +4953,7 @@ Respond with a single actionable task description (one sentence):`;
             const RESEARCH_TOOLS = new Set([
                 'web_search', 'browser_navigate', 'browser_click', 'browser_type',
                 'browser_examine_page', 'browser_screenshot', 'browser_back',
-                'extract_article', 'download_file', 'read_file', 'write_to_file',
+                'extract_article', 'http_fetch', 'download_file', 'read_file', 'write_to_file',
                 'write_file', 'create_file', 'send_file',
                 'run_command', 'analyze_media'
             ]);

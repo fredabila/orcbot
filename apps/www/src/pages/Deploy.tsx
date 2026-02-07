@@ -69,7 +69,7 @@ npm install -g .`,
     },
     {
       title: 'Install Lightpanda (recommended for low-memory VPS)',
-      description: 'Lightpanda is a lightweight browser using 9x less RAM than Chrome - perfect for $6/mo droplets:',
+      description: 'Lightpanda is a lightweight browser using 9x less RAM than Chrome — perfect for $6/mo droplets:',
       code: `# Install Lightpanda
 orcbot lightpanda install
 
@@ -171,22 +171,37 @@ ufw enable`,
 
   return (
     <div className="app deploy-page">
+      <div className="noise-overlay" />
+
       <header className="deploy-header">
+        <div className="deploy-header-bg">
+          <div className="gradient-orb orb-1" />
+          <div className="gradient-orb orb-2" />
+        </div>
+
         <nav className="nav">
-          <Link to="/" className="logo">OrcBot</Link>
-          <div className="nav-links">
+          <Link to="/" className="logo">
+            <span className="logo-icon">⬡</span>
+            <span className="logo-text">OrcBot</span>
+          </Link>
+          <div className="nav-center">
+            <Link to="/">Home</Link>
             <Link to="/#capabilities">Capabilities</Link>
-            <Link to="/#install">Quick Install</Link>
             <Link to="/deploy" className="active">Deploy</Link>
           </div>
-          <a className="nav-cta" href="https://github.com/fredabila/orcbot">GitHub</a>
+          <div className="nav-end">
+            <a className="nav-btn primary" href="https://github.com/fredabila/orcbot" target="_blank" rel="noopener noreferrer">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+              GitHub
+            </a>
+          </div>
         </nav>
 
         <div className="deploy-hero">
-          <div className="badge">Server Deployment</div>
+          <div className="section-label">Server Deployment</div>
           <h1>Deploy OrcBot to the cloud</h1>
-          <p className="subtitle">
-            Step-by-step guides to run OrcBot 24/7 on your favorite cloud provider. 
+          <p className="deploy-subtitle">
+            Step-by-step guides to run OrcBot 24/7 on your favorite cloud provider.
             Perfect for autonomous operations that never sleep.
           </p>
         </div>
@@ -205,7 +220,7 @@ ufw enable`,
               >
                 <span className="provider-icon">{provider.icon}</span>
                 <span className="provider-name">{provider.name}</span>
-                {!provider.available && <span className="coming-soon-badge">Coming Soon</span>}
+                {!provider.available && <span className="coming-soon-badge">Soon</span>}
               </button>
             ))}
           </div>
@@ -347,7 +362,7 @@ docker compose -f docker-compose.minimal.yml \\
             </div>
 
             <div className="post-deploy">
-              <h3>🎉 You're running with Docker!</h3>
+              <h3>You're running with Docker!</h3>
               <p>Your OrcBot container is now running. Here are some next steps:</p>
               <div className="next-steps-grid">
                 <div className="next-step">
@@ -414,7 +429,7 @@ docker compose -f docker-compose.minimal.yml \\
                   <div className="step-content">
                     <h3>{step.title}</h3>
                     <p>{step.description}</p>
-                    
+
                     {step.details && (
                       <ul className="step-details">
                         {step.details.map((detail, i) => (
@@ -422,11 +437,11 @@ docker compose -f docker-compose.minimal.yml \\
                         ))}
                       </ul>
                     )}
-                    
+
                     {step.code && (
                       <div className="code-block">
                         <pre><code>{step.code}</code></pre>
-                        <button 
+                        <button
                           className="copy-btn"
                           onClick={() => copyToClipboard(step.code!, index)}
                         >
@@ -440,7 +455,7 @@ docker compose -f docker-compose.minimal.yml \\
             </div>
 
             <div className="post-deploy">
-              <h3>🎉 You're all set!</h3>
+              <h3>You're all set!</h3>
               <p>Your OrcBot is now running 24/7 on DigitalOcean. Here are some next steps:</p>
               <div className="next-steps-grid">
                 <div className="next-step">
@@ -485,17 +500,20 @@ docker compose -f docker-compose.minimal.yml \\
         )}
 
         <section className="cta-section">
-          <h2>Need help deploying?</h2>
-          <p>Join our community for support and deployment assistance.</p>
-          <div className="cta-buttons">
-            <a href="https://github.com/fredabila/orcbot/discussions" className="primary-btn">GitHub Discussions</a>
-            <a href="https://twitter.com/orcbot_ai" className="ghost-btn">Follow Updates</a>
+          <div className="cta-glow" />
+          <div className="cta-section-inner">
+            <h2>Need help deploying?</h2>
+            <p>Join our community for support and deployment assistance.</p>
+            <div className="cta-buttons">
+              <a href="https://github.com/fredabila/orcbot/discussions" className="btn btn-primary btn-lg">GitHub Discussions</a>
+              <a href="https://twitter.com/orcbot_ai" className="btn btn-outline btn-lg">Follow Updates</a>
+            </div>
           </div>
         </section>
       </main>
 
       <footer>
-        &copy; {new Date().getFullYear()} OrcBot Project. Built for the autonomous era.
+        <p>&copy; {new Date().getFullYear()} OrcBot Project. Built for the autonomous era.</p>
       </footer>
     </div>
   );
