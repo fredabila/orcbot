@@ -75,13 +75,28 @@ export class WebBrowser {
             // Clean up stale Chromium lock files left by crashes / unclean shutdowns
             this.cleanStaleLockFiles(userDataDir);
 
-            this.context = await chromium.launchPersistentContext(userDataDir, {
+            // Launch with retry — if first attempt fails due to lock race, clean up and retry once
+            const launchOptions = {
                 headless: this.headlessMode,
                 args: ['--disable-blink-features=AutomationControlled'],
-                viewport: { width: 1280, height: 720 },
+                viewport: { width: 1280, height: 720 } as { width: number; height: number },
                 userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 deviceScaleFactor: 1,
-            });
+            };
+
+            try {
+                this.context = await chromium.launchPersistentContext(userDataDir, launchOptions);
+            } catch (launchErr: any) {
+                if (launchErr.message?.includes('process_singleton') || launchErr.message?.includes('profile') || launchErr.message?.includes('SingletonLock')) {
+                    logger.warn(`Browser: Launch failed due to profile lock, retrying after cleanup...`);
+                    this.cleanStaleLockFiles(userDataDir);
+                    // Wait a beat for the OS to release handles
+                    await new Promise(r => setTimeout(r, 1000));
+                    this.context = await chromium.launchPersistentContext(userDataDir, launchOptions);
+                } else {
+                    throw launchErr;
+                }
+            }
 
             // Sneaky: Remove webdriver property
             await this.context.addInitScript(() => {
@@ -149,21 +164,99 @@ export class WebBrowser {
     }
 
     /**
-     * Remove stale Chromium lock files (SingletonLock, SingletonSocket, SingletonCookie)
+     * Remove stale Chromium lock files and kill orphaned Chromium processes
      * that prevent browser launch after a crash or unclean shutdown.
+     * On Linux, SingletonLock is a symlink encoding "hostname-pid".
      */
     private cleanStaleLockFiles(userDataDir: string): void {
+        // Step 1: Try to detect and kill stale Chromium processes using this profile
+        this.killStaleChromiumProcesses(userDataDir);
+
+        // Step 2: Remove lock files (regular files on Windows, symlinks on Linux)
         const lockFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
         for (const name of lockFiles) {
             const lockPath = path.join(userDataDir, name);
             try {
-                if (fs.existsSync(lockPath)) {
+                // Use lstatSync to detect both files and symlinks (existsSync resolves symlinks)
+                let exists = false;
+                try { fs.lstatSync(lockPath); exists = true; } catch { /* doesn't exist */ }
+                
+                if (exists) {
                     fs.unlinkSync(lockPath);
                     logger.info(`Browser: Removed stale lock file ${name}`);
                 }
             } catch (err: any) {
                 logger.warn(`Browser: Could not remove lock file ${name}: ${err.message}`);
             }
+        }
+    }
+
+    /**
+     * Detect and kill orphaned Chromium processes that hold the profile lock.
+     * Reads the PID from SingletonLock (symlink target on Linux: "hostname-pid")
+     * and kills it if it's a stale chrome process.
+     */
+    private killStaleChromiumProcesses(userDataDir: string): void {
+        try {
+            const lockPath = path.join(userDataDir, 'SingletonLock');
+            let stalePid: number | null = null;
+
+            // On Linux/macOS, SingletonLock is a symlink whose target is "hostname-pid"
+            try {
+                const target = fs.readlinkSync(lockPath);
+                const match = target.match(/-(\d+)$/);
+                if (match) {
+                    stalePid = parseInt(match[1], 10);
+                }
+            } catch {
+                // Not a symlink or doesn't exist — try reading as file (Windows)
+                try {
+                    const content = fs.readFileSync(lockPath, 'utf-8').trim();
+                    const pid = parseInt(content, 10);
+                    if (!isNaN(pid)) stalePid = pid;
+                } catch { /* doesn't exist */ }
+            }
+
+            if (stalePid && stalePid > 0) {
+                try {
+                    // Check if process is alive
+                    process.kill(stalePid, 0);
+                    // It's alive — kill it
+                    logger.warn(`Browser: Killing stale Chromium process PID ${stalePid} holding profile lock`);
+                    process.kill(stalePid, 'SIGKILL');
+                    // Give the OS a moment to release file handles
+                    const { execSync } = require('child_process');
+                    try { execSync('sleep 0.5 2>/dev/null || timeout /t 1 /nobreak >nul 2>&1', { timeout: 3000 }); } catch { /* ok */ }
+                } catch {
+                    // Process doesn't exist — lock file is truly stale, cleanup will handle it
+                    logger.debug(`Browser: Stale lock references PID ${stalePid} which is no longer running`);
+                }
+            }
+
+            // Also try to find any orphaned chrome processes using this profile dir
+            if (process.platform !== 'win32') {
+                try {
+                    const { execSync } = require('child_process');
+                    const result = execSync(`pgrep -f "${userDataDir}" 2>/dev/null || true`, {
+                        encoding: 'utf-8',
+                        timeout: 5000
+                    }).trim();
+                    if (result) {
+                        const pids = result.split('\n').map(p => parseInt(p.trim(), 10)).filter(p => p > 0 && p !== process.pid);
+                        for (const pid of pids) {
+                            try {
+                                logger.warn(`Browser: Killing orphaned Chromium process PID ${pid}`);
+                                process.kill(pid, 'SIGKILL');
+                            } catch { /* already dead */ }
+                        }
+                        if (pids.length > 0) {
+                            try { execSync('sleep 0.5', { timeout: 3000 }); } catch { /* ok */ }
+                        }
+                    }
+                } catch { /* pgrep not available or failed — that's fine */ }
+            }
+        } catch (err: any) {
+            logger.debug(`Browser: Stale process cleanup failed (non-fatal): ${err.message}`);
         }
     }
 
