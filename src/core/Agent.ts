@@ -3938,13 +3938,15 @@ Respond with ONLY valid JSON:
         const intervalMinutes = this.config.get('autonomyInterval') || 0;
         if (!autonomyEnabled || intervalMinutes <= 0) return;
 
-        // Check for ACTIVE tasks (pending, waiting, or in-progress)
-        const activeTasks = this.actionQueue.getQueue().filter(a => a.status === 'pending' || a.status === 'waiting' || a.status === 'in-progress');
+        // Check for tasks the agent is actively executing (in-progress or pending about to run)
+        const runningTasks = this.actionQueue.getQueue().filter(a => a.status === 'pending' || a.status === 'in-progress');
 
-        // CRITICAL: Skip heartbeat if there are ANY pending/in-progress tasks
-        // This prevents heartbeat from disrupting ongoing work
-        if (activeTasks.length > 0) {
-            logger.debug(`Agent: Heartbeat skipped - ${activeTasks.length} active task(s) in queue`);
+        // CRITICAL: Skip heartbeat if there are pending/in-progress tasks
+        // This prevents heartbeat from disrupting ongoing work.
+        // NOTE: 'waiting' tasks do NOT block heartbeat — the agent is idle while waiting
+        // for user input, and heartbeat scheduled tasks should still fire.
+        if (runningTasks.length > 0) {
+            logger.debug(`Agent: Heartbeat skipped - ${runningTasks.length} active task(s) in queue`);
             return;
         }
 
@@ -4338,12 +4340,29 @@ Respond with a single actionable task description (one sentence):`;
         const maxMinutes = this.config.get('maxStaleActionMinutes') || 30;
         const threshold = Date.now() - maxMinutes * 60 * 1000;
         const queue = this.actionQueue.getQueue();
-        const stale = queue.filter(a => a.status === 'in-progress' && new Date(a.updatedAt || a.timestamp).getTime() < threshold);
-        if (stale.length === 0) return;
 
-        for (const action of stale) {
+        // Recover stale in-progress actions (crash recovery)
+        const staleInProgress = queue.filter(a => a.status === 'in-progress' && new Date(a.updatedAt || a.timestamp).getTime() < threshold);
+        for (const action of staleInProgress) {
             logger.warn(`Agent: Found stale in-progress action ${action.id}. Marking failed.`);
             this.actionQueue.updateStatus(action.id, 'failed');
+        }
+
+        // Recover stale waiting actions — if the user never replied, don't block forever.
+        // After maxStaleWaitingMinutes (default 60min), reset to pending so the agent
+        // retries the task (it may decide to proceed without the answer or ask again).
+        const maxWaitingMinutes = this.config.get('maxStaleWaitingMinutes') || 60;
+        const waitingThreshold = Date.now() - maxWaitingMinutes * 60 * 1000;
+        const staleWaiting = queue.filter(a => a.status === 'waiting' && new Date(a.updatedAt || a.timestamp).getTime() < waitingThreshold);
+        for (const action of staleWaiting) {
+            logger.warn(`Agent: Waiting action ${action.id} stale for >${maxWaitingMinutes}min without user reply. Resetting to pending.`);
+            // Append a system note so the agent knows the user didn't reply
+            const originalDesc = action.payload?.description || '';
+            this.actionQueue.updatePayload(action.id, {
+                description: `${originalDesc}\n\n[SYSTEM: User did not reply to your question within ${maxWaitingMinutes} minutes. Proceed without the answer — either infer the best approach, try an alternative, or inform the user you're proceeding with a default.]`,
+                resumedFromStaleWaiting: true
+            });
+            this.actionQueue.updateStatus(action.id, 'pending');
         }
     }
 
