@@ -3326,7 +3326,7 @@ Be thorough and academic.`;
      * When the agent gets stuck in a loop, this method analyzes the failure
      * and considers creating a new skill to handle the situation better.
      */
-    private async triggerSkillCreationForFailure(taskDescription: string, failingTool?: string, failingContext?: string) {
+    private async triggerSkillCreationForFailure(taskDescription: string, failingTool?: string, failingContext?: string, originAction?: any) {
         try {
             // GUARD: Never trigger self-improvement for core built-in skills.
             // If web_search or browser_navigate is "failing", it's a strategy problem, not a missing skill.
@@ -3409,7 +3409,13 @@ Choose the right tool:
 - Research APIs and methods first if needed.
 This skill should prevent future failures when ${taskDescription.slice(0, 100)}...`,
                 9, // High priority
-                { source: 'self_improvement', skillName: parsed.skill_name, trigger: 'loop_detection' },
+                {
+                    source: originAction?.payload?.source || 'self_improvement',
+                    sourceId: originAction?.payload?.sourceId,
+                    skillName: parsed.skill_name,
+                    trigger: 'loop_detection',
+                    selfImprovement: true,
+                },
                 'autonomy'
             );
 
@@ -5136,7 +5142,7 @@ Respond with a single actionable task description (one sentence):`;
                             if (failingTool && !this.isCoreBuiltinSkill(failingTool) && !RESEARCH_TOOLS.has(failingTool)) {
                                 const failingContext = JSON.stringify(decision.tools[0]?.metadata || {}).slice(0, 200);
                                 const taskDescription = typeof action.payload === 'string' ? action.payload : JSON.stringify(action.payload);
-                                await this.triggerSkillCreationForFailure(taskDescription, failingTool, failingContext);
+                                await this.triggerSkillCreationForFailure(taskDescription, failingTool, failingContext, action);
                             } else {
                                 logger.info(`Agent: Loop on core/research tool '${failingTool}' — not triggering self-improvement (strategy issue, not missing skill).`);
                             }
@@ -5212,7 +5218,8 @@ Respond with a single actionable task description (one sentence):`;
                                     await this.triggerSkillCreationForFailure(
                                         typeof action.payload === 'string' ? action.payload : JSON.stringify(action.payload),
                                         skillName,
-                                        `Skill called ${callCount} times without progress`
+                                        `Skill called ${callCount} times without progress`,
+                                        action
                                     );
                                 }
                             } else {

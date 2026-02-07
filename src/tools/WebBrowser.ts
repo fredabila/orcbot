@@ -273,8 +273,20 @@ export class WebBrowser {
         }
     }
 
+    /**
+     * Detect if we're in a headless environment (no X11/Wayland display).
+     * On such servers, headful mode is impossible.
+     */
+    private isHeadlessEnvironment(): boolean {
+        if (process.platform === 'win32' || process.platform === 'darwin') return false;
+        return !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
+    }
+
     // Sites known to block headless browsers aggressively
     private shouldUseHeadful(url: string): boolean {
+        // Cannot go headful on a server with no display
+        if (this.isHeadlessEnvironment()) return false;
+
         // First check if tuner has learned this domain needs headful
         if (this.tuner?.shouldForceHeadful(url)) {
             logger.debug(`Browser: Tuner says ${url} requires headful mode`);
@@ -380,8 +392,8 @@ export class WebBrowser {
 
             const bodyTextLength = await this._page.evaluate(() => document.body?.innerText?.trim().length ?? 0).catch(() => 0);
             
-            // If page appears empty and we're in headless mode, retry headful
-            if (bodyTextLength < 100 && this.headlessMode && allowHeadfulRetry) {
+            // If page appears empty and we're in headless mode, retry headful (only if display available)
+            if (bodyTextLength < 100 && this.headlessMode && allowHeadfulRetry && !this.isHeadlessEnvironment()) {
                 logger.warn(`Browser: Page appears blocked/empty (${bodyTextLength} chars). Retrying in headful mode...`);
                 await this.ensureBrowser(false);
                 return this.navigate(url, waitSelectors, false);
@@ -410,7 +422,7 @@ export class WebBrowser {
             const content = await this._page.content();
             const looksBlank = (!title || title.trim().length === 0) && content.replace(/\s+/g, '').length < 1200;
 
-            if (looksBlank && this.headlessMode && allowHeadfulRetry) {
+            if (looksBlank && this.headlessMode && allowHeadfulRetry && !this.isHeadlessEnvironment()) {
                 logger.warn('Browser: Page appears blank in headless mode. Retrying headful...');
                 // Auto-learn: this domain needs headful
                 if (this.tuner) {
