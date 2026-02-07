@@ -44,7 +44,7 @@ export class CommunicationHelper implements PromptHelper {
     - **SUCCESS CHECK**: If a previous step shows a tool SUCCEEDED (e.g., "Posted status update to 3 contacts"), the task is DONE. Do NOT then send a message saying you can't do it or asking for clarification. CHECK YOUR HISTORY before claiming inability.
 8.  **Progress Over Reflection**: Do not loop just to "reflect" in your journal or update learning. 
     - You are limited to **3 total steps** of internal reflection (Journal/Learning) without a "Deep Action" (Search/Command/Web).
-    - If you cannot make objective progress, inform the user and stop. Do NOT stay in a loop just updating metadata.
+    - If you cannot make objective progress AFTER exhausting creative alternatives (searching for APIs, trying different tools, considering building a solution), inform the user what you tried and stop. Do NOT stay in a loop just updating metadata, but also do NOT give up before genuinely trying.
 
 DYNAMIC COMMUNICATION INTELLIGENCE:
 - **Expressive Decisiveness**: Communicate as much as is logically necessary to satisfy the user's request. There is NO hard message limit.
