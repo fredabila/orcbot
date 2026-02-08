@@ -12,7 +12,7 @@
 
 **Autonomous. Strategic. Multi-Modal. Self-Healing.**
 
-[Features](#features) • [Installation](#installation) • [Quickstart](#quickstart) • [Usage](#-usage) • [Configuration](#configuration) • [Autonomy](#autonomy--heartbeat) • [Skills](#-high-power-skills) • [Plugins](#-dynamic-plugin-system) • [Security](#security--privacy) • [Docs](https://fredabila.github.io/orcbot/docs/)
+[Features](#features) • [Installation](#installation) • [Quickstart](#quickstart) • [Usage](#-usage) • [Configuration](#configuration) • [Autonomy](#autonomy--heartbeat) • [Skills](#-high-power-skills) • [Plugins](#-dynamic-plugin-system) • [Hardware](#hardware--robotics) • [Security](#security--privacy) • [Blog](docs/blog/robotics.md) • [Docs](https://fredabila.github.io/orcbot/docs/)
 
 </div>
 
@@ -80,6 +80,25 @@ flowchart LR
 
 ---
 
+## Hardware & Robotics
+
+OrcBot is software-first, but its skill system makes it a strong brain for hardware stacks. The recommended pattern is to keep **real-world control in a dedicated hardware bridge** (ROS2, MQTT, REST, or serial gateway), and let OrcBot plan, reason, and issue safe commands through that bridge.
+
+**Reference architecture:**
+- **OrcBot Core**: planning, memory, autonomy, and decision pipeline.
+- **Hardware Bridge Service**: a small service that translates high-level intents into robot-specific commands.
+- **Message Bus**: ROS2 topics, MQTT, or a REST endpoint to decouple AI from actuators.
+- **Safety Layer**: rate limits, e-stop, and command validation before hitting motors.
+
+**How OrcBot supports it:**
+- Skills can call HTTP endpoints, shell scripts, or custom plugins to control hardware.
+- The autonomy loop and heartbeat can schedule inspections, patrols, or checks.
+- The decision pipeline guards against loops and invalid actions before they reach actuators.
+
+For a full walkthrough and example integration plan, see the blog: [Robotics + OrcBot](docs/blog/robotics.md).
+
+---
+
 ## Installation
 
 You can get started instantly with our one-line installer:
@@ -125,6 +144,7 @@ Live docs (GitHub Pages): https://fredabila.github.io/orcbot/docs/
 *   🐳 [**Docker Guide**](docs/DOCKER.md) - Container deployment options
 *   📊 [**Testing Guide**](TESTING_GUIDE.md) - Testing strategies and patterns
 *   🔒 [**Security Summary**](SECURITY_SUMMARY.md) - Security features and best practices
+*   🤖 [**Robotics + OrcBot**](docs/blog/robotics.md) - Hardware integration approach and safety patterns
 
 ---
 
