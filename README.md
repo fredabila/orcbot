@@ -33,7 +33,9 @@ OrcBot is a next-generation **autonomous reasoning agent**. In v2.0, we've moved
 *   💓 **Smart Heartbeat**: Context-aware autonomy with exponential backoff, productivity tracking, and action-oriented tasks.
 *   🤖 **Multi-Agent Orchestration**: Spawn worker processes to handle parallel tasks with real-time coordination.
 *   🔄 **Termination Review**: Built-in safety layer that reviews proposed actions to prevent premature task termination.
+*   🧭 **LLM Task Complexity**: Dynamic step/message budgets based on model-classified task complexity.
 *   🎯 **Smart Skill Routing**: Intent-based skill selection using configurable routing rules for better tool matching.
+*   🧩 **Admin Permissions + Known Users**: Elevated skills protected by admin gates with persistent user tracking.
 *   🛤️ **Decision Pipeline**: Guardrails system with deduplication, safety checks, and autopilot mode.
 *   🔍 **Resilient Web Search**: Smart fallback from API providers to browser-based search when keys aren't configured.
 *   🖥️ **Interactive TUI & Dashboard**: Comprehensive terminal interface with worker process management.
@@ -41,6 +43,7 @@ OrcBot is a next-generation **autonomous reasoning agent**. In v2.0, we've moved
 *   🔄 **Circuit Breaker Pattern**: Intelligent loop prevention in browser operations to avoid getting stuck.
 *   📚 **Self-Updating Identity**: Agent can evolve its personality, values, and operating instructions through bootstrap files.
 *   ⏱️ **Event-Driven Polling**: Efficient condition monitoring without busy-waiting loops.
+*   🎨 **Image Generation**: Built-in skill for generating and delivering images in supported channels.
 
 ---
 
@@ -391,12 +394,15 @@ OrcBot doesn't just give one answer. It works iteratively:
 
 ---
 
-## �️ Decision Pipeline & Safety
+## 🛡️ Decision Pipeline & Safety
 
 OrcBot v2.0 includes a sophisticated decision pipeline that ensures reliable task execution:
 
 ### Termination Review Layer
 Every proposed action is reviewed before execution to prevent premature task termination. The system favors completing work over asking clarifying questions.
+
+### Task Complexity Classifier
+OrcBot uses an LLM-based classifier to label tasks as trivial, simple, standard, or complex. This drives step and message budgets dynamically instead of brittle regex rules.
 
 ### Skill Routing Rules
 Configure intent-based skill selection:
@@ -415,10 +421,11 @@ Enable `autopilotNoQuestions: true` to suppress clarification requests and keep 
 - **Deduplication**: Prevents repeated tool calls within the same action
 - **Safety Checks**: Validates tool parameters and prevents dangerous operations in safe mode
 - **Fallback Logic**: Auto-retries with alternative providers on failure
+- **Information Boundaries**: Non-admin tasks are blocked from journal/learning/episodic context to prevent cross-user leakage
 
 ---
 
-## �🔌 Dynamic Plugin System
+## 🔌 Dynamic Plugin System
 
 OrcBot supports hot-loadable skills via TypeScript or JavaScript plugins in `~/.orcbot/plugins` (or `./plugins`).
 
@@ -434,6 +441,7 @@ OrcBot supports hot-loadable skills via TypeScript or JavaScript plugins in `~/.
 - **Config isolation**: secrets are loaded from your config and environment variables
 - **Safe Mode**: disable command execution and skill creation via `safeMode: true`
 - **Plugin allow/deny**: control which plugins can load with `pluginAllowList` and `pluginDenyList`
+- **Admin-only Skills**: elevated capabilities are gated to configured admins
 
 ---
 

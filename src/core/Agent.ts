@@ -6909,6 +6909,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                     // Grant up to 5 bonus steps for wrapping up
                     const bonusSteps = Math.min(5, MAX_STEPS);
                     let bonusMessageSent = false;
+                    let bonusNoToolsRetryCount = 0;
                     // Continue the loop for bonus steps (simple approach: just don't break, 
                     // but we need to adjust MAX_STEPS since the while loop already exited)
                     // We'll run a mini-loop here
@@ -6931,6 +6932,22 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             }, { maxRetries: 2, initialDelay: 1000 });
                             
                             if (!bonusDecision?.tools?.length) {
+                                const bonusGoalsNotMet = bonusDecision?.verification?.goals_met === false;
+                                if (bonusGoalsNotMet) {
+                                    bonusNoToolsRetryCount++;
+                                    if (bonusNoToolsRetryCount >= MAX_NO_TOOLS_RETRIES) {
+                                        logger.error(`Agent: Bonus steps exceeded max retries (${MAX_NO_TOOLS_RETRIES}) for no-tools error. Terminating action ${action.id}.`);
+                                        break;
+                                    }
+                                    logger.warn(`Agent: Bonus step returned goals_met=false but no tools. Retry ${bonusNoToolsRetryCount}/${MAX_NO_TOOLS_RETRIES}...`);
+                                    this.memory.saveMemory({
+                                        id: `${action.id}-bonus-${bonus}-no-tools-error`,
+                                        type: 'short',
+                                        content: `[SYSTEM: You said goals_met=false but provided NO TOOLS during bonus steps. This is INVALID. If goals are not met, you MUST include at least one tool. Provide the appropriate tool calls to finish the task.]`,
+                                        metadata: { actionId: action.id, step: currentStep, error: 'no_tools_but_goals_not_met' }
+                                    });
+                                    continue;
+                                }
                                 logger.info(`Agent: No tools in bonus step. Wrapping up.`);
                                 break;
                             }
