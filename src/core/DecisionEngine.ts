@@ -89,12 +89,16 @@ The user appreciates knowing what's happening, especially during complex tasks.`
         
         if (isWindows) {
             return `- Platform: ${platformName} (${os.release()})
-- Shell: PowerShell/CMD
-- IMPORTANT: To run commands in a specific directory, you can either (a) use "cd /path && command" or "cd /path ; command" (the cd will be automatically extracted and used as the cwd while only the remaining command is executed), or (b) pass the cwd parameter directly to run_command
-- IMPORTANT: Use 'write_file' skill for creating files (echo multiline doesn't work)
-- IMPORTANT: Use 'create_directory' skill for making directories
+- Shell: PowerShell (all run_command calls execute in PowerShell, NOT cmd.exe)
+- CRITICAL: Use PowerShell cmdlets, NOT cmd.exe commands:
+  - Use Get-ChildItem (NOT dir), Get-Command (NOT where), Test-Path (NOT if exist)
+  - Use Start-MpScan for Windows Defender scans
+  - Use Get-Process, Stop-Process, Get-Service, Start-Service
+  - Use Invoke-WebRequest (NOT curl on older systems)
+- Use 'write_file' skill for creating files (echo multiline doesn't work)
+- Use 'create_directory' skill for making directories
 - Path format: C:\\path\\to\\file or C:/path/to/file
-- Command chaining: Both && and ; work, but && ensures previous command succeeds`;
+- Command chaining: Use semicolons (;) to chain commands`;
         } else {
             return `- Platform: ${platformName} (${os.release()})
 - Shell: Bash/Zsh
@@ -171,7 +175,8 @@ The user appreciates knowing what's happening, especially during complex tasks.`
         isFirstStep: boolean = true,
         contactProfile?: string,
         profilingEnabled?: boolean,
-        isHeartbeat?: boolean
+        isHeartbeat?: boolean,
+        skillsUsedInAction?: string[]
     ): Promise<string> {
         // Load bootstrap context
         const bootstrapContext: Record<string, string> = {};
@@ -196,7 +201,9 @@ The user appreciates knowing what's happening, especially during complex tasks.`
             bootstrapContext,
             contactProfile,
             profilingEnabled,
-            isHeartbeat
+            isHeartbeat,
+            skillsUsedInAction,
+            overrideMode: !!this.config?.get('overrideMode')
         };
 
         const result = await this.promptRouter.route(helperContext);
@@ -745,6 +752,17 @@ ACTIVE CHANNEL CONTEXT:
 
         // Build task-optimized prompt using the modular PromptHelper system.
         // The router analyzes the task and selects only the relevant helpers.
+        // Extract skills used in this action from step memory IDs (e.g. "abc-step-3-browser_click")
+        // so the PromptRouter can activate relevant helpers even when the task description
+        // doesn't mention browsing (e.g. "lets try again" after a browsing conversation).
+        const skillsUsedInAction = [...new Set(
+            actionMemories
+                .map(m => {
+                    const match = (m.id || '').match(/-step-\\d+-(.+?)(?:-error)?(?:-feedback)?$/);
+                    return match?.[1] || '';
+                })
+                .filter(Boolean)
+        )];
         const coreInstructions = await this.buildHelperPrompt(
             availableSkills,
             this.agentIdentity,
@@ -753,7 +771,8 @@ ACTIVE CHANNEL CONTEXT:
             isFirstStep,
             contactProfile,
             profilingEnabled,
-            isHeartbeat
+            isHeartbeat,
+            skillsUsedInAction
         );
 
         // User context - skip for heartbeats (already in heartbeat prompt)

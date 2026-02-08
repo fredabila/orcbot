@@ -5,13 +5,25 @@ This file lists the available skills for the agent.
 ## Messaging & Media
 - **send_telegram(chat_id, message)**: Send a message to a Telegram user.
 - **send_whatsapp(jid, message)**: Send a message to a WhatsApp contact or group.
+- **send_discord(channel_id, message)**: Send a message to a Discord channel.
+- **send_discord_file(channel_id, file_path, caption?)**: Send a file to a Discord channel with an optional caption.
+- **send_gateway_chat(message)**: Send a message to the Gateway Chat interface.
 - **send_file(jid, path, caption?)**: Send a file to Telegram or WhatsApp.
 - **download_file(url, filename?)**: Download a file to local storage.
 - **analyze_media(path, prompt?)**: Analyze an image, audio, or document file.
+- **text_to_speech(text, voice?, speed?)**: Convert text to an audio file using AI voice synthesis.
+- **send_voice_note(jid, text, voice?)**: Convert text to speech and send as a voice note.
 - **post_whatsapp_status(text)**: Post a text update to WhatsApp status.
+- **react(message_id, emoji, channel?, chat_id?)**: React to a message with an emoji (auto-detect channel).
+- **react_telegram(chat_id, message_id, emoji)**: React to a Telegram message with an emoji.
 - **react_whatsapp(jid, message_id, emoji)**: React to a WhatsApp message with an emoji.
+- **react_discord(channel_id, message_id, emoji)**: React to a Discord message with an emoji.
 - **reply_whatsapp_status(jid, message)**: Reply to a contact’s WhatsApp status.
 - **update_contact_profile(jid, profile_json)**: Persist a WhatsApp contact profile.
+- **get_contact_profile(jid)**: Retrieve a stored WhatsApp contact profile.
+- **list_whatsapp_contacts(limit?)**: List recent WhatsApp contacts that interacted with the bot.
+- **get_discord_guilds()**: Get the list of Discord servers (guilds) the bot is in.
+- **get_discord_channels(guild_id)**: Get the list of text channels in a Discord server.
 
 ## System & Configuration
 - **run_command(command, cwd?)**: Execute shell commands (subject to allow/deny lists). Automatically extracts directory from "cd /path && command" or "cd /path ; command" patterns and uses as working directory.
@@ -34,10 +46,27 @@ This file lists the available skills for the agent.
 - **browser_vision(prompt?)**: Analyze the current page using vision.
 - **browser_solve_captcha()**: Solve detected CAPTCHA.
 - **browser_run_js(script)**: Execute custom JavaScript on the current page.
+- **browser_back()**: Navigate back to the previous page.
+- **browser_scroll(direction, amount?)**: Scroll the page up or down.
+- **browser_hover(selector)**: Hover over an element to trigger menus or tooltips.
+- **browser_select(selector, value)**: Select an option in a dropdown by visible label.
 - **switch_browser_profile(profileName, profileDir?)**: Switch to a persistent browser profile.
+- **switch_browser_engine(engine, endpoint?)**: Switch between Playwright and Lightpanda browser engines.
 - **extract_article(url?)**: Extract clean article text from a URL or the current page.
 - **http_fetch(url, method?, headers?, body?, timeout?)**: Lightweight HTTP request (no browser). Supports GET/POST/PUT/PATCH/DELETE. Returns status + body. Ideal for APIs and simple pages.
 - **youtube_trending(region?, category?)**: Fetch YouTube trending videos via API fallbacks.
+
+## Computer Use (Vision + System)
+- **computer_screenshot(context?)**: Capture a screenshot (browser or system) with optional vision description.
+- **computer_click(x?, y?, description?, button?, context?)**: Click by coordinates or vision-locate a described element.
+- **computer_vision_click(description, button?, context?)**: Vision-guided click by description.
+- **computer_type(text, inputDescription?, context?)**: Type text, optionally vision-locating the input first.
+- **computer_key(key, context?)**: Press a key or key combo (e.g., ctrl+c, alt+Tab).
+- **computer_mouse_move(x, y, context?)**: Move the mouse cursor to pixel coordinates.
+- **computer_drag(fromX, fromY, toX, toY, context?)**: Drag from one point to another.
+- **computer_scroll(direction, amount?, x?, y?, context?)**: Scroll in browser or system context.
+- **computer_locate(description, context?)**: Vision-locate an element and return coordinates.
+- **computer_describe(x?, y?, radius?, context?)**: Vision description of the screen or a region.
 
 ## Memory, Journal & Learning
 - **update_user_profile(info_text)**: Save permanent information learned about the user.
@@ -45,8 +74,10 @@ This file lists the available skills for the agent.
 - **update_journal(entry_text)**: Write a reflection entry to JOURNAL.md.
 - **update_learning(topic, knowledge_content?)**: Research and persist knowledge.
 - **request_supporting_data(question)**: Ask for missing info and pause execution.
-- **deep_reason(topic)**: Perform intensive multi-step analysis.- **recall_memory(query, limit?)**: Semantic search across ALL memory — finds relevant memories from any channel, time period, or type. Use to remember past conversations, find context about topics, or recall what happened with a specific person/project.
+- **deep_reason(topic)**: Perform intensive multi-step analysis.
+- **recall_memory(query, limit?)**: Semantic search across ALL memory — finds relevant memories from any channel, time period, or type.
 - **search_chat_history(jid, query?, limit?, source?)**: Search chat history with a contact. Supports semantic search (meaning-based) and keyword search. Works across WhatsApp, Telegram, and Discord.
+- **get_whatsapp_context(jid)**: Get WhatsApp contact context including profile and recent history.
 ## Scheduling
 - **schedule_task(time_or_cron, task_description)**: Schedule a task for later.
 

@@ -23,6 +23,7 @@ export class WebBrowser {
     private lightpandaEndpoint: string;
     private stateManager: BrowserStateManager;
     private _visionAnalyzer?: (screenshotPath: string, prompt: string) => Promise<string>;
+    public _blankUrlHistory: Map<string, number> = new Map(); // domain → consecutive blank count
 
     public get page(): Page | null {
         return this._page;
@@ -404,6 +405,19 @@ export class WebBrowser {
                 return `Error: ${error}\n\nSuggestion: Wait a moment or try a different approach.`;
             }
 
+            // Check if this domain has repeatedly returned blank pages
+            try {
+                const blankCheckUrl = url.startsWith('http') ? url : 'https://' + url;
+                const blankDomain = new URL(blankCheckUrl).hostname.replace('www.', '');
+                const blankCount = this._blankUrlHistory.get(blankDomain) || 0;
+                if (blankCount >= 2) {
+                    const error = `This site (${blankDomain}) has returned blank/empty pages ${blankCount} time(s). It likely requires JavaScript rendering that is unavailable in this browser mode.`;
+                    logger.warn(`Browser: Blocking navigation to ${blankDomain} — ${blankCount} prior blank pages`);
+                    this.stateManager.recordNavigation(url, 'navigate', false, error);
+                    return `Error: ${error}\n\nSuggestion: STOP browsing this site. Use web_search or extract_article to get the information instead. If you must interact with this site, try computer_vision_click for visual-based interaction.`;
+                }
+            } catch {}
+
             const needsGoogleForms = /docs\.google\.com\/forms/i.test(url);
             const needsHeadful = this.shouldUseHeadful(url);
             
@@ -494,10 +508,23 @@ export class WebBrowser {
                 }
             }
 
+            // Track blank URL domains to prevent repeated failures
+            try {
+                const trackDomain = new URL(targetUrl).hostname.replace('www.', '');
+                if (looksBlank) {
+                    const prevCount = this._blankUrlHistory.get(trackDomain) || 0;
+                    this._blankUrlHistory.set(trackDomain, prevCount + 1);
+                    logger.warn(`Browser: Domain ${trackDomain} returned blank page (count: ${prevCount + 1})`);
+                } else {
+                    this._blankUrlHistory.delete(trackDomain);
+                }
+            } catch {}
+
             this.recordProfileHistory({ url: targetUrl, title, timestamp: new Date().toISOString() });
             this.lastNavigatedUrl = targetUrl;
             this.stateManager.recordNavigation(targetUrl, 'navigate', true);
-            return `Page Loaded: ${title}\nURL: ${url}${captcha ? `\n[WARNING: ${captcha}]` : ''}`;
+            const blankWarning = looksBlank ? '\n\n[WARNING: Page appears blank or nearly empty. The site may require JavaScript that cannot render. Consider using web_search or extract_article instead. Do NOT keep navigating to this site.]' : '';
+            return `Page Loaded: ${title}\nURL: ${url}${captcha ? `\n[WARNING: ${captcha}]` : ''}${blankWarning}`;
         } catch (e) {
             const classified = this.classifyNavigateError(e);
             logger.error(`Browser Error at ${url}: ${classified.raw}`);
@@ -773,25 +800,35 @@ export class WebBrowser {
 
             let snapshot = await buildSnapshot();
             let title = await this.page!.title();
-            let url = await this.page!.url();
+            let url = this.page!.url();
             let contentLength = (await this.page!.content()).length;
 
             // Track blank reload attempts to prevent infinite loops
             const maxBlankReloads = 1;
             let blankReloadAttempts = 0;
 
-            // For SPAs like YouTube, the URL might briefly show about:blank during navigation
-            // Only reload if we have no content AND no title AND the URL is blank
+            // SPAs often transition through about:blank briefly during client-side navigation.
+            // Wait up to 3s for the URL to become non-blank before considering a reload.
+            if ((!url || url === 'about:blank') && contentLength < 500) {
+                for (let i = 0; i < 6; i++) {
+                    await new Promise(r => setTimeout(r, 500));
+                    url = this.page!.url();
+                    contentLength = (await this.page!.content()).length;
+                    if (url && url !== 'about:blank') break;
+                }
+            }
+
+            // If still blank after settling, try navigating back to the last known URL
             if ((!url || url === 'about:blank') && contentLength < 500 && blankReloadAttempts < maxBlankReloads) {
                 const fallbackUrl = this.lastNavigatedUrl;
                 if (fallbackUrl) {
                     logger.warn(`Semantic snapshot: blank URL detected (content: ${contentLength} bytes). Attempting single reload.`);
                     blankReloadAttempts++;
                     await this.page!.goto(fallbackUrl, { waitUntil: 'load', timeout: 30000 }).catch(() => { });
-                    await this.waitForStablePage();
+                    await this.waitForStablePage(15000);
                     snapshot = await buildSnapshot();
                     title = await this.page!.title();
-                    url = await this.page!.url();
+                    url = this.page!.url();
                     contentLength = (await this.page!.content()).length;
                 }
             }
@@ -813,7 +850,7 @@ export class WebBrowser {
                 await this.waitForStablePage();
                 snapshot = await buildSnapshot();
                 title = await this.page!.title();
-                url = await this.page!.url();
+                url = this.page!.url();
                 contentLength = (await this.page!.content()).length;
                 
                 // Update URL display if still blank
@@ -884,7 +921,7 @@ export class WebBrowser {
      * If the ref attribute was removed by SPA re-render, attempts to re-attach it by
      * finding the Nth interactive element (the ref assignment order matches snapshot order).
      */
-    private async resolveSelector(selector: string): Promise<string> {
+    private async resolveSelector(selector: string): Promise<string | null> {
         if (!/^\d+$/.test(selector)) return selector;
 
         const refSelector = `[data-orcbot-ref="${selector}"]`;
@@ -925,9 +962,18 @@ export class WebBrowser {
             return refSelector;
         }
 
-        // Final fallback: return the original ref selector and let Playwright report the error
-        logger.warn(`Browser: Could not re-attach ref ${selector} — element may no longer exist`);
-        return refSelector;
+        // Second fallback: refresh semantic snapshot to re-attach refs, then re-check
+        logger.warn(`Browser: Could not re-attach ref ${selector} — refreshing snapshot`);
+        try {
+            await this.getSemanticSnapshot();
+            const existsAfter = await this.page!.$(refSelector).catch(() => null);
+            if (existsAfter) return refSelector;
+        } catch (e) {
+            logger.debug(`Browser: Snapshot refresh failed while re-attaching ref ${selector}: ${e}`);
+        }
+
+        logger.warn(`Browser: Ref ${selector} is stale — element may no longer exist`);
+        return null;
     }
 
     /**
@@ -952,6 +998,9 @@ export class WebBrowser {
 
             // Resolve ref ID → CSS selector (with re-attachment if SPA re-rendered)
             const finalSelector = await this.resolveSelector(selector);
+            if (!finalSelector) {
+                return `Error: Ref ${selector} is stale. Run browser_examine_page to get a new ref.`;
+            }
 
             // Check for action loop
             if (this.stateManager.detectActionLoop('click', selector)) {
@@ -1054,6 +1103,9 @@ export class WebBrowser {
 
             // Resolve ref ID → CSS selector (with re-attachment if SPA re-rendered)
             const finalSelector = await this.resolveSelector(selector);
+            if (!finalSelector) {
+                return `Error: Ref ${selector} is stale. Run browser_examine_page to get a new ref.`;
+            }
 
             // Check for action loop
             if (this.stateManager.detectActionLoop('type', selector)) {
@@ -1209,6 +1261,9 @@ export class WebBrowser {
         try {
             await this.ensureBrowser();
             const finalSelector = await this.resolveSelector(selector);
+            if (!finalSelector) {
+                return `Error: Ref ${selector} is stale. Run browser_examine_page to get a new ref.`;
+            }
             
             try {
                 await this.page!.hover(finalSelector, { timeout: 5000 });
@@ -1234,6 +1289,9 @@ export class WebBrowser {
         try {
             await this.ensureBrowser();
             const finalSelector = await this.resolveSelector(selector);
+            if (!finalSelector) {
+                return `Error: Ref ${selector} is stale. Run browser_examine_page to get a new ref.`;
+            }
 
             try {
                 // Try Playwright's selectOption — works for <select> elements

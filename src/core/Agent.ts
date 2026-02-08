@@ -13,6 +13,7 @@ import { WhatsAppChannel } from '../channels/WhatsAppChannel';
 import { DiscordChannel } from '../channels/DiscordChannel';
 import { configManagementSkill } from '../skills/configManagement';
 import { WebBrowser } from '../tools/WebBrowser';
+import { ComputerUse } from '../tools/ComputerUse';
 import { WorkerProfileManager } from './WorkerProfile';
 import { AgentOrchestrator } from './AgentOrchestrator';
 import { RuntimeTuner } from './RuntimeTuner';
@@ -44,6 +45,7 @@ export class Agent {
     public whatsapp: WhatsAppChannel | undefined;
     public discord: DiscordChannel | undefined;
     public browser: WebBrowser;
+    public computerUse: ComputerUse;
     public workerProfile: WorkerProfileManager;
     public orchestrator: AgentOrchestrator;
     public bootstrap: BootstrapManager;
@@ -171,6 +173,14 @@ export class Agent {
         this.browser.setVisionAnalyzer(async (screenshotPath: string, prompt: string) => {
             return this.llm.analyzeMedia(screenshotPath, prompt);
         });
+
+        // Computer Use: vision-based mouse/keyboard control for browser + system
+        this.computerUse = new ComputerUse();
+        this.computerUse.setVisionAnalyzer(async (screenshotPath: string, prompt: string) => {
+            return this.llm.analyzeMedia(screenshotPath, prompt);
+        });
+        this.computerUse.setPageGetter(() => this.browser.page);
+
         this.workerProfile = new WorkerProfileManager();
         this.orchestrator = new AgentOrchestrator();
 
@@ -474,13 +484,21 @@ export class Agent {
                 // Auto-detect channel from action context if not specified
                 if (!channel || !chatId) {
                     const recentMemories = this.memory.searchMemory('short');
+                    // Support composite "chatId_msgId" formats - extract the message part for matching
+                    const msgIdStr = String(messageId);
+                    const plainMsgId = msgIdStr.includes('_') ? msgIdStr.split('_').pop() : msgIdStr;
                     const matchingMemory = recentMemories.find((m: any) =>
                         m.metadata?.messageId === messageId ||
-                        m.metadata?.messageId?.toString() === messageId
+                        m.metadata?.messageId?.toString() === messageId ||
+                        m.metadata?.messageId?.toString() === plainMsgId
                     );
                     if (matchingMemory?.metadata) {
                         if (!channel) channel = detectChannelFromMetadata(matchingMemory.metadata);
                         if (!chatId) chatId = matchingMemory.metadata.chatId || matchingMemory.metadata.channelId || matchingMemory.metadata.sourceId;
+                    }
+                    // If chatId still missing but messageId is composite, extract chatId from it
+                    if (!chatId && msgIdStr.includes('_')) {
+                        chatId = msgIdStr.split('_')[0];
                     }
                 }
 
@@ -1207,7 +1225,7 @@ export class Agent {
         // Skill: Run Shell Command
         this.skills.registerSkill({
             name: 'run_command',
-            description: 'Execute a shell command on the server. For file creation, use separate commands or write_file skill. Do not use Unix echo with multiline content on Windows. To run commands in a specific directory, either use "cd /path && command" or pass cwd parameter.',
+            description: 'Execute a shell command on the server. On Windows, commands run in PowerShell — use PowerShell syntax (Get-ChildItem, Get-Command, Start-MpScan, etc.), NOT cmd.exe syntax (dir, where, etc.). For file creation, use write_file skill. To run commands in a specific directory, pass cwd parameter.',
             usage: 'run_command(command, cwd?)',
             handler: async (args: any) => {
                 let command = args.command || args.cmd || args.text;
@@ -1298,7 +1316,12 @@ export class Agent {
                 const { exec } = require('child_process');
 
                 const runOnce = () => new Promise<string>((resolve) => {
-                    const child = exec(actualCommand, { timeout: timeoutMs, cwd: workingDir }, (error: any, stdout: string, stderr: string) => {
+                    const execOptions: any = { timeout: timeoutMs, cwd: workingDir };
+                    // On Windows, use PowerShell as the shell so PowerShell cmdlets work
+                    if (process.platform === 'win32') {
+                        execOptions.shell = 'powershell.exe';
+                    }
+                    const child = exec(actualCommand, execOptions, (error: any, stdout: string, stderr: string) => {
                         if (error) {
                             if (error.killed) {
                                 resolve(`Error: Command timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
@@ -1342,16 +1365,18 @@ export class Agent {
                 const isLinux = process.platform === 'linux';
                 
                 const platformName = isWindows ? 'Windows' : isMac ? 'macOS' : isLinux ? 'Linux' : process.platform;
-                const shell = isWindows ? 'PowerShell/CMD' : 'Bash/Zsh';
+                const shell = isWindows ? 'PowerShell' : 'Bash/Zsh';
                 
                 const commandGuidance = isWindows ? `
-📋 WINDOWS COMMAND GUIDANCE:
-- Use semicolon (;) to chain commands, NOT &&
-- Use PowerShell cmdlets when possible (Get-ChildItem, Set-Content, etc.)
+📋 WINDOWS COMMAND GUIDANCE (PowerShell):
+- Commands run in PowerShell, NOT cmd.exe
+- Use PowerShell cmdlets: Get-ChildItem (not dir), Get-Command (not where), Test-Path (not if exist)
+- For virus scans: Start-MpScan -ScanType QuickScan
+- Use semicolon (;) to chain commands
 - For file creation: Use 'write_file' skill instead of echo
 - For directories: Use 'create_directory' skill instead of mkdir
 - Path separator: Use \\ or / (both work in PowerShell)
-- Environment vars: $env:VAR_NAME (PowerShell) or %VAR_NAME% (CMD)` 
+- Environment vars: $env:VAR_NAME` 
                 : `
 📋 UNIX COMMAND GUIDANCE:
 - Use && to chain commands
@@ -2093,6 +2118,212 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                     return `Switched to Lightpanda browser engine. CDP endpoint: ${ep}. Make sure Lightpanda is running: ./lightpanda serve --host 127.0.0.1 --port 9222`;
                 }
                 return 'Switched to Playwright browser engine (Chrome/Chromium).';
+            }
+        });
+
+        // ─── Computer Use Skills (Vision-based mouse/keyboard control) ───
+
+        // Skill: Computer Screenshot
+        this.skills.registerSkill({
+            name: 'computer_screenshot',
+            description: 'Take a screenshot and describe what is on screen. Set context to "browser" or "system". Returns a visual description so you can see the current screen state before acting.',
+            usage: 'computer_screenshot(context?)',
+            handler: async (args: any) => {
+                const ctx = args.context || args.mode || 'system';
+                if (ctx === 'system' || ctx === 'desktop') this.computerUse.setContext('system');
+                else this.computerUse.setContext('browser');
+                try {
+                    const screenshotPath = await this.computerUse.captureScreen();
+                    let result = `Screenshot saved to: ${screenshotPath} (context: ${this.computerUse.getContext()}, available: ${this.computerUse.isAvailable()})`;
+
+                    // Auto-describe the screenshot so the LLM can "see" it
+                    if (this.computerUse.hasVision()) {
+                        try {
+                            const description = await this.computerUse.describeScreen();
+                            result += `\n[Screen content: ${description}]`;
+                        } catch (e) {
+                            result += `\n[Vision description failed: ${e} — use computer_describe for details]`;
+                        }
+                    }
+
+                    return result;
+                } catch (e) {
+                    return `Screenshot failed: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Computer Click (vision-guided)
+        this.skills.registerSkill({
+            name: 'computer_click',
+            description: 'Click at pixel coordinates (x, y) or describe what to click and vision will locate it. Use context "browser" for in-page clicks or "system" for desktop clicks. When using description, the system takes a screenshot, uses vision AI to find the element, and clicks at the detected coordinates.',
+            usage: 'computer_click(x?, y?, description?, button?, context?)',
+            handler: async (args: any) => {
+                const ctx = args.context || args.mode || 'system';
+                if (ctx === 'system' || ctx === 'desktop') this.computerUse.setContext('system');
+                else if (ctx === 'browser' || ctx === 'page') this.computerUse.setContext('browser');
+
+                const x = args.x !== undefined ? parseInt(args.x) : undefined;
+                const y = args.y !== undefined ? parseInt(args.y) : undefined;
+                const description = args.description || args.element || args.target;
+                const button = args.button || 'left';
+
+                return this.computerUse.mouseClick({ x, y, button, description });
+            }
+        });
+
+        // Skill: Computer Vision Click (always uses vision to find element)
+        this.skills.registerSkill({
+            name: 'computer_vision_click',
+            description: 'Click an element by describing it visually. Takes a screenshot, uses AI vision to locate the element, and clicks at the detected coordinates. Best for canvas apps, custom UIs, or when DOM selectors fail.',
+            usage: 'computer_vision_click(description, button?, context?)',
+            handler: async (args: any) => {
+                const description = args.description || args.element || args.target;
+                if (!description) return 'Error: Missing description of element to click.';
+                const ctx = args.context || args.mode || 'system';
+                if (ctx === 'system' || ctx === 'desktop') this.computerUse.setContext('system');
+                else if (ctx === 'browser' || ctx === 'page') this.computerUse.setContext('browser');
+
+                return this.computerUse.visionClick(description, args.button || 'left');
+            }
+        });
+
+        // Skill: Computer Type
+        this.skills.registerSkill({
+            name: 'computer_type',
+            description: 'Type text at the current cursor position using keyboard simulation. Or describe an input field to click it first (vision-guided), then type.',
+            usage: 'computer_type(text, inputDescription?, context?)',
+            handler: async (args: any) => {
+                const text = args.text || args.content || args.input;
+                if (!text) return 'Error: Missing text to type.';
+                const ctx = args.context || args.mode || 'system';
+                if (ctx === 'system' || ctx === 'desktop') this.computerUse.setContext('system');
+                else if (ctx === 'browser' || ctx === 'page') this.computerUse.setContext('browser');
+
+                const inputDescription = args.inputDescription || args.field || args.element;
+                if (inputDescription) {
+                    return this.computerUse.visionType(inputDescription, text);
+                }
+                return this.computerUse.keyType(text);
+            }
+        });
+
+        // Skill: Computer Key Press
+        this.skills.registerSkill({
+            name: 'computer_key',
+            description: 'Press a key or key combination (e.g., "Enter", "ctrl+c", "alt+Tab", "ctrl+shift+s"). Works in both browser and system context.',
+            usage: 'computer_key(key, context?)',
+            handler: async (args: any) => {
+                const key = args.key || args.keys || args.combo;
+                if (!key) return 'Error: Missing key to press.';
+                const ctx = args.context || args.mode || 'system';
+                if (ctx === 'system' || ctx === 'desktop') this.computerUse.setContext('system');
+                else if (ctx === 'browser' || ctx === 'page') this.computerUse.setContext('browser');
+
+                return this.computerUse.keyPress(key);
+            }
+        });
+
+        // Skill: Computer Mouse Move
+        this.skills.registerSkill({
+            name: 'computer_mouse_move',
+            description: 'Move the mouse cursor to pixel coordinates (x, y).',
+            usage: 'computer_mouse_move(x, y, context?)',
+            handler: async (args: any) => {
+                const x = parseInt(args.x);
+                const y = parseInt(args.y);
+                if (isNaN(x) || isNaN(y)) return 'Error: Missing or invalid x/y coordinates.';
+                const ctx = args.context || args.mode || 'system';
+                if (ctx === 'system' || ctx === 'desktop') this.computerUse.setContext('system');
+                else if (ctx === 'browser' || ctx === 'page') this.computerUse.setContext('browser');
+
+                return this.computerUse.mouseMove(x, y);
+            }
+        });
+
+        // Skill: Computer Drag
+        this.skills.registerSkill({
+            name: 'computer_drag',
+            description: 'Drag from one point to another. Useful for moving elements, selecting text, resizing, etc.',
+            usage: 'computer_drag(fromX, fromY, toX, toY, context?)',
+            handler: async (args: any) => {
+                const fromX = parseInt(args.fromX || args.startX || args.x1);
+                const fromY = parseInt(args.fromY || args.startY || args.y1);
+                const toX = parseInt(args.toX || args.endX || args.x2);
+                const toY = parseInt(args.toY || args.endY || args.y2);
+                if ([fromX, fromY, toX, toY].some(isNaN)) return 'Error: Missing coordinates. Need fromX, fromY, toX, toY.';
+                const ctx = args.context || args.mode || 'system';
+                if (ctx === 'system' || ctx === 'desktop') this.computerUse.setContext('system');
+                else if (ctx === 'browser' || ctx === 'page') this.computerUse.setContext('browser');
+
+                return this.computerUse.mouseDrag(fromX, fromY, toX, toY);
+            }
+        });
+
+        // Skill: Computer Scroll
+        this.skills.registerSkill({
+            name: 'computer_scroll',
+            description: 'Scroll up/down/left/right in browser or system context. Amount is in scroll ticks (default 3).',
+            usage: 'computer_scroll(direction, amount?, x?, y?, context?)',
+            handler: async (args: any) => {
+                const direction = args.direction || 'down';
+                if (!['up', 'down', 'left', 'right'].includes(direction)) {
+                    return 'Error: direction must be up, down, left, or right.';
+                }
+                const amount = parseInt(args.amount) || 3;
+                const x = args.x !== undefined ? parseInt(args.x) : undefined;
+                const y = args.y !== undefined ? parseInt(args.y) : undefined;
+                const ctx = args.context || args.mode || 'system';
+                if (ctx === 'system' || ctx === 'desktop') this.computerUse.setContext('system');
+                else if (ctx === 'browser' || ctx === 'page') this.computerUse.setContext('browser');
+
+                return this.computerUse.scroll(direction, amount, x, y);
+            }
+        });
+
+        // Skill: Computer Locate Element
+        this.skills.registerSkill({
+            name: 'computer_locate',
+            description: 'Use AI vision to find an element on screen by description. Returns pixel coordinates. Useful for planning clicks on complex UIs, canvas apps, or non-DOM elements.',
+            usage: 'computer_locate(description, context?)',
+            handler: async (args: any) => {
+                const description = args.description || args.element || args.target;
+                if (!description) return 'Error: Missing description of element to locate.';
+                const ctx = args.context || args.mode || 'system';
+                if (ctx === 'system' || ctx === 'desktop') this.computerUse.setContext('system');
+                else if (ctx === 'browser' || ctx === 'page') this.computerUse.setContext('browser');
+
+                try {
+                    const result = await this.computerUse.locateElement(description);
+                    if (result.x < 0 || result.y < 0) {
+                        return `Element not found: "${description}". It may not be visible on the current screen. Try scrolling or navigating to reveal it.`;
+                    }
+                    return `Found "${description}" at coordinates (${result.x}, ${result.y}) [confidence: ${result.confidence}]${result.description ? ` — ${result.description}` : ''}`;
+                } catch (e) {
+                    return `Failed to locate element: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Computer Describe Screen
+        this.skills.registerSkill({
+            name: 'computer_describe',
+            description: 'Use AI vision to describe what is on screen. Optionally focus on a region around given coordinates.',
+            usage: 'computer_describe(x?, y?, radius?, context?)',
+            handler: async (args: any) => {
+                const ctx = args.context || args.mode || 'system';
+                if (ctx === 'system' || ctx === 'desktop') this.computerUse.setContext('system');
+                else if (ctx === 'browser' || ctx === 'page') this.computerUse.setContext('browser');
+
+                const x = args.x !== undefined ? parseInt(args.x) : undefined;
+                const y = args.y !== undefined ? parseInt(args.y) : undefined;
+                const radius = args.radius ? parseInt(args.radius) : undefined;
+
+                try {
+                    return await this.computerUse.describeScreen(x, y, radius);
+                } catch (e) {
+                    return `Failed to describe screen: ${e}`;
+                }
             }
         });
 
@@ -3624,7 +3855,7 @@ Be thorough and academic.`;
             this.agentIdentity = fs.readFileSync(this.agentConfigFile, 'utf-8');
             logger.info(`Agent identity loaded from ${this.agentConfigFile}`);
         } else {
-            this.agentIdentity = "You are a professional autonomous agent.";
+            this.agentIdentity = "You are a capable, direct autonomous agent. Be natural and concise — not a customer service bot.";
             logger.warn(`${this.agentConfigFile} not found. Using default identity.`);
         }
         this.decisionEngine.setAgentIdentity(this.agentIdentity);
@@ -3907,6 +4138,9 @@ Respond with ONLY valid JSON:
             'web_search', 'browser_navigate', 'browser_click', 'browser_type',
             'browser_examine_page', 'browser_screenshot', 'browser_back',
             'browser_scroll', 'browser_hover', 'browser_select',
+            'computer_screenshot', 'computer_click', 'computer_vision_click',
+            'computer_type', 'computer_key', 'computer_mouse_move',
+            'computer_drag', 'computer_scroll', 'computer_locate', 'computer_describe',
             'extract_article', 'http_fetch', 'download_file', 'read_file', 'write_to_file',
             'write_file', 'create_file', 'delete_file', 'run_command',
             'send_telegram', 'send_whatsapp', 'send_discord', 'send_gateway_chat',
@@ -5495,6 +5729,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 'web_search', 'browser_navigate', 'browser_click', 'browser_type',
                 'browser_examine_page', 'browser_screenshot', 'browser_back',
                 'browser_scroll', 'browser_hover', 'browser_select',
+                'computer_screenshot', 'computer_click', 'computer_vision_click',
+                'computer_type', 'computer_key', 'computer_locate', 'computer_describe',
                 'extract_article', 'http_fetch', 'download_file', 'read_file', 'write_to_file',
                 'write_file', 'create_file', 'send_file',
                 'run_command', 'analyze_media', 'recall_memory'
@@ -5533,6 +5769,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             const recentSkillNames: string[] = []; // Track skill name sequence for pattern detection
             const recentSkillSignatures: string[] = []; // Track skill name+args for smarter pattern detection
             this._blankPageCount = 0; // Reset blank-page counter for each new action
+            this.browser._blankUrlHistory?.clear(); // Reset blank-URL domain tracker for each new action
 
             const nonDeepSkills = [
                 'send_telegram',
@@ -6050,10 +6287,25 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                     metadata: { actionId: action.id, skill: toolCall.name, rateLimitMinutes: waitMinutes, step: currentStep }
                                 });
                             } else {
+                                // Build shell-aware hint for common failures
+                                let hint = '';
+                                const isWin = process.platform === 'win32';
+                                if (isWin && toolCall.name === 'run_command') {
+                                    const cmdStr = String(toolCall.metadata?.command || toolCall.metadata?.cmd || '').trim().toLowerCase();
+                                    if (cmdStr.startsWith('dir ') || cmdStr === 'dir') {
+                                        hint = ' HINT: Use Get-ChildItem instead of dir. Commands execute in PowerShell.';
+                                    } else if (cmdStr.startsWith('where ')) {
+                                        hint = ' HINT: Use Get-Command instead of where. Commands execute in PowerShell.';
+                                    } else if (errorSnippet.includes('not recognized') || errorSnippet.includes('not found') || errorSnippet.includes('Could not find')) {
+                                        hint = ' HINT: Commands run in PowerShell. Use PowerShell cmdlets (Get-ChildItem, Get-Command, Test-Path, Start-MpScan, etc.).';
+                                    } else if (errorSnippet.includes('cannot find the path') || errorSnippet.includes('does not exist')) {
+                                        hint = ' HINT: Verify the path exists with Test-Path before using it.';
+                                    }
+                                }
                                 this.memory.saveMemory({
                                     id: `${action.id}-step-${currentStep}-${toolCall.name}-error-feedback`,
                                     type: 'short',
-                                    content: `[SYSTEM: TOOL ERROR — '${toolCall.name}' FAILED with params ${paramsSummary}. Error: ${errorSnippet}. DO NOT call '${toolCall.name}' again with the same parameters. Fix the parameters or try a completely different approach.]`,
+                                    content: `[SYSTEM: TOOL ERROR — '${toolCall.name}' FAILED with params ${paramsSummary}. Error: ${errorSnippet}.${hint} DO NOT call '${toolCall.name}' again with the same parameters. Fix the parameters or try a completely different approach.]`,
                                     metadata: { actionId: action.id, skill: toolCall.name, failures: skillFailCounts[toolCall.name], step: currentStep }
                                 });
                             }

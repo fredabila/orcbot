@@ -176,6 +176,12 @@ export class ConfigPolicy {
             description: 'Sudo mode enabled',
             reason: 'Security-critical configuration',
         }],
+        ['overrideMode', {
+            key: 'overrideMode',
+            level: ConfigChangeLevel.LOCKED,
+            description: 'Behavioral override mode',
+            reason: 'Security-critical configuration — bypasses persona boundaries',
+        }],
         ['bedrockAccessKeyId', {
             key: 'bedrockAccessKeyId',
             level: ConfigChangeLevel.LOCKED,

@@ -32,6 +32,10 @@ export interface PromptHelperContext {
     profilingEnabled?: boolean;
     /** Whether this is a heartbeat/autonomy task (triggers lightweight prompt assembly) */
     isHeartbeat?: boolean;
+    /** Skills/tools that have been used so far in the current action (extracted from step memory IDs) */
+    skillsUsedInAction?: string[];
+    /** When true, persona boundaries and behavioral restrictions are suspended (user-toggled override) */
+    overrideMode?: boolean;
 }
 
 export interface PromptHelper {

@@ -58,6 +58,7 @@ export interface AgentConfig {
     commandDenyList?: string[];
     safeMode?: boolean;
     sudoMode?: boolean;
+    overrideMode?: boolean;
     pluginAllowList?: string[];
     pluginDenyList?: string[];
     pluginHealthCheckIntervalMinutes?: number; // Plugin health check interval (default 15)
@@ -413,6 +414,7 @@ export class ConfigManager {
             bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
             bedrockSecretAccessKey: process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY,
             sudoMode: false,
+            overrideMode: false,
             bedrockSessionToken: process.env.BEDROCK_SESSION_TOKEN || process.env.AWS_SESSION_TOKEN,
             openrouterBaseUrl: 'https://openrouter.ai/api/v1',
             skillRoutingRules: [],

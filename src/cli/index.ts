@@ -1210,7 +1210,7 @@ async function showMainMenu() {
     ].join(dim(' │ '));
 
     box([
-        `${dim('Agent')}    ${bold(agentName)}${sudoMode ? `  ${c.bgRed}${c.white}${c.bold} SUDO ${c.reset}` : ''}`,
+        `${dim('Agent')}    ${bold(agentName)}${sudoMode ? `  ${c.bgRed}${c.white}${c.bold} SUDO ${c.reset}` : ''}${agent.config.get('overrideMode') ? `  ${c.bgRed}${c.white}${c.bold} OVERRIDE ${c.reset}` : ''}`,
         `${dim('Model')}    ${brightCyan(model)} ${dim('via')} ${cyan(provider)}`,
         `${dim('Channels')} ${channelDots}  ${dim(`(${channelCount}/3 active)`)}`,
         '',
@@ -2756,20 +2756,23 @@ async function showSecurityMenu() {
 
     const safeMode = agent.config.get('safeMode');
     const sudoMode = agent.config.get('sudoMode');
+    const overrideMode = agent.config.get('overrideMode');
     const allowList = (agent.config.get('commandAllowList') || []) as string[];
     const denyList = (agent.config.get('commandDenyList') || []) as string[];
 
     console.log('');
     const safeBadge = safeMode ? red(bold('🔒 LOCKED')) : green(bold('🔓 OPEN'));
     const sudoBadge = sudoMode ? yellow(bold('⚠️  ENABLED')) : green(bold('✅ OFF'));
+    const overrideBadge = overrideMode ? red(bold('☠️  ACTIVE')) : green(bold('✅ OFF'));
     const secLines = [
-        `${dim('Safe Mode')}    ${safeBadge}     ${dim(safeMode ? 'commands disabled' : 'commands allowed')}`,
-        `${dim('Sudo Mode')}    ${sudoBadge}  ${dim(sudoMode ? 'all commands allowed' : 'allowList enforced')}`,
+        `${dim('Safe Mode')}     ${safeBadge}     ${dim(safeMode ? 'commands disabled' : 'commands allowed')}`,
+        `${dim('Sudo Mode')}     ${sudoBadge}  ${dim(sudoMode ? 'all commands allowed' : 'allowList enforced')}`,
+        `${dim('Override')}      ${overrideBadge}  ${dim(overrideMode ? 'persona boundaries OFF' : 'persona boundaries enforced')}`,
         ``,
-        `${dim('Allow List')}   ${cyan(bold(String(allowList.length)))} commands  ${dim(allowList.length > 0 ? allowList.slice(0, 5).join(', ') + (allowList.length > 5 ? '…' : '') : '(empty)')}`,
-        `${dim('Block List')}   ${cyan(bold(String(denyList.length)))} commands  ${dim(denyList.length > 0 ? denyList.slice(0, 5).join(', ') + (denyList.length > 5 ? '…' : '') : '(empty)')}`,
+        `${dim('Allow List')}    ${cyan(bold(String(allowList.length)))} commands  ${dim(allowList.length > 0 ? allowList.slice(0, 5).join(', ') + (allowList.length > 5 ? '…' : '') : '(empty)')}`,
+        `${dim('Block List')}    ${cyan(bold(String(denyList.length)))} commands  ${dim(denyList.length > 0 ? denyList.slice(0, 5).join(', ') + (denyList.length > 5 ? '…' : '') : '(empty)')}`,
     ];
-    box(secLines, { title: '🛡️  SECURITY STATUS', width: 58, color: safeMode ? c.red : (sudoMode ? c.yellow : c.green) });
+    box(secLines, { title: '🛡️  SECURITY STATUS', width: 58, color: overrideMode ? c.red : (safeMode ? c.red : (sudoMode ? c.yellow : c.green)) });
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -2781,6 +2784,8 @@ async function showSecurityMenu() {
                 new inquirer.Separator(gradient('  ─── Mode Toggles ─────────────────', [c.red, c.gray])),
                 { name: safeMode ? `  🔓 ${bold('Disable Safe Mode')} ${dim('(allow commands)')}` : `  🔒 ${bold('Enable Safe Mode')} ${dim('(block all commands)')}`, value: 'toggle_safe' },
                 { name: sudoMode ? `  ✅ ${bold('Disable Sudo Mode')} ${dim('(enforce allowList)')}` : `  ⚠️  ${bold('Enable Sudo Mode')} ${dim('(allow ALL commands)')}`, value: 'toggle_sudo' },
+                new inquirer.Separator(gradient('  ─── Dangerous ────────────────────', [c.red, c.brightRed || c.red])),
+                { name: overrideMode ? `  ☠️  ${bold('Disable Override')} ${dim('(restore persona boundaries)')}` : `  ☠️  ${bold('Enable Override')} ${dim('(remove ALL behavioral limits)')}`, value: 'toggle_override' },
                 new inquirer.Separator(gradient('  ─── Allow List ───────────────────', [c.green, c.gray])),
                 { name: `  ➕ Add Command to Allow List`, value: 'add_allow' },
                 { name: `  ➖ Remove Command from Allow List`, value: 'remove_allow' },
@@ -2814,6 +2819,39 @@ async function showSecurityMenu() {
             } else {
                 agent.config.set('sudoMode', false);
                 console.log('\n✅ Sudo Mode disabled. AllowList is now enforced.');
+            }
+            break;
+        case 'toggle_override':
+            if (!overrideMode) {
+                console.log('');
+                console.log(red(bold('  ╔══════════════════════════════════════════════════╗')));
+                console.log(red(bold('  ║         ☠️  BEHAVIORAL OVERRIDE WARNING ☠️         ║')));
+                console.log(red(bold('  ╠══════════════════════════════════════════════════╣')));
+                console.log(red(     '  ║  This removes ALL persona safety boundaries.     ║'));
+                console.log(red(     '  ║  The agent will comply with ANY request —         ║'));
+                console.log(red(     '  ║  including rude, offensive, or unhinged content.  ║'));
+                console.log(red(     '  ║                                                  ║'));
+                console.log(red(     '  ║  SOUL.md rules, tone restrictions, and refusal    ║'));
+                console.log(red(     '  ║  behaviors are fully suspended while active.      ║'));
+                console.log(red(bold('  ╚══════════════════════════════════════════════════╝')));
+                console.log('');
+                const { confirm: c1 } = await inquirer.prompt([
+                    { type: 'confirm', name: 'confirm', message: red('I understand this removes behavioral guardrails. Continue?'), default: false }
+                ]);
+                if (c1) {
+                    const { confirm: c2 } = await inquirer.prompt([
+                        { type: 'input', name: 'confirm', message: red('Type OVERRIDE to confirm:') }
+                    ]);
+                    if (c2 === 'OVERRIDE') {
+                        agent.config.set('overrideMode', true);
+                        console.log('\n☠️  Override Mode ' + red(bold('ACTIVE')) + '. All persona boundaries suspended.');
+                    } else {
+                        console.log('\nAborted — confirmation did not match.');
+                    }
+                }
+            } else {
+                agent.config.set('overrideMode', false);
+                console.log('\n✅ Override Mode disabled. Persona boundaries restored.');
             }
             break;
         case 'add_allow': {

@@ -283,15 +283,40 @@ export class TelegramChannel implements IChannel {
      */
     public async react(chatId: string, messageId: string, emoji: string): Promise<void> {
         try {
+            // Normalize chatId — might be composite "chatId_msgId" or plain number
+            let normalizedChatId: string | number = chatId;
+            if (String(chatId).includes('_')) {
+                // Composite format: take the FIRST part as chat_id
+                normalizedChatId = String(chatId).split('_')[0];
+                logger.warn(`TelegramChannel: Normalized chat_id from "${chatId}" to "${normalizedChatId}"`);
+            }
+            normalizedChatId = Number(normalizedChatId) || normalizedChatId;
+
+            // Normalize messageId — might be composite "chatId_msgId" or plain number
+            const rawId = String(messageId);
+            let numericId: number;
+            if (rawId.includes('_')) {
+                // Composite format: take the LAST part as message_id
+                const parts = rawId.split('_');
+                numericId = parseInt(parts[parts.length - 1], 10);
+                logger.warn(`TelegramChannel: Normalized message_id from "${rawId}" to "${numericId}"`);
+            } else {
+                numericId = parseInt(rawId, 10);
+            }
+            if (isNaN(numericId)) {
+                throw new Error(`Invalid message_id format: ${rawId}`);
+            }
+
+            logger.debug(`TelegramChannel: react() chat_id=${normalizedChatId} message_id=${numericId} emoji=${emoji}`);
             await (this.bot.telegram as any).callApi('setMessageReaction', {
-                chat_id: chatId,
-                message_id: parseInt(messageId, 10),
+                chat_id: normalizedChatId,
+                message_id: numericId,
                 reaction: [{ type: 'emoji', emoji }],
                 is_big: false
             });
-            logger.info(`TelegramChannel: Reacted with ${emoji} to message ${messageId} in ${chatId}`);
+            logger.info(`TelegramChannel: Reacted with ${emoji} to message ${numericId} in ${normalizedChatId}`);
         } catch (error) {
-            logger.error(`TelegramChannel: Error reacting to message ${messageId}: ${error}`);
+            logger.error(`TelegramChannel: Error reacting to message ${messageId} in chat ${chatId}: ${error}`);
             throw error;
         }
     }
