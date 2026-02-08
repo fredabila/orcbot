@@ -1096,4 +1096,203 @@ export class MultiLLM {
         // Rough heuristic: ~4 chars per token
         return Math.ceil(text.length / 4);
     }
+
+    /**
+     * Generate an image using the configured provider.
+     * Returns the file path to the saved image.
+     */
+    public async generateImage(
+        prompt: string,
+        outputPath: string,
+        options?: {
+            provider?: 'openai' | 'google';
+            model?: string;
+            size?: string;
+            quality?: string;
+        }
+    ): Promise<{ success: boolean; filePath?: string; revisedPrompt?: string; error?: string }> {
+        const provider = options?.provider || (this.googleKey ? 'google' : this.openaiKey ? 'openai' : null);
+
+        if (!provider) {
+            return { success: false, error: 'No image generation provider available. Configure an OpenAI or Google API key.' };
+        }
+
+        try {
+            if (provider === 'openai') {
+                return await this.generateImageOpenAI(prompt, outputPath, options?.model, options?.size, options?.quality);
+            } else if (provider === 'google') {
+                return await this.generateImageGoogle(prompt, outputPath, options?.model, options?.size);
+            }
+            return { success: false, error: `Unsupported image gen provider: ${provider}` };
+        } catch (error) {
+            logger.error(`MultiLLM: Image generation failed (${provider}): ${error}`);
+            return { success: false, error: String(error) };
+        }
+    }
+
+    /**
+     * Generate an image using OpenAI DALL·E / GPT Image API.
+     * Uses the Images API endpoint: POST /v1/images/generations
+     */
+    private async generateImageOpenAI(
+        prompt: string,
+        outputPath: string,
+        model?: string,
+        size?: string,
+        quality?: string
+    ): Promise<{ success: boolean; filePath?: string; revisedPrompt?: string; error?: string }> {
+        if (!this.openaiKey) throw new Error('OpenAI API key not configured');
+
+        const imageModel = model || 'dall-e-3';
+        const imageSize = size || '1024x1024';
+        // DALL-E 3 uses 'standard'/'hd'; GPT Image uses 'low'/'medium'/'high'
+        const isDalle = imageModel.startsWith('dall-e');
+        let imageQuality: string;
+        if (isDalle) {
+            imageQuality = (quality === 'high' || quality === 'hd') ? 'hd' : 'standard';
+        } else {
+            imageQuality = quality || 'medium';
+        }
+
+        const body: any = {
+            model: imageModel,
+            prompt,
+            n: 1,
+            size: imageSize,
+            quality: imageQuality,
+        };
+
+        // GPT Image models return b64_json by default; DALL-E supports both
+        body.response_format = 'b64_json';
+
+        const response = await fetch('https://api.openai.com/v1/images/generations', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.openaiKey}`,
+            },
+            body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+            const err = await response.text();
+            throw new Error(`OpenAI Image API Error: ${response.status} ${err}`);
+        }
+
+        const data = await response.json() as any;
+        const imageData = data?.data?.[0];
+
+        if (!imageData) throw new Error('No image data in OpenAI response');
+
+        const b64 = imageData.b64_json;
+        if (!b64) throw new Error('No base64 image data returned');
+
+        const dir = path.dirname(outputPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(outputPath, Buffer.from(b64, 'base64'));
+
+        logger.info(`MultiLLM: OpenAI image generated → ${outputPath} (model: ${imageModel})`);
+
+        return {
+            success: true,
+            filePath: outputPath,
+            revisedPrompt: imageData.revised_prompt,
+        };
+    }
+
+    /**
+     * Generate an image using Google Gemini image generation.
+     * Uses the Gemini generateContent endpoint with responseModalities: ['Image'].
+     * Compatible models: gemini-2.5-flash-image, gemini-3-pro-image-preview
+     */
+    private async generateImageGoogle(
+        prompt: string,
+        outputPath: string,
+        model?: string,
+        size?: string
+    ): Promise<{ success: boolean; filePath?: string; revisedPrompt?: string; error?: string }> {
+        if (!this.googleKey) throw new Error('Google API key not configured');
+
+        const imageModel = model || 'gemini-2.5-flash-image';
+
+        // Map size to aspect ratio for Gemini
+        let aspectRatio: string | undefined;
+        if (size) {
+            const [w, h] = size.split('x').map(Number);
+            if (w && h) {
+                if (w > h) aspectRatio = '16:9';
+                else if (h > w) aspectRatio = '9:16';
+                else aspectRatio = '1:1';
+            }
+        }
+
+        const requestBody: any = {
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+                responseModalities: ['Image', 'Text'],
+            },
+        };
+
+        if (aspectRatio) {
+            requestBody.generationConfig.imageConfig = { aspectRatio };
+        }
+
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${imageModel}:generateContent?key=${this.googleKey}`;
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody),
+        });
+
+        if (!response.ok) {
+            const err = await response.text();
+            throw new Error(`Google Image API Error: ${response.status} ${err}`);
+        }
+
+        const data = await response.json() as any;
+        const parts = data?.candidates?.[0]?.content?.parts;
+
+        if (!parts || parts.length === 0) {
+            throw new Error('No parts in Gemini image response');
+        }
+
+        // Find the image part (inline_data with image mimetype)
+        let imageB64: string | undefined;
+        let mimeType = 'image/png';
+        let textResponse: string | undefined;
+
+        for (const part of parts) {
+            if (part.inlineData && part.inlineData.mimeType?.startsWith('image/')) {
+                imageB64 = part.inlineData.data;
+                mimeType = part.inlineData.mimeType;
+            } else if (part.inline_data && part.inline_data.mime_type?.startsWith('image/')) {
+                // Alternative casing from some API responses
+                imageB64 = part.inline_data.data;
+                mimeType = part.inline_data.mime_type;
+            } else if (part.text) {
+                textResponse = part.text;
+            }
+        }
+
+        if (!imageB64) {
+            throw new Error(`No image data in Gemini response. Text: ${textResponse || 'none'}`);
+        }
+
+        // Determine extension from mime type
+        const ext = mimeType.includes('jpeg') ? '.jpg' : mimeType.includes('webp') ? '.webp' : '.png';
+        const finalPath = outputPath.endsWith(ext) ? outputPath : outputPath.replace(/\.[^.]+$/, ext);
+
+        const dir = path.dirname(finalPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(finalPath, Buffer.from(imageB64, 'base64'));
+
+        logger.info(`MultiLLM: Google image generated → ${finalPath} (model: ${imageModel})`);
+
+        return {
+            success: true,
+            filePath: finalPath,
+            revisedPrompt: textResponse,
+        };
+    }
 }

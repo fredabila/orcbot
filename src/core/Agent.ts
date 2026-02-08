@@ -30,6 +30,34 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 
+/**
+ * Skills that require admin-level permissions.
+ * Non-admin users (external users not in adminUsers config) cannot trigger these.
+ * When adminUsers is not configured, everyone is treated as admin (backwards compatible).
+ */
+export const ELEVATED_SKILLS = new Set([
+    'run_command',
+    'write_file', 'write_to_file', 'create_file', 'delete_file', 'read_file',
+    'install_npm_dependency',
+    'browser_navigate', 'browser_click', 'browser_type', 'browser_snapshot', 'browser_close',
+    'schedule_task',
+    'manage_skills', 'manage_config',
+    'generate_image', 'send_image',
+]);
+
+/**
+ * Tracks users who have interacted with the bot across channels.
+ * Used in the TUI to select admin users without needing to know raw IDs.
+ */
+export interface KnownUser {
+    id: string;           // channel-specific user ID
+    name: string;         // display name
+    channel: 'telegram' | 'discord' | 'whatsapp';
+    username?: string;    // @username if available
+    lastSeen: string;     // ISO timestamp
+    messageCount: number;
+}
+
 export class Agent {
     public memory: MemoryManager;
     public llm: MultiLLM;
@@ -74,6 +102,11 @@ export class Agent {
     // Track processed messages to prevent duplicates
     private processedMessages: Set<string> = new Set();
     private processedMessagesMaxSize: number = 1000;
+
+    // Known users tracker — populated from inbound channel messages
+    private knownUsers: Map<string, KnownUser> = new Map();
+    private knownUsersPath: string = '';
+    private knownUsersDirty: boolean = false;
 
     constructor() {
         this.config = new ConfigManager();
@@ -190,6 +223,8 @@ export class Agent {
         this.loadHeartbeatSchedules();
         this.scheduledTasksPath = path.join(path.dirname(this.config.get('actionQueuePath')), 'scheduled-tasks.json');
         this.loadScheduledTasks();
+        this.knownUsersPath = path.join(this.config.getDataHome(), 'known_users.json');
+        this.loadKnownUsers();
 
         // Ensure context is up to date (supports reconfiguration)
         this.skills.setContext({
@@ -894,6 +929,130 @@ export class Agent {
                     return 'Appropriate channel not available or JID type not recognized.';
                 } catch (e) {
                     return `Error sending voice note: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Generate Image
+        this.skills.registerSkill({
+            name: 'generate_image',
+            description: 'Generate an image from a text prompt using AI (DALL·E, GPT Image, or Gemini). Returns the file path of the generated image. IMPORTANT: Prefer send_image() instead — it generates AND sends in one step. Only use generate_image if you need the file without sending it.',
+            usage: 'generate_image(prompt, size?, quality?)',
+            handler: async (args: any) => {
+                const prompt = args.prompt || args.text || args.description;
+                const size = args.size || this.config.get('imageGenSize') || '1024x1024';
+                const quality = args.quality || this.config.get('imageGenQuality') || 'medium';
+
+                if (!prompt) return 'Error: Missing prompt for image generation.';
+
+                try {
+                    const downloadsDir = path.join(this.config.getDataHome(), 'downloads');
+                    if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
+                    const outputPath = path.join(downloadsDir, `image_${Date.now()}.png`);
+
+                    const provider = this.config.get('imageGenProvider') || undefined;
+                    const model = this.config.get('imageGenModel') || undefined;
+
+                    const result = await this.llm.generateImage(prompt, outputPath, {
+                        provider,
+                        model,
+                        size,
+                        quality,
+                    });
+
+                    if (result.success && result.filePath) {
+                        const fileName = path.basename(result.filePath);
+                        let response = `Image generated successfully: ${result.filePath} (${fileName})`;
+                        if (result.revisedPrompt) {
+                            response += `\nRevised prompt: ${result.revisedPrompt.substring(0, 200)}`;
+                        }
+                        response += '\n[SYSTEM: Image already generated. Do NOT call generate_image again. Use send_file() to deliver, or send_image() next time for auto-delivery.]';
+                        return response;
+                    } else {
+                        return `Error generating image: ${result.error || 'Unknown error'}`;
+                    }
+                } catch (e) {
+                    return `Error generating image: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Send Image (compound: generate + send in one step — preferred over generate_image)
+        this.skills.registerSkill({
+            name: 'send_image',
+            description: 'Generate an AI image from a text prompt and immediately send it to a contact. This is the PREFERRED way to deliver generated images — it generates and sends in one step, preventing duplicates. Use this instead of generate_image + send_file. IMPORTANT: set "channel" to the correct platform (discord/telegram/whatsapp).',
+            usage: 'send_image(jid, prompt, channel?, size?, quality?, caption?)',
+            handler: async (args: any) => {
+                const jid = args.jid || args.to;
+                const prompt = args.prompt || args.text || args.description;
+                const caption = args.caption || '';
+                const size = args.size || this.config.get('imageGenSize') || '1024x1024';
+                const quality = args.quality || this.config.get('imageGenQuality') || 'medium';
+                const explicitChannel = args.channel || args.via; // 'discord', 'telegram', 'whatsapp'
+
+                if (!jid) return 'Error: Missing jid (recipient identifier).';
+                if (!prompt) return 'Error: Missing prompt for image generation.';
+
+                let generatedFilePath = '';
+                try {
+                    // Generate the image
+                    const downloadsDir = path.join(this.config.getDataHome(), 'downloads');
+                    if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
+                    const outputPath = path.join(downloadsDir, `image_${Date.now()}.png`);
+
+                    const provider = this.config.get('imageGenProvider') || undefined;
+                    const model = this.config.get('imageGenModel') || undefined;
+
+                    const result = await this.llm.generateImage(prompt, outputPath, {
+                        provider,
+                        model,
+                        size,
+                        quality,
+                    });
+
+                    if (!result.success || !result.filePath) {
+                        return `Error generating image: ${result.error || 'Unknown error'}`;
+                    }
+                    generatedFilePath = result.filePath;
+
+                    // Determine target channel: action source > explicit parameter > JID pattern detection > fallback
+                    // The action's source (which channel the user messaged from) is the most reliable signal.
+                    const currentAction = this.actionQueue.getQueue().find(a => a.id === this.currentActionId);
+                    const actionSource = currentAction?.payload?.source; // 'discord', 'telegram', 'whatsapp'
+                    const imgCaption = caption || (result.revisedPrompt ? result.revisedPrompt.substring(0, 200) : '');
+                    const channelHint = explicitChannel || actionSource;
+                    const isWhatsApp = channelHint === 'whatsapp' || jid.includes('@s.whatsapp.net') || jid.includes('@g.us');
+                    // Discord snowflake IDs: purely numeric, 17-20 digits
+                    const isDiscord = channelHint === 'discord' || (!isWhatsApp && /^\d{15,20}$/.test(String(jid)));
+                    const isTelegram = channelHint === 'telegram' || (!isWhatsApp && !isDiscord);
+
+                    if (isWhatsApp && this.whatsapp) {
+                        await this.whatsapp.sendFile(jid, result.filePath, imgCaption);
+                        return `Image generated and sent via WhatsApp to ${jid} (${path.basename(result.filePath)})`;
+                    } else if (isDiscord && this.discord) {
+                        await this.discord.sendFile(jid, result.filePath, imgCaption);
+                        return `Image generated and sent via Discord to ${jid} (${path.basename(result.filePath)})`;
+                    } else if (isTelegram && this.telegram) {
+                        await this.telegram.sendFile(jid, result.filePath, imgCaption);
+                        return `Image generated and sent via Telegram to ${jid} (${path.basename(result.filePath)})`;
+                    }
+                    // Fallback: try any available channel
+                    if (this.discord) {
+                        await this.discord.sendFile(jid, result.filePath, imgCaption);
+                        return `Image generated and sent via Discord to ${jid} (${path.basename(result.filePath)})`;
+                    } else if (this.telegram) {
+                        await this.telegram.sendFile(jid, result.filePath, imgCaption);
+                        return `Image generated and sent via Telegram to ${jid} (${path.basename(result.filePath)})`;
+                    }
+                    return `Image generated at ${result.filePath} but no channel available to send. Use send_file() manually.`;
+                } catch (e) {
+                    // If the image was generated but the SEND failed, return structured partial success
+                    // so the tracking code knows an image exists and the LLM can deliver it via the correct skill
+                    if (generatedFilePath) {
+                        return { success: false, error: `Send failed: ${e}`, imageGenerated: true, filePath: generatedFilePath,
+                            hint: `Image was generated at ${generatedFilePath}. Use send_discord_file, send_file, or the correct channel skill to deliver it.` };
+                    }
+                    return `Error generating/sending image: ${e}`;
                 }
             }
         });
@@ -4145,6 +4304,7 @@ Respond with ONLY valid JSON:
             'write_file', 'create_file', 'delete_file', 'run_command',
             'send_telegram', 'send_whatsapp', 'send_discord', 'send_gateway_chat',
             'send_voice_note', 'text_to_speech', 'analyze_media',
+            'generate_image', 'send_image',
             'update_journal', 'update_learning', 'update_user_profile',
             'update_agent_identity', 'get_system_info', 'system_check',
             'manage_config', 'read_bootstrap_file', 'request_supporting_data',
@@ -4255,69 +4415,48 @@ Respond with ONLY valid JSON:
         }
     }
 
-    private isTrivialSocialIntent(text: string): boolean {
-        const normalized = (text || '').toLowerCase();
-        const quotedMatch = normalized.match(/"([^"]+)"/);
-        const payload = (quotedMatch?.[1] || normalized).trim();
-
-        if (payload.length === 0) return false;
-
-        const patterns = [
-            /^hi\b/, /^hello\b/, /^hey\b/, /^yo\b/,
-            /\bgood (morning|afternoon|evening)\b/,
-            /\bhow are you\b/,
-            /\bhow's it going\b/,
-            /\byou there\b/,
-            /\bare you there\b/,
-            /\bare you ignoring me\b/,
-            /\bp(i|y)ng\b/,
-            /^thanks\b/, /^thank you\b/
-        ];
-
-        return payload.length <= 80 && patterns.some(p => p.test(payload));
-    }
-
     /**
-     * Detect simple response tasks that don't need simulation planning (token saving)
-     * Simple tasks: short questions, acknowledgments, single-step requests
+     * Classify task complexity using a fast LLM call.
+     * Returns a complexity level that drives all downstream limits (steps, messages, simulation).
+     * 
+     * Levels:
+     *   trivial  — Greetings, acknowledgments, emoji-only (1 step, 1 message)
+     *   simple   — Quick questions, yes/no, direct answers (3 steps, 2 messages)
+     *   standard — Normal conversation, requests, short tasks (configMaxSteps, configMaxMessages)
+     *   complex  — Multi-step work: research, building, browsing, coding (configMaxSteps, higher messages)
+     *
+     * Falls back to a lightweight heuristic if LLM is unavailable or fails.
      */
-    private isSimpleResponseTask(text: string): boolean {
-        const normalized = (text || '').toLowerCase();
-        const quotedMatch = normalized.match(/"([^"]+)"/);
-        const payload = (quotedMatch?.[1] || normalized).trim();
-        
-        // Very short messages are usually simple
-        if (payload.length <= 50) return true;
-        
-        // Questions that can be answered directly
-        const simplePatterns = [
-            /^what('s| is) (your|the) (name|time|date)\b/,
-            /^who are you\b/,
-            /^can you\b.*\?$/,
-            /^do you\b.*\?$/,
-            /^are you\b.*\?$/,
-            /^tell me about yourself\b/,
-            /^what can you do\b/,
-            /\b(yes|no|ok|okay|sure|alright|fine|great|cool|nice|awesome)\b/,
-            /^(👍|👎|🙏|😊|😀|🤔|❤️|✅|❌)/  // Emoji-only or emoji-start responses
-        ];
-        
-        // Complex keywords that indicate multi-step tasks
-        const complexPatterns = [
-            /\b(search|find|look up|research)\b/,
-            /\b(download|install|setup|configure)\b/,
-            /\b(create|build|make|generate)\b.*(file|project|app)/,
-            /\b(analyze|investigate|debug)\b/,
-            /\b(run|execute|deploy)\b/,
-            /\bstep.?by.?step\b/,
-            /\bmultiple\b/
-        ];
-        
-        const isComplex = complexPatterns.some(p => p.test(payload));
-        if (isComplex) return false;
-        
-        const isSimple = payload.length <= 100 || simplePatterns.some(p => p.test(payload));
-        return isSimple;
+    private async classifyTaskComplexity(description: string): Promise<'trivial' | 'simple' | 'standard' | 'complex'> {
+        // Extract the actual user message from the task description
+        const quotedMatch = description.match(/"([^"]+)"/);
+        const payload = (quotedMatch?.[1] || description).trim().toLowerCase();
+
+        // Ultra-fast heuristic pre-filter for obvious trivials (avoid LLM call)
+        if (payload.length <= 5 || /^(hi|hey|hello|yo|sup|lol|ok|k|bye|thanks|ty|gm|gn|🙏|👍|👎|❤️|😊)$/i.test(payload)) {
+            return 'trivial';
+        }
+
+        try {
+            const response = await this.llm.call(
+                `Classify this message's complexity for an AI assistant. Message: "${payload.slice(0, 200)}"\n\nReply with ONLY one word: trivial, simple, standard, or complex.\n- trivial: greetings, thanks, acknowledgments, single emoji, casual openers\n- simple: quick factual questions, yes/no, preferences, one-line answers\n- standard: normal requests, conversation, short tasks\n- complex: research, building, coding, multi-step work, browsing, file creation, image generation`,
+                'You are a task classifier. Reply with exactly one word: trivial, simple, standard, or complex. Nothing else.'
+            );
+            const normalized = response.trim().toLowerCase().replace(/[^a-z]/g, '');
+            if (['trivial', 'simple', 'standard', 'complex'].includes(normalized)) {
+                logger.debug(`Agent: Task classified as "${normalized}" for: "${payload.slice(0, 60)}..."`);
+                return normalized as any;
+            }
+        } catch (e) {
+            logger.debug(`Agent: LLM task classification failed, using heuristic: ${e}`);
+        }
+
+        // Heuristic fallback
+        if (payload.length <= 50 && !payload.includes('build') && !payload.includes('create') && 
+            !payload.includes('search') && !payload.includes('find')) {
+            return 'simple';
+        }
+        return 'standard';
     }
 
     private getPluginHealthCheckIntervalMs(): number {
@@ -5103,12 +5242,22 @@ Respond with a single actionable task description (one sentence). Be specific ab
         const staleWaiting = queue.filter(a => a.status === 'waiting' && new Date(a.updatedAt || a.timestamp).getTime() < waitingThreshold);
         for (const action of staleWaiting) {
             logger.warn(`Agent: Waiting action ${action.id} stale for >${maxWaitingMinutes}min without user reply. Resetting to pending.`);
-            // Append a system note so the agent knows the user didn't reply
-            const originalDesc = action.payload?.description || '';
-            this.actionQueue.updatePayload(action.id, {
-                description: `${originalDesc}\n\n[SYSTEM: User did not reply to your question within ${maxWaitingMinutes} minutes. Proceed without the answer — either infer the best approach, try an alternative, or inform the user you're proceeding with a default.]`,
-                resumedFromStaleWaiting: true
-            });
+            
+            // Heartbeat tasks get their context rebuilt at execution time,
+            // so don't append stale-waiting notes to them (it just adds noise to a prompt
+            // that will be fully replaced with fresh context).
+            if (action.payload?.isHeartbeat) {
+                this.actionQueue.updatePayload(action.id, {
+                    resumedFromStaleWaiting: true
+                });
+            } else {
+                // Append a system note so the agent knows the user didn't reply
+                const originalDesc = action.payload?.description || '';
+                this.actionQueue.updatePayload(action.id, {
+                    description: `${originalDesc}\n\n[SYSTEM: User did not reply to your question within ${maxWaitingMinutes} minutes. Proceed without the answer — either infer the best approach, try an alternative, or inform the user you're proceeding with a default.]`,
+                    resumedFromStaleWaiting: true
+                });
+            }
             this.actionQueue.updateStatus(action.id, 'pending');
         }
     }
@@ -5512,6 +5661,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 if (this.memory.vectorMemory) {
                     this.memory.vectorMemory.shutdown();
                 }
+                this.saveKnownUsers(); // Flush known users to disk on shutdown
                 this.releaseInstanceLock();
             };
             process.once('exit', cleanup);
@@ -5533,6 +5683,134 @@ Respond with a single actionable task description (one sentence). Be specific ab
             logger.warn(`Failed to remove instance lock: ${e}`);
         }
         this.instanceLockAcquired = false;
+    }
+
+    /**
+     * Load known users from persistent storage.
+     */
+    private loadKnownUsers(): void {
+        try {
+            if (fs.existsSync(this.knownUsersPath)) {
+                const data = JSON.parse(fs.readFileSync(this.knownUsersPath, 'utf-8'));
+                if (Array.isArray(data)) {
+                    for (const user of data) {
+                        if (user.id && user.channel) {
+                            this.knownUsers.set(`${user.channel}:${user.id}`, user);
+                        }
+                    }
+                    logger.info(`Agent: Loaded ${this.knownUsers.size} known user(s) from disk.`);
+                }
+            }
+        } catch (e) {
+            logger.warn(`Agent: Failed to load known users: ${e}`);
+        }
+    }
+
+    /**
+     * Save known users to disk (only writes if dirty).
+     */
+    private saveKnownUsers(): void {
+        if (!this.knownUsersDirty) return;
+        try {
+            const data = Array.from(this.knownUsers.values());
+            fs.writeFileSync(this.knownUsersPath, JSON.stringify(data, null, 2));
+            this.knownUsersDirty = false;
+        } catch (e) {
+            logger.warn(`Agent: Failed to save known users: ${e}`);
+        }
+    }
+
+    /**
+     * Track a user who interacted via a channel.
+     * Called from pushTask when metadata has source/user info.
+     */
+    private trackKnownUser(metadata: any): void {
+        const source = metadata?.source;
+        if (!source || !['telegram', 'discord', 'whatsapp'].includes(source)) return;
+
+        let userId: string | undefined;
+        let name: string = metadata.senderName || 'Unknown';
+        let username: string | undefined;
+
+        if (source === 'telegram') {
+            userId = metadata.userId;
+        } else if (source === 'discord') {
+            userId = metadata.userId;
+            username = metadata.username;
+        } else if (source === 'whatsapp') {
+            userId = metadata.sourceId; // JID
+        }
+
+        if (!userId) return;
+
+        const key = `${source}:${userId}`;
+        const existing = this.knownUsers.get(key);
+
+        if (existing) {
+            existing.lastSeen = new Date().toISOString();
+            existing.messageCount++;
+            if (name && name !== 'Unknown') existing.name = name;
+            if (username) existing.username = username;
+        } else {
+            this.knownUsers.set(key, {
+                id: userId,
+                name,
+                channel: source as 'telegram' | 'discord' | 'whatsapp',
+                username,
+                lastSeen: new Date().toISOString(),
+                messageCount: 1
+            });
+        }
+        this.knownUsersDirty = true;
+
+        // Persist on every new user, or periodically for updates
+        if (!existing || this.knownUsers.size % 5 === 0) {
+            this.saveKnownUsers();
+        }
+    }
+
+    /**
+     * Get all known users, optionally filtered by channel.
+     */
+    public getKnownUsers(channel?: 'telegram' | 'discord' | 'whatsapp'): KnownUser[] {
+        const users = Array.from(this.knownUsers.values());
+        if (channel) return users.filter(u => u.channel === channel);
+        return users.sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime());
+    }
+
+    /**
+     * Determine if the user who triggered an action has admin-level permissions.
+     * When adminUsers is not configured (undefined), everyone is admin (backwards compatible).
+     * CLI/Gateway tasks and WhatsApp owner messages are always admin.
+     */
+    public isUserAdmin(payload: any): boolean {
+        const adminUsers = this.config.get('adminUsers') as any;
+        // If no adminUsers configured at all, everyone is treated as admin (single-user / backwards compatible)
+        if (!adminUsers) return true;
+
+        const source = payload?.source;
+        // CLI/Gateway/autonomy tasks (no channel source) are always admin
+        if (!source) return true;
+        // WhatsApp owner is always admin
+        if (source === 'whatsapp' && payload?.isOwner) return true;
+
+        if (source === 'telegram') {
+            const list: string[] = adminUsers.telegram || [];
+            // If the telegram admin list is empty, all telegram users are admin
+            if (list.length === 0) return true;
+            return list.includes(String(payload.userId)) || list.includes(String(payload.sourceId));
+        }
+        if (source === 'discord') {
+            const list: string[] = adminUsers.discord || [];
+            if (list.length === 0) return true;
+            return list.includes(String(payload.userId));
+        }
+        if (source === 'whatsapp') {
+            const list: string[] = adminUsers.whatsapp || [];
+            if (list.length === 0) return true;
+            return list.includes(String(payload.sourceId));
+        }
+        return true; // Unknown source = admin
     }
 
     public async pushTask(description: string, priority: number = 5, metadata: any = {}, lane: 'user' | 'autonomy' = 'user') {
@@ -5564,6 +5842,10 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 entries.slice(0, 100).forEach(e => this.processedMessages.delete(e));
             }
         }
+
+        // Track this user in the known users registry — must happen before early returns
+        // (dedup and waiting-action resume both return before the end of pushTask)
+        this.trackKnownUser(metadata);
 
         // If we have an action paused waiting for a reply from this same source/thread,
         // resume it instead of pushing a brand-new action.
@@ -5609,15 +5891,21 @@ Respond with a single actionable task description (one sentence). Be specific ab
             }
         }
         
+        // Tag the action with admin status based on the requesting user
+        const isAdmin = this.isUserAdmin(metadata);
+
         const action: Action = {
             id: Math.random().toString(36).substring(7),
             type: 'TASK',
-            payload: { description, ...metadata },
+            payload: { description, ...metadata, isAdmin },
             priority,
             lane,
             status: 'pending',
             timestamp: new Date().toISOString(),
         };
+        if (!isAdmin) {
+            logger.info(`Agent: Non-admin user ${metadata.senderName || metadata.userId || metadata.sourceId || 'unknown'} (${metadata.source}) — elevated skills restricted.`);
+        }
         this.actionQueue.push(action);
     }
 
@@ -5685,11 +5973,31 @@ Respond with a single actionable task description (one sentence). Be specific ab
             this.updateLastActionTime();
             this.actionQueue.updateStatus(action.id, 'in-progress');
 
+            // HEARTBEAT FRESHNESS: Rebuild the heartbeat prompt at execution time.
+            // Heartbeat prompts embed context (recent memories, task queue, timestamps)
+            // at push time, but the task may sit in queue for minutes or hours.
+            // By the time it executes, that frozen context is stale.
+            if (action.payload?.isHeartbeat) {
+                const idleTimeMs = Date.now() - this.lastActionTime;
+                const runningWorkers = this.orchestrator.getRunningWorkers();
+                const availableAgents = this.orchestrator.getAvailableAgents('execute');
+                const freshDescription = this.buildSmartHeartbeatPrompt(
+                    idleTimeMs,
+                    runningWorkers.length,
+                    availableAgents.length
+                );
+                action.payload.description = freshDescription;
+                logger.info(`Agent: Refreshed heartbeat ${action.id} context at execution time (was ${Math.floor((Date.now() - new Date(action.timestamp).getTime()) / 60000)}min old)`);
+            }
+
             // Record Task Start in Episodic Memory
+            const taskSummaryForMemory = action.payload?.isHeartbeat
+                ? 'Proactive Heartbeat'
+                : action.payload.description;
             this.memory.saveMemory({
                 id: `${action.id}-start`,
                 type: 'episodic',
-                content: `Starting Task: "${action.payload.description}" ${action.payload.source === 'telegram' ? `(via Telegram from ${action.payload.senderName})` : ''}`,
+                content: `Starting Task: "${taskSummaryForMemory}" ${action.payload.source === 'telegram' ? `(via Telegram from ${action.payload.senderName})` : ''}`,
                 metadata: { actionId: action.id, source: action.payload.source }
             });
 
@@ -5697,14 +6005,18 @@ Respond with a single actionable task description (one sentence). Be specific ab
             // Run a quick mental simulation to plan the steps (executed once per action start)
             const recentHist = this.memory.getRecentContext();
             const contextStr = recentHist.map(c => `[${c.type}] ${c.content}`).join('\n');
-            const isSocialFastPath = this.isTrivialSocialIntent(action.payload.description || '');
-            const skipSimulation = this.config.get('skipSimulationForSimpleTasks');
-            
-            // Detect simple tasks that don't need simulation (token saving)
-            // Heartbeat tasks are self-contained with their own rich prompt — skip simulation.
+
+            // LLM-based task complexity classification — replaces brittle regex heuristics.
+            // For resumed actions, classify the LATEST user message (not the original trigger).
             const isHeartbeatTask = !!action.payload.isHeartbeat;
-            const isSimpleTask = isSocialFastPath || isHeartbeatTask ||
-                (skipSimulation && this.isSimpleResponseTask(action.payload.description || ''));
+            const classificationTarget = action.payload.lastUserMessageText
+                ? `message: "${action.payload.lastUserMessageText}"`
+                : (action.payload.description || '');
+            const taskComplexity = isHeartbeatTask ? 'trivial' as const
+                : await this.classifyTaskComplexity(classificationTarget);
+            logger.info(`Agent: Task complexity="${taskComplexity}" for action ${action.id}`);
+
+            const isSimpleTask = taskComplexity === 'trivial' || taskComplexity === 'simple' || isHeartbeatTask;
             
             // PROGRESS FEEDBACK: Let user know we're working on non-trivial tasks
             // Skip for heartbeats — no user initiated this task
@@ -5722,9 +6034,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         : this.skills.getSkillsPrompt()
                 );
 
-            // RESEARCH TASK DETECTION
-            // Research/deep-work tasks legitimately need many tool calls and status updates.
-            // We give them higher budgets so they don't get killed mid-work.
+            // RESEARCH TOOLS — used for skill-repeat ceiling differentiation (browser/search
+            // tools legitimately get called many times in a single action).
             const RESEARCH_TOOLS = new Set([
                 'web_search', 'browser_navigate', 'browser_click', 'browser_type',
                 'browser_examine_page', 'browser_screenshot', 'browser_back',
@@ -5733,22 +6044,24 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 'computer_type', 'computer_key', 'computer_locate', 'computer_describe',
                 'extract_article', 'http_fetch', 'download_file', 'read_file', 'write_to_file',
                 'write_file', 'create_file', 'send_file',
-                'run_command', 'analyze_media', 'recall_memory'
+                'run_command', 'analyze_media', 'recall_memory',
+                'generate_image', 'send_image'
             ]);
-            const taskDesc = (action.payload.description || '').toLowerCase();
-            const researchKeywords = [
-                'research', 'deep dive', 'investigate', 'find out', 'look up', 'search for',
-                'compile', 'gather', 'aggregate', 'analyze', 'explore', 'discover',
-                'browse', 'scrape', 'crawl', 'download', 'collect', 'summarize',
-                'report on', 'write about', 'create a report', 'build a', 'develop a',
-                'set up', 'configure', 'install', 'deploy', 'with pictures', 'with images'
-            ];
-            const isResearchTask = !isSocialFastPath && researchKeywords.some(kw => taskDesc.includes(kw));
 
+            // Dynamic limits driven by task complexity classification
             const configMaxSteps = this.config.get('maxStepsPerAction') || 25;
             const configMaxMessages = this.config.get('maxMessagesPerAction') || 5;
-            const MAX_STEPS = isSocialFastPath ? 1 : configMaxSteps;
-            const MAX_MESSAGES = isSocialFastPath ? 1 : isResearchTask ? Math.max(configMaxMessages, 8) : configMaxMessages;
+
+            const COMPLEXITY_LIMITS: Record<string, { steps: number; messages: number }> = {
+                trivial:  { steps: 1, messages: 1 },
+                simple:   { steps: 3, messages: 2 },
+                standard: { steps: configMaxSteps, messages: configMaxMessages },
+                complex:  { steps: configMaxSteps, messages: Math.max(configMaxMessages, 8) },
+            };
+            const limits = COMPLEXITY_LIMITS[taskComplexity] || COMPLEXITY_LIMITS.standard;
+            const MAX_STEPS = limits.steps;
+            const MAX_MESSAGES = limits.messages;
+            const isResearchTask = taskComplexity === 'complex';
             const MAX_NO_TOOLS_RETRIES = 3; // Max retries when LLM returns no tools but goals_met=false
             const MAX_SKILL_REPEATS = 5; // Max times any single skill can be called in one action
             const MAX_RESEARCH_SKILL_REPEATS = 15; // Higher ceiling for research tools (web_search, browser_*, etc.)
@@ -5768,6 +6081,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
             const skillFailCounts: Record<string, number> = {}; // Track consecutive failures per skill
             const recentSkillNames: string[] = []; // Track skill name sequence for pattern detection
             const recentSkillSignatures: string[] = []; // Track skill name+args for smarter pattern detection
+            let imageGeneratedInAction = false; // Track if generate_image has been called in this action
+            let imageDeliveredInAction = false; // Track if the generated image has been delivered
+            let generatedImagePath = ''; // Path of the most recently generated image
             this._blankPageCount = 0; // Reset blank-page counter for each new action
             this.browser._blankUrlHistory?.clear(); // Reset blank-URL domain tracker for each new action
 
@@ -6032,6 +6348,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                     let forceBreak = false;
                     let hasSentMessageInThisStep = false;
+                    let toolsBlockedByCooldown = 0;
+                    let totalSendToolsInStep = 0;
 
                     for (const toolCall of decision.tools) {
                         // Reset cooldown if a deep tool (search, command, browser interaction) is used
@@ -6039,8 +6357,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             deepToolExecutedSinceLastMessage = true;
                         }
 
-                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_gateway_chat') {
+                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_discord' || toolCall.name === 'send_gateway_chat') {
                             const currentMessage = (toolCall.metadata?.message || '').trim();
+                            totalSendToolsInStep++;
 
                             // 0. HALLUCINATION / TEMPLATE PLACEHOLDER GUARD
                             // Block messages containing {{PLACEHOLDER}} or similar template syntax — these are fabricated, not real data.
@@ -6053,71 +6372,31 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                     content: `[SYSTEM: BLOCKED hallucinated message. Your message contained template placeholders like {{VARIABLE}} instead of real data. You MUST use ACTUAL data from tool results. If the browser returned blank pages, switch to web_search instead of fabricating results. NEVER send messages with placeholder text to the user.]`,
                                     metadata: { actionId: action.id, step: currentStep }
                                 });
+                                toolsBlockedByCooldown++;
                                 continue;
                             }
 
                             // 1. Block exact duplicates across any step in this action
                             if (sentMessagesInAction.includes(currentMessage)) {
                                 logger.warn(`Agent: Blocked redundant message in action ${action.id} (Action-wide duplicate).`);
+                                toolsBlockedByCooldown++;
                                 continue;
                             }
 
-                            // 2. COMPLETION MESSAGE CONTRADICTION CHECK
-                            // If the message claims completion but verification.goals_met is false, block it
-                            const completionPhrases = [
-                                'done', 'completed', 'finished', 'deployed', 'ready',
-                                'successfully', 'all set', 'live now', 'published'
-                            ];
-                            const messageIndicatesCompletion = completionPhrases.some(phrase => 
-                                currentMessage.toLowerCase().includes(phrase)
-                            );
-                            
-                            if (messageIndicatesCompletion && !decision.verification?.goals_met) {
-                                // Allow messages that contain questions - they're asking for input, not claiming done
-                                const messageHasQuestion = currentMessage.includes('?') || this.messageContainsQuestion(currentMessage);
-                                
-                                // Allow messages that are actually reporting blockers/problems, not claiming success
-                                const blockerPhrases = [
-                                    "can't", "cannot", "unable", "couldn't", "not yet", "still pending",
-                                    "need you to", "waiting for", "error", "failed", "problem",
-                                    "issue", "blocked", "requires", "hold on", "not claimed",
-                                    "before i can", "prerequisite", "first need", "however",
-                                    "but", "although", "what would", "what do", "what should"
-                                ];
-                                const isReportingBlocker = blockerPhrases.some(phrase =>
-                                    currentMessage.toLowerCase().includes(phrase)
-                                );
-                                
-                                if (messageHasQuestion) {
-                                    logger.info(`Agent: Allowing message through despite completion phrases — message contains a question (asking for input, not claiming done).`);
-                                } else if (isReportingBlocker) {
-                                    logger.info(`Agent: Allowing blocker-report message through despite completion phrases (goals_met=false but message reports a problem).`);
-                                } else {
-                                    logger.warn(`Agent: Blocked premature completion message in action ${action.id}. Message claims completion but goals_met=false. Message: "${currentMessage.slice(0, 100)}..."`);
-                                    
-                                    // Save to memory so the agent learns not to do this
-                                    this.memory.saveMemory({
-                                        id: `${action.id}-step-${currentStep}-blocked-premature-completion`,
-                                        type: 'short',
-                                        content: `[SYSTEM: BLOCKED premature completion message. You tried to tell the user the task is done, but verification.goals_met was false. This means you haven't actually completed the task yet. Continue working and only claim completion when goals_met=true.]`,
-                                        metadata: { actionId: action.id, step: currentStep }
-                                    });
-                                    continue;
-                                }
-                            }
-
-                            // 3. Communication Cooldown: Block if no new deep info since last message
+                            // 2. Communication Cooldown: Block if no new deep info since last message
                             // Exceptions: 
                             // - Step 1 is mandatory (Greeter)
                             // - If 15+ steps have passed without an update (Status update for long tasks)
                             if (currentStep > 1 && !deepToolExecutedSinceLastMessage && stepsSinceLastMessage < 15) {
                                 logger.warn(`Agent: Blocked redundant message in action ${action.id} (Communication Cooldown - No new deep data).`);
+                                toolsBlockedByCooldown++;
                                 continue;
                             }
 
-                            // 4. Block double-messages in a single step
+                            // 3. Block double-messages in a single step
                             if (hasSentMessageInThisStep) {
                                 logger.warn(`Agent: Blocked redundant message in action ${action.id} (Already sent message in this step).`);
+                                toolsBlockedByCooldown++;
                                 continue;
                             }
 
@@ -6127,7 +6406,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             deepToolExecutedSinceLastMessage = false; // Reset cooldown after sending
                             stepsSinceLastMessage = 0; // Reset status update timer
                             
-                            // 5. QUESTION DETECTION: If message contains a question, pause and wait for response
+                            // 4. QUESTION DETECTION: If message contains a question, pause and wait for response
                             if (this.messageContainsQuestion(currentMessage)) {
                                 logger.info(`Agent: Message contains question. Will pause after sending to wait for user response.`);
                                 // Only pause if we actually still need the user's answer to make progress.
@@ -6167,8 +6446,53 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             continue;
                         }
 
+                        // 4. ADMIN PERMISSION GATING
+                        // Non-admin users (external users not in adminUsers config) cannot use elevated skills.
+                        // This is a hard block — the LLM should have been told not to attempt these,
+                        // but this is defense-in-depth in case it does.
+                        const isAdmin = action.payload?.isAdmin !== false;
+                        if (!isAdmin && ELEVATED_SKILLS.has(toolCall.name)) {
+                            logger.warn(`Agent: BLOCKED elevated skill '${toolCall.name}' for non-admin user ${action.payload?.senderName || action.payload?.userId || 'unknown'} (${action.payload?.source}).`);
+
+                            // Send a polite denial message to the user via the appropriate channel
+                            const source = action.payload?.source;
+                            const sourceId = action.payload?.sourceId;
+                            const denialMsg = `Sorry, you don't have permission to do that. This action requires admin privileges.`;
+
+                            if (source === 'telegram' && this.telegram && sourceId) {
+                                try { await this.telegram.sendMessage(sourceId, denialMsg); messagesSent++; } catch (e) { /* best effort */ }
+                            } else if (source === 'discord' && this.discord && sourceId) {
+                                try { await this.discord.sendMessage(sourceId, denialMsg); messagesSent++; } catch (e) { /* best effort */ }
+                            } else if (source === 'whatsapp' && this.whatsapp && sourceId) {
+                                try { await this.whatsapp.sendMessage(sourceId, denialMsg); messagesSent++; } catch (e) { /* best effort */ }
+                            }
+
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-admin-denied`,
+                                type: 'short',
+                                content: `[SYSTEM: PERMISSION DENIED — '${toolCall.name}' is an elevated skill. User "${action.payload?.senderName || 'unknown'}" is NOT an admin. The user has been informed. Do NOT attempt other elevated skills. Only use messaging and search skills for this user.]`,
+                                metadata: { actionId: action.id, step: currentStep, skill: toolCall.name, denied: true }
+                            });
+                            forceBreak = true; // Stop trying — non-admin users get one denial then we exit
+                            break;
+                        }
+
 
                         // logger.info(`Executing skill: ${toolCall.name}`); // Redundant, SkillsManager logs this
+
+                        // HARD BLOCK: Prevent duplicate generate_image calls within the same action.
+                        // If an image was already generated (and optionally delivered), skip this call entirely.
+                        if (toolCall.name === 'generate_image' && imageGeneratedInAction) {
+                            logger.warn(`Agent: BLOCKED duplicate generate_image in action ${action.id}. Image already generated${imageDeliveredInAction ? ' and delivered' : ''}.`);
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-generate_image-blocked`,
+                                type: 'short',
+                                content: `[SYSTEM: generate_image BLOCKED — image was already generated in this action${generatedImagePath ? ` at ${generatedImagePath}` : ''}. ${imageDeliveredInAction ? 'Image was already delivered. Task is COMPLETE — set goals_met=true.' : `Use send_file(jid, "${generatedImagePath}") to deliver it.`}]`,
+                                metadata: { actionId: action.id, step: currentStep, skill: 'generate_image', blocked: true }
+                            });
+                            continue; // Skip execution, move to next tool
+                        }
+
                         let toolResult;
                         try {
                             toolResult = await this.skills.executeSkill(toolCall.name, toolCall.metadata || {});
@@ -6386,10 +6710,77 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             });
                         }
 
+                        // IMAGE GENERATION DEDUP: After successful generate_image, set tracking flags
+                        // and inject a signal to prevent the LLM from calling it again.
+                        if (toolCall.name === 'generate_image' && !resultIndicatesError) {
+                            imageGeneratedInAction = true;
+                            // Extract file path from result string
+                            const pathMatch = resultString.match(/([A-Z]:\\[^\s(]+\.(?:png|jpg|webp))/i) || resultString.match(/(\/[^\s(]+\.(?:png|jpg|webp))/i);
+                            if (pathMatch) generatedImagePath = pathMatch[1];
+                            logger.info(`Agent: Image generated in action ${action.id}. Injecting dedup signal.`);
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-image-generated`,
+                                type: 'short',
+                                content: `[SYSTEM: IMAGE ALREADY GENERATED at ${generatedImagePath || 'path above'}. Do NOT call generate_image again — it will create DUPLICATE files. Send it with send_file(jid, "${generatedImagePath}") or set goals_met=true if task is complete.]`,
+                                metadata: { actionId: action.id, step: currentStep, skill: 'generate_image', imageGenerated: true }
+                            });
+                        }
+
+                        // SEND_IMAGE COMPLETION: compound generate+send is a terminal delivery action.
+                        // Treat it like send_file — inject delivery signal and hard break.
+                        if (toolCall.name === 'send_image' && !resultIndicatesError) {
+                            imageGeneratedInAction = true;
+                            imageDeliveredInAction = true;
+                            logger.info(`Agent: Image generated and sent in action ${action.id}. Forcing break.`);
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-image-delivered`,
+                                type: 'short',
+                                content: `[SYSTEM: IMAGE GENERATED AND DELIVERED SUCCESSFULLY. The user has received the image. Task is COMPLETE.]`,
+                                metadata: { actionId: action.id, step: currentStep, skill: 'send_image', delivered: true, imageGenerated: true }
+                            });
+                            forceBreak = true;
+                            break;
+                        }
+
+                        // SEND_IMAGE PARTIAL FAILURE: image was generated but send failed (e.g. wrong channel).
+                        // Mark imageGeneratedInAction so generate_image won't create a duplicate image.
+                        // The LLM should use the correct channel-specific send skill to deliver the existing image.
+                        if (toolCall.name === 'send_image' && resultIndicatesError) {
+                            // Check if the result indicates the image was generated despite send failure
+                            const hasImageGenerated = (hasStructuredResult && toolResult.imageGenerated === true) ||
+                                                      resultString.includes('imageGenerated') ||
+                                                      resultString.includes('Image was generated');
+                            if (hasImageGenerated) {
+                                imageGeneratedInAction = true;
+                                // Extract file path from structured result or string
+                                const extractedPath = (hasStructuredResult && toolResult.filePath) ||
+                                    ((resultString.match(/filePath['"]?:\s*['"]?([^'"\s,}]+\.(?:png|jpg|webp))/i) || [])[1]) ||
+                                    ((resultString.match(/([A-Z]:\\[^\s'"]+\.(?:png|jpg|webp))/i) || [])[1]) ||
+                                    ((resultString.match(/(\/.+?\.(?:png|jpg|webp))/i) || [])[1]);
+                                if (extractedPath) generatedImagePath = extractedPath;
+                                logger.warn(`Agent: send_image PARTIAL FAILURE in action ${action.id} — image generated at ${generatedImagePath || 'unknown'} but send failed.`);
+                                this.memory.saveMemory({
+                                    id: `${action.id}-step-${currentStep}-image-generated-send-failed`,
+                                    type: 'short',
+                                    content: `[SYSTEM: Image was GENERATED at ${generatedImagePath || 'downloads folder'} but SEND FAILED. Do NOT generate another image. Use the correct channel skill to deliver: send_discord_file(channel_id, "${generatedImagePath}") for Discord, send_file(jid, "${generatedImagePath}") for Telegram/WhatsApp.]`,
+                                    metadata: { actionId: action.id, step: currentStep, skill: 'send_image', imageGenerated: true, sendFailed: true }
+                                });
+                            }
+                        }
+
+                        // IMAGE DELIVERY via send_file or send_discord_file: If we generated an image earlier
+                        // in this action and now delivered it, force-break to prevent duplicate generation.
+                        if ((toolCall.name === 'send_file' || toolCall.name === 'send_discord_file') && !resultIndicatesError && imageGeneratedInAction && !imageDeliveredInAction) {
+                            imageDeliveredInAction = true;
+                            logger.info(`Agent: Generated image delivered via ${toolCall.name} in action ${action.id}. Forcing break.`);
+                            forceBreak = true;
+                            break;
+                        }
+
                         // HARD BREAK after successful channel message send for "respond to" tasks
                         // This prevents duplicate messages when the LLM doesn't set goals_met correctly
                         const isChannelSend = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_gateway_chat'].includes(toolCall.name);
-                        const isFileDelivery = toolCall.name === 'send_file';
+                        const isFileDelivery = toolCall.name === 'send_file' || toolCall.name === 'send_image';
                         const isResponseTask = action.payload?.description?.toLowerCase().includes('respond to') ||
                                                action.payload?.requiresResponse === true;
                         const wasSuccessful = toolResult && !JSON.stringify(toolResult).toLowerCase().includes('error');
@@ -6407,7 +6798,9 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             const isFileCentricTask = taskDesc.includes('send') || taskDesc.includes('file') ||
                                                       taskDesc.includes('cut short') || taskDesc.includes('resend') ||
                                                       taskDesc.includes('deliver') || taskDesc.includes('share') ||
-                                                      taskDesc.includes('truncat') || taskDesc.includes('incomplete');
+                                                      taskDesc.includes('truncat') || taskDesc.includes('incomplete') ||
+                                                      taskDesc.includes('image') || taskDesc.includes('picture') ||
+                                                      taskDesc.includes('draw') || taskDesc.includes('generat');
                             if (isFileCentricTask) {
                                 logger.info(`Agent: File delivered for file-centric task ${action.id}. Terminating.`);
                                 forceBreak = true;
@@ -6419,6 +6812,13 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                     // NOW check goals_met AFTER tools have been executed
                     if (decision.verification?.goals_met) {
                         logger.info(`Agent: Strategic goal satisfied after execution. Terminating action ${action.id}.`);
+                        break;
+                    }
+
+                    // COOLDOWN COMPLETION: If ALL send tools in this step were blocked and we already
+                    // sent a message, the task is done — the agent is just looping trying to send dupes.
+                    if (totalSendToolsInStep > 0 && toolsBlockedByCooldown >= totalSendToolsInStep && messagesSent > 0) {
+                        logger.info(`Agent: All ${totalSendToolsInStep} send tool(s) blocked by cooldown/dupe guards and message already delivered. Completing action ${action.id}.`);
                         break;
                     }
 
@@ -6508,6 +6908,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                     });
                     // Grant up to 5 bonus steps for wrapping up
                     const bonusSteps = Math.min(5, MAX_STEPS);
+                    let bonusMessageSent = false;
                     // Continue the loop for bonus steps (simple approach: just don't break, 
                     // but we need to adjust MAX_STEPS since the while loop already exited)
                     // We'll run a mini-loop here
@@ -6534,11 +6935,38 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 break;
                             }
                             
+                            let bonusMsgSentThisStep = false;
                             for (const toolCall of bonusDecision.tools) {
+                                const isSendTool = toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_discord' || toolCall.name === 'send_gateway_chat';
+                                
+                                // Apply message guards to bonus steps too
+                                if (isSendTool) {
+                                    const bonusMsg = (toolCall.metadata?.message || '').trim();
+                                    // Block duplicates
+                                    if (sentMessagesInAction.includes(bonusMsg)) {
+                                        logger.warn(`Agent: Blocked duplicate message in bonus step (action ${action.id}).`);
+                                        continue;
+                                    }
+                                    // Block double-message in same bonus step
+                                    if (bonusMsgSentThisStep) {
+                                        logger.warn(`Agent: Blocked double-message in bonus step (action ${action.id}).`);
+                                        continue;
+                                    }
+                                    // Bonus steps are for wrapping up — block if a message was already
+                                    // sent in a PREVIOUS bonus step (one final message is enough).
+                                    if (bonusMessageSent) {
+                                        logger.warn(`Agent: Blocked extra message in bonus steps — already sent final message (action ${action.id}).`);
+                                        continue;
+                                    }
+                                }
+
                                 try {
                                     const toolResult = await this.skills.executeSkill(toolCall.name, toolCall.metadata || {});
-                                    if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_discord' || toolCall.name === 'send_gateway_chat') {
+                                    if (isSendTool) {
                                         messagesSent++;
+                                        bonusMsgSentThisStep = true;
+                                        bonusMessageSent = true;
+                                        sentMessagesInAction.push((toolCall.metadata?.message || '').trim());
                                     }
                                     this.memory.saveMemory({
                                         id: `${action.id}-bonus-${bonus}-${toolCall.name}`,
@@ -6551,6 +6979,12 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 }
                             }
                             
+                            // If we already sent the wrap-up message, no need for more bonus steps
+                            if (bonusMessageSent) {
+                                logger.info(`Agent: Final message sent in bonus steps. Done.`);
+                                break;
+                            }
+
                             if (bonusDecision.verification?.goals_met) {
                                 logger.info(`Agent: Goals met during bonus steps. Done.`);
                                 break;

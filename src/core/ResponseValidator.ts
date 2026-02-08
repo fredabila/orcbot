@@ -40,8 +40,8 @@ export class ResponseValidator {
             warnings.push(...metadataValidation.warnings);
         }
 
-        // Validate reasoning presence
-        if (!response.reasoning || response.reasoning.trim().length === 0) {
+        // Validate reasoning presence (only warn when no tools — tool calls are implicit reasoning)
+        if ((!response.reasoning || response.reasoning.trim().length === 0) && (!response.tools || response.tools.length === 0)) {
             warnings.push('No reasoning provided in response');
         }
 

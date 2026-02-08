@@ -1089,8 +1089,11 @@ main().catch(console.error);
         }
     }
 
-    public getSkillsPrompt(): string {
-        const skillsList = this.getAllSkills().map(s => `- ${s.name}: ${s.description} (Usage: ${s.usage})`).join('\n');
+    public getSkillsPrompt(excludeSkills?: Set<string>): string {
+        const skills = excludeSkills 
+            ? this.getAllSkills().filter(s => !excludeSkills.has(s.name))
+            : this.getAllSkills();
+        const skillsList = skills.map(s => `- ${s.name}: ${s.description} (Usage: ${s.usage})`).join('\n');
         return `Available Skills:\n${skillsList}`;
     }
 
@@ -1131,8 +1134,11 @@ main().catch(console.error);
      * 
      * This enables native function/tool calling on OpenAI, Anthropic, Google, etc.
      */
-    public getToolDefinitions(): LLMToolDefinition[] {
-        return this.getAllSkills().map(skill => {
+    public getToolDefinitions(excludeSkills?: Set<string>): LLMToolDefinition[] {
+        const skills = excludeSkills
+            ? this.getAllSkills().filter(s => !excludeSkills.has(s.name))
+            : this.getAllSkills();
+        return skills.map(skill => {
             const { properties, required } = SkillsManager.parseUsageToSchema(skill.usage);
 
             return {

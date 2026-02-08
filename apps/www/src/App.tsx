@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import './index.css';
 
@@ -6,7 +6,6 @@ function App() {
   const [copied, setCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<'bash' | 'powershell' | 'docker'>('bash');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const heroRef = useRef<HTMLDivElement>(null);
 
   const commands = {
     bash: 'curl -sSL https://orcbot.vercel.app/install.sh | bash',
@@ -20,32 +19,15 @@ function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  useEffect(() => {
-    const handleScroll = () => {
-      if (heroRef.current) {
-        const offset = window.scrollY * 0.25;
-        heroRef.current.style.transform = `translateY(${offset}px)`;
-      }
-    };
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
-
   return (
     <div className="app">
+      <div className="backdrop" />
       <div className="noise-overlay" />
 
-      <header className="hero">
-        <div className="hero-bg" ref={heroRef}>
-          <div className="gradient-orb orb-1" />
-          <div className="gradient-orb orb-2" />
-          <div className="gradient-orb orb-3" />
-          <div className="grid-lines" />
-        </div>
-
+      <header className="hero" id="top">
         <nav className="nav">
           <Link to="/" className="logo">
-            <span className="logo-icon">⬡</span>
+            <span className="logo-icon">▲</span>
             <span className="logo-text">OrcBot</span>
           </Link>
 
@@ -73,45 +55,95 @@ function App() {
             </a>
           </div>
         </nav>
+        <div className="hero-grid">
+          <div className="hero-copy">
+            <div className="hero-badge">
+              <span className="badge-dot" />
+              Strategic Autonomy, v2.0
+            </div>
 
-        <div className="hero-content">
-          <div className="hero-badge">
-            <span className="badge-pulse" />
-            v2.0 — The Strategic Era
-          </div>
+            <h1 className="hero-title">
+              OrcBot is the
+              <span className="hero-title-em">autonomous AI OS</span>
+              for operators.
+            </h1>
 
-          <h1 className="hero-title">
-            Autonomy that<br />
-            <span className="gradient-text">actually ships.</span>
-          </h1>
+            <p className="hero-subtitle">
+              Plan, execute, self-repair, and keep everything local. OrcBot is built for
+              real operations — multi-agent, memory-aware, and always on your hardware.
+            </p>
 
-          <p className="hero-subtitle">
-            The production-ready autonomous AI operating system. OrcBot simulates, plans,
-            executes, and self-repairs — all while keeping your data local and private.
-          </p>
+            <div className="hero-actions">
+              <a className="btn btn-primary btn-lg" href="#install">
+                Install OrcBot
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+              </a>
+              <a className="btn btn-outline btn-lg" href="https://fredabila.github.io/orcbot/docs/" target="_blank" rel="noopener noreferrer">
+                Documentation
+              </a>
+            </div>
 
-          <div className="hero-actions">
-            <a className="btn btn-primary btn-lg" href="#install">
-              Get Started
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-            </a>
-            <a className="btn btn-outline btn-lg" href="https://fredabila.github.io/orcbot/docs/" target="_blank" rel="noopener noreferrer">
-              Read the Docs
-            </a>
-          </div>
-
-          <div className="hero-metrics">
-            {[
-              { value: '6+', label: 'LLM Providers' },
-              { value: '30+', label: 'Built-in Skills' },
-              { value: '4', label: 'Chat Channels' },
-              { value: '∞', label: 'Plugin Extensibility' },
-            ].map((m, i) => (
-              <div className="metric" key={i}>
-                <span className="metric-value">{m.value}</span>
-                <span className="metric-label">{m.label}</span>
+            <div className="hero-strip">
+              <div>
+                <span className="strip-title">LLM Providers</span>
+                <span className="strip-value">6+</span>
               </div>
-            ))}
+              <div>
+                <span className="strip-title">Built-in Skills</span>
+                <span className="strip-value">30+</span>
+              </div>
+              <div>
+                <span className="strip-title">Chat Channels</span>
+                <span className="strip-value">4</span>
+              </div>
+              <div>
+                <span className="strip-title">Plugin Extensibility</span>
+                <span className="strip-value">Infinite</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="hero-panel">
+            <div className="panel-header">
+              <div>
+                <p className="panel-kicker">Ops Console</p>
+                <h3>Autonomy Control</h3>
+              </div>
+              <span className="status-pill">Live</span>
+            </div>
+
+            <div className="panel-card">
+              <div className="panel-line">
+                <span>Heartbeat</span>
+                <strong>Adaptive, 15m</strong>
+              </div>
+              <div className="panel-line">
+                <span>Workers</span>
+                <strong>Orchestrated</strong>
+              </div>
+              <div className="panel-line">
+                <span>Privacy</span>
+                <strong>Local-first</strong>
+              </div>
+              <div className="panel-line">
+                <span>Failures</span>
+                <strong>Self-repairing</strong>
+              </div>
+            </div>
+
+            <div className="panel-grid">
+              {[
+                { label: 'Decision Engine', value: 'Simulation + Guardrails' },
+                { label: 'Memory Core', value: 'Episodic + Vector' },
+                { label: 'Execution', value: 'Skills + Browser' },
+                { label: 'Channels', value: 'Telegram / WhatsApp / Discord' },
+              ].map((item, idx) => (
+                <div className="panel-chip" key={idx}>
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </header>
@@ -119,28 +151,31 @@ function App() {
       <main>
         {/* Install Section */}
         <section id="install" className="install-section">
-          <div className="terminal">
-            <div className="terminal-chrome">
-              <div className="terminal-dots">
-                <span /><span /><span />
+          <div className="install-shell">
+            <div className="install-head">
+              <div>
+                <p className="section-label">Install</p>
+                <h2 className="section-title">Launch your agent in minutes.</h2>
+                <p className="section-desc">Pick a target and copy the command. OrcBot ships with sane defaults and a guided setup.</p>
               </div>
-              <div className="terminal-tabs">
+              <div className="install-tabs">
                 {(['bash', 'powershell', 'docker'] as const).map(tab => (
                   <button
                     key={tab}
-                    className={`terminal-tab ${activeTab === tab ? 'active' : ''}`}
+                    className={`install-tab ${activeTab === tab ? 'active' : ''}`}
                     onClick={() => setActiveTab(tab)}
                   >
-                    {tab === 'bash' ? '🐧 Linux / Mac' : tab === 'powershell' ? '🪟 Windows' : '🐳 Docker'}
+                    {tab === 'bash' ? 'Linux / Mac' : tab === 'powershell' ? 'Windows' : 'Docker'}
                   </button>
                 ))}
               </div>
             </div>
-            <div className="terminal-body">
-              <span className="terminal-prompt">❯</span>
+
+            <div className="install-terminal">
+              <span className="terminal-prompt">$</span>
               <code className="terminal-cmd">{commands[activeTab]}</code>
               <button className="terminal-copy" onClick={copyToClipboard}>
-                {copied ? '✓ Copied' : 'Copy'}
+                {copied ? 'Copied' : 'Copy'}
               </button>
             </div>
           </div>
@@ -149,8 +184,8 @@ function App() {
         {/* Capabilities */}
         <section id="capabilities" className="section">
           <div className="section-label">Capabilities</div>
-          <h2 className="section-title">Everything an autonomous agent needs.</h2>
-          <p className="section-desc">Built for operators who want an employee-grade agent that never sleeps.</p>
+          <h2 className="section-title">Everything an autonomous operator needs.</h2>
+          <p className="section-desc">OrcBot is opinionated, tactical, and resilient. It thinks ahead and fixes itself when it breaks.</p>
 
           <div className="capabilities-grid">
             {[
@@ -163,7 +198,7 @@ function App() {
               { icon: '🧩', title: 'Smart Skill Routing', desc: 'Intent-based skill selection with configurable routing rules for optimal tool matching.' },
               { icon: '🔒', title: 'Privacy First', desc: 'All logs, memories, and configs stay on your hardware. You own everything.' },
             ].map((cap, i) => (
-              <div className="capability-card" key={i} style={{ animationDelay: `${i * 0.06}s` }}>
+              <div className="capability-card" key={i} style={{ animationDelay: `${i * 0.04}s` }}>
                 <div className="capability-icon">{cap.icon}</div>
                 <h3>{cap.title}</h3>
                 <p>{cap.desc}</p>
@@ -175,10 +210,10 @@ function App() {
         {/* How It Works */}
         <section id="how-it-works" className="section">
           <div className="section-label">How It Works</div>
-          <h2 className="section-title">The autonomy loop.</h2>
+          <h2 className="section-title">The autonomy loop, engineered for reliability.</h2>
           <p className="section-desc">Heartbeat-driven, stateful, and resilient — designed for overnight operations.</p>
 
-          <div className="steps-row">
+          <div className="steps-grid">
             {[
               { num: '01', title: 'Heartbeat fires', desc: 'Context-aware scheduling with exponential backoff when idle to save resources.' },
               { num: '02', title: 'Decision & planning', desc: 'Analyzes conversations, picks follow-ups, research, outreach, or delegation tasks.' },
@@ -187,9 +222,10 @@ function App() {
             ].map((step, i) => (
               <div className="step-item" key={i}>
                 <div className="step-num">{step.num}</div>
-                {i < 3 && <div className="step-connector" />}
-                <h4>{step.title}</h4>
-                <p>{step.desc}</p>
+                <div className="step-body">
+                  <h4>{step.title}</h4>
+                  <p>{step.desc}</p>
+                </div>
               </div>
             ))}
           </div>
@@ -198,38 +234,33 @@ function App() {
         {/* Architecture */}
         <section id="architecture" className="section">
           <div className="section-label">Architecture</div>
-          <h2 className="section-title">Local-first, modular design.</h2>
-          <p className="section-desc">Every component is swappable. Bring your own LLM, channels, or tools.</p>
+          <h2 className="section-title">Local-first, modular, and swappable.</h2>
+          <p className="section-desc">Every block can be replaced — bring your own model, channels, or tools.</p>
 
-          <div className="arch-diagram">
+          <div className="arch-grid">
             {[
-              { title: 'Channels', items: ['Telegram', 'WhatsApp', 'Discord', 'Web Gateway', 'CLI / TUI'], color: 'cyan' },
-              { title: 'Core Engine', items: ['Decision Engine', 'Pipeline & Guards', 'Orchestrator', 'Smart Heartbeat', 'Action Queue', 'Memory + Vectors'], color: 'purple' },
-              { title: 'Execution', items: ['Worker Processes', 'Skills Manager', 'Web Browser', 'Plugin System'], color: 'green' },
-              { title: 'Providers', items: ['OpenAI / Gemini / Claude', 'Bedrock / NVIDIA / OpenRouter', 'Search APIs', 'CAPTCHA Solver'], color: 'orange' },
+              { title: 'Channels', items: ['Telegram', 'WhatsApp', 'Discord', 'Web Gateway', 'CLI / TUI'] },
+              { title: 'Core Engine', items: ['Decision Engine', 'Pipeline & Guards', 'Orchestrator', 'Smart Heartbeat', 'Action Queue', 'Memory + Vectors'] },
+              { title: 'Execution', items: ['Worker Processes', 'Skills Manager', 'Web Browser', 'Plugin System'] },
+              { title: 'Providers', items: ['OpenAI / Gemini / Claude', 'Bedrock / NVIDIA / OpenRouter', 'Search APIs', 'CAPTCHA Solver'] },
             ].map((col, i) => (
-              <div className={`arch-col arch-${col.color}`} key={i}>
-                <div className="arch-col-title">{col.title}</div>
-                {col.items.map((item, j) => (
-                  <div className="arch-item" key={j}>{item}</div>
-                ))}
+              <div className="arch-card" key={i}>
+                <div className="arch-title">{col.title}</div>
+                <div className="arch-list">
+                  {col.items.map((item, j) => (
+                    <span key={j}>{item}</span>
+                  ))}
+                </div>
               </div>
             ))}
-          </div>
-
-          <div className="arch-flow">
-            <span>Channels</span><span className="flow-arrow">→</span>
-            <span>Core Engine</span><span className="flow-arrow">→</span>
-            <span>Execution</span><span className="flow-arrow">→</span>
-            <span>Providers</span>
           </div>
         </section>
 
         {/* Docs */}
         <section id="docs" className="section">
           <div className="section-label">Documentation</div>
-          <h2 className="section-title">Learn, customize, master.</h2>
-          <p className="section-desc">Comprehensive guides to get you from zero to production.</p>
+          <h2 className="section-title">Learn, customize, and master.</h2>
+          <p className="section-desc">Guides that move fast, from first run to production ops.</p>
 
           <div className="docs-grid">
             {[
@@ -252,7 +283,6 @@ function App() {
 
         {/* CTA */}
         <section className="cta-banner">
-          <div className="cta-glow" />
           <div className="cta-inner">
             <h2>Give your AI an operating system.</h2>
             <p>Autonomy, memory, and strategy — ready for production workflows.</p>

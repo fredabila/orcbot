@@ -18,6 +18,7 @@
  *   MediaHelper — voice/audio, images, TTS, file handling
  *   ProfileHelper — contact profiling, user context building
  *   DevelopmentHelper — software development, coding, project scaffolding
+ *   PrivacyHelper — information boundaries for non-admin users
  */
 
 export { PromptHelper, PromptHelperContext } from './PromptHelper';
@@ -31,3 +32,4 @@ export { SchedulingHelper } from './SchedulingHelper';
 export { MediaHelper } from './MediaHelper';
 export { ProfileHelper } from './ProfileHelper';
 export { DevelopmentHelper } from './DevelopmentHelper';
+export { PrivacyHelper } from './PrivacyHelper';

@@ -27,7 +27,16 @@ export class ParserLayer {
      * and downstream execution.
      */
     private static normalizeToolCalls(tools: ToolCall[]): ToolCall[] {
-        return (tools || []).map((tool) => {
+        return (tools || [])
+            .filter((tool) => {
+                // Filter out tool calls with empty/missing names — LLMs occasionally produce phantom calls
+                if (!tool?.name || tool.name.trim().length === 0) {
+                    logger.debug('ParserLayer: Filtered tool call with empty name');
+                    return false;
+                }
+                return true;
+            })
+            .map((tool) => {
             const toolName = (tool?.name || '').toLowerCase();
             const metadata: Record<string, any> = { ...(tool.metadata || {}) };
 
@@ -278,10 +287,17 @@ export class ParserLayer {
     ): StandardResponse {
         // Convert native tool calls → our ToolCall format
         // Native tools use "arguments" directly as the parameters, which maps to our "metadata"
-        let tools: ToolCall[] = nativeToolCalls.map(tc => ({
-            name: tc.name,
-            metadata: tc.arguments || {},
-        }));
+        // Filter out tool calls with empty names — LLMs occasionally produce phantom calls
+        let tools: ToolCall[] = nativeToolCalls
+            .filter(tc => tc.name && tc.name.trim().length > 0)
+            .map(tc => ({
+                name: tc.name,
+                metadata: tc.arguments || {},
+            }));
+
+        if (tools.length < nativeToolCalls.length) {
+            logger.debug(`ParserLayer: Filtered ${nativeToolCalls.length - tools.length} tool call(s) with empty name`);
+        }
 
         tools = this.normalizeToolCalls(tools);
 

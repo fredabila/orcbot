@@ -2,6 +2,7 @@ import { MemoryManager } from '../memory/MemoryManager';
 import { MultiLLM, LLMToolResponse } from './MultiLLM';
 import { ParserLayer, StandardResponse } from './ParserLayer';
 import { SkillsManager } from './SkillsManager';
+import { ELEVATED_SKILLS } from './Agent';
 import { logger } from '../utils/logger';
 import fs from 'fs';
 import os from 'os';
@@ -314,10 +315,11 @@ The user appreciates knowing what's happening, especially during complex tasks.`
         prompt: string,
         systemPrompt: string,
         actionId: string,
-        attemptNumber: number = 1
+        attemptNumber: number = 1,
+        excludeSkills?: Set<string>
     ): Promise<StandardResponse> {
         const state = this.executionStateManager.getState(actionId);
-        const toolDefs = this.skills.getToolDefinitions();
+        const toolDefs = this.skills.getToolDefinitions(excludeSkills);
 
         try {
             const response: LLMToolResponse = await this.llm.callWithTools(
@@ -356,7 +358,7 @@ The user appreciates knowing what's happening, especially during complex tasks.`
                         targetLength: Math.floor(systemPrompt.length * 0.6),
                         strategy: 'truncate'
                     });
-                    return this.callLLMWithToolsAndRetry(prompt, compacted, actionId, attemptNumber + 1);
+                    return this.callLLMWithToolsAndRetry(prompt, compacted, actionId, attemptNumber + 1, excludeSkills);
                 }
             }
 
@@ -365,7 +367,7 @@ The user appreciates knowing what's happening, especially during complex tasks.`
                 const delay = classified.cooldownMs || ErrorClassifier.getBackoffDelay(attemptNumber - 1);
                 logger.info(`DecisionEngine: Retrying tool call after ${delay}ms (attempt ${attemptNumber + 1}/${this.maxRetries})`);
                 await this.sleep(delay);
-                return this.callLLMWithToolsAndRetry(prompt, systemPrompt, actionId, attemptNumber + 1);
+                return this.callLLMWithToolsAndRetry(prompt, systemPrompt, actionId, attemptNumber + 1, excludeSkills);
             }
 
             // Final fallback: try text-based call
@@ -394,8 +396,15 @@ The user appreciates knowing what's happening, especially during complex tasks.`
 
         const userContext = this.memory.getUserContext();
         const recentContext = this.memory.getRecentContext();
-        const availableSkills = this.skills.getSkillsPrompt();
-        const allowedToolNames = this.skills.getAllSkills().map(s => s.name);
+
+        // Filter out elevated skills for non-admin users
+        const isAdmin = metadata.isAdmin !== false; // undefined = admin (backwards compatible)
+        const excludeSkills = !isAdmin ? ELEVATED_SKILLS : undefined;
+
+        const availableSkills = this.skills.getSkillsPrompt(excludeSkills);
+        const allowedToolNames = this.skills.getAllSkills()
+            .filter(s => !excludeSkills || !excludeSkills.has(s.name))
+            .map(s => s.name);
 
         // Auto-activate matching agent skills for this task (progressive disclosure)
         if ((metadata.currentStep || 1) === 1) {
@@ -749,6 +758,15 @@ ACTIVE CHANNEL CONTEXT:
         }
         } // end !isHeartbeat guard for channel instructions
 
+        // Permission notice for non-admin users — tells the LLM what's off-limits
+        if (!isAdmin && channelInstructions) {
+            channelInstructions += `
+PERMISSION NOTICE: This user is NOT an admin. You can ONLY use messaging, search, and basic interaction skills.
+System-level tools (run_command, file operations, browser automation, scheduling, image generation, etc.) are RESTRICTED and will be blocked.
+Respond conversationally. If the user asks you to do something that requires elevated permissions, politely inform them they don't have access.
+`;
+        }
+
 
         // Build task-optimized prompt using the modular PromptHelper system.
         // The router analyzes the task and selects only the relevant helpers.
@@ -763,23 +781,37 @@ ACTIVE CHANNEL CONTEXT:
                 })
                 .filter(Boolean)
         )];
+
+        // For non-admin users, suppress private context sections entirely.
+        // The PrivacyHelper (injected via PromptRouter) instructs the LLM to enforce
+        // information boundaries, but defense-in-depth means we also avoid sending
+        // the sensitive data at all.
+        const safeJournal = isAdmin ? journalContent : '';
+        const safeLearning = isAdmin ? learningContent : '';
+        const safeSemanticRecall = isAdmin ? semanticRecallString : '';
+        const safeEpisodic = isAdmin ? semanticEpisodicString : '';
+        const safeOtherContext = isAdmin ? otherContextString : '';
+        const safeContactProfile = isAdmin ? contactProfile : undefined;
+
         const coreInstructions = await this.buildHelperPrompt(
             availableSkills,
             this.agentIdentity,
             taskDescription,
             metadata,
             isFirstStep,
-            contactProfile,
-            profilingEnabled,
+            safeContactProfile,
+            isAdmin ? profilingEnabled : false,
             isHeartbeat,
             skillsUsedInAction
         );
 
         // User context - skip for heartbeats (already in heartbeat prompt)
+        // Strip sensitive owner context for non-admin users — they should not see
+        // the owner's profile, journal, learning notes, or cross-channel memories.
         const userContextStr = userContext.raw || '';
-        const trimmedUserContext = isHeartbeat ? '' : (userContextStr.length > 2000 
+        const trimmedUserContext = isHeartbeat ? '' : (!isAdmin ? '' : (userContextStr.length > 2000 
             ? userContextStr.slice(0, 2000) + '...[truncated]' 
-            : userContextStr);
+            : userContextStr));
 
         // Full prompt for all steps - don't risk losing context
         const systemPrompt = `
@@ -802,22 +834,22 @@ ${this.buildTransparencyNudge(metadata)}
 User Context (Long-term profile):
 ${trimmedUserContext || 'No user information available.'}
 
-${journalContent ? `Agent Journal (Recent Reflections):\n${journalContent}` : ''}
+${safeJournal ? `Agent Journal (Recent Reflections):\n${safeJournal}` : ''}
 
-${learningContent ? `Agent Learning Base (Knowledge):\n${learningContent}` : ''}
+${safeLearning ? `Agent Learning Base (Knowledge):\n${safeLearning}` : ''}
 
 ${threadContextString ? `THREAD CONTEXT (Same Chat):\n${threadContextString}` : ''}
 
-${semanticEpisodicString ? `EPISODIC MEMORY (Task-Relevant Summaries — past actions, outcomes, and learnings):\n${semanticEpisodicString}` : ''}
+${safeEpisodic ? `EPISODIC MEMORY (Task-Relevant Summaries — past actions, outcomes, and learnings):\n${safeEpisodic}` : ''}
 
-${semanticRecallString ? `LONG-TERM RECALL (Semantically relevant memories from all channels and time periods — your deep memory):\n${semanticRecallString}` : ''}
+${safeSemanticRecall ? `LONG-TERM RECALL (Semantically relevant memories from all channels and time periods — your deep memory):\n${safeSemanticRecall}` : ''}
 
 ⚠️ STEP HISTORY FOR THIS ACTION (Action ${actionId}) — THIS IS YOUR GROUND TRUTH:
 (If a tool SUCCEEDED here, that result is REAL and CONFIRMED. If a tool FAILED, DO NOT repeat the same call.)
 (STEP HISTORY always takes priority over background context below.)
 ${stepHistoryString}
 
-${otherContextString ? `RECENT BACKGROUND CONTEXT (reference only — may describe older/different actions):\n${otherContextString}` : ''}
+${safeOtherContext ? `RECENT BACKGROUND CONTEXT (reference only — may describe older/different actions):\n${safeOtherContext}` : ''}
 `;
 
         logger.info(`DecisionEngine: Deliberating on task: "${taskDescription}"`);
@@ -833,7 +865,7 @@ ${otherContextString ? `RECENT BACKGROUND CONTEXT (reference only — may descri
                 ParserLayer.getSystemPromptSnippet(),
                 ParserLayer.getNativeToolCallingPromptSnippet()
             );
-            const rawParsed = await this.callLLMWithToolsAndRetry(taskDescription, nativeSystemPrompt || systemPrompt, actionId);
+            const rawParsed = await this.callLLMWithToolsAndRetry(taskDescription, nativeSystemPrompt || systemPrompt, actionId, 1, excludeSkills);
             parsed = this.applyChannelDefaultsToTools(rawParsed, metadata);
             logger.info(`DecisionEngine: Used native tool calling — ${parsed.tools?.length || 0} tool(s)`);
         } else {

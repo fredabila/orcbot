@@ -194,6 +194,24 @@ export class ConfigPolicy {
             description: 'AWS Bedrock secret key',
             reason: 'Critical authentication credential',
         }],
+        ['adminUsers', {
+            key: 'adminUsers',
+            level: ConfigChangeLevel.LOCKED,
+            description: 'Admin user allowlists per channel',
+            reason: 'Security-critical — controls who can issue elevated commands via channels',
+        }],
+        ['imageGenProvider', {
+            key: 'imageGenProvider',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Image generation provider',
+            reason: 'Non-critical preference setting',
+        }],
+        ['imageGenModel', {
+            key: 'imageGenModel',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Image generation model name',
+            reason: 'Non-critical preference setting',
+        }],
     ]);
 
     /**

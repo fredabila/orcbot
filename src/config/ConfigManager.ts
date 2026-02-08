@@ -97,6 +97,17 @@ export interface AgentConfig {
     gatewayHost?: string;                 // Host to bind gateway (default 0.0.0.0)
     gatewayApiKey?: string;               // API key for gateway authentication
     gatewayCorsOrigins?: string[];        // CORS allowed origins (default ['*'])
+    // Image Generation
+    imageGenProvider?: 'openai' | 'google';       // Which provider for image gen (default: auto based on available keys)
+    imageGenModel?: string;                       // Model name (e.g. 'dall-e-3', 'gpt-image-1', 'gemini-2.5-flash-image')
+    imageGenSize?: string;                        // Default size (e.g. '1024x1024')
+    imageGenQuality?: string;                     // Default quality (e.g. 'medium', 'high', 'hd')
+    // User Permissions
+    adminUsers?: {
+        telegram?: string[];   // Telegram numeric user IDs (e.g., ["123456789"])
+        discord?: string[];    // Discord snowflake user IDs (e.g., ["876513738667229184"])
+        whatsapp?: string[];   // WhatsApp JIDs (e.g., ["5511999998888@s.whatsapp.net"])
+    };
 }
 
 export class ConfigManager {
@@ -427,7 +438,11 @@ export class ConfigManager {
             memoryConsolidationThreshold: 30,
             memoryConsolidationBatch: 20,
             skipSimulationForSimpleTasks: true,
-            compactSkillsPrompt: false
+            compactSkillsPrompt: false,
+            imageGenProvider: undefined,
+            imageGenModel: undefined,
+            imageGenSize: '1024x1024',
+            imageGenQuality: 'medium'
         };
     }
 

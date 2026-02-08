@@ -18,7 +18,10 @@ export class MediaHelper implements PromptHelper {
         'document', 'pdf', 'file', 'attachment', 'upload', 'download',
         'video', 'media', 'analyze', 'examine', 'ocr', 'read image',
         'send voice', 'voice note', 'tts', 'text to speech',
-        '[voice:', 'file stored at:', 'sticker', 'gif'
+        '[voice:', 'file stored at:', 'sticker', 'gif',
+        'generate image', 'create image', 'draw', 'illustration',
+        'make an image', 'make a picture', 'make me an image', 'make me a picture',
+        'generate a', 'design a', 'render', 'art of', 'artwork'
     ];
 
     shouldActivate(ctx: PromptHelperContext): boolean {
@@ -46,6 +49,15 @@ export class MediaHelper implements PromptHelper {
 FILE DELIVERY WORKFLOW:
 - **\`send_file\` is the delivery skill**: After producing or downloading any file meant for the user (documents, images, audio, PDFs, text files), use \`send_file(jid, path, caption?)\` to deliver it through the active messaging channel.
 - **write_file → send_file pipeline**: If you create content with \`write_file\` or download with \`download_file\`, the file exists only on the server. The user cannot access it unless you follow up with \`send_file\`. Always chain: produce file → send file → confirm.
-- **Don't just announce**: Sending a text message like "I saved the file to evolution.txt" without actually sending the file is incomplete. The user expects to receive the file in their chat.`;
+- **Don't just announce**: Sending a text message like "I saved the file to evolution.txt" without actually sending the file is incomplete. The user expects to receive the file in their chat.
+
+IMAGE GENERATION:
+- **\`send_image\` is the PREFERRED skill**: Use \`send_image(jid, prompt, size?, quality?, caption?)\` to generate AND send an image in one step. This prevents duplicate files and ensures delivery.
+- **\`generate_image\` is for FILE-ONLY use**: Use \`generate_image(prompt)\` ONLY when you need the file path without sending it (e.g., for further processing). In most cases, use send_image instead.
+- **NEVER call generate_image twice**: One call per image request. If you already generated an image, do NOT generate again — use the file path from the first result.
+- **Prompt quality**: Be descriptive — describe the scene, style, lighting, mood. A narrative paragraph produces better results than a keyword list.
+- **Available sizes**: 1024x1024 (square, default), 1024x1536 (portrait), 1536x1024 (landscape)
+- **Available quality**: low (fast), medium (balanced, default), high (best quality)
+- **When to use**: When the user asks to "create", "generate", "draw", "make", "design" an image or picture.`;
     }
 }

@@ -233,14 +233,24 @@ describe('ResponseValidator', () => {
     });
 
     describe('General response validation', () => {
-        it('should warn about missing reasoning', () => {
+        it('should warn about missing reasoning when no tools are present', () => {
+            const response: StandardResponse = {
+                success: true,
+                tools: []
+            };
+
+            const validation = ResponseValidator.validateResponse(response, allowedTools);
+            expect(validation.warnings.some(w => w.includes('No reasoning'))).toBe(true);
+        });
+
+        it('should NOT warn about missing reasoning when tools are present', () => {
             const response: StandardResponse = {
                 success: true,
                 tools: [{ name: 'send_telegram', metadata: { chatId: '123', message: 'Hi' } }]
             };
 
             const validation = ResponseValidator.validateResponse(response, allowedTools);
-            expect(validation.warnings.some(w => w.includes('No reasoning'))).toBe(true);
+            expect(validation.warnings.some(w => w.includes('No reasoning'))).toBe(false);
         });
 
         it('should warn about goals_met=true with tools', () => {

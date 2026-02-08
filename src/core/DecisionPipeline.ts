@@ -312,6 +312,12 @@ export class DecisionPipeline {
         const searchCounts = new Map<string, number>();
         for (const q of recentSearches) searchCounts.set(q, (searchCounts.get(q) || 0) + 1);
 
+        // Guardrail: prevent duplicate generate_image calls in the same action
+        // If an image was already generated in this action, block subsequent generate_image calls
+        const imageAlreadyGenerated = (ctx.recentMemories || []).some(
+            m => m.id && m.id.startsWith(actionPrefix) && m.metadata?.imageGenerated === true
+        );
+
         // Guardrail: prevent repeated distribute_tasks / orchestrator_status calls in same action
         const orchestrationToolCalls = (ctx.recentMemories || [])
             .filter(m => m.id && m.id.startsWith(actionPrefix) && m.metadata?.tool)
@@ -344,6 +350,13 @@ export class DecisionPipeline {
                     notes.push(`Suppressed ${tool.name}: called ${callCount} times already - likely loop`);
                     continue;
                 }
+            }
+
+            // Suppress duplicate generate_image/send_image calls when an image was already generated in this action
+            if ((tool.name === 'generate_image' || tool.name === 'send_image') && imageAlreadyGenerated) {
+                dropped.push(`image-dedup:${tool.name}`);
+                notes.push(`Suppressed ${tool.name}: image already generated in this action — use send_file to deliver existing image`);
+                continue;
             }
 
             const isSend = tool.name === 'send_telegram' || tool.name === 'send_whatsapp' || tool.name === 'send_discord';
@@ -403,11 +416,23 @@ export class DecisionPipeline {
 
         result.tools = filteredTools;
 
-        // If we dropped all messaging tools, hint termination to avoid loops
+        // If we dropped all proposed tools, decide whether to force-terminate or just warn
         if ((proposed.tools?.length || 0) > 0 && (filteredTools.length === 0)) {
-            notes.push('All proposed tools were suppressed by the pipeline');
-            result.verification = result.verification || { goals_met: false, analysis: '' };
-            result.verification.analysis = `${result.verification.analysis || ''} Pipeline suppressed unsafe/duplicate actions.`.trim();
+            const sendToolNames = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_gateway_chat'];
+            const allDroppedWereSends = proposed.tools!.every(t => sendToolNames.includes(t.name));
+
+            if (allDroppedWereSends && ctx.messagesSent > 0) {
+                // Agent already sent a message AND all subsequent sends were suppressed as dupes.
+                // This is NOT a failure — the task is done. Force goals_met=true to prevent loops.
+                notes.push('All subsequent sends suppressed — message already delivered. Marking task complete.');
+                result.verification = result.verification || { goals_met: false, analysis: '' };
+                result.verification.goals_met = true;
+                result.verification.analysis = 'Message already delivered successfully. Subsequent duplicate sends suppressed by pipeline.';
+            } else {
+                notes.push('All proposed tools were suppressed by the pipeline');
+                result.verification = result.verification || { goals_met: false, analysis: '' };
+                result.verification.analysis = `${result.verification.analysis || ''} Pipeline suppressed unsafe/duplicate actions.`.trim();
+            }
         }
 
         this.attachNotes(result, notes, dropped);

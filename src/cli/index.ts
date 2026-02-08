@@ -1434,6 +1434,10 @@ async function showToolingMenu() {
     const hasSearxng = !!agent.config.get('searxngUrl');
     const hasCaptcha = !!agent.config.get('captchaApiKey');
     const browserEngine = agent.config.get('browserEngine') || 'playwright';
+    const imageGenProvider = agent.config.get('imageGenProvider');
+    const imageGenModel = agent.config.get('imageGenModel');
+    const hasImageGen = !!(imageGenProvider || imageGenModel || agent.config.get('openaiApiKey') || agent.config.get('googleApiKey'));
+    const imageGenLabel = imageGenModel ? `${imageGenModel}` : imageGenProvider ? `${imageGenProvider} (auto)` : hasImageGen ? 'Auto-detect' : 'Not configured';
 
     console.log('');
     const toolLines = [
@@ -1442,6 +1446,7 @@ async function showToolingMenu() {
         `${statusDot(hasBrave, '')} ${bold('Brave Search')}  ${hasBrave ? green('Configured') : gray('Not set')}`,
         `${statusDot(hasSearxng, '')} ${bold('SearxNG')}       ${hasSearxng ? green('Configured') : gray('Not set')}`,
         `${statusDot(hasCaptcha, '')} ${bold('2Captcha')}      ${hasCaptcha ? green('Configured') : gray('Not set')}`,
+        `${statusDot(hasImageGen, '')} ${bold('Image Gen')}    ${hasImageGen ? green(imageGenLabel) : gray('Not set')}`,
     ];
     box(toolLines, { title: '🛠️  TOOL STATUS', width: 52, color: c.yellow });
     console.log('');
@@ -1460,6 +1465,7 @@ async function showToolingMenu() {
                 { name: `  🔀 ${bold('Search Provider Order')}`, value: 'searchOrder' },
                 new inquirer.Separator(gradient('  ─── Other ────────────────────────', [c.yellow, c.gray])),
                 { name: `  ${statusDot(hasCaptcha, '')} 2Captcha ${dim('(CAPTCHA Solver)')}`, value: 'captcha' },
+                { name: `  ${statusDot(hasImageGen, '')} 🎨 ${bold('Image Generation')} ${dim(`(${imageGenLabel})`)}`, value: 'imagegen' },
                 new inquirer.Separator(gradient('  ──────────────────────────────────', [c.yellow, c.gray])),
                 { name: dim('  ← Back'), value: 'back' }
             ]
@@ -1508,6 +1514,102 @@ async function showToolingMenu() {
             { type: 'input', name: 'key', message: `Enter CAPTCHA Solver API Key (current: ${apiKey.substring(0, 8)}...):` }
         ]);
         if (key) agent.config.set('captchaApiKey', key);
+    } else if (tool === 'imagegen') {
+        console.log('');
+        const imgLines = [
+            `${dim('Provider')}  ${bold(String(agent.config.get('imageGenProvider') || 'auto'))}`,
+            `${dim('Model')}     ${bold(String(agent.config.get('imageGenModel') || 'auto'))}`,
+            `${dim('Size')}      ${bold(String(agent.config.get('imageGenSize') || '1024x1024'))}`,
+            `${dim('Quality')}   ${bold(String(agent.config.get('imageGenQuality') || 'medium'))}`,
+            '',
+            `${dim('Available providers:')}`,
+            `  ${agent.config.get('openaiApiKey') ? green('●') : red('○')} OpenAI  ${dim('(DALL·E 3, GPT Image)')}`,
+            `  ${agent.config.get('googleApiKey') ? green('●') : red('○')} Google  ${dim('(Gemini Flash Image, Imagen)')}`,
+            '',
+            `${dim('Reuses your existing LLM API keys!')}`,
+        ];
+        box(imgLines, { title: '🎨 IMAGE GENERATION', width: 52, color: c.magenta });
+        console.log('');
+
+        const { imgAction } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'imgAction',
+                message: cyan('Image Generation Options:'),
+                choices: [
+                    { name: `  🔌 ${bold('Set Provider')} ${dim('(openai / google / auto)')}`, value: 'provider' },
+                    { name: `  🤖 ${bold('Set Model')} ${dim('(dall-e-3 / gemini-2.5-flash-image / ...)')}`, value: 'model' },
+                    { name: `  📐 ${bold('Set Default Size')} ${dim(`(current: ${agent.config.get('imageGenSize') || '1024x1024'})`)}`, value: 'size' },
+                    { name: `  ✨ ${bold('Set Default Quality')} ${dim(`(current: ${agent.config.get('imageGenQuality') || 'medium'})`)}`, value: 'quality' },
+                    new inquirer.Separator(gradient('  ──────────────────────────────────', [c.magenta, c.gray])),
+                    { name: dim('  ← Back'), value: 'back' }
+                ]
+            }
+        ]);
+
+        if (imgAction === 'back') {
+            return showToolingMenu();
+        } else if (imgAction === 'provider') {
+            const { prov } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'prov',
+                    message: 'Select image generation provider:',
+                    choices: [
+                        { name: `  Auto-detect ${dim('(uses first available key)')}`, value: '' },
+                        { name: `  OpenAI ${dim('(DALL·E 3, GPT Image 1)')}`, value: 'openai' },
+                        { name: `  Google ${dim('(Gemini 2.5 Flash Image, Gemini 3 Pro Image)')}`, value: 'google' },
+                    ]
+                }
+            ]);
+            agent.config.set('imageGenProvider', prov || undefined);
+        } else if (imgAction === 'model') {
+            const { mdl } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'mdl',
+                    message: 'Select image generation model:',
+                    choices: [
+                        { name: `  Auto ${dim('(provider default)')}`, value: '' },
+                        new inquirer.Separator(dim('  ─── OpenAI ───')),
+                        { name: `  dall-e-3 ${dim('(1024x1024, good quality)')}`, value: 'dall-e-3' },
+                        { name: `  gpt-image-1 ${dim('(best quality, text rendering)')}`, value: 'gpt-image-1' },
+                        new inquirer.Separator(dim('  ─── Google ───')),
+                        { name: `  gemini-2.5-flash-image ${dim('(fast, efficient)')}`, value: 'gemini-2.5-flash-image' },
+                        { name: `  gemini-3-pro-image-preview ${dim('(4K, professional)')}`, value: 'gemini-3-pro-image-preview' },
+                    ]
+                }
+            ]);
+            agent.config.set('imageGenModel', mdl || undefined);
+        } else if (imgAction === 'size') {
+            const { sz } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'sz',
+                    message: 'Select default image size:',
+                    choices: [
+                        { name: '  1024x1024 (square)', value: '1024x1024' },
+                        { name: '  1024x1536 (portrait)', value: '1024x1536' },
+                        { name: '  1536x1024 (landscape)', value: '1536x1024' },
+                    ]
+                }
+            ]);
+            agent.config.set('imageGenSize', sz);
+        } else if (imgAction === 'quality') {
+            const { q } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'q',
+                    message: 'Select default image quality:',
+                    choices: [
+                        { name: `  low ${dim('(fastest, cheapest)')}`, value: 'low' },
+                        { name: `  medium ${dim('(balanced)')}`, value: 'medium' },
+                        { name: `  high ${dim('(best quality, slower)')}`, value: 'high' },
+                    ]
+                }
+            ]);
+            agent.config.set('imageGenQuality', q);
+        }
     }
 
     console.log('Tooling configuration updated!');
@@ -2759,15 +2861,23 @@ async function showSecurityMenu() {
     const overrideMode = agent.config.get('overrideMode');
     const allowList = (agent.config.get('commandAllowList') || []) as string[];
     const denyList = (agent.config.get('commandDenyList') || []) as string[];
+    const adminUsers = agent.config.get('adminUsers') as any || {};
+    const tgAdmins = (adminUsers.telegram || []) as string[];
+    const dcAdmins = (adminUsers.discord || []) as string[];
+    const waAdmins = (adminUsers.whatsapp || []) as string[];
+    const totalAdmins = tgAdmins.length + dcAdmins.length + waAdmins.length;
+    const adminConfigured = totalAdmins > 0;
 
     console.log('');
     const safeBadge = safeMode ? red(bold('🔒 LOCKED')) : green(bold('🔓 OPEN'));
     const sudoBadge = sudoMode ? yellow(bold('⚠️  ENABLED')) : green(bold('✅ OFF'));
     const overrideBadge = overrideMode ? red(bold('☠️  ACTIVE')) : green(bold('✅ OFF'));
+    const adminBadge = adminConfigured ? green(bold(`👤 ${totalAdmins} admin(s)`)) : yellow(bold('⚠️  OPEN'));
     const secLines = [
         `${dim('Safe Mode')}     ${safeBadge}     ${dim(safeMode ? 'commands disabled' : 'commands allowed')}`,
         `${dim('Sudo Mode')}     ${sudoBadge}  ${dim(sudoMode ? 'all commands allowed' : 'allowList enforced')}`,
         `${dim('Override')}      ${overrideBadge}  ${dim(overrideMode ? 'persona boundaries OFF' : 'persona boundaries enforced')}`,
+        `${dim('Admin Users')}   ${adminBadge}  ${dim(adminConfigured ? `TG:${tgAdmins.length} DC:${dcAdmins.length} WA:${waAdmins.length}` : 'everyone has full access')}`,
         ``,
         `${dim('Allow List')}    ${cyan(bold(String(allowList.length)))} commands  ${dim(allowList.length > 0 ? allowList.slice(0, 5).join(', ') + (allowList.length > 5 ? '…' : '') : '(empty)')}`,
         `${dim('Block List')}    ${cyan(bold(String(denyList.length)))} commands  ${dim(denyList.length > 0 ? denyList.slice(0, 5).join(', ') + (denyList.length > 5 ? '…' : '') : '(empty)')}`,
@@ -2794,6 +2904,8 @@ async function showSecurityMenu() {
                 { name: `  ➕ Add Command to Block List`, value: 'add_deny' },
                 { name: `  ➖ Remove Command from Block List`, value: 'remove_deny' },
                 { name: `  📋 View Full Block List ${dim(`(${denyList.length})`)}`, value: 'view_deny' },
+                new inquirer.Separator(gradient('  ─── Admin Users ──────────────────', [c.cyan, c.gray])),
+                { name: `  👤 ${bold('Manage Admin Users')} ${dim(`(${totalAdmins} configured)`)}`, value: 'manage_admins' },
                 new inquirer.Separator(gradient('  ──────────────────────────────────', [c.gray, c.gray])),
                 { name: dim('  ← Back'), value: 'back' }
             ]
@@ -2908,10 +3020,216 @@ async function showSecurityMenu() {
             console.log('\n📋 Full Block List:');
             console.log(denyList.length > 0 ? denyList.join(', ') : '(empty)');
             break;
+        case 'manage_admins':
+            await showAdminUsersMenu();
+            return; // showAdminUsersMenu handles navigation
     }
 
     await waitKeyPress();
     return showSecurityMenu();
+}
+
+/**
+ * Admin Users Management submenu.
+ * Allows adding/removing admin user IDs per channel (Telegram, Discord, WhatsApp).
+ * When no admin users are configured, everyone has full access (backwards compatible).
+ */
+async function showAdminUsersMenu() {
+    console.clear();
+    banner();
+    sectionHeader('👤', 'Admin Users Management');
+
+    const adminUsers = agent.config.get('adminUsers') as any || {};
+    const tgAdmins = (adminUsers.telegram || []) as string[];
+    const dcAdmins = (adminUsers.discord || []) as string[];
+    const waAdmins = (adminUsers.whatsapp || []) as string[];
+
+    // Fetch known users per channel for pick-lists (excluding already-admin users)
+    const knownTg = agent.getKnownUsers('telegram').filter(u => !tgAdmins.includes(u.id));
+    const knownDc = agent.getKnownUsers('discord').filter(u => !dcAdmins.includes(u.id));
+    const knownWa = agent.getKnownUsers('whatsapp').filter(u => !waAdmins.includes(u.id));
+
+    // Helper: format admin ID with known user name if available
+    const nameForId = (id: string, channel: 'telegram' | 'discord' | 'whatsapp') => {
+        const user = agent.getKnownUsers(channel).find(u => u.id === id);
+        return user ? `${user.name}${user.username ? ` (@${user.username})` : ''} — ${id}` : id;
+    };
+
+    console.log('');
+    const adminLines = [
+        `${dim('When admin users are configured, only listed users can trigger')}`,
+        `${dim('elevated skills (shell, files, browser, scheduling, image gen).')}`,
+        `${dim('Unlisted users can still chat but with restricted permissions.')}`,
+        `${dim('If NO admins are set for a channel, everyone has full access.')}`,
+        ``,
+        `${dim('Telegram')}    ${cyan(bold(String(tgAdmins.length)))} admin(s)  ${dim(tgAdmins.length > 0 ? tgAdmins.slice(0, 3).map(id => nameForId(id, 'telegram')).join(', ') + (tgAdmins.length > 3 ? '…' : '') : '(open — all users are admin)')}`,
+        `${dim('Discord')}     ${cyan(bold(String(dcAdmins.length)))} admin(s)  ${dim(dcAdmins.length > 0 ? dcAdmins.slice(0, 3).map(id => nameForId(id, 'discord')).join(', ') + (dcAdmins.length > 3 ? '…' : '') : '(open — all users are admin)')}`,
+        `${dim('WhatsApp')}    ${cyan(bold(String(waAdmins.length)))} admin(s)  ${dim(waAdmins.length > 0 ? waAdmins.slice(0, 3).map(id => nameForId(id, 'whatsapp')).join(', ') + (waAdmins.length > 3 ? '…' : '') : '(open — all users are admin)')}`,
+        ``,
+        `${dim('Known users')} ${cyan(bold(String(knownTg.length + knownDc.length + knownWa.length)))} ${dim('available to add')}  ${dim(`(${knownTg.length} tg, ${knownDc.length} dc, ${knownWa.length} wa)`)}`,
+    ];
+    box(adminLines, { title: '👤 ADMIN USERS', width: 62, color: c.cyan });
+    console.log('');
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: cyan('Admin Users Options:'),
+            choices: [
+                new inquirer.Separator(gradient('  ─── Telegram ─────────────────────', [c.blue, c.gray])),
+                { name: `  ➕ Add Telegram Admin ${knownTg.length > 0 ? cyan(`(${knownTg.length} known users)`) : dim('(enter ID manually)')}`, value: 'add_tg' },
+                { name: `  ➖ Remove Telegram Admin ${dim(`(${tgAdmins.length})`)}`, value: 'remove_tg' },
+                new inquirer.Separator(gradient('  ─── Discord ──────────────────────', [c.magenta, c.gray])),
+                { name: `  ➕ Add Discord Admin ${knownDc.length > 0 ? cyan(`(${knownDc.length} known users)`) : dim('(enter ID manually)')}`, value: 'add_dc' },
+                { name: `  ➖ Remove Discord Admin ${dim(`(${dcAdmins.length})`)}`, value: 'remove_dc' },
+                new inquirer.Separator(gradient('  ─── WhatsApp ─────────────────────', [c.green, c.gray])),
+                { name: `  ➕ Add WhatsApp Admin ${knownWa.length > 0 ? cyan(`(${knownWa.length} known users)`) : dim('(enter ID manually)')}`, value: 'add_wa' },
+                { name: `  ➖ Remove WhatsApp Admin ${dim(`(${waAdmins.length})`)}`, value: 'remove_wa' },
+                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.gray, c.gray])),
+                { name: dim('  ← Back to Security'), value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showSecurityMenu();
+
+    const saveAdminUsers = (tg: string[], dc: string[], wa: string[]) => {
+        const updated: any = {};
+        if (tg.length > 0) updated.telegram = tg;
+        if (dc.length > 0) updated.discord = dc;
+        if (wa.length > 0) updated.whatsapp = wa;
+        // If all empty, set adminUsers to undefined (backwards compatible — no restrictions)
+        agent.config.set('adminUsers', Object.keys(updated).length > 0 ? updated : undefined);
+    };
+
+    switch (action) {
+        case 'add_tg': {
+            let id = '';
+            if (knownTg.length > 0) {
+                const choices = knownTg.map(u => ({
+                    name: `  ${u.name}${u.username ? ` (@${u.username})` : ''} — ID: ${u.id}  ${dim(`${u.messageCount} msgs, last ${new Date(u.lastSeen).toLocaleDateString()}`)}`,
+                    value: u.id
+                }));
+                choices.push({ name: dim('  ✏️  Enter ID manually'), value: '__manual__' });
+                const { selected } = await inquirer.prompt([
+                    { type: 'list', name: 'selected', message: 'Select a Telegram user to add as admin:', choices }
+                ]);
+                id = selected === '__manual__' ? '' : selected;
+            }
+            if (!id) {
+                if (knownTg.length === 0) console.log(dim('  No known Telegram users yet — enter ID manually.'));
+                const { userId } = await inquirer.prompt([
+                    { type: 'input', name: 'userId', message: 'Enter Telegram numeric user ID (e.g., 123456789):' }
+                ]);
+                id = userId.trim();
+            }
+            if (id && /^\d+$/.test(id)) {
+                const newList = [...new Set([...tgAdmins, id])];
+                saveAdminUsers(newList, dcAdmins, waAdmins);
+                const user = agent.getKnownUsers('telegram').find(u => u.id === id);
+                console.log(`\n✅ Telegram admin added: ${user ? `${user.name} (${id})` : id}`);
+            } else if (id) {
+                console.log('\n❌ Invalid Telegram user ID. Must be numeric.');
+            }
+            break;
+        }
+        case 'remove_tg': {
+            if (tgAdmins.length === 0) { console.log('\nNo Telegram admins configured.'); break; }
+            const { userId } = await inquirer.prompt([
+                { type: 'list', name: 'userId', message: 'Select Telegram admin to remove:', choices: tgAdmins.map(id => ({ name: nameForId(id, 'telegram'), value: id })) }
+            ]);
+            saveAdminUsers(tgAdmins.filter(id => id !== userId), dcAdmins, waAdmins);
+            console.log(`\n✅ Telegram admin removed: ${nameForId(userId, 'telegram')}`);
+            break;
+        }
+        case 'add_dc': {
+            let id = '';
+            if (knownDc.length > 0) {
+                const choices = knownDc.map(u => ({
+                    name: `  ${u.name}${u.username ? ` (@${u.username})` : ''} — ID: ${u.id}  ${dim(`${u.messageCount} msgs, last ${new Date(u.lastSeen).toLocaleDateString()}`)}`,
+                    value: u.id
+                }));
+                choices.push({ name: dim('  ✏️  Enter ID manually'), value: '__manual__' });
+                const { selected } = await inquirer.prompt([
+                    { type: 'list', name: 'selected', message: 'Select a Discord user to add as admin:', choices }
+                ]);
+                id = selected === '__manual__' ? '' : selected;
+            }
+            if (!id) {
+                if (knownDc.length === 0) console.log(dim('  No known Discord users yet — enter ID manually.'));
+                const { userId } = await inquirer.prompt([
+                    { type: 'input', name: 'userId', message: 'Enter Discord snowflake user ID (e.g., 876513738667229184):' }
+                ]);
+                id = userId.trim();
+            }
+            if (id && /^\d{15,20}$/.test(id)) {
+                const newList = [...new Set([...dcAdmins, id])];
+                saveAdminUsers(tgAdmins, newList, waAdmins);
+                const user = agent.getKnownUsers('discord').find(u => u.id === id);
+                console.log(`\n✅ Discord admin added: ${user ? `${user.name} (${id})` : id}`);
+            } else if (id) {
+                console.log('\n❌ Invalid Discord user ID. Must be a 15-20 digit snowflake.');
+            }
+            break;
+        }
+        case 'remove_dc': {
+            if (dcAdmins.length === 0) { console.log('\nNo Discord admins configured.'); break; }
+            const { userId } = await inquirer.prompt([
+                { type: 'list', name: 'userId', message: 'Select Discord admin to remove:', choices: dcAdmins.map(id => ({ name: nameForId(id, 'discord'), value: id })) }
+            ]);
+            saveAdminUsers(tgAdmins, dcAdmins.filter(id => id !== userId), waAdmins);
+            console.log(`\n✅ Discord admin removed: ${nameForId(userId, 'discord')}`);
+            break;
+        }
+        case 'add_wa': {
+            let id = '';
+            if (knownWa.length > 0) {
+                const choices = knownWa.map(u => ({
+                    name: `  ${u.name}${u.username ? ` (@${u.username})` : ''} — ${u.id}  ${dim(`${u.messageCount} msgs, last ${new Date(u.lastSeen).toLocaleDateString()}`)}`,
+                    value: u.id
+                }));
+                choices.push({ name: dim('  ✏️  Enter ID manually'), value: '__manual__' });
+                const { selected } = await inquirer.prompt([
+                    { type: 'list', name: 'selected', message: 'Select a WhatsApp user to add as admin:', choices }
+                ]);
+                id = selected === '__manual__' ? '' : selected;
+            }
+            if (!id) {
+                if (knownWa.length === 0) console.log(dim('  No known WhatsApp users yet — enter ID manually.'));
+                const { userId } = await inquirer.prompt([
+                    { type: 'input', name: 'userId', message: 'Enter WhatsApp JID (e.g., 2348012345678@s.whatsapp.net):' }
+                ]);
+                id = userId.trim();
+                // Auto-append @s.whatsapp.net if they just typed a phone number
+                if (id && /^\d+$/.test(id)) {
+                    id = `${id}@s.whatsapp.net`;
+                    console.log(dim(`  → Formatted as ${id}`));
+                }
+            }
+            if (id && id.includes('@')) {
+                const newList = [...new Set([...waAdmins, id])];
+                saveAdminUsers(tgAdmins, dcAdmins, newList);
+                const user = agent.getKnownUsers('whatsapp').find(u => u.id === id);
+                console.log(`\n✅ WhatsApp admin added: ${user ? `${user.name} (${id})` : id}`);
+            } else if (id) {
+                console.log('\n❌ Invalid WhatsApp JID. Use format: phonenumber@s.whatsapp.net');
+            }
+            break;
+        }
+        case 'remove_wa': {
+            if (waAdmins.length === 0) { console.log('\nNo WhatsApp admins configured.'); break; }
+            const { userId } = await inquirer.prompt([
+                { type: 'list', name: 'userId', message: 'Select WhatsApp admin to remove:', choices: waAdmins.map(id => ({ name: nameForId(id, 'whatsapp'), value: id })) }
+            ]);
+            saveAdminUsers(tgAdmins, dcAdmins, waAdmins.filter(id => id !== userId));
+            console.log(`\n✅ WhatsApp admin removed: ${nameForId(userId, 'whatsapp')}`);
+            break;
+        }
+    }
+
+    await waitKeyPress();
+    return showAdminUsersMenu();
 }
 
 async function showConfigMenu() {

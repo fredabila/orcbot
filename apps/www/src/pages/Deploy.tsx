@@ -17,6 +17,7 @@ const providers: { id: Provider; name: string; icon: string; available: boolean 
 function Deploy() {
   const [selectedProvider, setSelectedProvider] = useState<Provider>('docker');
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const copyToClipboard = (text: string, index: number) => {
     navigator.clipboard.writeText(text);
@@ -171,6 +172,7 @@ ufw enable`,
 
   return (
     <div className="app deploy-page">
+      <div className="backdrop" />
       <div className="noise-overlay" />
 
       <header className="deploy-header">
@@ -181,10 +183,17 @@ ufw enable`,
 
         <nav className="nav">
           <Link to="/" className="logo">
-            <span className="logo-icon">⬡</span>
+            <span className="logo-icon">▲</span>
             <span className="logo-text">OrcBot</span>
           </Link>
-          <div className="nav-center">
+          <button
+            className="mobile-toggle"
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            aria-label="Toggle menu"
+          >
+            <span className={`hamburger ${mobileMenuOpen ? 'open' : ''}`} />
+          </button>
+          <div className={`nav-center ${mobileMenuOpen ? 'open' : ''}`}>
             <Link to="/">Home</Link>
             <Link to="/#capabilities">Capabilities</Link>
             <Link to="/deploy" className="active">Deploy</Link>
@@ -197,19 +206,56 @@ ufw enable`,
           </div>
         </nav>
 
-        <div className="deploy-hero">
-          <div className="section-label">Server Deployment</div>
-          <h1>Deploy OrcBot to the cloud</h1>
-          <p className="deploy-subtitle">
-            Step-by-step guides to run OrcBot 24/7 on your favorite cloud provider.
-            Perfect for autonomous operations that never sleep.
-          </p>
+        <div className="deploy-hero-grid">
+          <div className="deploy-hero-copy">
+            <div className="section-label">Deployment Playbook</div>
+            <h1 className="deploy-title">Deploy OrcBot with confidence.</h1>
+            <p className="deploy-subtitle">
+              Step-by-step guides to run OrcBot 24/7 on your preferred infrastructure.
+              Docker for fast launch, DigitalOcean for dedicated always-on ops.
+            </p>
+            <div className="deploy-hero-actions">
+              <a className="btn btn-primary btn-lg" href="#providers">Choose a provider</a>
+              <a className="btn btn-outline btn-lg" href="https://fredabila.github.io/orcbot/docs/" target="_blank" rel="noopener noreferrer">Full docs</a>
+            </div>
+          </div>
+
+          <div className="deploy-hero-card">
+            <div className="deploy-card-header">
+              <span className="deploy-card-kicker">Launch Overview</span>
+              <span className="status-pill">Ready</span>
+            </div>
+            <div className="deploy-card-grid">
+              <div>
+                <p>Docker</p>
+                <strong>~3 min setup</strong>
+              </div>
+              <div>
+                <p>DigitalOcean</p>
+                <strong>~15 min setup</strong>
+              </div>
+              <div>
+                <p>Data</p>
+                <strong>Local volume</strong>
+              </div>
+              <div>
+                <p>Ops Mode</p>
+                <strong>24/7 autonomy</strong>
+              </div>
+            </div>
+            <div className="deploy-card-footer">
+              Use Lightpanda for low-memory VPS setups.
+            </div>
+          </div>
         </div>
       </header>
 
       <main className="deploy-main">
-        <section className="provider-selector">
-          <h2>Choose your provider</h2>
+        <section id="providers" className="provider-selector">
+          <div className="provider-header">
+            <h2>Choose your provider</h2>
+            <p>Pick a path that matches your ops style. We recommend Docker for the fastest start.</p>
+          </div>
           <div className="provider-grid">
             {providers.map((provider) => (
               <button
@@ -229,8 +275,10 @@ ufw enable`,
         {selectedProvider === 'docker' && (
           <section className="deployment-guide">
             <div className="guide-header">
-              <h2>🐳 Docker Deployment Guide</h2>
-              <p>Run OrcBot anywhere with Docker — the fastest way to deploy.</p>
+              <div>
+                <h2>🐳 Docker Deployment Guide</h2>
+                <p>Run OrcBot anywhere with Docker — the fastest way to deploy.</p>
+              </div>
               <div className="requirements">
                 <h4>Requirements</h4>
                 <ul>
@@ -409,8 +457,10 @@ docker compose -f docker-compose.minimal.yml \\
         {selectedProvider === 'digitalocean' && (
           <section className="deployment-guide">
             <div className="guide-header">
-              <h2>🌊 DigitalOcean Deployment Guide</h2>
-              <p>Deploy OrcBot to a DigitalOcean Droplet in about 15 minutes.</p>
+              <div>
+                <h2>🌊 DigitalOcean Deployment Guide</h2>
+                <p>Deploy OrcBot to a DigitalOcean Droplet in about 15 minutes.</p>
+              </div>
               <div className="requirements">
                 <h4>Requirements</h4>
                 <ul>
@@ -500,10 +550,9 @@ docker compose -f docker-compose.minimal.yml \\
         )}
 
         <section className="cta-section">
-          <div className="cta-glow" />
           <div className="cta-section-inner">
             <h2>Need help deploying?</h2>
-            <p>Join our community for support and deployment assistance.</p>
+            <p>Join the community for support, real configs, and deployment playbooks.</p>
             <div className="cta-buttons">
               <a href="https://github.com/fredabila/orcbot/discussions" className="btn btn-primary btn-lg">GitHub Discussions</a>
               <a href="https://twitter.com/orcbot_ai" className="btn btn-outline btn-lg">Follow Updates</a>

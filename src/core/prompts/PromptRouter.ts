@@ -18,6 +18,7 @@ import { SchedulingHelper } from './SchedulingHelper';
 import { MediaHelper } from './MediaHelper';
 import { ProfileHelper } from './ProfileHelper';
 import { DevelopmentHelper } from './DevelopmentHelper';
+import { PrivacyHelper } from './PrivacyHelper';
 import { logger } from '../../utils/logger';
 
 /** Minimal LLM interface — avoids importing the full MultiLLM dependency */
@@ -47,6 +48,7 @@ export class PromptRouter {
     constructor() {
         // Register all built-in helpers
         this.register(new CoreHelper());
+        this.register(new PrivacyHelper());
         this.register(new ToolingHelper());
         this.register(new CommunicationHelper());
         this.register(new BrowserHelper());
