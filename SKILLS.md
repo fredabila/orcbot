@@ -45,8 +45,8 @@ This file lists the available skills for the agent.
 - **update_journal(entry_text)**: Write a reflection entry to JOURNAL.md.
 - **update_learning(topic, knowledge_content?)**: Research and persist knowledge.
 - **request_supporting_data(question)**: Ask for missing info and pause execution.
-- **deep_reason(topic)**: Perform intensive multi-step analysis.
-
+- **deep_reason(topic)**: Perform intensive multi-step analysis.- **recall_memory(query, limit?)**: Semantic search across ALL memory — finds relevant memories from any channel, time period, or type. Use to remember past conversations, find context about topics, or recall what happened with a specific person/project.
+- **search_chat_history(jid, query?, limit?, source?)**: Search chat history with a contact. Supports semantic search (meaning-based) and keyword search. Works across WhatsApp, Telegram, and Discord.
 ## Scheduling
 - **schedule_task(time_or_cron, task_description)**: Schedule a task for later.
 

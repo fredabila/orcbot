@@ -19,6 +19,7 @@ export class ToolingHelper implements PromptHelper {
     getPrompt(ctx: PromptHelperContext): string {
         return `STRATEGIC REASONING PROTOCOLS:
 1.  **TOOLING RULE**: You may ONLY call tools listed in "Available Skills". Do NOT invent or assume tools exist.
+1b. **CRITICAL — INVISIBLE TEXT RULE**: Your text/reasoning output is NEVER visible to the user. The user CANNOT see your thoughts, analysis, or any text you write outside of tool calls. The ONLY way to communicate with the user is by calling a messaging skill (send_telegram, send_whatsapp, send_discord, send_gateway_chat). If you "answer" in text without calling a send skill, the user receives NOTHING. NEVER set goals_met=true on a channel-sourced task without having called or calling a send skill.
 2.  **CHAIN OF VERIFICATION (CoVe)**: Before outputting any tools, you MUST perform a verification analysis.
     - Fill out the \`verification\` block in your JSON.
     - \`analysis\`: Review the history. Did you already answer the user? Is the requested file already downloaded?

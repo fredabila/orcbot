@@ -396,4 +396,33 @@ export class DiscordChannel implements IChannel {
     private delay(ms: number): Promise<void> {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
+
+    /**
+     * React to a message with an emoji.
+     * Supports both Unicode emoji and custom Discord emoji (name:id format).
+     */
+    public async react(chatId: string, messageId: string, emoji: string): Promise<void> {
+        if (!this.isReady) {
+            throw new Error('Discord client is not ready');
+        }
+
+        try {
+            const channel = await this.client.channels.fetch(chatId);
+
+            if (!channel || !channel.isTextBased()) {
+                throw new Error(`Channel ${chatId} not found or not text-based`);
+            }
+
+            const message = await (channel as any).messages.fetch(messageId);
+            if (!message) {
+                throw new Error(`Message ${messageId} not found in channel ${chatId}`);
+            }
+
+            await message.react(emoji);
+            logger.info(`DiscordChannel: Reacted with ${emoji} to message ${messageId} in ${chatId}`);
+        } catch (error: any) {
+            logger.error(`DiscordChannel: Error reacting to message ${messageId}: ${error.message}`);
+            throw error;
+        }
+    }
 }

@@ -430,6 +430,78 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
     }
 
     /**
+     * Semantic recall — deep long-term memory retrieval across ALL memory types.
+     * Unlike semanticSearch which is typically filtered by source, this searches
+     * the entire vector store for the most relevant memories regardless of channel.
+     * 
+     * Returns deduplicated results excluding specified IDs (e.g., already-shown memories).
+     * This is the agent's "remember anything relevant" capability.
+     */
+    public async semanticRecall(
+        query: string,
+        limit: number = 8,
+        excludeIds?: Set<string>
+    ): Promise<ScoredVectorEntry[]> {
+        if (!this.vectorMemory?.isEnabled()) return [];
+        try {
+            const results = await this.vectorMemory.search(query, limit * 2, { excludeIds });
+            // Filter out very low similarity hits (noise)
+            const meaningful = results.filter(r => r.score > 0.25);
+            return meaningful.slice(0, limit);
+        } catch (e) {
+            logger.warn(`MemoryManager: semanticRecall failed: ${e}`);
+            return [];
+        }
+    }
+
+    /**
+     * Get semantically relevant episodic summaries for a given task.
+     * Returns episodic memories ranked by relevance to the query, not just recency.
+     * Falls back to recency-based retrieval if vector memory is unavailable.
+     */
+    public async getRelevantEpisodicMemories(
+        query: string,
+        limit: number = 5
+    ): Promise<MemoryEntry[]> {
+        if (!this.vectorMemory?.isEnabled()) {
+            // Fallback: return most recent episodic memories
+            return this.searchMemory('episodic').slice(-limit);
+        }
+
+        try {
+            const semanticHits = await this.vectorMemory.search(query, limit * 2, { type: 'episodic' });
+            if (semanticHits.length < 2) {
+                // Not enough semantic hits — fall back to recency
+                return this.searchMemory('episodic').slice(-limit);
+            }
+
+            // Cross-reference with actual memory entries to get full metadata
+            const allEpisodic = this.searchMemory('episodic');
+            const episodicById = new Map(allEpisodic.map(m => [m.id, m]));
+            
+            const relevant = semanticHits
+                .map(h => episodicById.get(h.id))
+                .filter(Boolean) as MemoryEntry[];
+
+            // Always include the most recent episodic memory for continuity
+            const mostRecent = allEpisodic.slice(-1);
+            const merged: MemoryEntry[] = [];
+            const seen = new Set<string>();
+            for (const m of [...relevant, ...mostRecent]) {
+                if (m.id && !seen.has(m.id)) {
+                    seen.add(m.id);
+                    merged.push(m);
+                }
+            }
+
+            return merged.slice(0, limit);
+        } catch (e) {
+            logger.warn(`MemoryManager: getRelevantEpisodicMemories failed: ${e}`);
+            return this.searchMemory('episodic').slice(-limit);
+        }
+    }
+
+    /**
      * Get context including daily memory for agent prompts
      */
     public getExtendedContext(): string {

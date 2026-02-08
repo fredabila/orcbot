@@ -12,6 +12,34 @@ export interface LLMMessage {
     content: string;
 }
 
+/** JSON Schema-based tool definition (OpenAI function calling format) */
+export interface LLMToolDefinition {
+    type: 'function';
+    function: {
+        name: string;
+        description: string;
+        parameters: {
+            type: 'object';
+            properties: Record<string, { type: string; description?: string }>;
+            required?: string[];
+        };
+    };
+}
+
+/** Structured tool call returned by native tool calling APIs */
+export interface LLMToolCall {
+    name: string;
+    arguments: Record<string, any>;
+    id?: string;  // tool_call_id from the API
+}
+
+/** Combined response from callWithTools: text content + structured tool calls */
+export interface LLMToolResponse {
+    content: string;         // Text/reasoning from the model (may be empty if only tool calls)
+    toolCalls: LLMToolCall[];
+    raw?: any;               // Raw API response for debugging
+}
+
 export class MultiLLM {
     private openaiKey: string | undefined;
     private openrouterKey: string | undefined;
@@ -78,6 +106,357 @@ export class MultiLLM {
                 return ErrorHandler.withRetry(() => executeCall(fallbackProvider, fallbackModel), { maxRetries: 1 });
             }
         );
+    }
+
+    /**
+     * Call the LLM with native tool/function calling support.
+     * Providers that support tool calling (OpenAI, Anthropic, Google, OpenRouter, NVIDIA)
+     * will pass structured tool definitions to the API rather than embedding them in the prompt.
+     * 
+     * Returns both the text content (reasoning) and structured tool calls.
+     * Falls back to regular call() + text parsing for unsupported providers.
+     */
+    public async callWithTools(
+        prompt: string,
+        systemMessage: string,
+        tools: LLMToolDefinition[],
+        provider?: LLMProvider,
+        modelOverride?: string
+    ): Promise<LLMToolResponse> {
+        const primaryProvider = provider || this.preferredProvider || this.inferProvider(modelOverride || this.modelName);
+        const model = modelOverride || this.modelName;
+
+        // Check if provider supports native tool calling
+        const supportsTools = this.supportsNativeToolCalling(primaryProvider);
+
+        if (!supportsTools || tools.length === 0) {
+            // Fallback: use regular call() — tools are already in the system prompt
+            const textResponse = await this.call(prompt, systemMessage, provider, modelOverride);
+            return { content: textResponse, toolCalls: [] };
+        }
+
+        const executeToolCall = async (p: LLMProvider, m: string): Promise<LLMToolResponse> => {
+            switch (p) {
+                case 'openai':
+                case 'nvidia':  // NVIDIA uses OpenAI-compatible API
+                    return this.callOpenAIWithTools(prompt, systemMessage, tools, m, p);
+                case 'anthropic':
+                    return this.callAnthropicWithTools(prompt, systemMessage, tools, m);
+                case 'google':
+                    return this.callGoogleWithTools(prompt, systemMessage, tools, m);
+                case 'openrouter':
+                    return this.callOpenRouterWithTools(prompt, systemMessage, tools, m);
+                default:
+                    // Unsupported: fall back to text-based
+                    const text = await this.call(prompt, systemMessage, p, m);
+                    return { content: text, toolCalls: [] };
+            }
+        };
+
+        const fallbackProvider = this.getFallbackProvider(primaryProvider);
+
+        return ErrorHandler.withFallback(
+            () => ErrorHandler.withRetry(() => executeToolCall(primaryProvider, model), { maxRetries: 2 }),
+            async () => {
+                if (!fallbackProvider) throw new Error(`Primary provider (${primaryProvider}) failed and no fallback available.`);
+                const fallbackModel = this.getDefaultModelForProvider(fallbackProvider);
+                logger.info(`MultiLLM: Tool call falling back from ${primaryProvider} to ${fallbackProvider}`);
+                return ErrorHandler.withRetry(() => executeToolCall(fallbackProvider, fallbackModel), { maxRetries: 1 });
+            }
+        );
+    }
+
+    /**
+     * Whether a given provider supports native tool/function calling.
+     */
+    public supportsNativeToolCalling(provider?: LLMProvider): boolean {
+        const p = provider || this.preferredProvider || this.inferProvider(this.modelName);
+        return ['openai', 'anthropic', 'google', 'openrouter', 'nvidia'].includes(p);
+    }
+
+    // ── Native tool calling: OpenAI / NVIDIA (OpenAI-compatible) ──
+
+    private async callOpenAIWithTools(
+        prompt: string,
+        systemMessage: string,
+        tools: LLMToolDefinition[],
+        model: string,
+        provider: 'openai' | 'nvidia'
+    ): Promise<LLMToolResponse> {
+        const apiKey = provider === 'nvidia' ? this.nvidiaKey : this.openaiKey;
+        const baseUrl = provider === 'nvidia'
+            ? 'https://integrate.api.nvidia.com/v1/chat/completions'
+            : 'https://api.openai.com/v1/chat/completions';
+
+        if (!apiKey) throw new Error(`${provider} API key not configured`);
+
+        const resolvedModel = provider === 'nvidia' ? this.normalizeNvidiaModel(model) : model;
+
+        const messages: LLMMessage[] = [];
+        if (systemMessage) messages.push({ role: 'system', content: systemMessage });
+        messages.push({ role: 'user', content: prompt });
+
+        const body: any = {
+            model: resolvedModel,
+            messages,
+            temperature: 0.7,
+            tools,
+        };
+
+        // NVIDIA may need max_tokens
+        if (provider === 'nvidia') {
+            body.max_tokens = 16384;
+        }
+
+        try {
+            const response = await fetch(baseUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`,
+                    ...(provider === 'nvidia' ? { 'Accept': 'application/json' } : {}),
+                },
+                body: JSON.stringify(body),
+            });
+
+            if (!response.ok) {
+                const err = await response.text();
+                throw new Error(`${provider} Tool Call API Error: ${response.status} ${err}`);
+            }
+
+            const data = await response.json() as any;
+            const message = data.choices?.[0]?.message;
+            const textContent = message?.content || '';
+            const toolCalls: LLMToolCall[] = (message?.tool_calls || []).map((tc: any) => ({
+                name: tc.function?.name || '',
+                arguments: this.safeParseJson(tc.function?.arguments),
+                id: tc.id,
+            }));
+
+            this.recordUsage(provider, resolvedModel, prompt, data, textContent);
+            logger.debug(`MultiLLM: ${provider} tool call returned ${toolCalls.length} tool(s) + ${textContent.length} chars text`);
+
+            return { content: textContent, toolCalls, raw: data };
+        } catch (error) {
+            logger.error(`MultiLLM ${provider} tool call error: ${error}`);
+            throw error;
+        }
+    }
+
+    // ── Native tool calling: Anthropic ──
+
+    private async callAnthropicWithTools(
+        prompt: string,
+        systemMessage: string,
+        tools: LLMToolDefinition[],
+        model: string
+    ): Promise<LLMToolResponse> {
+        if (!this.anthropicKey) throw new Error('Anthropic API key not configured');
+
+        const resolvedModel = this.normalizeAnthropicModel(model);
+
+        // Convert OpenAI tool format → Anthropic tool format
+        const anthropicTools = tools.map(t => ({
+            name: t.function.name,
+            description: t.function.description,
+            input_schema: t.function.parameters,
+        }));
+
+        const body: any = {
+            model: resolvedModel,
+            max_tokens: 16384,
+            messages: [{ role: 'user', content: prompt }],
+            tools: anthropicTools,
+        };
+        if (systemMessage) {
+            body.system = systemMessage;
+        }
+
+        try {
+            const response = await fetch('https://api.anthropic.com/v1/messages', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-key': this.anthropicKey,
+                    'anthropic-version': '2023-06-01',
+                },
+                body: JSON.stringify(body),
+            });
+
+            if (!response.ok) {
+                const err = await response.text();
+                throw new Error(`Anthropic Tool Call API Error: ${response.status} ${err}`);
+            }
+
+            const data = await response.json() as any;
+
+            // Anthropic returns mixed content blocks: text and tool_use
+            let textContent = '';
+            const toolCalls: LLMToolCall[] = [];
+
+            for (const block of (data.content || [])) {
+                if (block.type === 'text') {
+                    textContent += block.text;
+                } else if (block.type === 'tool_use') {
+                    toolCalls.push({
+                        name: block.name,
+                        arguments: block.input || {},
+                        id: block.id,
+                    });
+                }
+            }
+
+            this.recordUsage('anthropic', resolvedModel, prompt, data, textContent);
+            logger.debug(`MultiLLM: Anthropic tool call returned ${toolCalls.length} tool(s) + ${textContent.length} chars text`);
+
+            return { content: textContent, toolCalls, raw: data };
+        } catch (error) {
+            logger.error(`MultiLLM Anthropic tool call error: ${error}`);
+            throw error;
+        }
+    }
+
+    // ── Native tool calling: Google Gemini ──
+
+    private async callGoogleWithTools(
+        prompt: string,
+        systemMessage: string,
+        tools: LLMToolDefinition[],
+        model: string
+    ): Promise<LLMToolResponse> {
+        if (!this.googleKey) throw new Error('Google API key not configured');
+
+        const fullPrompt = systemMessage ? `System: ${systemMessage}\n\nUser: ${prompt}` : prompt;
+
+        // Convert OpenAI tool format → Gemini function declaration format
+        const geminiTools = [{
+            function_declarations: tools.map(t => ({
+                name: t.function.name,
+                description: t.function.description,
+                parameters: t.function.parameters,
+            }))
+        }];
+
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.googleKey}`;
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: fullPrompt }] }],
+                    tools: geminiTools,
+                }),
+            });
+
+            if (!response.ok) {
+                const err = await response.text();
+                throw new Error(`Google Tool Call API Error: ${response.status} ${err}`);
+            }
+
+            const data = await response.json() as any;
+
+            let textContent = '';
+            const toolCalls: LLMToolCall[] = [];
+
+            // Gemini returns parts with text and/or functionCall
+            const parts = data?.candidates?.[0]?.content?.parts || [];
+            for (const part of parts) {
+                if (part.text) {
+                    textContent += part.text;
+                }
+                if (part.functionCall) {
+                    toolCalls.push({
+                        name: part.functionCall.name,
+                        arguments: part.functionCall.args || {},
+                    });
+                }
+            }
+
+            this.recordUsage('google', model, fullPrompt, data, textContent);
+            logger.debug(`MultiLLM: Google tool call returned ${toolCalls.length} tool(s) + ${textContent.length} chars text`);
+
+            return { content: textContent, toolCalls, raw: data };
+        } catch (error) {
+            logger.error(`MultiLLM Google tool call error: ${error}`);
+            throw error;
+        }
+    }
+
+    // ── Native tool calling: OpenRouter (OpenAI-compatible) ──
+
+    private async callOpenRouterWithTools(
+        prompt: string,
+        systemMessage: string,
+        tools: LLMToolDefinition[],
+        model: string
+    ): Promise<LLMToolResponse> {
+        if (!this.openrouterKey) throw new Error('OpenRouter API key not configured');
+
+        const resolvedModel = this.normalizeOpenRouterModel(model);
+        const base = this.openrouterBaseUrl.replace(/\/+$/, '');
+        const url = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`;
+
+        const messages: LLMMessage[] = [];
+        if (systemMessage) messages.push({ role: 'system', content: systemMessage });
+        messages.push({ role: 'user', content: prompt });
+
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.openrouterKey}`,
+        };
+        if (this.openrouterReferer) headers['HTTP-Referer'] = this.openrouterReferer;
+        if (this.openrouterAppName) headers['X-Title'] = this.openrouterAppName;
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    model: resolvedModel,
+                    messages,
+                    temperature: 0.7,
+                    tools,
+                }),
+            });
+
+            if (!response.ok) {
+                const err = await response.text();
+                throw new Error(`OpenRouter Tool Call API Error: ${response.status} ${err}`);
+            }
+
+            const data = await response.json() as any;
+            const message = data.choices?.[0]?.message;
+            const textContent = message?.content || '';
+            const toolCalls: LLMToolCall[] = (message?.tool_calls || []).map((tc: any) => ({
+                name: tc.function?.name || '',
+                arguments: this.safeParseJson(tc.function?.arguments),
+                id: tc.id,
+            }));
+
+            this.recordUsage('openrouter', resolvedModel, prompt, data, textContent);
+            logger.debug(`MultiLLM: OpenRouter tool call returned ${toolCalls.length} tool(s) + ${textContent.length} chars text`);
+
+            return { content: textContent, toolCalls, raw: data };
+        } catch (error) {
+            logger.error(`MultiLLM OpenRouter tool call error: ${error}`);
+            throw error;
+        }
+    }
+
+    /**
+     * Safely parse a JSON string, returning empty object on failure.
+     * OpenAI tool call arguments come as a JSON string.
+     */
+    private safeParseJson(str: any): Record<string, any> {
+        if (typeof str === 'object' && str !== null) return str;
+        if (typeof str !== 'string') return {};
+        try {
+            return JSON.parse(str);
+        } catch {
+            logger.warn(`MultiLLM: Failed to parse tool arguments: "${String(str).slice(0, 100)}"`);
+            return {};
+        }
     }
 
     private getFallbackProvider(primaryProvider: LLMProvider): LLMProvider | null {

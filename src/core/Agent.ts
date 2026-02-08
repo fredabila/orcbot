@@ -24,6 +24,7 @@ import { DOMParser } from 'linkedom';
 import { eventBus } from './EventBus';
 import { logger } from '../utils/logger';
 import { ErrorHandler } from '../utils/ErrorHandler';
+import { resolveEmoji, detectChannelFromMetadata } from '../utils/ReactionHelper';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -50,6 +51,8 @@ export class Agent {
     private lastHeartbeatAt: number = 0;
     private consecutiveIdleHeartbeats: number = 0;
     private lastHeartbeatProductive: boolean = true;
+    private heartbeatRunning: boolean = false;
+    private lastHeartbeatPushAt: number = 0;
     private _blankPageCount: number = 0;
     private agentConfigFile: string;
     private agentIdentity: string = '';
@@ -162,6 +165,12 @@ export class Agent {
             this.config.get('browserEngine'),      // Browser engine: 'playwright' | 'lightpanda'
             this.config.get('lightpandaEndpoint')  // Lightpanda CDP endpoint
         );
+
+        // Wire vision analyzer so the browser can auto-fallback to screenshot + LLM vision
+        // when semantic snapshots are thin (canvas-heavy, image-based, or custom-component UIs)
+        this.browser.setVisionAnalyzer(async (screenshotPath: string, prompt: string) => {
+            return this.llm.analyzeMedia(screenshotPath, prompt);
+        });
         this.workerProfile = new WorkerProfileManager();
         this.orchestrator = new AgentOrchestrator();
 
@@ -256,18 +265,49 @@ export class Agent {
         }
     }
 
+    /**
+     * Resolve a Telegram chat ID — if the agent passed a name instead of a numeric ID,
+     * look up the real ID from recent memory.
+     * Returns the numeric ID string, or null if unresolvable.
+     */
+    private resolveTelegramChatId(input: string): { id: string; resolved: boolean } | null {
+        const trimmed = String(input).trim();
+        if (/^-?\d+$/.test(trimmed)) {
+            return { id: trimmed, resolved: false };
+        }
+        // Name passed — search memory for the real numeric ID
+        const recentMemories = this.memory.searchMemory('short');
+        const match = recentMemories.find((m: any) =>
+            m.metadata?.source === 'telegram' &&
+            (m.metadata?.senderName?.toLowerCase() === trimmed.toLowerCase() ||
+             m.content?.toLowerCase().includes(trimmed.toLowerCase()))
+        );
+        if (match?.metadata?.chatId && /^-?\d+$/.test(String(match.metadata.chatId))) {
+            logger.info(`resolveTelegramChatId: Resolved "${trimmed}" → ${match.metadata.chatId}`);
+            return { id: String(match.metadata.chatId), resolved: true };
+        }
+        return null;
+    }
+
     private registerInternalSkills() {
         // Skill: Send Telegram
         this.skills.registerSkill({
             name: 'send_telegram',
-            description: 'Send a message to a Telegram user',
+            description: 'Send a message to a Telegram user. The chatId MUST be the numeric Telegram ID (e.g. 123456789), NOT the user\'s name.',
             usage: 'send_telegram(chatId, message)',
             handler: async (args: any) => {
-                const chat_id = args.chat_id || args.chatId || args.id;
+                let chat_id = args.chat_id || args.chatId || args.id;
                 const message = args.message || args.content || args.text;
 
-                if (!chat_id) return 'Error: Missing chat_id. Use the numeric ID provided in context.';
+                if (!chat_id) return 'Error: Missing chatId. Use the NUMERIC Telegram chat ID from the message metadata (e.g. 123456789), not the user\'s name.';
                 if (!message) return 'Error: Missing message content.';
+
+                // Validate: Telegram chat IDs are numeric. If the agent passed a name, try to resolve it.
+                const resolved = this.resolveTelegramChatId(String(chat_id));
+                if (!resolved) {
+                    return `Error: "${chat_id}" is not a valid Telegram chat ID. Telegram IDs are numeric (e.g. 123456789). Check the incoming message metadata for the correct chatId or userId.`;
+                }
+                chat_id = resolved.id;
 
                 if (this.telegram) {
                     await this.telegram.sendMessage(chat_id, message);
@@ -409,6 +449,140 @@ export class Agent {
                 });
 
                 return `Message sent to Gateway Chat`;
+            }
+        });
+
+        // ═══════════════════════════════════════════
+        // Reaction Skills (unified across channels)
+        // ═══════════════════════════════════════════
+
+        // Skill: React to a message (auto-detect channel)
+        this.skills.registerSkill({
+            name: 'react',
+            description: 'React to a message with an emoji. Auto-detects the channel from context. Supports semantic names ("thumbs_up", "love", "fire", "laugh", "check", "eyes", "thinking") or raw emoji ("👍", "❤️"). The message_id comes from the incoming message metadata.',
+            usage: 'react(message_id, emoji, channel?, chat_id?)',
+            handler: async (args: any) => {
+                const messageId = args.message_id || args.messageId || args.id;
+                const emojiInput = args.emoji || args.reaction || args.text || 'thumbs_up';
+                let channel = (args.channel || args.source || '').toLowerCase();
+                let chatId = args.chat_id || args.chatId || args.jid || args.to;
+
+                if (!messageId) return 'Error: Missing message_id. Use the messageId from the incoming message metadata.';
+
+                const emoji = resolveEmoji(emojiInput);
+
+                // Auto-detect channel from action context if not specified
+                if (!channel || !chatId) {
+                    const recentMemories = this.memory.searchMemory('short');
+                    const matchingMemory = recentMemories.find((m: any) =>
+                        m.metadata?.messageId === messageId ||
+                        m.metadata?.messageId?.toString() === messageId
+                    );
+                    if (matchingMemory?.metadata) {
+                        if (!channel) channel = detectChannelFromMetadata(matchingMemory.metadata);
+                        if (!chatId) chatId = matchingMemory.metadata.chatId || matchingMemory.metadata.channelId || matchingMemory.metadata.sourceId;
+                    }
+                }
+
+                if (!channel) return 'Error: Could not detect channel. Specify channel (telegram/whatsapp/discord) explicitly.';
+                if (!chatId) return 'Error: Could not detect chat_id. Specify it explicitly.';
+
+                try {
+                    if (channel === 'telegram' && this.telegram) {
+                        await this.telegram.react(chatId, messageId, emoji);
+                    } else if (channel === 'whatsapp' && this.whatsapp) {
+                        await this.whatsapp.react(chatId, messageId, emoji);
+                    } else if (channel === 'discord' && this.discord) {
+                        await this.discord.react(chatId, messageId, emoji);
+                    } else {
+                        return `Error: Channel "${channel}" not available or not recognized.`;
+                    }
+                    return `Reacted with ${emoji} to message ${messageId} on ${channel}`;
+                } catch (e) {
+                    return `Error reacting: ${e}`;
+                }
+            }
+        });
+
+        // Skill: React Telegram
+        this.skills.registerSkill({
+            name: 'react_telegram',
+            description: 'React to a Telegram message with an emoji. Use semantic names ("thumbs_up", "love", "fire") or raw emoji.',
+            usage: 'react_telegram(chat_id, message_id, emoji)',
+            handler: async (args: any) => {
+                let chatId = args.chat_id || args.chatId || args.to;
+                const messageId = args.message_id || args.messageId || args.id;
+                const emojiInput = args.emoji || args.reaction || 'thumbs_up';
+
+                if (!chatId) return 'Error: Missing chat_id (numeric Telegram ID).';
+                if (!messageId) return 'Error: Missing message_id.';
+
+                // Resolve name → numeric ID if needed
+                const resolved = this.resolveTelegramChatId(String(chatId));
+                if (!resolved) {
+                    return `Error: "${chatId}" is not a valid Telegram chat ID. Use the numeric ID from message metadata.`;
+                }
+                chatId = resolved.id;
+
+                if (!this.telegram) return 'Telegram channel not available';
+
+                const emoji = resolveEmoji(emojiInput);
+                try {
+                    await this.telegram.react(chatId, messageId, emoji);
+                    return `Reacted with ${emoji} to Telegram message ${messageId}`;
+                } catch (e) {
+                    return `Error: ${e}`;
+                }
+            }
+        });
+
+        // Skill: React WhatsApp
+        this.skills.registerSkill({
+            name: 'react_whatsapp',
+            description: 'React to a WhatsApp message with an emoji. Use semantic names ("thumbs_up", "love", "fire") or raw emoji.',
+            usage: 'react_whatsapp(jid, message_id, emoji)',
+            handler: async (args: any) => {
+                const jid = args.jid || args.to || args.chat_id;
+                const messageId = args.message_id || args.messageId || args.id;
+                const emojiInput = args.emoji || args.reaction || 'thumbs_up';
+
+                if (!jid) return 'Error: Missing jid (WhatsApp ID).';
+                if (!messageId) return 'Error: Missing message_id.';
+
+                if (!this.whatsapp) return 'WhatsApp channel not available';
+
+                const emoji = resolveEmoji(emojiInput);
+                try {
+                    await this.whatsapp.react(jid, messageId, emoji);
+                    return `Reacted with ${emoji} to WhatsApp message ${messageId}`;
+                } catch (e) {
+                    return `Error: ${e}`;
+                }
+            }
+        });
+
+        // Skill: React Discord
+        this.skills.registerSkill({
+            name: 'react_discord',
+            description: 'React to a Discord message with an emoji. Use semantic names ("thumbs_up", "love", "fire") or raw emoji.',
+            usage: 'react_discord(channel_id, message_id, emoji)',
+            handler: async (args: any) => {
+                const channelId = args.channel_id || args.channelId || args.to;
+                const messageId = args.message_id || args.messageId || args.id;
+                const emojiInput = args.emoji || args.reaction || 'thumbs_up';
+
+                if (!channelId) return 'Error: Missing channel_id.';
+                if (!messageId) return 'Error: Missing message_id.';
+
+                if (!this.discord) return 'Discord channel not available';
+
+                const emoji = resolveEmoji(emojiInput);
+                try {
+                    await this.discord.react(channelId, messageId, emoji);
+                    return `Reacted with ${emoji} to Discord message ${messageId}`;
+                } catch (e) {
+                    return `Error: ${e}`;
+                }
             }
         });
 
@@ -869,29 +1043,55 @@ export class Agent {
         // Skill: Search Chat History
         this.skills.registerSkill({
             name: 'search_chat_history',
-            description: 'Search chat history with a specific WhatsApp contact. Returns recent messages from memory.',
-            usage: 'search_chat_history(jid, limit?)',
+            description: 'Search chat history with a specific contact. Supports semantic search (meaning-based) when vector memory is enabled, falling back to keyword/recency search. Works across WhatsApp, Telegram, and Discord.',
+            usage: 'search_chat_history(jid, query?, limit?, source?)',
             handler: async (args: any) => {
                 const jid = args.jid || args.to || args.id;
+                const query = args.query || args.search || args.q || '';
                 const limit = parseInt(args.limit || '10', 10);
+                const source = args.source || 'whatsapp'; // Default to whatsapp for backward compat
 
-                if (!jid) return 'Error: Missing jid.';
+                if (!jid) return 'Error: Missing jid/contact identifier.';
 
                 try {
-                    const memories = this.memory.searchMemory('short');
-                    const chatHistory = memories
-                        .filter((m: any) => 
-                            m.metadata?.source === 'whatsapp' && 
-                            m.metadata?.senderId === jid
-                        )
-                        .slice(-limit)
-                        .reverse();
+                    // Semantic search path: use vector memory for meaning-based retrieval
+                    if (query && this.memory.vectorMemory?.isEnabled()) {
+                        const semanticHits = await this.memory.semanticSearch(query, limit * 2, { source });
+                        const contactHits = semanticHits.filter((h: any) => {
+                            const md = h.metadata || {};
+                            return md.senderId === jid || md.sourceId === jid || md.chatId === jid;
+                        }).slice(0, limit);
 
-                    if (chatHistory.length === 0) {
-                        return `No chat history found for ${jid}.`;
+                        if (contactHits.length > 0) {
+                            const formatted = contactHits.map((m: any, i: number) =>
+                                `[${m.timestamp}] (relevance: ${(m.score * 100).toFixed(0)}%) ${m.content}`
+                            ).join('\n\n');
+                            return `Chat history with ${jid} (${contactHits.length} results, semantic search):\n\n${formatted}`;
+                        }
                     }
 
-                    const formatted = chatHistory.map((m: any, i: number) => 
+                    // Fallback: keyword/recency search
+                    const memories = this.memory.searchMemory('short');
+                    let chatHistory = memories.filter((m: any) =>
+                        m.metadata?.source === source &&
+                        (m.metadata?.senderId === jid || m.metadata?.sourceId === jid || m.metadata?.chatId === jid)
+                    );
+
+                    // Apply keyword filter if query provided
+                    if (query) {
+                        const queryLower = query.toLowerCase();
+                        chatHistory = chatHistory.filter((m: any) =>
+                            (m.content || '').toLowerCase().includes(queryLower)
+                        );
+                    }
+
+                    chatHistory = chatHistory.slice(-limit).reverse();
+
+                    if (chatHistory.length === 0) {
+                        return `No chat history found for ${jid}${query ? ` matching "${query}"` : ''}.`;
+                    }
+
+                    const formatted = chatHistory.map((m: any, i: number) =>
                         `[${m.timestamp}] ${m.content}`
                     ).join('\n\n');
 
@@ -945,6 +1145,61 @@ export class Agent {
                     return context;
                 } catch (e) {
                     return `Error getting context: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Recall Memory (Semantic Search)
+        this.skills.registerSkill({
+            name: 'recall_memory',
+            description: 'Search your entire memory semantically — finds relevant memories across ALL channels, time periods, and memory types (short, episodic, long-term). Use this when you need to remember something from a past conversation, find context about a topic, or recall what happened with a specific person/project. Much more powerful than keyword search.',
+            usage: 'recall_memory(query, limit?)',
+            handler: async (args: any) => {
+                const query = args.query || args.search || args.text || args.q;
+                const limit = parseInt(args.limit || '10', 10);
+
+                if (!query) return 'Error: Missing query. Provide a natural language description of what you want to recall.';
+
+                try {
+                    // Try semantic search first (best quality)
+                    if (this.memory.vectorMemory?.isEnabled()) {
+                        const results = await this.memory.semanticRecall(query, limit);
+                        if (results.length > 0) {
+                            const formatted = results.map((r, i) => {
+                                const src = r.metadata?.source ? ` [${r.metadata.source}]` : '';
+                                const type = r.type || 'unknown';
+                                return `${i + 1}. [${r.timestamp}] (${type}${src}, relevance: ${(r.score * 100).toFixed(0)}%) ${r.content}`;
+                            }).join('\n\n');
+                            return `Found ${results.length} relevant memories:\n\n${formatted}`;
+                        }
+                    }
+
+                    // Fallback: keyword search across all memory types
+                    const queryLower = query.toLowerCase();
+                    const allMemories = [
+                        ...this.memory.searchMemory('short'),
+                        ...this.memory.searchMemory('episodic'),
+                    ];
+                    const matches = allMemories
+                        .filter(m => (m.content || '').toLowerCase().includes(queryLower))
+                        .sort((a, b) => {
+                            const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+                            const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+                            return tb - ta;
+                        })
+                        .slice(0, limit);
+
+                    if (matches.length === 0) {
+                        return `No memories found matching "${query}". The search covers all conversations and past actions.`;
+                    }
+
+                    const formatted = matches.map((m, i) => {
+                        const src = m.metadata?.source ? ` [${m.metadata.source}]` : '';
+                        return `${i + 1}. [${m.timestamp}] (${m.type}${src}) ${m.content}`;
+                    }).join('\n\n');
+                    return `Found ${matches.length} memories (keyword match):\n\n${formatted}`;
+                } catch (e) {
+                    return `Error recalling memory: ${e}`;
                 }
             }
         });
@@ -1679,10 +1934,11 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
         // Skill: Browser Vision
         this.skills.registerSkill({
             name: 'browser_vision',
-            description: 'Use vision to analyze the current browser page when semantic snapshots are insufficient.',
+            description: 'Use vision (screenshot + AI analysis) to see and describe the current browser page. Use when semantic snapshots are insufficient — e.g. canvas-heavy pages, image-based UIs, complex visual layouts, or when you need spatial understanding of element positions.',
             usage: 'browser_vision(prompt?)',
             handler: async (args: any) => {
-                const prompt = args.prompt || args.question || args.text || 'Describe what you see on the page.';
+                const prompt = args.prompt || args.question || args.text ||
+                    'Describe the visible page layout and content. List ALL interactive elements you can see: buttons, links, input fields, menus, tabs, icons, and any clickable areas. For each element, describe its position (top/center/bottom, left/center/right) and apparent function. Also note any visible text, headings, images, or important content areas.';
 
                 const screenshotResult = await this.browser.screenshot();
                 if (String(screenshotResult).startsWith('Failed')) {
@@ -1695,7 +1951,8 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 }
 
                 try {
-                    return await this.llm.analyzeMedia(screenshotPath, prompt);
+                    const description = await this.llm.analyzeMedia(screenshotPath, prompt);
+                    return `VISION ANALYSIS:\n${description}`;
                 } catch (e) {
                     return `Error analyzing screenshot: ${e}`;
                 }
@@ -1721,6 +1978,57 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 const script = args.script || args.code || args.js;
                 if (!script) return 'Error: Missing script.';
                 return this.browser.evaluate(script);
+            }
+        });
+
+        // Skill: Browser Back
+        this.skills.registerSkill({
+            name: 'browser_back',
+            description: 'Navigate back to the previous page in browser history.',
+            usage: 'browser_back()',
+            handler: async () => {
+                return this.browser.goBack();
+            }
+        });
+
+        // Skill: Browser Scroll
+        this.skills.registerSkill({
+            name: 'browser_scroll',
+            description: 'Scroll the page up or down. Direction must be "up" or "down". Amount is optional pixels (default 600).',
+            usage: 'browser_scroll(direction, amount?)',
+            handler: async (args: any) => {
+                const direction = args.direction || 'down';
+                const amount = args.amount ? parseInt(args.amount, 10) : undefined;
+                if (direction !== 'up' && direction !== 'down') {
+                    return 'Error: direction must be "up" or "down".';
+                }
+                return this.browser.scrollPage(direction, amount);
+            }
+        });
+
+        // Skill: Browser Hover
+        this.skills.registerSkill({
+            name: 'browser_hover',
+            description: 'Hover over an element to trigger tooltips, menus, or hover effects. Use ref number from examine_page or a CSS selector.',
+            usage: 'browser_hover(selector)',
+            handler: async (args: any) => {
+                const selector = args.selector || args.ref || args.element;
+                if (!selector) return 'Error: Missing selector.';
+                return this.browser.hover(String(selector));
+            }
+        });
+
+        // Skill: Browser Select
+        this.skills.registerSkill({
+            name: 'browser_select',
+            description: 'Select an option from a dropdown (<select> or custom dropdown). Use the visible label text as the value.',
+            usage: 'browser_select(selector, value)',
+            handler: async (args: any) => {
+                const selector = args.selector || args.ref || args.element;
+                const value = args.value || args.option || args.label;
+                if (!selector) return 'Error: Missing selector.';
+                if (!value) return 'Error: Missing value/option to select.';
+                return this.browser.selectOption(String(selector), String(value));
             }
         });
 
@@ -3598,6 +3906,7 @@ Respond with ONLY valid JSON:
         const coreSkills = new Set([
             'web_search', 'browser_navigate', 'browser_click', 'browser_type',
             'browser_examine_page', 'browser_screenshot', 'browser_back',
+            'browser_scroll', 'browser_hover', 'browser_select',
             'extract_article', 'http_fetch', 'download_file', 'read_file', 'write_to_file',
             'write_file', 'create_file', 'delete_file', 'run_command',
             'send_telegram', 'send_whatsapp', 'send_discord', 'send_gateway_chat',
@@ -3607,7 +3916,7 @@ Respond with ONLY valid JSON:
             'manage_config', 'read_bootstrap_file', 'request_supporting_data',
             'manage_skills', 'create_custom_skill', 'create_skill',
             'schedule_task', 'schedule_list', 'schedule_remove',
-            'install_npm_dependency'
+            'install_npm_dependency', 'recall_memory'
         ]);
         return coreSkills.has(skillName);
     }
@@ -3928,6 +4237,12 @@ Respond with ONLY valid JSON:
         this.detectStalledAction();
         this.recoverStaleInProgressActions();
 
+        // Mutex: prevent overlapping heartbeat evaluations
+        if (this.heartbeatRunning) {
+            logger.debug('Agent: Heartbeat skipped - another heartbeat evaluation is already running');
+            return;
+        }
+
         // CRITICAL: Skip heartbeat if agent is actively processing an action
         if (this.isBusy) {
             logger.debug('Agent: Heartbeat skipped - currently processing an action');
@@ -3937,6 +4252,12 @@ Respond with ONLY valid JSON:
         const autonomyEnabled = this.config.get('autonomyEnabled');
         const intervalMinutes = this.config.get('autonomyInterval') || 0;
         if (!autonomyEnabled || intervalMinutes <= 0) return;
+
+        // Cooldown: skip if any heartbeat (including cron-scheduled) pushed a task very recently
+        const heartbeatCooldownMs = 60_000;
+        if (Date.now() - this.lastHeartbeatPushAt < heartbeatCooldownMs) {
+            return;
+        }
 
         // Check for tasks the agent is actively executing (in-progress or pending about to run)
         const runningTasks = this.actionQueue.getQueue().filter(a => a.status === 'pending' || a.status === 'in-progress');
@@ -3965,6 +4286,8 @@ Respond with ONLY valid JSON:
         }
 
         if (heartbeatDue) {
+            this.heartbeatRunning = true;
+            try {
             logger.info(`Agent: Heartbeat trigger - Agent idle for ${Math.floor(idleTimeMs / 60000)}m. Cooldown multiplier: ${cooldownMultiplier}x`);
 
             // Check if we have workers available for delegation
@@ -3987,38 +4310,69 @@ Respond with ONLY valid JSON:
             this.lastHeartbeatProductive = false; // Will be set true if actual learning/action occurs
             this.consecutiveIdleHeartbeats++;
             this.updateLastHeartbeatTime();
+            this.lastHeartbeatPushAt = Date.now();
+            } finally {
+                this.heartbeatRunning = false;
+            }
         }
     }
 
     private buildSmartHeartbeatPrompt(idleTimeMs: number, workerCount: number, availableWorkers: number): string {
-        // Get recent memory to understand context and find actionable opportunities
-        const recentMemories = this.memory.getRecentContext(20);
         const now = Date.now();
-        
-        // Format memories with relative time for recency awareness
+
+        // ── 1. Recent memories (short + episodic) with relative timestamps ──
+        const recentMemories = this.memory.getRecentContext(20);
         const recentContext = recentMemories
             .filter(m => m.type === 'episodic' || m.type === 'short')
             .map(m => {
                 const ts = m.timestamp ? new Date(m.timestamp).getTime() : 0;
                 const ageMs = now - ts;
                 const ageMinutes = Math.floor(ageMs / 60000);
-                const ageStr = ageMinutes < 60 
-                    ? `${ageMinutes}m ago` 
-                    : ageMinutes < 1440 
+                const ageStr = ageMinutes < 60
+                    ? `${ageMinutes}m ago`
+                    : ageMinutes < 1440
                         ? `${Math.floor(ageMinutes / 60)}h ago`
                         : `${Math.floor(ageMinutes / 1440)}d ago`;
-                return `[${ageStr}] ${m.content}`;
+                const src = m.metadata?.source ? ` [${m.metadata.source}]` : '';
+                return `[${ageStr}]${src} ${m.content}`;
             })
             .join('\n');
 
-        // Check for incomplete/failed tasks
-        const recentTasks = this.actionQueue.getQueue()
-            .filter(a => a.status === 'failed' || a.status === 'completed')
-            .slice(-5)
-            .map(a => `[${a.status}] ${a.payload?.description?.slice(0, 100) || 'Unknown'}`)
-            .join('\n');
+        // ── 2. Semantic memory highlights (vector search for unresolved/important items) ──
+        let semanticHighlights = '';
+        if (this.memory.vectorMemory?.isEnabled()) {
+            try {
+                // Fire-and-forget style: we run this synchronously by building the string later
+                // But since we can't await here (sync method), we'll note the capability instead
+                semanticHighlights = '(Vector memory active — use `recall_memory(query)` to semantically search all past conversations and actions)';
+            } catch { /* graceful */ }
+        }
 
-        // Get user profile for personalized actions
+        // ── 3. Task queue: failed, pending, recent completed ──
+        const queue = this.actionQueue.getQueue();
+        const failedTasks = queue
+            .filter(a => a.status === 'failed')
+            .slice(-3)
+            .map(a => `  ✗ [FAILED] ${a.payload?.description?.slice(0, 100) || 'Unknown'}${a.retry ? ` (attempt ${a.retry.attempts}/${a.retry.maxAttempts})` : ''}`)
+            .join('\n');
+        const pendingTasks = queue
+            .filter(a => a.status === 'pending')
+            .slice(0, 3)
+            .map(a => `  ⏳ [PENDING] ${a.payload?.description?.slice(0, 100) || 'Unknown'}`)
+            .join('\n');
+        const completedTasks = queue
+            .filter(a => a.status === 'completed')
+            .slice(-3)
+            .map(a => `  ✓ [DONE] ${a.payload?.description?.slice(0, 100) || 'Unknown'}`)
+            .join('\n');
+        const taskSummary = [failedTasks, pendingTasks, completedTasks].filter(Boolean).join('\n') || 'No recent tasks';
+
+        // ── 4. Active heartbeat schedules ──
+        const activeSchedules = Array.from(this.heartbeatJobMeta.values())
+            .map((s: any) => `  🔁 "${s.task}" — ${s.schedule}`)
+            .join('\n') || 'None';
+
+        // ── 5. User profile ──
         const userProfilePath = this.config.get('userProfilePath');
         let userContext = '';
         try {
@@ -4027,73 +4381,182 @@ Respond with ONLY valid JSON:
             }
         } catch { /* ignore */ }
 
+        // ── 6. Journal & Learning tails (match what DecisionEngine sees) ──
+        let journalTail = '';
+        let learningTail = '';
+        try {
+            const jp = this.config.get('journalPath');
+            if (jp && fs.existsSync(jp)) {
+                const full = fs.readFileSync(jp, 'utf-8');
+                journalTail = full.length > 800 ? full.slice(-800) : full;
+            }
+            const lp = this.config.get('learningPath');
+            if (lp && fs.existsSync(lp)) {
+                const full = fs.readFileSync(lp, 'utf-8');
+                learningTail = full.length > 800 ? full.slice(-800) : full;
+            }
+        } catch { /* ignore */ }
+
+        // ── 7. Active channel status ──
+        const channels: string[] = [];
+        if (this.telegram) channels.push('Telegram (send_telegram)');
+        if (this.whatsapp) channels.push('WhatsApp (send_whatsapp)');
+        if (this.discord) channels.push('Discord (send_discord)');
+        const channelStatus = channels.length > 0 ? channels.join(', ') : 'No channels active';
+
+        // ── 8. Contact profiles summary ──
+        let contactSummary = '';
+        try {
+            const profilesDir = path.join(path.dirname(this.config.get('actionQueuePath')), 'profiles');
+            if (fs.existsSync(profilesDir)) {
+                const profileFiles = fs.readdirSync(profilesDir).filter(f => f.endsWith('.json')).slice(0, 5);
+                if (profileFiles.length > 0) {
+                    contactSummary = profileFiles.map(f => {
+                        try {
+                            const data = JSON.parse(fs.readFileSync(path.join(profilesDir, f), 'utf-8'));
+                            return `  👤 ${data.name || f.replace('.json', '')}${data.relationship ? ` — ${data.relationship}` : ''}`;
+                        } catch { return null; }
+                    }).filter(Boolean).join('\n');
+                }
+            }
+        } catch { /* ignore */ }
+
+        // ── 9. Time-of-day and day-of-week awareness ──
+        const nowDate = new Date();
+        const hour = nowDate.getHours();
+        const dayOfWeek = nowDate.toLocaleDateString('en-US', { weekday: 'long' });
+        const timeOfDay = hour < 6 ? 'late night' : hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : hour < 21 ? 'evening' : 'night';
+        const isWeekend = nowDate.getDay() === 0 || nowDate.getDay() === 6;
+
+        // ── 10. Compute idle severity for autonomy guidance ──
+        const idleMinutes = Math.floor(idleTimeMs / 60000);
+        const idleHours = Math.floor(idleMinutes / 60);
+        const autonomyLevel = idleHours >= 4 ? 'high' : idleHours >= 1 ? 'moderate' : 'low';
+
+        // ── 11. Available channels summary (skills are provided by the DecisionEngine, not duplicated here) ──
+        const channelSkills = [];
+        if (this.telegram) channelSkills.push('send_telegram');
+        if (this.whatsapp) channelSkills.push('send_whatsapp');
+        if (this.discord) channelSkills.push('send_discord');
+        const channelSkillNote = channelSkills.length > 0 
+            ? `Messaging: ${channelSkills.join(', ')}` 
+            : 'No messaging channels active';
+
         return `
-PROACTIVE HEARTBEAT - Idle for ${Math.floor(idleTimeMs / 60000)} minutes.
+PROACTIVE HEARTBEAT — Idle for ${idleMinutes} minutes.
+Current Time: ${nowDate.toLocaleString()} (${dayOfWeek} ${timeOfDay})${isWeekend ? ' [Weekend]' : ''}
+Autonomy Level: ${autonomyLevel} (${autonomyLevel === 'high' ? 'long idle — creative initiative encouraged' : autonomyLevel === 'moderate' ? 'moderate idle — balanced initiative' : 'short idle — prefer context-reactive actions'})
 Workers: ${availableWorkers} available / ${workerCount} total
-Current Time: ${new Date().toLocaleString()}
+Active Channels: ${channelStatus} (${channelSkillNote})
+${semanticHighlights ? `Memory: ${semanticHighlights}` : ''}
 
 ═══════════════════════════════════════════
-RECENT CONVERSATION & TASKS (sorted by recency):
+RECENT CONTEXT (sorted by recency):
 ${recentContext.slice(0, 2000) || 'No recent activity'}
 
-RECENT TASK HISTORY:
-${recentTasks || 'No recent tasks'}
+TASK QUEUE:
+${taskSummary}
 
-USER PROFILE:
-${userContext.slice(0, 300) || 'No profile yet'}
+ACTIVE RECURRING SCHEDULES:
+${activeSchedules}
+${contactSummary ? `\nKNOWN CONTACTS:\n${contactSummary}` : ''}
+${userContext ? `\nUSER PROFILE:\n${userContext.slice(0, 300)}` : ''}
+${journalTail ? `\nJOURNAL (recent):\n${journalTail.slice(0, 400)}` : ''}
+${learningTail ? `\nKNOWLEDGE BASE (recent):\n${learningTail.slice(0, 400)}` : ''}
 ═══════════════════════════════════════════
 
-YOU HAVE FULL CAPABILITIES. Based on the context above, choose an ACTION:
+You are an autonomous agent with full capabilities. You have TWO modes of thinking:
 
-⚡ **PRIORITIZATION RULES**:
-- PRIORITIZE items from the last few minutes/hours over older items
-- Items marked "Xm ago" or "Xh ago" are NEWER and should take priority
-- Items marked "Xd ago" (days) are OLDER - only act on these if nothing recent is actionable
-- If the user asked you to do something recently, that takes priority over old tasks
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MODE A — REACTIVE (respond to what happened)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Look at the context above and act on it:
+1. **Unresolved requests** — Did the user ask for something that wasn't fully delivered? Finish it.
+2. **Failed tasks** — Retry with a different strategy. Don't repeat the same approach.
+3. **Follow-ups** — User mentioned checking something later, monitoring something, or waiting for a result? Now is the time.
+4. **Stale conversations** — A contact hasn't been replied to? Compose a thoughtful response.
 
-🔄 **FOLLOW UP ON SOMETHING**
-- Did the user ask you to check something later? Do it now.
-- Was there a task that failed? Try a different approach.
-- Did user mention a website/service? Go check it for updates.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MODE B — CREATIVE INITIATIVE (your own ideas)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+You don't need to wait for instructions. Think independently about what would be genuinely valuable:
 
-📬 **PROACTIVE OUTREACH**
-- Send the user a useful update via Telegram/WhatsApp
-- Share something relevant you found
-- Ask if they need help with something mentioned earlier
+🌐 **Discovery & Awareness**
+- Browse news, tech blogs, or sites relevant to the user's interests (infer from profile + past conversations)
+- Check if services/APIs/websites the user depends on have updates, outages, or new features
+- Research trending topics in the user's domain and prepare a brief
+- Look up something you're curious about from past conversations — deepen your understanding
 
-🔍 **INVESTIGATE & RESEARCH**
-- User mentioned a problem? Research solutions and report back
-- Something was unclear? Look it up and prepare an answer
-- Browse a site the user cares about and summarize what's new
+🧠 **Self-Evolution**
+- Review your journal — identify patterns in what went well vs. poorly. Write a reflection.
+- Audit your knowledge base — is anything outdated? Research and update it.
+- Think about what skills you lack. Can you create a plugin for a repeated need?
+- Analyze your failure patterns — what types of tasks do you struggle with? Research solutions.
 
-🛠️ **MAINTENANCE & IMPROVEMENT**
-- Clean up old memories or consolidate learnings
-- Update your identity/persona based on interactions
-- Retry a failed automation with a new strategy
+👥 **Relationship Intelligence**
+- Review contact profiles — who haven't you heard from in a while? Consider a check-in.
+- Prepare context dossiers for contacts you interact with frequently.
+- Think about upcoming events (birthdays, deadlines, meetings) from conversation history and prepare.
 
-📚 **LEARN SOMETHING CONTEXTUAL**
-- Research deeper into a topic the user discussed
-- update_learning("topic from context") to auto-research and save
+📊 **Proactive Preparation**
+- If the user has recurring patterns (e.g., morning briefings, weekly reviews), prepare content for the next one.
+- Draft summaries of recent activity the user might want to review.
+- Pre-research topics that came up in recent conversations but weren't fully explored.
+- Set up monitoring via \`heartbeat_schedule\` for things the user cares about.
 
-⏹️ **NOTHING TO DO**
-- If context is empty or nothing actionable: terminate with goals_met: true
-- Don't force an action if there's genuinely nothing useful
+💡 **Creative Value**
+- Synthesize insights across different conversations into a useful overview.
+- Spot connections the user might not have noticed (e.g., "Contact A mentioned X, which relates to your project Y").
+- Compose an unprompted helpful message — a tip, a resource, a summary — but ONLY if it's genuinely high-value.
 
-RULES:
-- RECENT actions (minutes/hours ago) take priority over OLD ones (days ago)
-- Actions must relate to the conversation context above
-- Be genuinely helpful, not performative
-- If you message the user, have something valuable to say
-- If nothing meaningful to do, just terminate
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DECISION FRAMEWORK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Priority Order:**
+1. REACTIVE items from the last few hours (unfinished work, failed retries, pending follow-ups)
+2. CREATIVE initiatives that are clearly high-value (real insight, real preparation, real discovery)
+3. Self-improvement (journal reflection, knowledge updates, skill analysis)
+4. If genuinely nothing valuable → terminate with goals_met: true
+
+**Time-of-day hints** (${dayOfWeek} ${timeOfDay}):
+${timeOfDay === 'morning' ? '- Morning: Good time for briefings, daily prep, checking overnight messages' : ''}
+${timeOfDay === 'afternoon' ? '- Afternoon: Good time for research, deep work, following up on morning conversations' : ''}
+${timeOfDay === 'evening' ? '- Evening: Good time for summaries, reflections, quiet research, preparing for tomorrow' : ''}
+${timeOfDay === 'night' || timeOfDay === 'late night' ? '- Night: Good time for background research, knowledge consolidation, low-priority maintenance' : ''}
+${isWeekend ? '- Weekend: Lighter touch — avoid unnecessary outreach unless urgent. Focus on self-improvement and preparation.' : ''}
+
+**Autonomy level: ${autonomyLevel}**
+${autonomyLevel === 'high' ? '- Long idle period. Creative initiative is STRONGLY encouraged. Don\'t just sit idle — find something genuinely useful to do.' : ''}
+${autonomyLevel === 'moderate' ? '- Moderate idle. Balance reactive follow-ups with creative ideas.' : ''}
+${autonomyLevel === 'low' ? '- Short idle. Prefer reacting to recent context over creative initiatives.' : ''}
+
+🔧 **YOUR FULL TOOLSET**: All your skills are listed in the "Available Skills" section of the system prompt above. Use whichever tools best serve the task.
+
+**HARD RULES:**
+- Never be performative. Every action must create real value.
+- If you message the user, have something worth reading. No "just checking in" without substance.
+- Don't repeat actions that recently failed unless you have a NEW strategy.
+- If nothing meaningful to do, terminate cleanly (goals_met: true). Silence is better than noise.
 `;
     }
 
     private async delegateHeartbeatResearch(availableAgents: any[]) {
         // Get context to determine what action to delegate
         const recentMemories = this.memory.getRecentContext(15);
+        const now = Date.now();
         const recentContext = recentMemories
             .filter(m => m.type === 'episodic' || m.type === 'short')
-            .map(m => m.content)
+            .map(m => {
+                const ts = m.timestamp ? new Date(m.timestamp).getTime() : 0;
+                const ageMs = now - ts;
+                const ageMinutes = Math.floor(ageMs / 60000);
+                const ageStr = ageMinutes < 60
+                    ? `${ageMinutes}m ago`
+                    : `${Math.floor(ageMinutes / 60)}h ago`;
+                const src = m.metadata?.source ? ` [${m.metadata.source}]` : '';
+                return `[${ageStr}]${src} ${m.content}`;
+            })
             .join('\n');
 
         if (!recentContext || recentContext.length < 50) {
@@ -4101,18 +4564,47 @@ RULES:
             return;
         }
 
+        // Gather failed tasks for context
+        const failedTasks = this.actionQueue.getQueue()
+            .filter(a => a.status === 'failed')
+            .slice(-3)
+            .map(a => `- [FAILED] ${a.payload?.description?.slice(0, 80) || 'Unknown'}`)
+            .join('\n');
+
+        // Build dynamic skill list for the delegation prompt
+        const skillNames = this.skills.listSkills()
+            .map((s: any) => s.usage || s.name)
+            .join(', ');
+
         // Use LLM to determine the best proactive action from context
         try {
-            const actionPrompt = `Based on this conversation context, what is ONE useful proactive action a worker agent could do? 
-Consider: following up on something, researching a topic mentioned, checking a website, preparing information.
+            const actionPrompt = `You are an autonomous agent deciding what to do during idle time. Based on the context below, choose ONE valuable action for a worker agent to execute.
 
-Context:
+The worker has access to ALL of these tools: ${skillNames}
+
+You can pick from TWO categories:
+
+A) REACTIVE — Act on something from the context:
+- Follow up on an unresolved user request
+- Retry a failed task with a new approach
+- Research something mentioned in conversation
+- Check a website or service the user discussed
+
+B) CREATIVE — Your own initiative (if nothing reactive is urgent):
+- Research something useful related to the user's interests
+- Browse a relevant news source or tech blog for updates
+- Deepen knowledge on a topic from past conversations
+- Prepare a briefing or summary the user might find valuable
+- Audit and update the knowledge base
+
+Context (newest first):
 ${recentContext.slice(0, 1500)}
+${failedTasks ? `\nFailed tasks:\n${failedTasks}` : ''}
 
-Respond with a single actionable task description (one sentence):`;
-            
-            const taskDescription = await this.llm.call(actionPrompt, 'Extract proactive action');
-            
+Respond with a single actionable task description (one sentence). Be specific about WHAT to do, not vague:`;
+
+            const taskDescription = await this.llm.call(actionPrompt, 'Choose a valuable autonomous action for worker delegation');
+
             if (!taskDescription || taskDescription.length < 10 || taskDescription.length > 200) {
                 logger.info(`Agent: Could not extract meaningful action from context`);
                 return;
@@ -4290,8 +4782,29 @@ Respond with a single actionable task description (one sentence):`;
         if (this.heartbeatJobs.has(id)) return;
 
         const cron = new Cron(scheduleDef.schedule, () => {
+            // Guard: skip if agent is busy, another heartbeat just fired, or pending heartbeat tasks exist
+            if (this.isBusy) {
+                logger.debug(`Heartbeat Schedule ${id}: Skipped - agent is busy`);
+                return;
+            }
+            // Cooldown: don't fire if any heartbeat pushed a task in the last 60 seconds
+            const heartbeatCooldownMs = 60_000;
+            if (Date.now() - this.lastHeartbeatPushAt < heartbeatCooldownMs) {
+                logger.debug(`Heartbeat Schedule ${id}: Skipped - another heartbeat task pushed ${Math.floor((Date.now() - this.lastHeartbeatPushAt) / 1000)}s ago`);
+                return;
+            }
+            // Check for existing pending/in-progress heartbeat tasks
+            const pendingHeartbeat = this.actionQueue.getQueue().find(a =>
+                (a.status === 'pending' || a.status === 'in-progress') && a.payload?.isHeartbeat
+            );
+            if (pendingHeartbeat) {
+                logger.debug(`Heartbeat Schedule ${id}: Skipped - heartbeat task ${pendingHeartbeat.id} already in queue`);
+                return;
+            }
+
             logger.info(`Heartbeat Schedule Triggered: ${scheduleDef.task}`);
             this.pushTask(`Heartbeat Task: ${scheduleDef.task}`, scheduleDef.priority || 6, { isHeartbeat: true, heartbeatId: id }, 'autonomy');
+            this.lastHeartbeatPushAt = Date.now();
         });
 
         this.heartbeatJobs.set(id, cron);
@@ -4954,10 +5467,13 @@ Respond with a single actionable task description (one sentence):`;
             const skipSimulation = this.config.get('skipSimulationForSimpleTasks');
             
             // Detect simple tasks that don't need simulation (token saving)
-            const isSimpleTask = isSocialFastPath || 
+            // Heartbeat tasks are self-contained with their own rich prompt — skip simulation.
+            const isHeartbeatTask = !!action.payload.isHeartbeat;
+            const isSimpleTask = isSocialFastPath || isHeartbeatTask ||
                 (skipSimulation && this.isSimpleResponseTask(action.payload.description || ''));
             
             // PROGRESS FEEDBACK: Let user know we're working on non-trivial tasks
+            // Skip for heartbeats — no user initiated this task
             if (!isSimpleTask && action.payload.source) {
                 await this.sendProgressFeedback(action, 'start');
             }
@@ -4978,9 +5494,10 @@ Respond with a single actionable task description (one sentence):`;
             const RESEARCH_TOOLS = new Set([
                 'web_search', 'browser_navigate', 'browser_click', 'browser_type',
                 'browser_examine_page', 'browser_screenshot', 'browser_back',
+                'browser_scroll', 'browser_hover', 'browser_select',
                 'extract_article', 'http_fetch', 'download_file', 'read_file', 'write_to_file',
                 'write_file', 'create_file', 'send_file',
-                'run_command', 'analyze_media'
+                'run_command', 'analyze_media', 'recall_memory'
             ]);
             const taskDesc = (action.payload.description || '').toLowerCase();
             const researchKeywords = [
@@ -5086,6 +5603,8 @@ Respond with a single actionable task description (one sentence):`;
                                 messagesSent,
                                 messagingLocked: messagesSent > 0,
                                 currentStep,
+                                stepsSinceLastMessage,
+                                isResearchTask,
                                 executionPlan // Pass plan to DecisionEngine
                             }
                         });
@@ -5696,6 +6215,22 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                     }
                     
                     // Case 3: goals_met=true or undefined with no tools - legitimate termination
+                    // BUT: catch silent termination — if from a channel and never sent a message, force a retry
+                    const isChannelTask = action.payload.source === 'telegram' || action.payload.source === 'whatsapp' || 
+                                          action.payload.source === 'discord' || action.payload.source === 'gateway-chat';
+                    if (isChannelTask && messagesSent === 0 && currentStep < MAX_STEPS) {
+                        noToolsRetryCount++;
+                        if (noToolsRetryCount < MAX_NO_TOOLS_RETRIES) {
+                            logger.warn(`Agent: Action ${action.id} tried to terminate without sending ANY message to channel user. Forcing retry ${noToolsRetryCount}/${MAX_NO_TOOLS_RETRIES}...`);
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-silent-termination-blocked`,
+                                type: 'short',
+                                content: `[SYSTEM: BLOCKED SILENT TERMINATION. You tried to finish the task without sending ANY message to the user. Your text/reasoning output is NOT visible to them — the ONLY way to respond is by calling send_${action.payload.source === 'gateway-chat' ? 'gateway_chat' : action.payload.source}. You MUST include a send skill in your next response. The user is waiting for a reply.]`,
+                                metadata: { actionId: action.id, step: currentStep, error: 'silent_termination_blocked' }
+                            });
+                            continue;
+                        }
+                    }
                     logger.info(`Agent: Action ${action.id} reached self-termination. Reasoning: ${decision.reasoning || 'No further tools needed.'}`);
                     break;
                 }

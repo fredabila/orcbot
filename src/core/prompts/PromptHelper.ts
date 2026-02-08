@@ -30,6 +30,8 @@ export interface PromptHelperContext {
     contactProfile?: string;
     /** Whether profiling is enabled */
     profilingEnabled?: boolean;
+    /** Whether this is a heartbeat/autonomy task (triggers lightweight prompt assembly) */
+    isHeartbeat?: boolean;
 }
 
 export interface PromptHelper {

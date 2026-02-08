@@ -17,7 +17,8 @@ export class CommunicationHelper implements PromptHelper {
         'send', 'message', 'reply', 'respond', 'tell', 'say', 'ask',
         'hello', 'hi', 'hey', 'good morning', 'good evening', 'how are you',
         'text', 'chat', 'dm', 'notify', 'inform', 'update them',
-        'write to', 'post', 'forward', 'share with'
+        'write to', 'post', 'forward', 'share with',
+        'react', 'reaction', 'emoji', 'thumbs up', 'like', 'love'
     ];
 
     shouldActivate(ctx: PromptHelperContext): boolean {
@@ -32,7 +33,7 @@ export class CommunicationHelper implements PromptHelper {
 
     getPrompt(ctx: PromptHelperContext): string {
         return `COMMUNICATION INTELLIGENCE:
-3.  **Step-1 Mandatory Interaction**: If this is a NEW request (\`messagesSent: 0\`), you MUST provide a response in Step 1. Do NOT stay silent.
+3.  **Step-1 Mandatory Interaction**: If this is a NEW request (\`messagesSent: 0\`), you MUST include a send skill (send_telegram/send_whatsapp/send_discord/send_gateway_chat) in your Step 1 tool calls. Your text/reasoning output is INVISIBLE to the user — the ONLY way to respond is through a send skill. Do NOT just write an answer in your reasoning and set goals_met=true. That sends NOTHING.
     - **SOCIAL FINALITY**: If the user says "Hi", "Hello", or "How are you?", respond naturally and **terminate immediately** (\`goals_met: true\` with send_telegram/send_whatsapp/send_discord) in Step 1. Do not look for additional work or research their profile unless specifically asked.
 4.  **Step-2+ Purpose (RESULTS ONLY)**: If \`messagesSent > 0\`, do NOT send another message unless you have gathered NEW, CRITICAL information or reached a 15-step milestone in a long process.
 5.  **Prohibiting Repetitive Greetings**: If you have already greeted the user or offered help in Step 1, do NOT repeat that offer in Step 2+. If no new data was found, terminate immediately (\`goals_met: true\` with NO tools).
@@ -48,15 +49,46 @@ export class CommunicationHelper implements PromptHelper {
 
 DYNAMIC COMMUNICATION INTELLIGENCE:
 - **Expressive Decisiveness**: Communicate as much as is logically necessary to satisfy the user's request. There is NO hard message limit.
-- **Informative Updates**: If a task is complex (e.g., long web search), providing a status update IS encouraged.
 - **Logical Finality**: Once the goal is reached (e.g., results found and sent), provide a final comprehensive report IF NOT SENT ALREADY, and terminate immediately.
 - **No Redundancy**: Do not send "Acknowledgment" messages if you are about to provide the result in the same step. Do NOT send "Consolidated" summaries of information you just sent in the previous step.
-- **Status Presence**: If you are in the middle of a multi-step task (e.g., downloading a large file, scanning multiple pages), providing a progress update is encouraged once every ~15 steps to keep the user in the loop.
 - **Sent Message Awareness**: BEFORE you send any message to the user (via any channel skill like \`send_telegram\`, \`send_whatsapp\`, \`send_discord\`, \`send_gateway_chat\`, etc.), READ the 'Recent Conversation History'. If you see ANY message observation confirming successful delivery of the requested info, DO NOT send another message.
-- **Message Economy**: While you have ample room to work (typically 10+ steps per action), don't send messages frivolously. Reserve messages for: (1) Initial acknowledgment, (2) Critical blockers requiring user input, (3) Significant milestone updates on long tasks, (4) Final completion report. Silent work in between is preferred.
+
+PROACTIVE TRANSPARENCY (CRITICAL — the user CANNOT see your internal work):
+- The user only sees messages you SEND them. Everything else — searches, browsing, file reads, commands — is invisible.
+- **For simple tasks** (1-3 steps): Acknowledge + deliver result. No interim updates needed.
+- **For complex tasks** (4+ steps): Send a brief progress update every 3-5 deep tool calls. The user should never wonder "is it still working?"
+- **Good progress updates** (1-2 sentences max):
+  - "Looking into it — I've found a few sources, cross-checking now..."
+  - "Quick update: downloaded the file, now converting the format..."
+  - "I've searched 3 sites so far. Getting closer — checking one more source..."
+  - "Hit a small snag with [X], trying an alternative approach..."
+- **Bad progress updates** (DON'T do these):
+  - Claiming completion when you're not done
+  - Repeating what you already said
+  - Generic "working on it" with zero specifics
+  - Sending an update AND immediately sending the final result
+- **Acknowledge + Work pattern**: For tasks that will take multiple steps, your Step 1 message should tell the user what you're about to do: "Let me look that up for you" / "On it — I'll search for that and get back to you." This sets expectations.
+- **Check Execution State**: Look at \`Steps Since Last Message\` in the execution state. If it's 5+, you should strongly consider sending an update.
+
+MESSAGE ECONOMY:
+- Reserve messages for: (1) Initial acknowledgment/greeting, (2) Progress milestones, (3) Critical blockers requiring user input, (4) Final completion report.
+- Between updates, work quietly — no need to narrate every single tool call.
+- The goal is INFORMED SILENCE, not radio silence. The user should feel included without being spammed.
 
 HUMAN-LIKE COLLABORATION:
 - Combined multiple confirmations into one natural response.
-- Use the user's name (Frederick) if available.`;
+- Use the user's name (Frederick) if available.
+
+REACTIONS (EMOJI RESPONSES):
+- You can react to messages with emoji using \`react(message_id, emoji)\` — it auto-detects the channel from context.
+- Or use channel-specific: \`react_telegram(chat_id, message_id, emoji)\`, \`react_whatsapp(jid, message_id, emoji)\`, \`react_discord(channel_id, message_id, emoji)\`.
+- Use semantic names instead of raw emoji: "thumbs_up", "love", "fire", "laugh", "check", "eyes", "thinking", "celebrate", "pray", "hundred".
+- **When to react**: Use reactions for lightweight acknowledgment INSTEAD of sending a full message. Perfect for:
+  - Acknowledging receipt of a message quickly (👍 or 👀) before doing deeper work
+  - Expressing agreement or appreciation without cluttering the chat (❤️, 🔥, 💯)
+  - Signaling you're thinking about it (🤔) or that you've seen it (👀)
+  - Confirming task completion quickly (✅) alongside or instead of a message
+- **When NOT to react**: Don't react AND send a message that says the same thing. One or the other.
+- The message_id is available in the incoming message metadata. Use it directly.`;
     }
 }

@@ -265,6 +265,106 @@ export class ParserLayer {
         }
     }
 
+    /**
+     * Convert a native tool calling response (structured tool calls + text content)
+     * into the StandardResponse format used by the rest of the system.
+     * 
+     * The text content from the LLM may contain reasoning/verification as JSON or free text.
+     * The structured tool calls are directly mapped to our ToolCall format.
+     */
+    public static normalizeNativeToolResponse(
+        textContent: string,
+        nativeToolCalls: Array<{ name: string; arguments: Record<string, any>; id?: string }>
+    ): StandardResponse {
+        // Convert native tool calls → our ToolCall format
+        // Native tools use "arguments" directly as the parameters, which maps to our "metadata"
+        let tools: ToolCall[] = nativeToolCalls.map(tc => ({
+            name: tc.name,
+            metadata: tc.arguments || {},
+        }));
+
+        tools = this.normalizeToolCalls(tools);
+
+        // Extract reasoning and verification from the text content.
+        // The LLM may embed these in JSON within its text response, or as free text.
+        let reasoning: string | undefined;
+        let verification: { goals_met: boolean; analysis: string } | undefined;
+        let content: string | undefined;
+        let action: string | undefined;
+
+        if (textContent) {
+            // Try to parse structured JSON from the text content
+            const jsonMatch = textContent.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                try {
+                    const parsed = JSON.parse(jsonMatch[0]);
+                    reasoning = parsed.reasoning;
+                    verification = parsed.verification;
+                    content = parsed.content;
+                    action = parsed.action;
+
+                    // If the JSON also contained tools (hybrid response), merge them
+                    if (parsed.tools?.length && tools.length === 0) {
+                        const textTools: ToolCall[] = parsed.tools.map((t: any) => ({
+                            name: t.name,
+                            metadata: t.metadata || {},
+                        }));
+                        tools = this.normalizeToolCalls(textTools);
+                    }
+                } catch {
+                    // JSON parse failed — treat text as reasoning
+                    reasoning = textContent;
+                }
+            } else {
+                // No JSON in text — treat the whole thing as reasoning
+                reasoning = textContent;
+            }
+        }
+
+        // If no verification was extracted, infer from tools: if no tools and no content,
+        // the model might be done (but DecisionEngine's termination review catches this)
+        if (!verification) {
+            verification = {
+                goals_met: tools.length === 0 && !content,
+                analysis: tools.length === 0 ? 'No tools invoked' : `Invoking ${tools.length} tool(s)`,
+            };
+        }
+
+        return {
+            success: true,
+            action: action || (tools.length > 0 ? 'EXECUTE' : 'THOUGHT'),
+            tool: tools.length === 1 ? tools[0].name : undefined,
+            tools,
+            content,
+            metadata: tools.length === 1 ? tools[0].metadata : undefined,
+            reasoning,
+            verification,
+        };
+    }
+
+    /**
+     * Get the system prompt snippet for native tool calling mode.
+     * This is a slimmer version — no JSON format instructions needed since tools are structured.
+     * We only need to tell the model about reasoning/verification expectations.
+     */
+    public static getNativeToolCallingPromptSnippet(): string {
+        return `
+TOOL CALLING MODE:
+You have tools available as function calls. When you want to use a tool, call it directly — do NOT wrap tool calls in JSON.
+
+In addition to calling tools, include reasoning in your text response:
+- Brief reasoning about what you're doing and why
+- A verification assessment: { "goals_met": true/false, "analysis": "..." }
+
+When the task is complete, respond with text only (no tool calls) and include:
+\`\`\`json
+{ "verification": { "goals_met": true, "analysis": "Task completed because..." }, "content": "Your message to show the user" }
+\`\`\`
+
+You can call MULTIPLE tools in parallel when they are independent operations.
+`;
+    }
+
     public static getSystemPromptSnippet(): string {
         return `
 IMPORTANT: You MUST always respond with a valid JSON object wrapped in code blocks.

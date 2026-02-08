@@ -23,8 +23,10 @@ export class MediaHelper implements PromptHelper {
 
     shouldActivate(ctx: PromptHelperContext): boolean {
         const task = ctx.taskDescription.toLowerCase();
-        // Also activate if the task contains file path indicators
+        // Contextual signals: file path indicators, file extension mentions
         if (task.includes('file stored at:') || task.includes('[voice:')) return true;
+        // File extension pattern: .pdf, .jpg, .mp3, .docx, etc.
+        if (/\.(pdf|doc|docx|xls|xlsx|csv|jpg|jpeg|png|gif|svg|mp3|mp4|wav|zip|tar)\b/.test(task)) return true;
         return MediaHelper.MEDIA_SIGNALS.some(kw => task.includes(kw));
     }
 

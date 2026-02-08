@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { logger } from '../utils/logger';
+import type { LLMToolDefinition } from './MultiLLM';
 
 export interface AgentContext {
     browser: any; // WebBrowser
@@ -488,6 +489,36 @@ export class SkillsManager {
         }
 
         return { valid: errors.length === 0, errors };
+    }
+
+    /**
+     * List ALL skills (core + agent skills) with name, description, and usage.
+     * Useful for prompt injection so the LLM knows every tool at its disposal.
+     */
+    public listSkills(): Array<{ name: string; description: string; usage: string }> {
+        const result: Array<{ name: string; description: string; usage: string }> = [];
+
+        // Core skills (registered via registerSkill)
+        for (const skill of this.skills.values()) {
+            result.push({
+                name: skill.name,
+                description: skill.description,
+                usage: skill.usage
+            });
+        }
+
+        // Agent skills (SKILL.md-based, only activated ones)
+        for (const agentSkill of this.agentSkills.values()) {
+            if (agentSkill.activated) {
+                result.push({
+                    name: agentSkill.meta.name,
+                    description: agentSkill.meta.description,
+                    usage: agentSkill.meta.name // Agent skills don't have "usage" per se
+                });
+            }
+        }
+
+        return result;
     }
 
     /**
@@ -1091,5 +1122,68 @@ main().catch(console.error);
         
         const skillsList = relevant.map(s => `- ${s.name}: ${s.description} (Usage: ${s.usage})`).join('\n');
         return `Available Skills:\n${skillsList}`;
+    }
+
+    /**
+     * Convert registered skills to LLM-native tool definitions (JSON Schema format).
+     * Auto-generates parameter schemas from the usage string pattern:
+     *   skill_name(param1, param2, optional?) → { param1: string (required), param2: string (required), optional: string }
+     * 
+     * This enables native function/tool calling on OpenAI, Anthropic, Google, etc.
+     */
+    public getToolDefinitions(): LLMToolDefinition[] {
+        return this.getAllSkills().map(skill => {
+            const { properties, required } = SkillsManager.parseUsageToSchema(skill.usage);
+
+            return {
+                type: 'function' as const,
+                function: {
+                    name: skill.name,
+                    description: skill.description,
+                    parameters: {
+                        type: 'object' as const,
+                        properties,
+                        ...(required.length > 0 ? { required } : {}),
+                    },
+                },
+            };
+        });
+    }
+
+    /**
+     * Parse a usage string like "skill_name(param1, param2, optional?)" into a JSON Schema.
+     * Parameters with `?` suffix are optional; all others are required.
+     * All parameters default to type "string" since we don't have type info in usage strings.
+     */
+    public static parseUsageToSchema(usage: string): {
+        properties: Record<string, { type: string; description?: string }>;
+        required: string[];
+    } {
+        const properties: Record<string, { type: string; description?: string }> = {};
+        const required: string[] = [];
+
+        // Extract params from "name(p1, p2?, p3)" — handle no-arg case "name()"
+        const match = usage.match(/\(([^)]*)\)/);
+        if (!match || !match[1].trim()) {
+            return { properties, required };
+        }
+
+        const params = match[1].split(',').map(p => p.trim()).filter(Boolean);
+
+        for (const param of params) {
+            const isOptional = param.endsWith('?');
+            const cleanName = param.replace(/\?$/, '').trim();
+
+            if (!cleanName) continue;
+
+            // Use the canonical param name for the property
+            properties[cleanName] = { type: 'string' };
+
+            if (!isOptional) {
+                required.push(cleanName);
+            }
+        }
+
+        return { properties, required };
     }
 }

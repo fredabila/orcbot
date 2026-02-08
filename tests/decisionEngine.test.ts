@@ -12,6 +12,7 @@ describe('DecisionEngine - System Prompt Persistence', () => {
     
     // Create a mock LLM that records calls
     const mockLLM = {
+      supportsNativeToolCalling: () => false,
       call: vi.fn(async (prompt: string, systemMessage?: string) => {
         llmCalls.push({ prompt, systemMessage });
         
@@ -123,6 +124,7 @@ describe('DecisionEngine - System Prompt Persistence', () => {
     const llmCalls: Array<{ systemMessage?: string }> = [];
     
     const mockLLM = {
+      supportsNativeToolCalling: () => false,
       call: vi.fn(async (prompt: string, systemMessage?: string) => {
         llmCalls.push({ systemMessage });
         
@@ -185,6 +187,7 @@ describe('DecisionEngine - Thread Context Grounding', () => {
     const llmCalls: Array<{ prompt: string; systemMessage?: string }> = [];
 
     const mockLLM = {
+      supportsNativeToolCalling: () => false,
       call: vi.fn(async (prompt: string, systemMessage?: string) => {
         llmCalls.push({ prompt, systemMessage });
         return JSON.stringify({

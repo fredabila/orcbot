@@ -276,4 +276,23 @@ export class TelegramChannel implements IChannel {
             throw error;
         }
     }
+
+    /**
+     * React to a message with an emoji.
+     * Uses Telegram Bot API setMessageReaction (API 7.0+).
+     */
+    public async react(chatId: string, messageId: string, emoji: string): Promise<void> {
+        try {
+            await (this.bot.telegram as any).callApi('setMessageReaction', {
+                chat_id: chatId,
+                message_id: parseInt(messageId, 10),
+                reaction: [{ type: 'emoji', emoji }],
+                is_big: false
+            });
+            logger.info(`TelegramChannel: Reacted with ${emoji} to message ${messageId} in ${chatId}`);
+        } catch (error) {
+            logger.error(`TelegramChannel: Error reacting to message ${messageId}: ${error}`);
+            throw error;
+        }
+    }
 }

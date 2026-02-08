@@ -17,10 +17,11 @@
  *   SchedulingHelper — smart scheduling, cron, temporal blockers
  *   MediaHelper — voice/audio, images, TTS, file handling
  *   ProfileHelper — contact profiling, user context building
+ *   DevelopmentHelper — software development, coding, project scaffolding
  */
 
 export { PromptHelper, PromptHelperContext } from './PromptHelper';
-export { PromptRouter, RouteResult } from './PromptRouter';
+export { PromptRouter, RouteResult, RouterLLM } from './PromptRouter';
 export { CoreHelper } from './CoreHelper';
 export { ToolingHelper } from './ToolingHelper';
 export { CommunicationHelper } from './CommunicationHelper';
@@ -29,3 +30,4 @@ export { ResearchHelper } from './ResearchHelper';
 export { SchedulingHelper } from './SchedulingHelper';
 export { MediaHelper } from './MediaHelper';
 export { ProfileHelper } from './ProfileHelper';
+export { DevelopmentHelper } from './DevelopmentHelper';

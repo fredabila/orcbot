@@ -22,9 +22,18 @@ export class WebBrowser {
     private browserEngine: BrowserEngine;
     private lightpandaEndpoint: string;
     private stateManager: BrowserStateManager;
+    private _visionAnalyzer?: (screenshotPath: string, prompt: string) => Promise<string>;
 
     public get page(): Page | null {
         return this._page;
+    }
+
+    /**
+     * Set a vision analyzer callback for automatic fallback when semantic snapshots are thin.
+     * The callback receives a screenshot file path and a prompt, returns a visual description.
+     */
+    public setVisionAnalyzer(fn: (screenshotPath: string, prompt: string) => Promise<string>): void {
+        this._visionAnalyzer = fn;
     }
 
     constructor(
@@ -329,15 +338,53 @@ export class WebBrowser {
         }
     }
 
+    private lastNavigateTimestamp: number = 0;
+
     private async waitForStablePage(timeout = 10000) {
         if (!this._page) return;
         try {
+            // Phase 1: Wait for basic load events
             await Promise.all([
                 this._page.waitForLoadState('load', { timeout }),
-                this._page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => { }) // Network idle is nice but not critical
+                this._page.waitForLoadState('networkidle', { timeout: Math.min(timeout, 8000) }).catch(() => { })
             ]);
         } catch (e) {
             logger.warn(`Stable page wait exceeded timeout: ${e}`);
+        }
+
+        // Phase 2: SPA content polling — wait for meaningful DOM content to appear.
+        // SPAs (React, Vue, Svelte) fire 'load' on an empty shell, then JS renders.
+        // We poll until body has real text or interactive elements.
+        try {
+            const pollStart = Date.now();
+            const maxPollMs = Math.min(timeout, 10000);
+            const pollInterval = 500;
+            let attempt = 0;
+
+            while (Date.now() - pollStart < maxPollMs) {
+                const metrics = await this._page.evaluate(() => {
+                    const bodyText = document.body?.innerText?.trim() || '';
+                    const interactiveCount = document.querySelectorAll(
+                        'a, button, input, select, textarea, [role="button"], [role="link"]'
+                    ).length;
+                    return { textLength: bodyText.length, interactiveCount };
+                }).catch(() => ({ textLength: 0, interactiveCount: 0 }));
+
+                // Consider page rendered if we have meaningful content
+                if (metrics.textLength > 100 || metrics.interactiveCount > 3) {
+                    if (attempt > 0) {
+                        logger.debug(`Browser: SPA content appeared after ${Date.now() - pollStart}ms (${metrics.textLength} chars, ${metrics.interactiveCount} interactive elements)`);
+                    }
+                    return;
+                }
+
+                attempt++;
+                await new Promise(r => setTimeout(r, pollInterval));
+            }
+
+            logger.debug(`Browser: SPA content poll timed out after ${maxPollMs}ms — page may still be loading`);
+        } catch {
+            // Best effort — don't fail the navigation over this
         }
     }
 
@@ -387,8 +434,9 @@ export class WebBrowser {
             }
 
             logger.info(`Browser: Navigating to ${targetUrl}`);
-            await this._page.goto(targetUrl, { waitUntil: 'load', timeout: 30000 });
-            await this.waitForStablePage();
+            await this._page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            await this.waitForStablePage(15000);
+            this.lastNavigateTimestamp = Date.now();
 
             const bodyTextLength = await this._page.evaluate(() => document.body?.innerText?.trim().length ?? 0).catch(() => 0);
             
@@ -400,7 +448,8 @@ export class WebBrowser {
             }
             
             if (bodyTextLength === 0) {
-                await this._page.waitForTimeout(1200);
+                // Give SPAs extra time to hydrate before giving up
+                await this._page.waitForTimeout(3000);
             }
 
             const effectiveWaitSelectors = [...waitSelectors];
@@ -506,8 +555,8 @@ export class WebBrowser {
             });
 
             const page = await context.newPage();
-            await page.goto(targetUrl, { waitUntil: 'load', timeout: 30000 });
-            await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => { });
+            await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => { });
 
             for (const selector of waitSelectors) {
                 await page.waitForSelector(selector, { timeout: 10000 }).catch(() => { });
@@ -652,7 +701,12 @@ export class WebBrowser {
     public async getSemanticSnapshot(): Promise<string> {
         try {
             await this.ensureBrowser();
-            await this.waitForStablePage();
+
+            // Skip redundant stable-page wait if we just navigated (within 5s)
+            const timeSinceNavigate = Date.now() - this.lastNavigateTimestamp;
+            if (timeSinceNavigate > 5000) {
+                await this.waitForStablePage();
+            }
 
             if (this.page?.isClosed() && this.lastNavigatedUrl) {
                 logger.warn('Semantic snapshot: page is closed, re-opening last URL.');
@@ -769,7 +823,37 @@ export class WebBrowser {
             }
 
             const diagnostics = `URL: ${url}\nHTML length: ${contentLength}`;
-            return `PAGE: "${title}"\n${diagnostics}\n\nSEMANTIC SNAPSHOT:\n${snapshot || '(No interactive elements found)'}`;
+            const baseResult = `PAGE: "${title}"\n${diagnostics}\n\nSEMANTIC SNAPSHOT:\n${snapshot || '(No interactive elements found)'}`;
+
+            // Auto-vision fallback: if the page has substantial HTML but the semantic snapshot
+            // found very few interactive elements, use vision to describe what's actually visible.
+            // This helps with canvas-heavy pages, image-based UIs, and SPAs with custom components.
+            const interactiveLineCount = (snapshot || '').split('\n').filter(l => l.includes('[ref=')).length;
+            const hasSubstantialContent = contentLength > 1500;
+            const snapshotIsThin = interactiveLineCount < 5 && (!snapshot || snapshot.length < 200);
+
+            if (this._visionAnalyzer && hasSubstantialContent && snapshotIsThin) {
+                try {
+                    logger.info(`Semantic snapshot thin (${interactiveLineCount} elements, ${contentLength} bytes HTML) — triggering auto-vision fallback`);
+                    const screenshotResult = await this.screenshot();
+                    if (!String(screenshotResult).startsWith('Failed')) {
+                        const screenshotPath = path.join(os.homedir(), '.orcbot', 'screenshot.png');
+                        if (fs.existsSync(screenshotPath)) {
+                            const visionDescription = await this._visionAnalyzer(
+                                screenshotPath,
+                                'Describe the visible page layout and content. List ALL interactive elements you can see: buttons, links, input fields, menus, tabs, icons, and any clickable areas. For each element, describe its position (top/center/bottom, left/center/right) and what it appears to do. Also describe any visible text, headings, images, or important content areas.'
+                            );
+                            if (visionDescription && visionDescription.length > 20) {
+                                return baseResult + `\n\nVISION ANALYSIS (auto-fallback — semantic snapshot was thin):\n${visionDescription}`;
+                            }
+                        }
+                    }
+                } catch (e) {
+                    logger.warn(`Auto-vision fallback failed: ${e}`);
+                }
+            }
+
+            return baseResult;
         } catch (e) {
             return `Failed to get semantic snapshot: ${e}`;
         }
@@ -795,15 +879,79 @@ export class WebBrowser {
         }
     }
 
+    /**
+     * Resolve a selector — handles numeric ref IDs by looking up data-orcbot-ref attributes.
+     * If the ref attribute was removed by SPA re-render, attempts to re-attach it by
+     * finding the Nth interactive element (the ref assignment order matches snapshot order).
+     */
+    private async resolveSelector(selector: string): Promise<string> {
+        if (!/^\d+$/.test(selector)) return selector;
+
+        const refSelector = `[data-orcbot-ref="${selector}"]`;
+
+        // Fast path: ref attribute still present
+        const exists = await this.page!.$(refSelector).catch(() => null);
+        if (exists) return refSelector;
+
+        // Slow path: SPA re-rendered and cleared data-orcbot-ref attributes.
+        // Re-run the same selector logic that getSemanticSnapshot uses and re-attach refs.
+        logger.debug(`Browser: Ref ${selector} not found in DOM, re-attaching refs...`);
+        const reattached = await this.page!.evaluate((targetRef: number) => {
+            const selectors = [
+                'a', 'button', 'input', 'select', 'textarea', 'summary',
+                '[contenteditable="true"]', '[tabindex]:not([tabindex="-1"])',
+                '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="radio"]',
+                '[role="switch"]', '[role="menuitem"]', '[role="tab"]', '[role="combobox"]',
+                '[role="listbox"]', '[role="option"]', '[role="textbox"]', '[role="searchbox"]',
+                '[onclick]', '[onmousedown]', '[onkeydown]'
+            ];
+            const elements = Array.from(document.querySelectorAll(selectors.join(','))) as HTMLElement[];
+            const visible = elements.filter(el => {
+                const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+            });
+            let counter = 1;
+            for (const el of visible) {
+                el.setAttribute('data-orcbot-ref', counter.toString());
+                if (counter === targetRef) return true;
+                counter++;
+            }
+            return false;
+        }, parseInt(selector)).catch(() => false);
+
+        if (reattached) {
+            logger.debug(`Browser: Successfully re-attached ref ${selector}`);
+            return refSelector;
+        }
+
+        // Final fallback: return the original ref selector and let Playwright report the error
+        logger.warn(`Browser: Could not re-attach ref ${selector} — element may no longer exist`);
+        return refSelector;
+    }
+
+    /**
+     * Lightweight post-interaction wait — settles the page after a click/type/select
+     * without the full SPA poll that waitForStablePage does.
+     * Just waits for network to quiet and a brief DOM settle.
+     */
+    private async waitAfterInteraction(maxMs: number = 2000): Promise<void> {
+        if (!this._page) return;
+        try {
+            await this._page.waitForLoadState('networkidle', { timeout: maxMs }).catch(() => {});
+            // Brief settle for animations/transitions
+            await this._page.waitForTimeout(Math.min(300, maxMs));
+        } catch {
+            // Best effort
+        }
+    }
+
     public async click(selector: string): Promise<string> {
         try {
             await this.ensureBrowser();
 
-            // Handle ref ID
-            let finalSelector = selector;
-            if (/^\d+$/.test(selector)) {
-                finalSelector = `[data-orcbot-ref="${selector}"]`;
-            }
+            // Resolve ref ID → CSS selector (with re-attachment if SPA re-rendered)
+            const finalSelector = await this.resolveSelector(selector);
 
             // Check for action loop
             if (this.stateManager.detectActionLoop('click', selector)) {
@@ -823,26 +971,77 @@ export class WebBrowser {
             const settings = this.lastNavigatedUrl 
                 ? this.tuner?.getBrowserSettingsForDomain(this.lastNavigatedUrl)
                 : null;
-            const clickTimeout = settings?.clickTimeout || 15000;
-            const waitAfterClick = settings?.waitAfterClick || 1000;
+            const waitAfterClick = settings?.waitAfterClick || 1500;
 
-            // Wait for element to exist first, then click
-            await this.page!.waitForSelector(finalSelector, { timeout: 10000, state: 'attached' }).catch(() => {});
-            await this.page!.waitForTimeout(300); // Small delay for dynamic elements
-            await this.page!.click(finalSelector, { timeout: clickTimeout });
-            await this.waitForStablePage(waitAfterClick); // Wait for any navigation/updates after click
+            // MULTI-STRATEGY CLICK: try progressively more aggressive approaches
+            // Strategy 1: Standard Playwright click (waits for actionability — visible, stable, enabled)
+            let clicked = false;
+            let lastError: any;
+
+            try {
+                await this.page!.click(finalSelector, { timeout: 5000 });
+                clicked = true;
+            } catch (e1) {
+                lastError = e1;
+                logger.debug(`Browser: Standard click failed for ${selector}: ${e1}`);
+
+                // Strategy 2: Force click (skip actionability checks — works for overlapping/animated elements)
+                try {
+                    await this.page!.click(finalSelector, { force: true, timeout: 3000 });
+                    clicked = true;
+                    logger.debug(`Browser: Force click succeeded for ${selector}`);
+                } catch (e2) {
+                    lastError = e2;
+                    logger.debug(`Browser: Force click failed for ${selector}: ${e2}`);
+
+                    // Strategy 3: JavaScript click (bypasses Playwright entirely — works for custom web components)
+                    try {
+                        const jsClicked = await this.page!.evaluate((sel: string) => {
+                            const el = document.querySelector(sel) as HTMLElement;
+                            if (!el) return false;
+                            // Scroll into view first
+                            el.scrollIntoView({ block: 'center', behavior: 'instant' });
+                            el.click();
+                            return true;
+                        }, finalSelector);
+
+                        if (jsClicked) {
+                            clicked = true;
+                            logger.debug(`Browser: JS click succeeded for ${selector}`);
+                        } else {
+                            lastError = new Error('Element not found for JS click');
+                        }
+                    } catch (e3) {
+                        lastError = e3;
+                        logger.debug(`Browser: JS click also failed for ${selector}: ${e3}`);
+                    }
+                }
+            }
+
+            if (!clicked) {
+                // Learn from failure
+                if (this.lastNavigatedUrl && this.tuner && String(lastError).includes('Timeout')) {
+                    try {
+                        const domain = new URL(this.lastNavigatedUrl).hostname.replace('www.', '');
+                        this.tuner.tuneBrowserForDomain(domain, { waitAfterClick: 2000 }, 'Auto-learned: click timed out');
+                    } catch {}
+                }
+                const error = String(lastError);
+                this.stateManager.recordAction('click', this.lastNavigatedUrl || 'unknown', selector, false, error);
+                return `Failed to click ${selector}: ${lastError}`;
+            }
+
+            // Lightweight post-click stabilization (not full SPA poll)
+            await this.waitAfterInteraction(waitAfterClick);
             
             this.stateManager.recordAction('click', this.lastNavigatedUrl || 'unknown', selector, true);
-            return `Successfully clicked: ${selector}`;
+
+            // Return a mini-snapshot of the page state after click so the agent knows what happened
+            const url = this.page!.url();
+            const title = await this.page!.title().catch(() => '');
+            const urlChanged = url !== this.lastNavigatedUrl;
+            return `Successfully clicked: ${selector}${urlChanged ? `\nPage navigated to: "${title}" (${url})` : ''}`;
         } catch (e) {
-            // Learn from failure - if timeout, increase timeout for next time
-            if (this.lastNavigatedUrl && this.tuner && String(e).includes('Timeout')) {
-                try {
-                    const domain = new URL(this.lastNavigatedUrl).hostname.replace('www.', '');
-                    this.tuner.tuneBrowserForDomain(domain, { clickTimeout: 30000, waitAfterClick: 2000 }, 'Auto-learned: click timed out');
-                    logger.info(`Browser: Auto-tuned ${domain} with increased click timeout`);
-                } catch {}
-            }
             const error = String(e);
             this.stateManager.recordAction('click', this.lastNavigatedUrl || 'unknown', selector, false, error);
             return `Failed to click ${selector}: ${e}`;
@@ -853,11 +1052,8 @@ export class WebBrowser {
         try {
             await this.ensureBrowser();
 
-            // Handle ref ID
-            let finalSelector = selector;
-            if (/^\d+$/.test(selector)) {
-                finalSelector = `[data-orcbot-ref="${selector}"]`;
-            }
+            // Resolve ref ID → CSS selector (with re-attachment if SPA re-rendered)
+            const finalSelector = await this.resolveSelector(selector);
 
             // Check for action loop
             if (this.stateManager.detectActionLoop('type', selector)) {
@@ -870,51 +1066,91 @@ export class WebBrowser {
             const settings = this.lastNavigatedUrl 
                 ? this.tuner?.getBrowserSettingsForDomain(this.lastNavigatedUrl)
                 : null;
-            const typeTimeout = settings?.typeTimeout || 15000;
             const useSlowTyping = settings?.useSlowTyping || false;
             const slowTypingDelay = settings?.slowTypingDelay || 50;
 
-            // Wait for element, focus it, then type
-            await this.page!.waitForSelector(finalSelector, { timeout: 10000, state: 'attached' }).catch(() => {});
-            await this.page!.waitForTimeout(300); // Small delay for dynamic elements
-            
-            // Try fill first (fast), fall back to typing character by character
-            if (useSlowTyping) {
-                // Site requires slow typing - skip fill
-                await this.page!.click(finalSelector, { timeout: 5000 });
-                await this.page!.keyboard.type(text, { delay: slowTypingDelay });
-            } else {
+            // MULTI-STRATEGY TYPE: try progressively more approaches
+            let typed = false;
+            let lastError: any;
+
+            // Strategy 1: Playwright fill() — fast, works on standard inputs/textareas
+            if (!useSlowTyping) {
                 try {
-                    await this.page!.fill(finalSelector, text, { timeout: typeTimeout });
-                } catch (fillError) {
-                    // Fallback: click element and type character by character (for stubborn inputs)
-                    await this.page!.click(finalSelector, { timeout: 5000 });
+                    await this.page!.fill(finalSelector, text, { timeout: 5000 });
+                    typed = true;
+                } catch (e) {
+                    lastError = e;
+                    logger.debug(`Browser: fill() failed for ${selector}: ${e}`);
+                }
+            }
+
+            // Strategy 2: Click + keyboard.type() — works for custom inputs, contenteditable
+            if (!typed) {
+                try {
+                    // Try clicking with force to focus the element
+                    await this.page!.click(finalSelector, { force: true, timeout: 3000 });
+                    // Clear existing content first
+                    await this.page!.keyboard.press('Control+a');
+                    await this.page!.keyboard.press('Backspace');
                     await this.page!.keyboard.type(text, { delay: slowTypingDelay });
-                    
+                    typed = true;
+                    logger.debug(`Browser: Click+type succeeded for ${selector}`);
+
                     // Auto-learn: this domain needs slow typing
                     if (this.lastNavigatedUrl && this.tuner) {
                         try {
                             const domain = new URL(this.lastNavigatedUrl).hostname.replace('www.', '');
-                            this.tuner.tuneBrowserForDomain(domain, { useSlowTyping: true }, 'Auto-learned: fill() failed, slow typing worked');
-                            logger.info(`Browser: Auto-tuned ${domain} to use slow typing`);
+                            this.tuner.tuneBrowserForDomain(domain, { useSlowTyping: true }, 'Auto-learned: fill() failed');
                         } catch {}
                     }
+                } catch (e) {
+                    lastError = e;
+                    logger.debug(`Browser: Click+type failed for ${selector}: ${e}`);
                 }
             }
-            
+
+            // Strategy 3: JS-based focus + input event dispatch — for highly custom components
+            if (!typed) {
+                try {
+                    const jsTyped = await this.page!.evaluate(({ sel, val }: { sel: string; val: string }) => {
+                        const el = document.querySelector(sel) as HTMLElement;
+                        if (!el) return false;
+                        el.scrollIntoView({ block: 'center', behavior: 'instant' });
+                        el.focus();
+                        if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+                            el.value = val;
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                        } else if (el.isContentEditable) {
+                            el.textContent = val;
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                        } else {
+                            return false;
+                        }
+                        return true;
+                    }, { sel: finalSelector, val: text });
+
+                    if (jsTyped) {
+                        typed = true;
+                        logger.debug(`Browser: JS type succeeded for ${selector}`);
+                    } else {
+                        lastError = new Error('Element not found or not typeable via JS');
+                    }
+                } catch (e) {
+                    lastError = e;
+                }
+            }
+
+            if (!typed) {
+                const error = String(lastError);
+                this.stateManager.recordAction('type', this.lastNavigatedUrl || 'unknown', selector, false, error);
+                return `Failed to type in ${selector}: ${lastError}`;
+            }
+
+            await this.waitAfterInteraction(1000);
             this.stateManager.recordAction('type', this.lastNavigatedUrl || 'unknown', selector, true);
             return `Successfully typed into ${selector}: "${text}"`;
         } catch (e) {
-            // Learn from failure
-            if (this.lastNavigatedUrl && this.tuner && String(e).includes('Timeout')) {
-                try {
-                    const domain = new URL(this.lastNavigatedUrl).hostname.replace('www.', '');
-                    // If it timed out, try increasing the timeout for next time
-                    this.tuner.tuneBrowserForDomain(domain, { typeTimeout: 30000, useSlowTyping: true }, 'Auto-learned: type timed out');
-                    logger.info(`Browser: Auto-tuned ${domain} with increased type timeout`);
-                } catch {}
-            }
-            
             const error = String(e);
             this.stateManager.recordAction('type', this.lastNavigatedUrl || 'unknown', selector, false, error);
             return `Failed to type in ${selector}: ${e}`;
@@ -928,6 +1164,112 @@ export class WebBrowser {
             return `Successfully pressed key: ${key}`;
         } catch (e) {
             return `Failed to press key ${key}: ${e}`;
+        }
+    }
+
+    public async goBack(): Promise<string> {
+        try {
+            await this.ensureBrowser();
+            await this.page!.goBack({ waitUntil: 'domcontentloaded', timeout: 15000 });
+            await this.waitAfterInteraction(2000);
+            const title = await this.page!.title().catch(() => '');
+            const url = this.page!.url();
+            this.lastNavigatedUrl = url;
+            return `Navigated back to: "${title}" (${url})`;
+        } catch (e) {
+            return `Failed to go back: ${e}`;
+        }
+    }
+
+    public async scrollPage(direction: 'up' | 'down', amount?: number): Promise<string> {
+        try {
+            await this.ensureBrowser();
+            const pixels = amount || 600;
+            const delta = direction === 'down' ? pixels : -pixels;
+            await this.page!.evaluate((d: number) => window.scrollBy(0, d), delta);
+            await this.page!.waitForTimeout(300); // Brief settle for lazy-loaded content
+
+            // Return scroll position info
+            const info = await this.page!.evaluate(() => {
+                const scrollTop = window.scrollY;
+                const scrollHeight = document.documentElement.scrollHeight;
+                const clientHeight = window.innerHeight;
+                const atBottom = scrollTop + clientHeight >= scrollHeight - 50;
+                const atTop = scrollTop <= 10;
+                return { scrollTop: Math.round(scrollTop), scrollHeight, clientHeight, atBottom, atTop };
+            }).catch(() => ({ scrollTop: 0, scrollHeight: 0, clientHeight: 0, atBottom: false, atTop: false }));
+
+            return `Scrolled ${direction} ${pixels}px. Position: ${info.scrollTop}/${info.scrollHeight}px${info.atTop ? ' (at top)' : ''}${info.atBottom ? ' (at bottom)' : ''}`;
+        } catch (e) {
+            return `Failed to scroll ${direction}: ${e}`;
+        }
+    }
+
+    public async hover(selector: string): Promise<string> {
+        try {
+            await this.ensureBrowser();
+            const finalSelector = await this.resolveSelector(selector);
+            
+            try {
+                await this.page!.hover(finalSelector, { timeout: 5000 });
+            } catch {
+                // Fallback: force hover via JS
+                await this.page!.evaluate((sel: string) => {
+                    const el = document.querySelector(sel) as HTMLElement;
+                    if (el) {
+                        el.scrollIntoView({ block: 'center', behavior: 'instant' });
+                        el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+                        el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+                    }
+                }, finalSelector);
+            }
+            await this.page!.waitForTimeout(500); // Wait for hover effects/tooltips/menus
+            return `Successfully hovered over: ${selector}`;
+        } catch (e) {
+            return `Failed to hover over ${selector}: ${e}`;
+        }
+    }
+
+    public async selectOption(selector: string, value: string): Promise<string> {
+        try {
+            await this.ensureBrowser();
+            const finalSelector = await this.resolveSelector(selector);
+
+            try {
+                // Try Playwright's selectOption — works for <select> elements
+                const selected = await this.page!.selectOption(finalSelector, { label: value }, { timeout: 5000 })
+                    .catch(() => this.page!.selectOption(finalSelector, { value }, { timeout: 3000 }));
+                await this.waitAfterInteraction(1000);
+                return `Successfully selected "${value}" in ${selector} (values: ${selected.join(', ')})`;
+            } catch {
+                // Fallback for custom dropdown components: click to open, then find and click the option
+                await this.page!.click(finalSelector, { force: true, timeout: 3000 }).catch(() => {});
+                await this.page!.waitForTimeout(500);
+                
+                // Look for the option text in visible elements
+                const optionClicked = await this.page!.evaluate((optionText: string) => {
+                    const candidates = Array.from(document.querySelectorAll(
+                        '[role="option"], [role="listbox"] *, li, .option, [class*="option"], [class*="dropdown"] *'
+                    )) as HTMLElement[];
+                    for (const el of candidates) {
+                        if (el.innerText?.trim().toLowerCase() === optionText.toLowerCase() ||
+                            el.textContent?.trim().toLowerCase() === optionText.toLowerCase()) {
+                            el.scrollIntoView({ block: 'center' });
+                            el.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }, value);
+
+                if (optionClicked) {
+                    await this.waitAfterInteraction(1000);
+                    return `Successfully selected "${value}" in ${selector} (custom dropdown)`;
+                }
+                return `Failed to select "${value}" in ${selector}: Option not found. Try browser_click on the specific option after opening the dropdown.`;
+            }
+        } catch (e) {
+            return `Failed to select option in ${selector}: ${e}`;
         }
     }
 

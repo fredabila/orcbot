@@ -1,5 +1,5 @@
 import { MemoryManager } from '../memory/MemoryManager';
-import { MultiLLM } from './MultiLLM';
+import { MultiLLM, LLMToolResponse } from './MultiLLM';
 import { ParserLayer, StandardResponse } from './ParserLayer';
 import { SkillsManager } from './SkillsManager';
 import { logger } from '../utils/logger';
@@ -42,6 +42,44 @@ export class DecisionEngine {
         this.maxRetries = this.config?.get('decisionEngineMaxRetries') || 3;
         this.enableAutoCompaction = this.config?.get('decisionEngineAutoCompaction') !== false;
         this.promptRouter = new PromptRouter();
+        this.promptRouter.setLLM(this.llm);
+    }
+
+    /**
+     * Builds a dynamic transparency nudge based on how long the agent has been
+     * working silently. This encourages the LLM to send progress updates so the
+     * user isn't left wondering what's happening.
+     */
+    private buildTransparencyNudge(metadata: any): string {
+        const stepsSinceMsg = metadata.stepsSinceLastMessage ?? 0;
+        const currentStep = metadata.currentStep || 1;
+        const messagesSent = metadata.messagesSent || 0;
+        const isResearch = metadata.isResearchTask || false;
+
+        // No nudge needed for first step or if just sent a message
+        if (currentStep <= 1 || stepsSinceMsg <= 1) return '';
+
+        // Thresholds: lower for research tasks (lots of work under the hood)
+        const softNudge = isResearch ? 3 : 4;
+        const hardNudge = isResearch ? 5 : 7;
+
+        if (stepsSinceMsg >= hardNudge) {
+            return `⚡ TRANSPARENCY ALERT: You have been working for ${stepsSinceMsg} steps without updating the user.
+The user cannot see your internal work — they only see messages you send them.
+You SHOULD send a brief progress update NOW. Examples:
+- "I've found [X] so far. Still checking [Y]..."
+- "Working on it — I've [done A and B], now [doing C]..."
+- "Quick update: [brief status]. I'll send the full result shortly."
+Keep it to 1-2 sentences. Do NOT claim completion unless you are truly done.`;
+        }
+
+        if (stepsSinceMsg >= softNudge) {
+            return `💡 TRANSPARENCY NOTE: You have been working for ${stepsSinceMsg} steps since your last message to the user.
+If you've made meaningful progress (found data, completed a sub-task, hit a blocker), consider sending a brief status update.
+The user appreciates knowing what's happening, especially during complex tasks.`;
+        }
+
+        return '';
     }
 
     private buildSystemContext(): string {
@@ -125,15 +163,16 @@ export class DecisionEngine {
      * The PromptRouter analyzes the task and selects only the relevant helpers,
      * so simple tasks get lean prompts and complex tasks get focused guidance.
      */
-    private buildHelperPrompt(
+    private async buildHelperPrompt(
         availableSkills: string,
         agentIdentity: string,
         taskDescription: string,
         metadata: Record<string, any>,
         isFirstStep: boolean = true,
         contactProfile?: string,
-        profilingEnabled?: boolean
-    ): string {
+        profilingEnabled?: boolean,
+        isHeartbeat?: boolean
+    ): Promise<string> {
         // Load bootstrap context
         const bootstrapContext: Record<string, string> = {};
         if (this.bootstrap) {
@@ -156,10 +195,11 @@ export class DecisionEngine {
             systemContext: this.getSystemContext(),
             bootstrapContext,
             contactProfile,
-            profilingEnabled
+            profilingEnabled,
+            isHeartbeat
         };
 
-        const result = this.promptRouter.route(helperContext);
+        const result = await this.promptRouter.route(helperContext);
 
         if (result.estimatedSavings > 500) {
             logger.info(`PromptRouter: Active helpers [${result.activeHelpers.join(', ')}] — saved ~${result.estimatedSavings} chars`);
@@ -183,7 +223,7 @@ export class DecisionEngine {
      * Kept for backward compatibility with the termination review layer.
      * @deprecated Use buildHelperPrompt() for new code.
      */
-    private buildCoreInstructions(availableSkills: string, agentIdentity: string, isFirstStep: boolean = true): string {
+    private async buildCoreInstructions(availableSkills: string, agentIdentity: string, isFirstStep: boolean = true): Promise<string> {
         return this.buildHelperPrompt(availableSkills, agentIdentity, '', {}, isFirstStep);
     }
 
@@ -260,6 +300,75 @@ export class DecisionEngine {
     }
 
     /**
+     * Make an LLM call with native tool calling and retry logic.
+     * Falls back to text-based callLLMWithRetry if tool calling fails.
+     */
+    private async callLLMWithToolsAndRetry(
+        prompt: string,
+        systemPrompt: string,
+        actionId: string,
+        attemptNumber: number = 1
+    ): Promise<StandardResponse> {
+        const state = this.executionStateManager.getState(actionId);
+        const toolDefs = this.skills.getToolDefinitions();
+
+        try {
+            const response: LLMToolResponse = await this.llm.callWithTools(
+                prompt, systemPrompt, toolDefs
+            );
+
+            state.recordAttempt({
+                response: { success: true, content: response.content },
+                contextSize: systemPrompt.length + prompt.length
+            });
+
+            // If the API returned native tool calls, use the native parser
+            if (response.toolCalls.length > 0) {
+                logger.info(`DecisionEngine: Native tool calling returned ${response.toolCalls.length} tool(s)`);
+                return ParserLayer.normalizeNativeToolResponse(response.content, response.toolCalls);
+            }
+
+            // No native tool calls — the model responded with text only.
+            // Parse the text for embedded JSON (reasoning, verification, content)
+            return ParserLayer.normalize(response.content);
+        } catch (error) {
+            const classified = ErrorClassifier.classify(error);
+            state.recordAttempt({
+                error: classified,
+                contextSize: systemPrompt.length + prompt.length
+            });
+
+            logger.warn(`DecisionEngine: Tool call failed (attempt ${attemptNumber}): ${classified.type} - ${classified.message}`);
+
+            // Context overflow → compact and retry
+            if (classified.type === ErrorType.CONTEXT_OVERFLOW && this.enableAutoCompaction) {
+                if (state.shouldTryCompaction()) {
+                    logger.info('DecisionEngine: Attempting context compaction for tool call...');
+                    state.markCompactionAttempted();
+                    const compacted = await this.contextCompactor.compact(systemPrompt, {
+                        targetLength: Math.floor(systemPrompt.length * 0.6),
+                        strategy: 'truncate'
+                    });
+                    return this.callLLMWithToolsAndRetry(prompt, compacted, actionId, attemptNumber + 1);
+                }
+            }
+
+            // Retry on retryable errors
+            if (ErrorClassifier.shouldRetry(classified, attemptNumber, this.maxRetries)) {
+                const delay = classified.cooldownMs || ErrorClassifier.getBackoffDelay(attemptNumber - 1);
+                logger.info(`DecisionEngine: Retrying tool call after ${delay}ms (attempt ${attemptNumber + 1}/${this.maxRetries})`);
+                await this.sleep(delay);
+                return this.callLLMWithToolsAndRetry(prompt, systemPrompt, actionId, attemptNumber + 1);
+            }
+
+            // Final fallback: try text-based call
+            logger.warn('DecisionEngine: Native tool calling exhausted retries, falling back to text-based');
+            const rawResponse = await this.callLLMWithRetry(prompt, systemPrompt, actionId);
+            return ParserLayer.normalize(rawResponse);
+        }
+    }
+
+    /**
      * Sleep utility for retry delays
      */
     private sleep(ms: number): Promise<void> {
@@ -270,6 +379,11 @@ export class DecisionEngine {
         const taskDescription = action.payload.description;
         const metadata = action.payload;
         const actionId = action.id;
+
+        // Detect heartbeat/autonomy tasks — they carry their own rich context
+        // in the task description, so we use a lightweight prompt assembly path
+        // that skips redundant journal/learning/thread/semantic/episodic/channel context.
+        const isHeartbeat = !!metadata.isHeartbeat;
 
         const userContext = this.memory.getUserContext();
         const recentContext = this.memory.getRecentContext();
@@ -291,22 +405,25 @@ export class DecisionEngine {
         }
 
         // Load Journal and Learning - keep meaningful context
+        // Skip for heartbeats — the heartbeat prompt already includes journal/learning tails
         const isFirstStep = (metadata.currentStep || 1) === 1;
         const journalLimit = 1500;  // Recent reflections
         const learningLimit = 1500; // Knowledge base
         
         let journalContent = '';
         let learningContent = '';
-        try {
-            if (fs.existsSync(this.journalPath)) {
-                const full = fs.readFileSync(this.journalPath, 'utf-8');
-                journalContent = full.length > journalLimit ? full.slice(-journalLimit) : full;
-            }
-            if (fs.existsSync(this.learningPath)) {
-                const full = fs.readFileSync(this.learningPath, 'utf-8');
-                learningContent = full.length > learningLimit ? full.slice(-learningLimit) : full;
-            }
-        } catch (e) { }
+        if (!isHeartbeat) {
+            try {
+                if (fs.existsSync(this.journalPath)) {
+                    const full = fs.readFileSync(this.journalPath, 'utf-8');
+                    journalContent = full.length > journalLimit ? full.slice(-journalLimit) : full;
+                }
+                if (fs.existsSync(this.learningPath)) {
+                    const full = fs.readFileSync(this.learningPath, 'utf-8');
+                    learningContent = full.length > learningLimit ? full.slice(-learningLimit) : full;
+                }
+            } catch (e) { }
+        }
 
         // Filter context to only include memories for THIS action (step observations)
         const actionPrefix = `${actionId}-step-`;
@@ -331,12 +448,14 @@ export class DecisionEngine {
 
         // Thread context: last N user/assistant messages from the same source+thread.
         // This is the main mechanism for grounding follow-ups (e.g., pronouns like "he") across actions.
+        // Skip for heartbeats — there's no conversation thread to track (source='autonomy').
         const source = (metadata.source || '').toString().toLowerCase();
         const sourceId = metadata.sourceId;
         const telegramChatId = metadata?.chatId ?? (source === 'telegram' ? sourceId : undefined);
         const telegramUserId = metadata?.userId;
 
         let threadContextString = '';
+        if (!isHeartbeat) {
         try {
             const stopwords = new Set([
                 'the','a','an','and','or','but','if','then','else','when','where','what','who','whom','which','why','how',
@@ -472,6 +591,7 @@ export class DecisionEngine {
         } catch {
             // Best-effort only
         }
+        } // end !isHeartbeat guard for thread context
         
         // Build step history specific to this action
         // Apply PROACTIVE COMPACTION when step history is large to prevent context overflow.
@@ -530,9 +650,65 @@ export class DecisionEngine {
             ? otherMemories.map(c => `[${c.type}] ${c.content}`).join('\n')
             : '';
 
+        // SEMANTIC LONG-TERM RECALL: Search the entire vector store for memories
+        // relevant to this task — across ALL channels, ALL memory types.
+        // This is how the agent "remembers" things from days/weeks ago.
+        // Skip for heartbeats — the heartbeat prompt includes its own recent context.
+        let semanticRecallString = '';
+        if (!isHeartbeat) {
+        try {
+            if (this.memory.vectorMemory?.isEnabled()) {
+                // Collect IDs already shown to avoid duplicates
+                const shownIds = new Set<string>();
+                for (const m of [...actionMemories, ...otherMemories]) {
+                    if (m.id) shownIds.add(m.id);
+                }
+                // Also exclude thread context memories
+                // (threadContextString is already built from merged memories above)
+
+                const recalled = await this.memory.semanticRecall(taskDescription, 6, shownIds);
+                if (recalled.length > 0) {
+                    semanticRecallString = recalled
+                        .map(r => {
+                            const ts = r.timestamp || '';
+                            const src = r.metadata?.source ? ` [${r.metadata.source}]` : '';
+                            const content = r.content.length > 400 ? r.content.slice(0, 400) + '…' : r.content;
+                            return `[${ts}]${src} (relevance: ${(r.score * 100).toFixed(0)}%) ${content}`;
+                        })
+                        .join('\n');
+                }
+            }
+        } catch {
+            // Best-effort only — agent still works without this
+        }
+        }
+
+        // SEMANTIC EPISODIC RETRIEVAL: Instead of just the last N episodic summaries,
+        // find the ones most relevant to the current task
+        // Skip for heartbeats — the heartbeat prompt is self-contained.
+        let semanticEpisodicString = '';
+        if (!isHeartbeat) {
+        try {
+            const relevantEpisodic = await this.memory.getRelevantEpisodicMemories(taskDescription, 5);
+            if (relevantEpisodic.length > 0) {
+                semanticEpisodicString = relevantEpisodic
+                    .map(m => {
+                        const ts = m.timestamp || '';
+                        const content = (m.content || '').length > 500 ? m.content.slice(0, 500) + '…' : m.content;
+                        return `[${ts}] ${content}`;
+                    })
+                    .join('\n');
+            }
+        } catch {
+            // Fall through — episodic context is still available via getRecentContext
+        }
+        }
+
+        // Channel instructions and contact profiles — irrelevant for heartbeats (source='autonomy')
         let channelInstructions = '';
         let contactProfile: string | undefined;
         let profilingEnabled = false;
+        if (!isHeartbeat) {
         if (metadata.source === 'telegram') {
             channelInstructions = `
 ACTIVE CHANNEL CONTEXT:
@@ -564,25 +740,27 @@ ACTIVE CHANNEL CONTEXT:
 - Rule: To respond to this user, you MUST use the "send_gateway_chat" skill.
 `;
         }
+        } // end !isHeartbeat guard for channel instructions
 
 
         // Build task-optimized prompt using the modular PromptHelper system.
         // The router analyzes the task and selects only the relevant helpers.
-        const coreInstructions = this.buildHelperPrompt(
+        const coreInstructions = await this.buildHelperPrompt(
             availableSkills,
             this.agentIdentity,
             taskDescription,
             metadata,
             isFirstStep,
             contactProfile,
-            profilingEnabled
+            profilingEnabled,
+            isHeartbeat
         );
 
-        // User context - limit only if very large (>2000 chars)
+        // User context - skip for heartbeats (already in heartbeat prompt)
         const userContextStr = userContext.raw || '';
-        const trimmedUserContext = userContextStr.length > 2000 
+        const trimmedUserContext = isHeartbeat ? '' : (userContextStr.length > 2000 
             ? userContextStr.slice(0, 2000) + '...[truncated]' 
-            : userContextStr;
+            : userContextStr);
 
         // Full prompt for all steps - don't risk losing context
         const systemPrompt = `
@@ -592,11 +770,15 @@ EXECUTION STATE:
 - Action ID: ${actionId}
 - messagesSent: ${metadata.messagesSent || 0}
 - Sequence Step: ${metadata.currentStep || '1'}
+- Steps Since Last Message: ${metadata.stepsSinceLastMessage ?? 0}
+- Task Type: ${metadata.isResearchTask ? 'Research/Deep Work' : 'Standard'}
 
 EXECUTION PLAN:
 ${metadata.executionPlan || 'Proceed with standard reasoning.'}
 
 ${channelInstructions}
+
+${this.buildTransparencyNudge(metadata)}
 
 User Context (Long-term profile):
 ${trimmedUserContext || 'No user information available.'}
@@ -606,6 +788,10 @@ ${journalContent ? `Agent Journal (Recent Reflections):\n${journalContent}` : ''
 ${learningContent ? `Agent Learning Base (Knowledge):\n${learningContent}` : ''}
 
 ${threadContextString ? `THREAD CONTEXT (Same Chat):\n${threadContextString}` : ''}
+
+${semanticEpisodicString ? `EPISODIC MEMORY (Task-Relevant Summaries — past actions, outcomes, and learnings):\n${semanticEpisodicString}` : ''}
+
+${semanticRecallString ? `LONG-TERM RECALL (Semantically relevant memories from all channels and time periods — your deep memory):\n${semanticRecallString}` : ''}
 
 ⚠️ STEP HISTORY FOR THIS ACTION (Action ${actionId}) — THIS IS YOUR GROUND TRUTH:
 (If a tool SUCCEEDED here, that result is REAL and CONFIRMED. If a tool FAILED, DO NOT repeat the same call.)
@@ -617,9 +803,25 @@ ${otherContextString ? `RECENT BACKGROUND CONTEXT (reference only — may descri
 
         logger.info(`DecisionEngine: Deliberating on task: "${taskDescription}"`);
         
-        // Use retry wrapper for main LLM call
-        const rawResponse = await this.callLLMWithRetry(taskDescription, systemPrompt, actionId);
-        const parsed = this.applyChannelDefaultsToTools(ParserLayer.normalize(rawResponse), metadata);
+        // Use native tool calling when the provider supports it, otherwise fall back to text-based
+        const useNativeTools = this.llm.supportsNativeToolCalling();
+        let parsed: StandardResponse;
+
+        if (useNativeTools) {
+            // Native tool calling: structured tool definitions passed to API
+            // The system prompt uses a slimmer format (no JSON format instructions needed)
+            const nativeSystemPrompt = systemPrompt.replace(
+                ParserLayer.getSystemPromptSnippet(),
+                ParserLayer.getNativeToolCallingPromptSnippet()
+            );
+            const rawParsed = await this.callLLMWithToolsAndRetry(taskDescription, nativeSystemPrompt || systemPrompt, actionId);
+            parsed = this.applyChannelDefaultsToTools(rawParsed, metadata);
+            logger.info(`DecisionEngine: Used native tool calling — ${parsed.tools?.length || 0} tool(s)`);
+        } else {
+            // Text-based: tools embedded in prompt, parse JSON from response
+            const rawResponse = await this.callLLMWithRetry(taskDescription, systemPrompt, actionId);
+            parsed = this.applyChannelDefaultsToTools(ParserLayer.normalize(rawResponse), metadata);
+        }
 
         // Validate response before processing
         const validation = ResponseValidator.validateResponse(parsed, allowedToolNames);
@@ -670,6 +872,7 @@ Your job is to decide if the agent should truly terminate or continue working.
 ADDITIONAL REVIEW RULES:
 - If the task is TRULY complete (user got their answer, file downloaded, message sent, etc.), return goals_met=true with no tools.
 - If the task is NOT complete and the agent stopped prematurely, return goals_met=false and include the WORK tools needed to continue (e.g., browser_navigate, web_search, run_command, send_telegram, etc.).
+- CRITICAL: If this task came from a messaging channel (Telegram/WhatsApp/Discord/Gateway) and messagesSent is 0, the user has received NOTHING. The agent's text reasoning is invisible to the user. You MUST return goals_met=false and include the appropriate send skill (send_telegram, send_whatsapp, send_discord, send_gateway_chat) with the response message.
 - Do NOT default to asking questions. Only use request_supporting_data if genuinely missing critical info that cannot be inferred.
 - Prefer ACTION over CLARIFICATION. If the agent can make progress with available context, it should.
 
