@@ -6212,8 +6212,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
             const configMaxMessages = this.config.get('maxMessagesPerAction') || 5;
 
             const COMPLEXITY_LIMITS: Record<string, { steps: number; messages: number }> = {
-                trivial:  { steps: 1, messages: 1 },
-                simple:   { steps: 3, messages: 2 },
+                trivial:  { steps: 2, messages: 1 },
+                simple:   { steps: 5, messages: 2 },
                 standard: { steps: configMaxSteps, messages: configMaxMessages },
                 complex:  { steps: configMaxSteps, messages: Math.max(configMaxMessages, 8) },
             };
@@ -6557,8 +6557,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             // 2. Communication Cooldown: Block if no new deep info since last message
                             // Exceptions: 
                             // - Step 1 is mandatory (Greeter)
+                            // - If no message has been sent yet in this action (first reply must get through)
                             // - If 15+ steps have passed without an update (Status update for long tasks)
-                            if (currentStep > 1 && !deepToolExecutedSinceLastMessage && stepsSinceLastMessage < 15) {
+                            if (currentStep > 1 && messagesSent > 0 && !deepToolExecutedSinceLastMessage && stepsSinceLastMessage < 15) {
                                 logger.warn(`Agent: Blocked redundant message in action ${action.id} (Communication Cooldown - No new deep data).`);
                                 toolsBlockedByCooldown++;
                                 continue;
@@ -7077,14 +7078,32 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             logger.error(`Agent: Exceeded max retries (${MAX_NO_TOOLS_RETRIES}) for no-tools error. Terminating action ${action.id}.`);
                             break;
                         }
-                        logger.warn(`Agent: LLM returned goals_met=false but no tools. Retry ${noToolsRetryCount}/${MAX_NO_TOOLS_RETRIES}...`);
                         
-                        this.memory.saveMemory({
-                            id: `${action.id}-step-${currentStep}-no-tools-error`,
-                            type: 'short',
-                            content: `[SYSTEM: You said goals_met=false but provided NO TOOLS. This is INVALID. If goals are not met, you MUST include at least one tool to make progress. Re-read the task and provide the appropriate tool calls.]`,
-                            metadata: { actionId: action.id, step: currentStep, error: 'no_tools_but_goals_not_met' }
-                        });
+                        // Check if the pipeline suppressed send tools as duplicates
+                        const pipelineDropped = pipelineNotes?.dropped || [];
+                        const wasSendSuppressed = pipelineDropped.some((d: string) => 
+                            d.startsWith('semantic-dupe:') || d.startsWith('dupe:') || d.startsWith('limit:')
+                        );
+                        
+                        if (wasSendSuppressed && messagesSent === 0) {
+                            // Pipeline incorrectly suppressed the first reply — this shouldn't happen
+                            // with our fix, but as a safety net, inject a better error message
+                            logger.warn(`Agent: Pipeline suppressed first reply as duplicate. Retry ${noToolsRetryCount}/${MAX_NO_TOOLS_RETRIES} with better guidance...`);
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-no-tools-error`,
+                                type: 'short',
+                                content: `[SYSTEM: Your reply was blocked because it was too similar to a recent message. Rephrase your response with DIFFERENT wording — don't just repeat the same message. Address the user's specific words directly.]`,
+                                metadata: { actionId: action.id, step: currentStep, error: 'send_suppressed_as_dupe' }
+                            });
+                        } else {
+                            logger.warn(`Agent: LLM returned goals_met=false but no tools. Retry ${noToolsRetryCount}/${MAX_NO_TOOLS_RETRIES}...`);
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-no-tools-error`,
+                                type: 'short',
+                                content: `[SYSTEM: You said goals_met=false but provided NO TOOLS. This is INVALID. If goals are not met, you MUST include at least one tool to make progress. Re-read the task and provide the appropriate tool calls.]`,
+                                metadata: { actionId: action.id, step: currentStep, error: 'no_tools_but_goals_not_met' }
+                            });
+                        }
                         
                         continue;
                     }

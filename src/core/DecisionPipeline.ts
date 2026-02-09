@@ -392,14 +392,20 @@ export class DecisionPipeline {
             const isReassurance = this.isShortReassurance(message);
             const hasNewToolOutput = this.hasNonSendToolSinceLastSend(ctx);
 
+            // CRITICAL: Never suppress the FIRST message of an action.
+            // The user sent a message and deserves a reply. Cross-action semantic
+            // similarity is expected (similar reassurances like "on it" / "working on it").
+            const isFirstMessageInAction = ctx.messagesSent === 0 && allowedMessages === 0;
+
             // Block semantically duplicate messages (e.g., "I'm distributing tasks" repeated with slight variations)
-            if (isSemanticallyDuplicate && !hasNewToolOutput) {
+            // BUT only within the same action — the first reply to a NEW user message must always go through.
+            if (isSemanticallyDuplicate && !hasNewToolOutput && !isFirstMessageInAction) {
                 dropped.push(`semantic-dupe:${tool.name}`);
                 notes.push('Suppressed send: semantically similar to recent message');
                 continue;
             }
 
-            if (isImmediateDuplicate && !hasNewToolOutput) {
+            if (isImmediateDuplicate && !hasNewToolOutput && !isFirstMessageInAction) {
                 if (isReassurance && this.canUseReassurance(ctx.actionId)) {
                     this.markReassuranceUsed(ctx.actionId);
                 } else {

@@ -124,7 +124,7 @@ describe('DecisionPipeline', () => {
       actionId: 'a3',
       source: 'telegram',
       sourceId: 'u1',
-      messagesSent: 0,
+      messagesSent: 1, // First message was already sent in step 1
       currentStep: 2,
     });
 
