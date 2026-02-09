@@ -6275,8 +6275,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                 // PERIODIC PROGRESS FEEDBACK: For long-running tasks, send the user
                 // periodic "still working" feedback so they know we haven't stalled.
-                // This fires every 8 steps for non-simple tasks when no message has been sent recently.
-                if (!isSimpleTask && currentStep > 1 && stepsSinceLastMessage >= 8 && currentStep % 8 === 0 && action.payload.source) {
+                // Fires once after 8 consecutive silent steps (stepsSinceLastMessage resets on send).
+                if (!isSimpleTask && currentStep > 1 && stepsSinceLastMessage === 8 && action.payload.source) {
                     await this.sendProgressFeedback(action, 'working', `Still working on your request (step ${currentStep})...`);
                 }
 
