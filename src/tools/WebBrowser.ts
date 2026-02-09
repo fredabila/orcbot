@@ -132,12 +132,39 @@ export class WebBrowser {
             try {
                 this.context = await chromium.launchPersistentContext(userDataDir, launchOptions);
             } catch (launchErr: any) {
-                if (launchErr.message?.includes('process_singleton') || launchErr.message?.includes('profile') || launchErr.message?.includes('SingletonLock')) {
+                const errMsg = launchErr.message || String(launchErr);
+                
+                // Display/headful failure — permanently mark display as broken & fall back to headless
+                if (!this.headlessMode && (errMsg.includes('display') || errMsg.includes('DISPLAY') || errMsg.includes('Xlib') || errMsg.includes('X11') || errMsg.includes('cannot open') || errMsg.includes('main display'))) {
+                    logger.warn(`Browser: Headful launch failed (${errMsg}). Display unavailable — falling back to headless permanently.`);
+                    this._displayBroken = true;
+                    this.headlessMode = true;
+                    launchOptions.headless = true;
+                    try {
+                        this.context = await chromium.launchPersistentContext(userDataDir, launchOptions);
+                    } catch (fallbackErr) {
+                        throw fallbackErr;
+                    }
+                } else if (errMsg.includes('process_singleton') || errMsg.includes('profile') || errMsg.includes('SingletonLock')) {
                     logger.warn(`Browser: Launch failed due to profile lock, retrying after cleanup...`);
                     this.cleanStaleLockFiles(userDataDir);
                     // Wait a beat for the OS to release handles
                     await new Promise(r => setTimeout(r, 1000));
-                    this.context = await chromium.launchPersistentContext(userDataDir, launchOptions);
+                    try {
+                        this.context = await chromium.launchPersistentContext(userDataDir, launchOptions);
+                    } catch (retryErr: any) {
+                        // If the retry also fails with a display error, fall back to headless
+                        const retryMsg = retryErr.message || String(retryErr);
+                        if (!this.headlessMode && (retryMsg.includes('display') || retryMsg.includes('DISPLAY') || retryMsg.includes('cannot open'))) {
+                            logger.warn(`Browser: Retry also hit display error. Falling back to headless.`);
+                            this._displayBroken = true;
+                            this.headlessMode = true;
+                            launchOptions.headless = true;
+                            this.context = await chromium.launchPersistentContext(userDataDir, launchOptions);
+                        } else {
+                            throw retryErr;
+                        }
+                    }
                 } else {
                     throw launchErr;
                 }
@@ -360,9 +387,13 @@ export class WebBrowser {
     /**
      * Detect if we're in a headless environment (no X11/Wayland display).
      * On such servers, headful mode is impossible.
+     * Checks both env vars AND tracks actual launch failures.
      */
+    private _displayBroken = false; // Set true if headful launch ever fails with display error
     private isHeadlessEnvironment(): boolean {
         if (process.platform === 'win32' || process.platform === 'darwin') return false;
+        // If a previous headful launch failed with display error, don't try again
+        if (this._displayBroken) return true;
         return !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
     }
 
@@ -414,6 +445,7 @@ export class WebBrowser {
     }
 
     private lastNavigateTimestamp: number = 0;
+    private lastInteractionTimestamp: number = 0;
 
     private async waitForStablePage(timeout = 10000) {
         if (!this._page) return;
@@ -817,12 +849,18 @@ export class WebBrowser {
         try {
             await this.ensureBrowser();
 
-            // Skip redundant stable-page wait if we just navigated (within 15s)
-            // The navigate() function already does a full waitForStablePage — re-running it
-            // can cause SPAs to re-enter transitional states (about:blank flicker).
+            // Skip redundant stable-page wait only when:
+            // 1. We navigated very recently (within 15s), AND
+            // 2. No click/type happened after navigate (which could trigger SPA re-render), AND
+            // 3. The page URL isn't about:blank (SPA transition state).
             const timeSinceNavigate = Date.now() - this.lastNavigateTimestamp;
-            if (timeSinceNavigate > 15000) {
-                await this.waitForStablePage();
+            const timeSinceInteraction = Date.now() - this.lastInteractionTimestamp;
+            const currentUrl = this.page?.url() || '';
+            const isBlankUrl = !currentUrl || currentUrl === 'about:blank';
+            const interactionAfterNavigate = this.lastInteractionTimestamp > this.lastNavigateTimestamp;
+            const needsStableWait = timeSinceNavigate > 15000 || interactionAfterNavigate || isBlankUrl;
+            if (needsStableWait) {
+                await this.waitForStablePage(isBlankUrl ? 8000 : undefined);
             }
 
             if (this.page?.isClosed() && this.lastNavigatedUrl) {
@@ -1186,11 +1224,27 @@ export class WebBrowser {
                 }
                 const error = String(lastError);
                 this.stateManager.recordAction('click', this.lastNavigatedUrl || 'unknown', selector, false, error);
-                return `Failed to click ${selector}: ${lastError}`;
+                
+                // Provide actionable fallback suggestions based on failure type
+                const suggestions: string[] = [];
+                if (error.includes('not visible') || error.includes('outside of the viewport')) {
+                    suggestions.push('The element may be off-screen. Try browser_scroll("down") to bring it into view, then browser_examine_page() to get fresh refs.');
+                } else if (error.includes('intercept') || error.includes('overlay') || error.includes('pointer')) {
+                    suggestions.push('Another element is covering this one (modal, popup, cookie banner). Try closing the overlay first, or use browser_vision to see what is blocking it.');
+                } else if (error.includes('detached') || error.includes('not found')) {
+                    suggestions.push('The element no longer exists in the DOM (page may have re-rendered). Call browser_examine_page() to get fresh element refs.');
+                } else if (error.includes('Timeout')) {
+                    suggestions.push('The element exists but is not becoming interactive (may be disabled or loading). Try browser_wait(2000) then retry, or use computer_vision_click to click it by visual position.');
+                }
+                if (suggestions.length === 0) {
+                    suggestions.push('Try browser_examine_page() to get fresh refs, or use browser_vision("describe clickable elements") to see the page visually.');
+                }
+                return `Failed to click ${selector}: ${lastError}\n\nSuggestions:\n${suggestions.map(s => `• ${s}`).join('\n')}`;
             }
 
             // Lightweight post-click stabilization (not full SPA poll)
             await this.waitAfterInteraction(waitAfterClick);
+            this.lastInteractionTimestamp = Date.now();
             
             this.stateManager.recordAction('click', this.lastNavigatedUrl || 'unknown', selector, true);
 
@@ -1311,6 +1365,7 @@ export class WebBrowser {
             }
 
             await this.waitAfterInteraction(1000);
+            this.lastInteractionTimestamp = Date.now();
             this.stateManager.recordAction('type', this.lastNavigatedUrl || 'unknown', selector, true);
             logger.info(`Browser: Typed ${selector} (len=${text.length})`);
             return `Successfully typed into ${selector}: "${text}"`;
@@ -1410,6 +1465,7 @@ export class WebBrowser {
                 const selected = await this.page!.selectOption(finalSelector, { label: value }, { timeout: 5000 })
                     .catch(() => this.page!.selectOption(finalSelector, { value }, { timeout: 3000 }));
                 await this.waitAfterInteraction(1000);
+                this.lastInteractionTimestamp = Date.now();
                 return `Successfully selected "${value}" in ${selector} (values: ${selected.join(', ')})`;
             } catch {
                 // Fallback for custom dropdown components: click to open, then find and click the option

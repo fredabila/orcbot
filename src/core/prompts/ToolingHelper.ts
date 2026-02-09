@@ -30,6 +30,7 @@ export class ToolingHelper implements PromptHelper {
     - Execution will PAUSE until the user provides the answer. Do NOT guess or hallucinate missing data.
     - IMPORTANT: If you ask a question via send_telegram/send_whatsapp/send_discord/send_gateway_chat, the system will AUTO-PAUSE and wait for user response. DO NOT continue working after asking a question.
     - After asking a clarifying question, set goals_met: true to terminate. The user's reply will create a NEW action.
+    - **URL EXCEPTION**: If the user's message IS or CONTAINS a URL (http/https link), this is NOT ambiguous — it is an implicit request to visit the URL and report what you find. Do NOT ask for clarification. Navigate to it, read the page, and tell the user what's there. URLs are ACTION, not questions.
 10. **User Correction Override**: If the user's NEW message provides corrective information (e.g., a new password after a failed login, a corrected URL, updated credentials), this is a RETRY TRIGGER. You MUST attempt the action AGAIN with the new data, even if you previously failed. The goal is always to SUCCEED, not just to try once and give up.
 11. **WAITING STATE AWARENESS**: Check memory for "[SYSTEM: Sent question to user. WAITING for response]" entries.
     - If you see this in recent memory, your previous self asked a question.

@@ -162,8 +162,36 @@ export class ComputerUse {
         return savePath;
     }
 
+    /**
+     * Check if a display server is available on Linux.
+     * Returns false on headless servers where scrot/import/xdotool cannot work.
+     */
+    private hasDisplay(): boolean {
+        if (this.platform === 'win32' || this.platform === 'darwin') return true;
+        // Linux: need X11 or Wayland
+        if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) return false;
+        // DISPLAY might be set but stale (e.g., old SSH session). Quick sanity check.
+        try {
+            execSync('xdpyinfo -display "$DISPLAY" 2>&1 | head -1', { timeout: 3000, stdio: 'pipe' });
+            return true;
+        } catch {
+            // xdpyinfo not installed or display is bad — check if xdotool works
+            try {
+                execSync('xdotool getdisplaygeometry 2>&1', { timeout: 3000, stdio: 'pipe' });
+                return true;
+            } catch {
+                return false;
+            }
+        }
+    }
+
     private async captureSystemScreen(savePath: string): Promise<string> {
         try {
+            // Early bail on headless Linux servers — scrot/import need X11
+            if (this.platform === 'linux' && !this.hasDisplay()) {
+                throw new Error('No display server available (headless server). System screenshots require X11/Wayland. Use context="browser" for browser screenshots instead, or use browser_screenshot/browser_vision for page inspection.');
+            }
+
             // Get screen size from robotjs if available
             if (robot) {
                 const size = robot.getScreenSize();

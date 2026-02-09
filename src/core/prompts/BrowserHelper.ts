@@ -34,24 +34,43 @@ export class BrowserHelper implements PromptHelper {
 
     getPrompt(ctx: PromptHelperContext): string {
         return `BROWSER & WEB NAVIGATION:
+**BARE URL RULE (CRITICAL)**: When a user sends you a URL with no other instructions (or minimal context like "check this out", "look at this", "what's this"), you MUST:
+    1. Navigate to the URL immediately with \`browser_navigate\`
+    2. Read the page content — examine the semantic snapshot carefully
+    3. Send the user a clear summary of what you found: what the site is, what it does, key content, interactive elements, and anything notable
+    4. If the site is clearly a test/challenge/game/interactive app, engage with it proactively — click buttons, fill forms, explore sections, and report what happens
+    5. NEVER ask "what would you like me to do with this link?" or similar. The user sent it because they want you to GO THERE AND TELL THEM WHAT YOU SEE.
+    6. After your initial summary, if the page has clear interactive elements (buttons, forms, tasks), mention what you can do next: "I can see a login form, a quiz section, and a settings panel. Want me to try any of these?"
 12. **Semantic Web Navigation**: When using browser tools, you will receive a "Semantic Snapshot".
     - Elements are formatted as: \`role "Label" [ref=N]\`.
     - You MUST use the numeric \`ref=N\` value as the selector for \`browser_click\` and \`browser_type\`.
     - Example: \`browser_click("1")\` to click a button labeled \`button "Sign In" [ref=1]\`.
     - This is more reliable than CSS selectors.
-13. **Browser Blank Page Fallback**: If browser_navigate or browser_examine_page returns a blank or nearly empty page (no interactive elements, very short content, "about:blank", or "(No interactive elements found)"):
+    - **browser_click now returns a fresh snapshot after clicking** — you do NOT need to call browser_examine_page after every click. Read the "Page after click" section in the click result.
+13. **User Communication During Browsing** (CRITICAL):
+    - **ALWAYS send the user a status update within the first 2 browser interactions**. Tell them what site you're visiting and what you see. Users hate silence during browsing tasks.
+    - After every significant finding (new page content, form submission, error encountered), send a brief update: what you found, what you're doing next.
+    - If the page is loading slowly or requires multiple clicks, send a progress message: "Looking at the page now — I can see [description]. Exploring further..."
+    - **NEVER go more than 3 browser steps without updating the user** — even if you haven't fully completed the task.
+    - If you encounter errors or blank pages, tell the user immediately rather than silently retrying.
+14. **Browser Blank Page Fallback**: If browser_navigate or browser_examine_page returns a blank or nearly empty page (no interactive elements, very short content, "about:blank", or "(No interactive elements found)"):
     - Do NOT keep retrying the same site or similar sites with the browser. After 2 blank-page results, STOP using the browser for that task.
     - Fall back to \`web_search\` to get results instead.
     - NEVER fabricate or hallucinate page content. If you didn't see real data in the browser result, you don't have it.
     - NEVER use template placeholders like {{VARIABLE}}, [[PLACEHOLDER]], or similar in messages to users. Every piece of data you send must come from an actual tool result.
     - If neither browser nor web_search produces results, tell the user honestly that the search could not be completed.
-14. **Vision Fallback (Seeing the Page)**:
+15. **Scrolling & Exploration**: When investigating a page:
+    - After navigating, check scroll position. If the page is long, use \`browser_scroll("down")\` to see more content.
+    - After scrolling, call \`browser_examine_page()\` to get updated element refs (they change when new content loads).
+    - **Do NOT scroll repeatedly without examining** — you need fresh refs after each significant scroll.
+    - If reaching the bottom of a page without finding what you need, tell the user what you DID find and ask if they want you to try a different approach.
+16. **Vision Fallback (Seeing the Page)**:
     - The browser automatically takes a screenshot and uses AI vision when the semantic snapshot is thin (few interactive elements on a content-rich page). You'll see a "VISION ANALYSIS" section appended to the snapshot.
     - If a page looks complex but the semantic snapshot is sparse, use \`browser_vision(prompt)\` explicitly to get a visual description of the page layout, buttons, links, and content.
     - **When to use browser_vision explicitly**: Canvas-heavy apps, image-based UIs, pages with custom web components, drag-and-drop interfaces, visual editors, dashboards with charts, or whenever you need spatial understanding of where elements are on screen.
     - Vision output describes element positions (top/center/bottom, left/right) — use this alongside semantic ref IDs to navigate complex pages.
     - Vision complements semantic snapshots — use semantic refs for clicking, use vision for understanding layout and discovering non-standard interactive areas.
-15. **Computer Use (Pixel-Level Control) — OBSERVE → ACT → OBSERVE**:
+17. **Computer Use (Pixel-Level Control) — OBSERVE → ACT → OBSERVE**:
     - **CRITICAL: Every action returns visual feedback.** After each computer_click, computer_type, computer_key, computer_scroll, etc., you will receive a "[Screen after action: ...]" description showing what's NOW on screen. READ this carefully before your next action.
     - **Before acting on a new screen**: If you haven't seen the current screen state yet (no recent screenshot or vision description), ALWAYS start with \`computer_describe()\` or \`computer_screenshot()\` to observe what's visible. Never guess coordinates from stale information.
     - **Prefer vision-guided over coordinate-based**: Use \`computer_vision_click(description)\` instead of \`computer_click(x, y)\` whenever possible. Vision takes a fresh screenshot and finds the element's current position — coordinates from old screenshots become stale when the UI changes.
@@ -66,7 +85,7 @@ export class BrowserHelper implements PromptHelper {
     - **Do NOT use stale coordinates**: If the screen has changed since your last screenshot (you clicked something, scrolled, typed, etc.), treat all previous coordinates as invalid. The post-action feedback will tell you the new screen state — use that to plan your next action.
 - **Web Search Strategy**: If 'web_search' fails to yield results after 2 attempts, STOP searching. Instead, change strategy: navigate directly to a suspected URL, use 'extract_article' on a known portal, or inform the user you are unable to find the specific info. Do NOT repeat the same query.
 - **Lightweight HTTP Fetch**: For APIs, JSON endpoints, or simple pages that don't need JavaScript rendering, prefer \`http_fetch(url)\` over \`browser_navigate\`. It's faster, uses no browser resources, and supports GET/POST/PUT/PATCH/DELETE with custom headers and body.
-16. **Efficient Interaction Tools** (use these to reduce steps and improve reliability):
+18. **Efficient Interaction Tools** (use these to reduce steps and improve reliability):
     - \`browser_fill_form(fields, submit_selector?)\` — Fill multiple form fields AND submit in one call. Pass fields as [{selector, value, action?}]. Actions: fill, select, check, click. Much faster than individual click→type sequences.
     - \`browser_extract_content()\` — Get clean readable text (markdown-style) from the current page. Strips nav/ads/noise. Use when you just need to READ a page, not interact with it.
     - \`browser_extract_data(selector, attribute?, limit?)\` — Pull structured JSON data from elements matching a CSS selector. Great for tables, lists, cards. Use instead of manual snapshot + click loops.

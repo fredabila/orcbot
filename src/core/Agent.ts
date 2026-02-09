@@ -2077,12 +2077,22 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
         // Skill: Browser Click
         this.skills.registerSkill({
             name: 'browser_click',
-            description: 'Click an element using a CSS selector or a numeric reference ID [ref=N] from the semantic snapshot.',
+            description: 'Click an element using a CSS selector or a numeric reference ID [ref=N] from the semantic snapshot. Returns a fresh snapshot of the page after clicking.',
             usage: 'browser_click(selector_or_ref)',
             handler: async (args: any) => {
                 const selector = args.selector_or_ref || args.selector || args.css || args.ref;
                 if (!selector) return 'Error: Missing selector or ref.';
-                return this.browser.click(String(selector));
+                const clickResult = await this.browser.click(String(selector));
+                if (clickResult.startsWith('Error') || clickResult.startsWith('Failed')) return clickResult;
+
+                // Auto-snapshot: Return what the page looks like after the click
+                // This saves a step (no need for separate browser_examine_page)
+                try {
+                    const snapshot = await this.browser.getSemanticSnapshot();
+                    return `${clickResult}\n\n--- Page after click ---\n${snapshot}`;
+                } catch {
+                    return clickResult;
+                }
             }
         });
 
@@ -2213,7 +2223,15 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 if (direction !== 'up' && direction !== 'down') {
                     return 'Error: direction must be "up" or "down".';
                 }
-                return this.browser.scrollPage(direction, amount);
+                const result = await this.browser.scrollPage(direction, amount);
+                // Inject boundary warnings to prevent scroll loops
+                if (result.includes('(at bottom)') && direction === 'down') {
+                    return `${result}\n\n⚠️ You have reached the BOTTOM of the page. Do NOT scroll down again — there is no more content below. Either scroll up, interact with visible elements, navigate elsewhere, or report your findings to the user.`;
+                }
+                if (result.includes('(at top)') && direction === 'up') {
+                    return `${result}\n\n⚠️ You have reached the TOP of the page. Do NOT scroll up again — there is no more content above. Either scroll down, interact with visible elements, or try a different approach.`;
+                }
+                return result;
             }
         });
 
@@ -2388,7 +2406,7 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
         // Skill: Computer Screenshot
         this.skills.registerSkill({
             name: 'computer_screenshot',
-            description: 'Take a screenshot and describe what is on screen. Set context to "browser" or "system". Returns a visual description so you can see the current screen state before acting.',
+            description: 'Take a screenshot and describe what is on screen. Set context to "browser" or "system". Returns a visual description so you can see the current screen state before acting. NOTE: "system" context requires a display server (X11/Wayland) — it will NOT work on headless servers. Use "browser" context or browser_vision instead on servers.',
             usage: 'computer_screenshot(context?)',
             handler: async (args: any) => {
                 const ctx = args.context || args.mode || 'system';
@@ -2410,6 +2428,11 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
 
                     return result;
                 } catch (e) {
+                    const errMsg = String(e);
+                    // On headless servers, guide the agent to use browser-based alternatives
+                    if (errMsg.includes('display') || errMsg.includes('DISPLAY') || errMsg.includes('headless server')) {
+                        return `Screenshot failed (no display server): ${e}\n\n⚠️ This is a headless server — system-level computer_* tools (computer_screenshot, computer_click, computer_vision_click, etc.) with context="system" will NOT work. Use these alternatives instead:\n• browser_screenshot — take a screenshot of the browser page\n• browser_vision(prompt) — get AI-powered visual description of the browser page\n• browser_examine_page() — get semantic snapshot of interactive elements\n• computer_screenshot(context="browser") — screenshot in browser context only\nDo NOT retry system-context computer_* tools.`;
+                    }
                     return `Screenshot failed: ${e}`;
                 }
             }
@@ -2418,7 +2441,7 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
         // Skill: Computer Click (vision-guided)
         this.skills.registerSkill({
             name: 'computer_click',
-            description: 'Click at pixel coordinates (x, y) or describe what to click and vision will locate it. Use context "browser" for in-page clicks or "system" for desktop clicks. When using description, the system takes a screenshot, uses vision AI to find the element, and clicks at the detected coordinates.',
+            description: 'Click at pixel coordinates (x, y) or describe what to click and vision will locate it. Use context "browser" for in-page clicks or "system" for desktop clicks. NOTE: "system" context requires a display server — use browser_click on headless servers.',
             usage: 'computer_click(x?, y?, description?, button?, context?)',
             handler: async (args: any) => {
                 const ctx = args.context || args.mode || 'system';
@@ -2430,23 +2453,39 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 const description = args.description || args.element || args.target;
                 const button = args.button || 'left';
 
-                return this.computerUse.mouseClick({ x, y, button, description });
+                try {
+                    return await this.computerUse.mouseClick({ x, y, button, description });
+                } catch (e) {
+                    const errMsg = String(e);
+                    if (errMsg.includes('display') || errMsg.includes('DISPLAY') || errMsg.includes('headless server')) {
+                        return `Computer click failed (headless server — no display): ${e}\nUse browser_click with ref IDs instead, or browser_vision_click for visual element targeting. Do NOT retry system-context computer_* tools.`;
+                    }
+                    return `Computer click failed: ${e}`;
+                }
             }
         });
 
         // Skill: Computer Vision Click (always uses vision to find element)
         this.skills.registerSkill({
             name: 'computer_vision_click',
-            description: 'Click an element by describing it visually. Takes a screenshot, uses AI vision to locate the element, and clicks at the detected coordinates. Best for canvas apps, custom UIs, or when DOM selectors fail.',
+            description: 'Click an element by describing it visually. Takes a screenshot, uses AI vision to locate the element, and clicks at the detected coordinates. Best for canvas apps, custom UIs, or when DOM selectors fail. NOTE: On headless servers, use context="browser" only.',
             usage: 'computer_vision_click(description, button?, context?)',
             handler: async (args: any) => {
                 const description = args.description || args.element || args.target;
                 if (!description) return 'Error: Missing description of element to click.';
-                const ctx = args.context || args.mode || 'system';
+                const ctx = args.context || args.mode || 'browser'; // Default to browser (works on headless)
                 if (ctx === 'system' || ctx === 'desktop') this.computerUse.setContext('system');
                 else if (ctx === 'browser' || ctx === 'page') this.computerUse.setContext('browser');
 
-                return this.computerUse.visionClick(description, args.button || 'left');
+                try {
+                    return await this.computerUse.visionClick(description, args.button || 'left');
+                } catch (e) {
+                    const errMsg = String(e);
+                    if (errMsg.includes('display') || errMsg.includes('DISPLAY') || errMsg.includes('headless server')) {
+                        return `Vision click failed (headless server — no display): ${e}\nUse browser_click with ref IDs from browser_examine_page, or browser_vision for visual analysis. Do NOT retry system-context computer_* tools.`;
+                    }
+                    return `Vision click failed: ${e}`;
+                }
             }
         });
 
@@ -6206,7 +6245,6 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 'get_system_info',
                 'system_check',
                 'read_bootstrap_file', // Reading bootstrap files is not progress
-                'browser_examine_page', // Examining without action is low info
                 'browser_screenshot',
                 'browser_trace_start',
                 'browser_trace_stop',
@@ -6916,6 +6954,20 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 break;
                             }
                         }
+                    }
+
+                    // BROWSING PROGRESS INJECTION: If the agent has been doing browser work
+                    // for 3+ steps without sending a user update, nudge it to communicate.
+                    const browserSkillsUsed = Object.keys(skillCallCounts).filter(s => s.startsWith('browser_'));
+                    const totalBrowserCalls = browserSkillsUsed.reduce((sum, s) => sum + skillCallCounts[s], 0);
+                    if (totalBrowserCalls >= 3 && stepsSinceLastMessage >= 3 && messagesSent === 0) {
+                        this.memory.saveMemory({
+                            id: `${action.id}-step-${currentStep}-browse-progress-nudge`,
+                            type: 'short',
+                            content: `[SYSTEM: You have been browsing for ${totalBrowserCalls} steps without sending any update to the user. Send a brief status update NOW describing what you see on the page and what you're doing. Users need visibility into browsing progress — don't go silent. Keep them informed.]`,
+                            metadata: { actionId: action.id, step: currentStep, browserCalls: totalBrowserCalls }
+                        });
+                        logger.info(`Agent: Injected browsing progress nudge at step ${currentStep} (${totalBrowserCalls} browser calls, no user message yet)`);
                     }
 
                     // NOW check goals_met AFTER tools have been executed
