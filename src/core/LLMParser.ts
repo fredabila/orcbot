@@ -41,6 +41,7 @@ export class LLMParser {
     private cache = new Map<string, { result: any; timestamp: number }>();
     private static readonly CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
     private static readonly CACHE_MAX_SIZE = 30;
+    private static readonly MAX_INPUT_LENGTH = 2000;
 
     constructor(llm: ParserLLM) {
         this.llm = llm;
@@ -71,7 +72,7 @@ Return ONLY a valid JSON object with the fields you found. If a field is not pre
 
         try {
             const response = await this.llm.call(
-                `Repair this malformed JSON and extract structured fields:\n\`\`\`\n${malformedJson.slice(0, 2000)}\n\`\`\``,
+                `Repair this malformed JSON and extract structured fields:\n\`\`\`\n${malformedJson.slice(0, LLMParser.MAX_INPUT_LENGTH)}\n\`\`\``,
                 systemPrompt
             );
 

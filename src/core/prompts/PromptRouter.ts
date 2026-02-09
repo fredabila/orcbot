@@ -21,7 +21,6 @@ import { DevelopmentHelper } from './DevelopmentHelper';
 import { TaskChecklistHelper } from './TaskChecklistHelper';
 import { PollingHelper } from './PollingHelper';
 import { PrivacyHelper } from './PrivacyHelper';
-import { LLMParser } from '../LLMParser';
 import { logger } from '../../utils/logger';
 
 /** Minimal LLM interface — avoids importing the full MultiLLM dependency */
@@ -304,17 +303,6 @@ Rules:
 
         if (hasChannel) {
             fallbacks.push('communication');
-        }
-
-        // Use LLM-based intent classification when available for smarter routing
-        // instead of relying solely on hardcoded regex patterns.
-        // The LLM call result is cached (3 min TTL) so subsequent calls are free.
-        if (this.llm) {
-            const llmParser = new LLMParser(this.llm);
-            // Fire-and-forget style: we return sync fallbacks but cache the result
-            // for subsequent route() calls. The classifyWithLLM tier above handles
-            // the async case. Here we just seed the regex-based fallback with
-            // broader pattern coverage.
         }
 
         // Broad action-verb detection (covers creative phrasings the keyword lists missed)
