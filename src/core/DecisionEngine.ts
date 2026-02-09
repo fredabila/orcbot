@@ -60,24 +60,29 @@ export class DecisionEngine {
         // No nudge needed for first step or if just sent a message
         if (currentStep <= 1 || stepsSinceMsg <= 1) return '';
 
-        // Thresholds: lower for research tasks (lots of work under the hood)
-        const softNudge = isResearch ? 3 : 4;
-        const hardNudge = isResearch ? 5 : 7;
+        // Thresholds: lower for research/complex tasks (lots of invisible work under the hood)
+        const softNudge = isResearch ? 2 : 3;
+        const hardNudge = isResearch ? 4 : 5;
 
         if (stepsSinceMsg >= hardNudge) {
             return `⚡ TRANSPARENCY ALERT: You have been working for ${stepsSinceMsg} steps without updating the user.
 The user cannot see your internal work — they only see messages you send them.
-You SHOULD send a brief progress update NOW. Examples:
+You MUST send a brief progress update NOW. Tell the user:
+- What you've done so far (specific results, not vague)
+- What you're working on right now
+- What's left to do (if anything)
+Examples:
 - "I've found [X] so far. Still checking [Y]..."
 - "Working on it — I've [done A and B], now [doing C]..."
 - "Quick update: [brief status]. I'll send the full result shortly."
+- "Hit a snag with [X], trying a different approach..."
 Keep it to 1-2 sentences. Do NOT claim completion unless you are truly done.`;
         }
 
         if (stepsSinceMsg >= softNudge) {
             return `💡 TRANSPARENCY NOTE: You have been working for ${stepsSinceMsg} steps since your last message to the user.
-If you've made meaningful progress (found data, completed a sub-task, hit a blocker), consider sending a brief status update.
-The user appreciates knowing what's happening, especially during complex tasks.`;
+If you've made meaningful progress (found data, completed a sub-task, hit a blocker), send a brief status update.
+The user appreciates knowing what's happening, especially during complex tasks. Silence feels like failure.`;
         }
 
         return '';
