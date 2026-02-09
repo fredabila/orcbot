@@ -197,6 +197,7 @@ ufw enable`,
             <Link to="/">Home</Link>
             <Link to="/#capabilities">Capabilities</Link>
             <Link to="/deploy" className="active">Deploy</Link>
+            <Link to="/robotics">Robotics</Link>
           </div>
           <div className="nav-end">
             <a className="nav-btn primary" href="https://github.com/fredabila/orcbot" target="_blank" rel="noopener noreferrer">

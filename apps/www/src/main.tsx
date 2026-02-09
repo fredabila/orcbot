@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import './index.css'
 import App from './App.tsx'
 import Deploy from './pages/Deploy.tsx'
+import Robotics from './pages/Robotics.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -11,6 +12,7 @@ createRoot(document.getElementById('root')!).render(
       <Routes>
         <Route path="/" element={<App />} />
         <Route path="/deploy" element={<Deploy />} />
+        <Route path="/robotics" element={<Robotics />} />
       </Routes>
     </BrowserRouter>
   </StrictMode>,

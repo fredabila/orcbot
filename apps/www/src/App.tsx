@@ -45,6 +45,7 @@ function App() {
             <a href="#architecture" onClick={() => setMobileMenuOpen(false)}>Architecture</a>
             <a href="#docs" onClick={() => setMobileMenuOpen(false)}>Docs</a>
             <Link to="/deploy" onClick={() => setMobileMenuOpen(false)}>Deploy</Link>
+            <Link to="/robotics" onClick={() => setMobileMenuOpen(false)}>Robotics</Link>
           </div>
 
           <div className="nav-end">
