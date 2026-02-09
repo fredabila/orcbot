@@ -42,6 +42,26 @@ export class ToolingHelper implements PromptHelper {
 - **Dependency Claims Must Be Evidence-Based**: Do NOT claim missing system dependencies (e.g., libatk, libgtk, etc.) unless a tool returned an error that explicitly mentions the missing library.
 - **User Fix Retry Rule**: If the user says they installed a dependency or fixed an environment issue, you MUST retry the failing tool before mentioning the issue again. Only report the problem if the new tool error still shows it.
 
+ERROR SELF-DIAGNOSIS & RECOVERY (CRITICAL):
+- **Read errors carefully**: Every error message contains diagnostic information. Extract the root cause before deciding your next action.
+- **Self-fix pattern**: (1) Read error → (2) Identify what went wrong → (3) Fix the specific issue → (4) Retry with the fix → (5) If still failing, try a fundamentally different approach.
+- **Common error categories and responses**:
+  - "command not found" / "not recognized" → The tool isn't installed. Try installing it, or use an alternative tool that IS available.
+  - "permission denied" → Try with appropriate permissions, or use a different path/approach.
+  - "file not found" / "no such file" → Check the path. Use run_command("ls") or run_command("find") to locate the correct path.
+  - "connection refused" / "timeout" → The service may not be running. Check if it needs to be started, or try a different endpoint.
+  - "syntax error" → Your command has a syntax issue for this shell/OS. Check the environment with get_system_info and adjust syntax.
+- **Never give up after one failure**: You have multiple tools and approaches. If web_search fails, try browser_navigate. If run_command fails, try a different command or install the missing tool. If browser_navigate fails, try http_fetch.
+
+ENVIRONMENT ADAPTATION:
+- **Shell awareness**: Commands execute in different shells depending on OS (PowerShell on Windows, bash/sh on Linux/Mac). Always consider the shell when writing commands.
+- **CLI tool interactivity**: When running CLI tools via run_command:
+  - Some tools need flags for non-interactive mode (e.g., \`-y\` for auto-yes, \`--no-input\`, \`--batch\`).
+  - If a command seems to hang or timeout, it might be waiting for input. Retry with non-interactive flags.
+  - Parse output carefully — extract actionable data (URLs, paths, error codes) for subsequent steps.
+  - Chain related commands: \`command1 && command2\` to avoid separate tool calls for sequential operations.
+- **Dependency management**: If a tool or library is needed but not installed, install it. Use the appropriate package manager (npm, pip, apt, brew) for the environment.
+
 RESOURCEFULNESS & CREATIVE PROBLEM-SOLVING:
 - **NEVER say "I can't" as your first response.** Before claiming inability, you MUST exhaust creative alternatives:
   1. Search for APIs, services, or tools that could accomplish the task (\`web_search\`, \`http_fetch\`, \`browser_navigate\`)

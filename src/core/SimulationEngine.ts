@@ -32,16 +32,24 @@ Think about:
 3. What if that tool fails? (Fallback layers)
 4. What is the success criteria?
 5. DELIVERY: If the task produces a file or downloadable content for the user, the plan MUST include a step to SEND the file to the user via their channel using \`send_file\`, NOT just save it locally. A file saved to disk without being sent is a dead end — the user cannot access the agent's filesystem.
+6. ERROR RECOVERY: For each step, briefly note what to do if it fails (alternative tool, different parameters, fallback approach). The agent MUST adapt, not repeat the same failing call.
+7. ENVIRONMENT AWARENESS: If the task involves running commands or CLI tools, the plan should account for the server OS/shell environment. Include a verification step (e.g., check OS, check if tool is installed) before running environment-dependent commands.
+8. PROGRESS CHECKPOINTS: For tasks with 3+ steps, include explicit checkpoints where the agent should update the user on progress. The user cannot see internal work — silence feels like failure.
 
 OUTPUT FORMAT:
-Provide a concise "Execution Plan" with contingency steps.
+Provide a concise "Execution Plan" as a numbered checklist with contingency notes.
 Example:
-"1. Try searching specifically for 'song name' on YouTube using web_search.
-2. If search fails or Captcha blocks it, try searching generally for the artist's discography.
-3. Once a link is found, use 'download_file'.
-4. If web tools fail completely, ask user for a direct link."
+"1. [VERIFY] Check environment: run get_system_info to know OS/shell.
+2. [EXECUTE] Search for 'song name' on YouTube using web_search.
+   ↳ FALLBACK: If search fails or Captcha blocks, try browser_navigate to YouTube directly.
+3. [CHECKPOINT] Update user: 'Found the link, downloading now...'
+4. [EXECUTE] Download using download_file.
+   ↳ FALLBACK: If download fails, try http_fetch or browser-based download.
+5. [DELIVER] Send file to user via send_file.
+6. [CHECKPOINT] Confirm delivery to user.
+   ↳ FALLBACK: If send_file fails, provide the local path and explain."
 
-Do not be verbose. Be tactical.
+Be tactical, not verbose. Every step should have a clear action and a fallback.
 IMPORTANT: Only reference tools that exist in AVAILABLE TOOLS. Do NOT invent tools.
 `;
 
@@ -52,7 +60,7 @@ IMPORTANT: Only reference tools that exist in AVAILABLE TOOLS. Do NOT invent too
             return plan;
         } catch (e) {
             logger.error(`SimulationEngine failed: ${e}`);
-            return "Proceed with logical stpes: Analyze -> Execute -> Verify.";
+            return "Proceed with logical steps: 1. Analyze task and environment. 2. Execute primary approach. 3. If error, adapt and try alternative. 4. Update user on progress. 5. Verify and deliver result.";
         }
     }
 }

@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { TaskChecklistHelper } from '../src/core/prompts/TaskChecklistHelper';
+import { ToolingHelper } from '../src/core/prompts/ToolingHelper';
+import { BrowserHelper } from '../src/core/prompts/BrowserHelper';
 import { PollingHelper } from '../src/core/prompts/PollingHelper';
 import { PromptHelperContext } from '../src/core/prompts/PromptHelper';
 
@@ -112,5 +114,116 @@ describe('PollingHelper', () => {
         const prompt = helper.getPrompt(makeContext());
         expect(prompt).toContain('maxAttempts');
         expect(prompt).toContain('intervals');
+    });
+});
+
+describe('TaskChecklistHelper - Enhanced', () => {
+    const helper = new TaskChecklistHelper();
+
+    it('should include error recovery guidance in prompt', () => {
+        const prompt = helper.getPrompt(makeContext({ metadata: { currentStep: 1 } }));
+        expect(prompt).toContain('ERROR RECOVERY');
+        expect(prompt).toContain('Self-diagnosis pattern');
+    });
+
+    it('should include CLI interactivity guidance', () => {
+        const prompt = helper.getPrompt(makeContext({ metadata: { currentStep: 1 } }));
+        expect(prompt).toContain('CLI TOOL INTERACTIVITY');
+        expect(prompt).toContain('run_command');
+    });
+
+    it('should include premature completion gate', () => {
+        const prompt = helper.getPrompt(makeContext({ metadata: { currentStep: 3 } }));
+        expect(prompt).toContain('PREMATURE COMPLETION GATE');
+        expect(prompt).toContain('goals_met=true');
+    });
+
+    it('should include context preservation guidance', () => {
+        const prompt = helper.getPrompt(makeContext({ metadata: { currentStep: 3 } }));
+        expect(prompt).toContain('CONTEXT PRESERVATION');
+    });
+
+    it('should include mandatory progress cadence', () => {
+        const prompt = helper.getPrompt(makeContext({ metadata: { currentStep: 1 } }));
+        expect(prompt).toContain('MANDATORY PROGRESS CADENCE');
+        expect(prompt).toContain('every 3 deep tool calls');
+    });
+
+    it('should include environment check guidance in early phase', () => {
+        const prompt = helper.getPrompt(makeContext({ metadata: { currentStep: 1 } }));
+        expect(prompt).toContain('ENVIRONMENT CHECK');
+        expect(prompt).toContain('get_system_info');
+    });
+
+    it('should inject urgent progress nudge when steps since message is high', () => {
+        const prompt = helper.getPrompt(makeContext({ metadata: { currentStep: 5, stepsSinceLastMessage: 4 } }));
+        expect(prompt).toContain('Send a progress update NOW');
+    });
+
+    it('should NOT inject progress nudge when steps since message is low', () => {
+        const prompt = helper.getPrompt(makeContext({ metadata: { currentStep: 5, stepsSinceLastMessage: 1 } }));
+        expect(prompt).not.toContain('Send a progress update NOW');
+    });
+});
+
+describe('ToolingHelper - Enhanced', () => {
+    const helper = new ToolingHelper();
+
+    it('should include error self-diagnosis section', () => {
+        const prompt = helper.getPrompt(makeContext());
+        expect(prompt).toContain('ERROR SELF-DIAGNOSIS');
+        expect(prompt).toContain('Self-fix pattern');
+    });
+
+    it('should include common error category guidance', () => {
+        const prompt = helper.getPrompt(makeContext());
+        expect(prompt).toContain('command not found');
+        expect(prompt).toContain('permission denied');
+        expect(prompt).toContain('file not found');
+        expect(prompt).toContain('connection refused');
+        expect(prompt).toContain('syntax error');
+    });
+
+    it('should include environment adaptation section', () => {
+        const prompt = helper.getPrompt(makeContext());
+        expect(prompt).toContain('ENVIRONMENT ADAPTATION');
+        expect(prompt).toContain('Shell awareness');
+    });
+
+    it('should include CLI interactivity guidance', () => {
+        const prompt = helper.getPrompt(makeContext());
+        expect(prompt).toContain('CLI tool interactivity');
+        expect(prompt).toContain('non-interactive');
+    });
+
+    it('should include dependency management guidance', () => {
+        const prompt = helper.getPrompt(makeContext());
+        expect(prompt).toContain('Dependency management');
+        expect(prompt).toContain('package manager');
+    });
+});
+
+describe('BrowserHelper - Enhanced', () => {
+    const helper = new BrowserHelper();
+
+    it('should include browser error recovery section', () => {
+        const prompt = helper.getPrompt(makeContext({ taskDescription: 'browse the web' }));
+        expect(prompt).toContain('Browser Error Recovery');
+    });
+
+    it('should include context preservation during browsing section', () => {
+        const prompt = helper.getPrompt(makeContext({ taskDescription: 'browse the web' }));
+        expect(prompt).toContain('Context Preservation During Browsing');
+        expect(prompt).toContain('mental map');
+    });
+
+    it('should use tighter silence limit of 2 steps', () => {
+        const prompt = helper.getPrompt(makeContext({ taskDescription: 'browse the web' }));
+        expect(prompt).toContain('NEVER go more than 2 browser steps');
+    });
+
+    it('should include long browsing session guidance', () => {
+        const prompt = helper.getPrompt(makeContext({ taskDescription: 'browse the web' }));
+        expect(prompt).toContain('Long browsing sessions');
     });
 });

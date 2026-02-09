@@ -51,8 +51,9 @@ export class BrowserHelper implements PromptHelper {
     - **ALWAYS send the user a status update within the first 2 browser interactions**. Tell them what site you're visiting and what you see. Users hate silence during browsing tasks.
     - After every significant finding (new page content, form submission, error encountered), send a brief update: what you found, what you're doing next.
     - If the page is loading slowly or requires multiple clicks, send a progress message: "Looking at the page now — I can see [description]. Exploring further..."
-    - **NEVER go more than 3 browser steps without updating the user** — even if you haven't fully completed the task.
+    - **NEVER go more than 2 browser steps without updating the user** — even if you haven't fully completed the task. Browsing is inherently uncertain and users need to know you're making progress.
     - If you encounter errors or blank pages, tell the user immediately rather than silently retrying.
+    - **Long browsing sessions**: If a task requires navigating multiple pages (5+ interactions), periodically summarize what you've found so far and what you're looking for next. Don't let the user wonder if you've lost track of the original goal.
 14. **Browser Blank Page Fallback**: If browser_navigate or browser_examine_page returns a blank or nearly empty page (no interactive elements, very short content, "about:blank", or "(No interactive elements found)"):
     - Do NOT keep retrying the same site or similar sites with the browser. After 2 blank-page results, STOP using the browser for that task.
     - Fall back to \`web_search\` to get results instead.
@@ -90,6 +91,16 @@ export class BrowserHelper implements PromptHelper {
     - \`browser_extract_content()\` — Get clean readable text (markdown-style) from the current page. Strips nav/ads/noise. Use when you just need to READ a page, not interact with it.
     - \`browser_extract_data(selector, attribute?, limit?)\` — Pull structured JSON data from elements matching a CSS selector. Great for tables, lists, cards. Use instead of manual snapshot + click loops.
     - \`browser_api_intercept()\` then \`browser_api_list(json_only?)\` — Auto-discover XHR/fetch API endpoints as you navigate. Then call them directly via \`http_fetch\` — bypasses all rendering overhead.
-    - **Strategy priority**: API interception → http_fetch > extract_content > semantic snapshot > vision. Pick the lightest tool that gets the job done.`;
+    - **Strategy priority**: API interception → http_fetch > extract_content > semantic snapshot > vision. Pick the lightest tool that gets the job done.
+19. **Browser Error Recovery:**
+    - If a page fails to load, try: (1) reload with browser_navigate to the same URL, (2) try http_fetch as a lighter alternative, (3) try a different URL or search approach.
+    - If form submission fails, check: (1) are all required fields filled? (2) is the submit button the correct element? (3) try browser_fill_form instead of individual clicks.
+    - If clicking an element doesn't work, try: (1) a different selector/ref, (2) scrolling to make the element visible first, (3) browser_vision to understand the page layout, (4) computer_vision_click as a fallback.
+    - **Always tell the user when you hit browser errors** — "The page didn't load correctly, trying an alternative approach..."
+20. **Context Preservation During Browsing:**
+    - When navigating multiple pages, maintain a mental map of: where you started, what you've found on each page, and what you still need.
+    - Before navigating away from a page, extract and remember any important data — you can't go back easily.
+    - If the task requires information from multiple pages, compile findings as you go rather than trying to remember everything at the end.
+    - Re-read your step history periodically to ensure you haven't lost track of the original goal during a long browsing session.`;
     }
 }

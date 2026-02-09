@@ -4369,6 +4369,16 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 await this.telegram.sendMessage(sourceId, message);
             } else if (source === 'whatsapp' && this.whatsapp) {
                 await this.whatsapp.sendMessage(sourceId, message);
+            } else if (source === 'discord' && this.discord) {
+                await this.discord.sendMessage(sourceId, message);
+            } else if (source === 'gateway-chat') {
+                eventBus.emit('gateway:chat:response', {
+                    type: 'chat:message',
+                    role: 'assistant',
+                    content: message,
+                    timestamp: new Date().toISOString(),
+                    messageId: `progress-${Date.now()}`
+                });
             }
         } catch (e) {
             logger.debug(`Failed to send progress feedback: ${e}`);
@@ -6263,6 +6273,13 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     break;
                 }
 
+                // PERIODIC PROGRESS FEEDBACK: For long-running tasks, send the user
+                // periodic "still working" feedback so they know we haven't stalled.
+                // This fires every 8 steps for non-simple tasks when no message has been sent recently.
+                if (!isSimpleTask && currentStep > 1 && stepsSinceLastMessage >= 8 && currentStep % 8 === 0 && action.payload.source) {
+                    await this.sendProgressFeedback(action, 'working', `Still working on your request (step ${currentStep})...`);
+                }
+
                 if (messagesSent >= MAX_MESSAGES) {
                     logger.warn(`Agent: Message budget reached (${messagesSent}/${MAX_MESSAGES}) for action ${action.id}. Checking if task is truly done...`);
                     
@@ -6761,16 +6778,33 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 // Build shell-aware hint for common failures
                                 let hint = '';
                                 const isWin = process.platform === 'win32';
-                                if (isWin && toolCall.name === 'run_command') {
+                                if (toolCall.name === 'run_command') {
                                     const cmdStr = String(toolCall.metadata?.command || toolCall.metadata?.cmd || '').trim().toLowerCase();
-                                    if (cmdStr.startsWith('dir ') || cmdStr === 'dir') {
-                                        hint = ' HINT: Use Get-ChildItem instead of dir. Commands execute in PowerShell.';
-                                    } else if (cmdStr.startsWith('where ')) {
-                                        hint = ' HINT: Use Get-Command instead of where. Commands execute in PowerShell.';
-                                    } else if (errorSnippet.includes('not recognized') || errorSnippet.includes('not found') || errorSnippet.includes('Could not find')) {
-                                        hint = ' HINT: Commands run in PowerShell. Use PowerShell cmdlets (Get-ChildItem, Get-Command, Test-Path, Start-MpScan, etc.).';
-                                    } else if (errorSnippet.includes('cannot find the path') || errorSnippet.includes('does not exist')) {
-                                        hint = ' HINT: Verify the path exists with Test-Path before using it.';
+                                    if (isWin) {
+                                        if (cmdStr.startsWith('dir ') || cmdStr === 'dir') {
+                                            hint = ' HINT: Use Get-ChildItem instead of dir. Commands execute in PowerShell.';
+                                        } else if (cmdStr.startsWith('where ')) {
+                                            hint = ' HINT: Use Get-Command instead of where. Commands execute in PowerShell.';
+                                        } else if (errorSnippet.includes('not recognized') || errorSnippet.includes('not found') || errorSnippet.includes('Could not find')) {
+                                            hint = ' HINT: Commands run in PowerShell. Use PowerShell cmdlets (Get-ChildItem, Get-Command, Test-Path, Start-MpScan, etc.).';
+                                        } else if (errorSnippet.includes('cannot find the path') || errorSnippet.includes('does not exist')) {
+                                            hint = ' HINT: Verify the path exists with Test-Path before using it.';
+                                        }
+                                    } else {
+                                        // Linux/Mac hints
+                                        if (errorSnippet.includes('command not found') || errorSnippet.includes('not found')) {
+                                            hint = ' HINT: The command is not installed. Try installing it first (e.g., apt install, brew install, npm install -g, pip install), or use an alternative tool that is available. Run "which <command>" or "command -v <command>" to check if a tool exists.';
+                                        } else if (errorSnippet.includes('Permission denied') || errorSnippet.includes('permission denied')) {
+                                            hint = ' HINT: Permission denied. Try: (1) using a different output directory you have write access to, (2) checking file permissions with "ls -la", (3) using chmod if appropriate.';
+                                        } else if (errorSnippet.includes('No such file or directory')) {
+                                            hint = ' HINT: File or directory not found. Use "ls" or "find" to locate the correct path. Check for typos in the path.';
+                                        } else if (errorSnippet.includes('Connection refused') || errorSnippet.includes('connection refused')) {
+                                            hint = ' HINT: Connection refused. The target service may not be running. Check if it needs to be started or if the port/address is correct.';
+                                        } else if (errorSnippet.includes('timed out') || errorSnippet.includes('Killed')) {
+                                            hint = ' HINT: Command timed out or was killed. Try: (1) a simpler/faster command, (2) adding non-interactive flags (-y, --batch, --no-input), (3) increasing the timeout with timeoutMs parameter.';
+                                        } else if (errorSnippet.includes('syntax error') || errorSnippet.includes('unexpected token')) {
+                                            hint = ' HINT: Shell syntax error. Check your command for proper quoting, escaping, and shell-compatible syntax. Use get_system_info to check the shell environment.';
+                                        }
                                     }
                                 }
                                 this.memory.saveMemory({
@@ -6957,10 +6991,10 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                     }
 
                     // BROWSING PROGRESS INJECTION: If the agent has been doing browser work
-                    // for 3+ steps without sending a user update, nudge it to communicate.
+                    // for 2+ steps without sending a user update, nudge it to communicate.
                     const browserSkillsUsed = Object.keys(skillCallCounts).filter(s => s.startsWith('browser_'));
                     const totalBrowserCalls = browserSkillsUsed.reduce((sum, s) => sum + skillCallCounts[s], 0);
-                    if (totalBrowserCalls >= 3 && stepsSinceLastMessage >= 3 && messagesSent === 0) {
+                    if (totalBrowserCalls >= 2 && stepsSinceLastMessage >= 2 && messagesSent === 0) {
                         this.memory.saveMemory({
                             id: `${action.id}-step-${currentStep}-browse-progress-nudge`,
                             type: 'short',
@@ -6968,6 +7002,18 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             metadata: { actionId: action.id, step: currentStep, browserCalls: totalBrowserCalls }
                         });
                         logger.info(`Agent: Injected browsing progress nudge at step ${currentStep} (${totalBrowserCalls} browser calls, no user message yet)`);
+                    }
+
+                    // GENERAL PROGRESS INJECTION: For non-browser tasks, nudge the agent to
+                    // update the user when working silently for too long.
+                    if (totalBrowserCalls === 0 && stepsSinceLastMessage >= 4 && messagesSent === 0 && currentStep >= 4) {
+                        this.memory.saveMemory({
+                            id: `${action.id}-step-${currentStep}-general-progress-nudge`,
+                            type: 'short',
+                            content: `[SYSTEM: You have been working for ${stepsSinceLastMessage} steps without sending any message to the user. The user CANNOT see your internal work — they may think you've stopped or stalled. Send a brief progress update NOW: what you've done, what you're doing, and what's left. Even a short "Working on it — found X, now doing Y" helps the user feel informed.]`,
+                            metadata: { actionId: action.id, step: currentStep, stepsSilent: stepsSinceLastMessage }
+                        });
+                        logger.info(`Agent: Injected general progress nudge at step ${currentStep} (${stepsSinceLastMessage} steps without message)`);
                     }
 
                     // NOW check goals_met AFTER tools have been executed
