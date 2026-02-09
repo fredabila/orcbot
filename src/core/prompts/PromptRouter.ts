@@ -18,6 +18,8 @@ import { SchedulingHelper } from './SchedulingHelper';
 import { MediaHelper } from './MediaHelper';
 import { ProfileHelper } from './ProfileHelper';
 import { DevelopmentHelper } from './DevelopmentHelper';
+import { TaskChecklistHelper } from './TaskChecklistHelper';
+import { PollingHelper } from './PollingHelper';
 import { PrivacyHelper } from './PrivacyHelper';
 import { logger } from '../../utils/logger';
 
@@ -57,6 +59,8 @@ export class PromptRouter {
         this.register(new MediaHelper());
         this.register(new ProfileHelper());
         this.register(new DevelopmentHelper());
+        this.register(new TaskChecklistHelper());
+        this.register(new PollingHelper());
     }
 
     /**
@@ -281,7 +285,8 @@ Rules:
 
     /**
      * Infer which helpers to activate as a fallback when keyword matching produced
-     * zero domain helpers. Uses broader heuristics:
+     * zero domain helpers. Uses broader heuristics as fast path, then optionally
+     * enhances with LLM-based intent classification when regex is uncertain.
      * - Action-oriented language → DevelopmentHelper + ResearchHelper
      * - Question language → CommunicationHelper + ResearchHelper
      * - Long/complex description → ResearchHelper
@@ -291,10 +296,6 @@ Rules:
         const task = context.taskDescription.toLowerCase();
         const fallbacks: string[] = [];
 
-        // Broad action-verb detection (covers creative phrasings the keyword lists missed)
-        const hasActionIntent = /\b(make|do|get|give|help|put|show|figure|work|handle|take\s+care|sort\s+out|come\s+up\s+with|hook\s+.+up|throw|set|run|start|launch|open|try)\b/.test(task);
-        // Question/information-seeking intent
-        const hasQuestionIntent = /\b(what|how|why|where|when|who|which|can\s+you|could\s+you|is\s+there|tell\s+me|explain|describe)\b/.test(task);
         // Has a messaging channel active
         const hasChannel = ['telegram', 'whatsapp', 'discord', 'gateway-chat'].includes(context.metadata.source);
         // Long description suggests complexity
@@ -303,6 +304,15 @@ Rules:
         if (hasChannel) {
             fallbacks.push('communication');
         }
+
+        // Broad action-verb detection (covers creative phrasings the keyword lists missed)
+        const hasActionIntent = /\b(make|do|get|give|help|put|show|figure|work|handle|take\s+care|sort\s+out|come\s+up\s+with|hook\s+.+up|throw|set|run|start|launch|open|try)\b/.test(task);
+        // Question/information-seeking intent
+        const hasQuestionIntent = /\b(what|how|why|where|when|who|which|can\s+you|could\s+you|is\s+there|tell\s+me|explain|describe)\b/.test(task);
+        // Polling/monitoring intent — route to polling helper
+        const hasPollingIntent = /\b(wait\s+for|monitor|watch\s+for|poll|check\s+if|notify\s+me\s+when|alert\s+me|keep\s+checking|retry|is\s+it\s+ready|is\s+it\s+done)\b/.test(task);
+        // Multi-step/checklist intent — route to task-checklist helper
+        const hasChecklistIntent = /\b(step\s+by\s+step|break\s+down|checklist|multiple\s+steps|first.*then|plan\s+out|track\s+progress)\b/.test(task);
 
         if (hasActionIntent) {
             // Action tasks most often need dev or research guidance
@@ -314,6 +324,14 @@ Rules:
             // Pure questions benefit from research + communication
             fallbacks.push('research');
             if (!hasChannel) fallbacks.push('communication');
+        }
+
+        if (hasPollingIntent && !fallbacks.includes('polling')) {
+            fallbacks.push('polling');
+        }
+
+        if ((hasChecklistIntent || isComplex) && !fallbacks.includes('task-checklist')) {
+            fallbacks.push('task-checklist');
         }
 
         if (isComplex && !fallbacks.includes('research')) {

@@ -32,4 +32,6 @@ export { SchedulingHelper } from './SchedulingHelper';
 export { MediaHelper } from './MediaHelper';
 export { ProfileHelper } from './ProfileHelper';
 export { DevelopmentHelper } from './DevelopmentHelper';
+export { TaskChecklistHelper } from './TaskChecklistHelper';
+export { PollingHelper } from './PollingHelper';
 export { PrivacyHelper } from './PrivacyHelper';
