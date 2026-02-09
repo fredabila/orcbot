@@ -1,4 +1,5 @@
 import { logger } from '../utils/logger';
+import { LLMParser, ParserLLM } from './LLMParser';
 
 export interface ToolCall {
     name: string;
@@ -22,6 +23,25 @@ export interface StandardResponse {
 }
 
 export class ParserLayer {
+    /** Optional LLM instance for smart parsing fallback (Tier 3) */
+    private static llmParser: LLMParser | null = null;
+
+    /**
+     * Set the LLM instance for intelligent field extraction when regex fails.
+     * Called once during agent initialization.
+     */
+    public static setLLM(llm: ParserLLM): void {
+        ParserLayer.llmParser = new LLMParser(llm);
+    }
+
+    /**
+     * Get the LLMParser instance (if configured). Useful for callers who want
+     * direct access to intent classification or metadata normalization.
+     */
+    public static getLLMParser(): LLMParser | null {
+        return ParserLayer.llmParser;
+    }
+
     /**
      * Normalize tool call metadata to a canonical shape expected by ResponseValidator
      * and downstream execution.
@@ -176,6 +196,62 @@ export class ParserLayer {
                 metadata: { error: String(error) }
             };
         }
+    }
+
+    /**
+     * Async-enhanced normalize that adds an LLM fallback tier.
+     *
+     * Pipeline:
+     *   1. JSON.parse (fast)
+     *   2. Sanitize + JSON.parse
+     *   3. Regex-based manual extraction
+     *   4. **LLM-based extraction** (new — only fires when regex extraction fails and an LLM is configured)
+     *
+     * Callers that can `await` should prefer this over the sync `normalize()`.
+     */
+    public static async normalizeAsync(rawResponse: string): Promise<StandardResponse> {
+        // First try the fast synchronous path
+        const syncResult = this.normalize(rawResponse);
+
+        // If sync parsing succeeded with tools or meaningful content, return it
+        if (syncResult.success && (syncResult.tools?.length || syncResult.tool || syncResult.action)) {
+            return syncResult;
+        }
+
+        // If sync parsing failed AND we have an LLM parser, try LLM extraction
+        if (!syncResult.success && this.llmParser) {
+            const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
+            const inputForLLM = jsonMatch ? jsonMatch[0] : rawResponse;
+
+            logger.info('ParserLayer: Attempting LLM-based field extraction...');
+            try {
+                const extracted = await this.llmParser.extractFields(inputForLLM);
+                if (extracted && (extracted.tool || extracted.tools?.length || extracted.action)) {
+                    logger.info('ParserLayer: LLM extraction succeeded');
+
+                    let tools: ToolCall[] = extracted.tools || [];
+                    if (extracted.tool && tools.length === 0) {
+                        tools.push({ name: extracted.tool, metadata: extracted.metadata });
+                    }
+                    tools = this.normalizeToolCalls(tools);
+
+                    return {
+                        success: true,
+                        action: extracted.action,
+                        tool: extracted.tool,
+                        tools,
+                        content: extracted.content,
+                        metadata: extracted.metadata,
+                        reasoning: extracted.reasoning,
+                        verification: extracted.verification
+                    };
+                }
+            } catch (llmError) {
+                logger.warn(`ParserLayer: LLM extraction failed: ${llmError}`);
+            }
+        }
+
+        return syncResult;
     }
 
     /**
