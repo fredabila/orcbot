@@ -4345,7 +4345,9 @@ The plugin handles all logic internally. See the plugin source for implementatio
         // Only send feedback for channel-sourced actions
         const source = action.payload?.source;
         const sourceId = action.payload?.sourceId;
-        if (!source || !sourceId) return;
+        if (!source) return;
+        // Gateway-chat doesn't require sourceId (uses eventBus broadcast)
+        if (source !== 'gateway-chat' && !sourceId) return;
         
         // Craft compact, non-intrusive messages
         let message = '';
@@ -6278,6 +6280,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 // Fires once after 8 consecutive silent steps (stepsSinceLastMessage resets on send).
                 if (!isSimpleTask && currentStep > 1 && stepsSinceLastMessage === 8 && action.payload.source) {
                     await this.sendProgressFeedback(action, 'working', `Still working on your request (step ${currentStep})...`);
+                    // Progress message was just sent; reset silent-step counter and count toward message budget.
+                    stepsSinceLastMessage = 0;
+                    messagesSent++;
                 }
 
                 if (messagesSent >= MAX_MESSAGES) {
@@ -7006,7 +7011,9 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
 
                     // GENERAL PROGRESS INJECTION: For non-browser tasks, nudge the agent to
                     // update the user when working silently for too long.
-                    if (totalBrowserCalls === 0 && stepsSinceLastMessage >= 4 && messagesSent === 0 && currentStep >= 4) {
+                    // Uses stepsSinceLastMessage as the primary check (accounts for both LLM-sent
+                    // messages and system progress feedback that resets this counter).
+                    if (totalBrowserCalls === 0 && stepsSinceLastMessage >= 4 && currentStep >= 4) {
                         this.memory.saveMemory({
                             id: `${action.id}-step-${currentStep}-general-progress-nudge`,
                             type: 'short',

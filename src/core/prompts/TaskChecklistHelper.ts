@@ -59,7 +59,7 @@ ${isEarlyPhase ? `
 - Identify dependencies between steps — which steps must complete before others can start.
 - Estimate which steps can be parallelized (use multi-tool calls for independent steps).
 - If the task has more than 3 steps, briefly share the plan with the user before starting.
-- **ENVIRONMENT CHECK**: If any step involves running commands, CLI tools, or interacting with the server environment, include a verification step FIRST (e.g., check OS with get_system_info, verify tool installation with run_command("which <tool>") or run_command("command -v <tool>")).
+- **ENVIRONMENT CHECK**: If any step involves running commands, CLI tools, or interacting with the server environment, include a verification step FIRST (e.g., check OS with get_system_info, then use an OS-appropriate tool-existence check: on Unix, verify with run_command("which <tool>") or run_command("command -v <tool>"); on Windows/PowerShell, verify with run_command("Get-Command <tool>")).
 ` : ''}
 **PROGRESS TRACKING (during execution):**
 - After completing each significant step, note what was done and what remains.
@@ -91,7 +91,7 @@ ${stepsSinceMsg >= 3 ? `- ⚡ You have been working for ${stepsSinceMsg} steps w
 - If a command returns an error about missing tools, try installing them first: run_command("npm install -g <tool>") or run_command("pip install <tool>") or use the package manager appropriate for the environment.
 - Parse command output carefully — extract relevant information and use it in subsequent steps.
 - If a command produces long output, focus on the relevant sections (errors, results, status).
-- Chain commands when appropriate: "command1 && command2" for sequential execution.
+- Chain commands when appropriate using syntax appropriate for the current shell, or run them as separate run_command calls for sequential execution.
 
 **COMPLETION VERIFICATION:**
 - Before marking goals_met=true, mentally walk through your original checklist.
