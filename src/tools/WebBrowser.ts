@@ -8,6 +8,17 @@ import fs from 'fs';
 
 export type BrowserEngine = 'playwright' | 'lightpanda';
 
+export interface InterceptedApi {
+    url: string;
+    method: string;
+    contentType: string;
+    status: number;
+    timestamp: number;
+    responseSize: number;
+    isJson: boolean;
+    domain: string;
+}
+
 export class WebBrowser {
     private browser: Browser | null = null;
     private _page: Page | null = null; // Renamed from 'page' to '_page'
@@ -23,7 +34,19 @@ export class WebBrowser {
     private lightpandaEndpoint: string;
     private stateManager: BrowserStateManager;
     private _visionAnalyzer?: (screenshotPath: string, prompt: string) => Promise<string>;
+    private debugAlwaysSaveArtifacts: boolean;
+    private traceEnabled: boolean;
+    private traceActive: boolean = false;
+    private traceDir: string;
+    private traceScreenshots: boolean;
+    private traceSnapshots: boolean;
+    private tracePath?: string;
     public _blankUrlHistory: Map<string, number> = new Map(); // domain → consecutive blank count
+
+    // API Interception: auto-discover XHR/fetch endpoints during navigation
+    private _apiInterceptionEnabled: boolean = false;
+    private _interceptedApis: InterceptedApi[] = [];
+    private _apiInterceptionMaxEntries: number = 50;
 
     public get page(): Page | null {
         return this._page;
@@ -47,7 +70,14 @@ export class WebBrowser {
         browserProfileName?: string,
         tuner?: RuntimeTuner,
         browserEngine?: BrowserEngine,
-        lightpandaEndpoint?: string
+        lightpandaEndpoint?: string,
+        debugOptions?: {
+            alwaysSaveArtifacts?: boolean;
+            traceEnabled?: boolean;
+            traceDir?: string;
+            traceScreenshots?: boolean;
+            traceSnapshots?: boolean;
+        }
     ) {
         this.profileDir = browserProfileDir;
         this.profileName = browserProfileName || 'default';
@@ -55,6 +85,11 @@ export class WebBrowser {
         this.browserEngine = browserEngine || 'playwright';
         this.lightpandaEndpoint = lightpandaEndpoint || 'ws://127.0.0.1:9222';
         this.stateManager = new BrowserStateManager();
+        this.debugAlwaysSaveArtifacts = Boolean(debugOptions?.alwaysSaveArtifacts);
+        this.traceEnabled = Boolean(debugOptions?.traceEnabled);
+        this.traceDir = debugOptions?.traceDir || path.join(os.homedir(), '.orcbot', 'browser-traces');
+        this.traceScreenshots = debugOptions?.traceScreenshots !== false;
+        this.traceSnapshots = debugOptions?.traceSnapshots !== false;
     }
 
     private async ensureBrowser(headlessOverride?: boolean) {
@@ -114,6 +149,44 @@ export class WebBrowser {
             });
 
             this._page = await this.context.newPage();
+            await this.ensureTracing();
+        }
+    }
+
+    private async ensureTracing(): Promise<void> {
+        if (!this.traceEnabled || this.traceActive || !this.context) return;
+        try {
+            if (!fs.existsSync(this.traceDir)) {
+                fs.mkdirSync(this.traceDir, { recursive: true });
+            }
+            const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+            this.tracePath = path.join(this.traceDir, `trace-${stamp}.zip`);
+            await this.context.tracing.start({
+                screenshots: this.traceScreenshots,
+                snapshots: this.traceSnapshots,
+                sources: false
+            });
+            this.traceActive = true;
+            logger.info(`Browser: Trace started (${this.tracePath})`);
+        } catch (e) {
+            logger.warn(`Browser: Trace start failed: ${e}`);
+            this.traceEnabled = false;
+        }
+    }
+
+    private async stopTracing(): Promise<void> {
+        if (!this.traceActive || !this.context) return;
+        try {
+            if (this.tracePath) {
+                await this.context.tracing.stop({ path: this.tracePath });
+                logger.info(`Browser: Trace saved (${this.tracePath})`);
+            } else {
+                await this.context.tracing.stop();
+            }
+        } catch (e) {
+            logger.warn(`Browser: Trace stop failed: ${e}`);
+        } finally {
+            this.traceActive = false;
         }
     }
 
@@ -158,6 +231,7 @@ export class WebBrowser {
                 userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             });
             this._page = await this.context.newPage();
+            await this.ensureTracing();
             
             logger.info('Browser: Connected to Lightpanda successfully');
         } catch (error: any) {
@@ -391,6 +465,7 @@ export class WebBrowser {
 
     public async navigate(url: string, waitSelectors: string[] = [], allowHeadfulRetry: boolean = true): Promise<string> {
         try {
+            const navStart = Date.now();
             // Check for navigation loop
             if (this.stateManager.detectNavigationLoop(url)) {
                 const error = `Navigation loop detected for ${url}. Aborting to prevent infinite loop.`;
@@ -447,12 +522,15 @@ export class WebBrowser {
                 targetUrl = 'https://' + targetUrl;
             }
 
-            logger.info(`Browser: Navigating to ${targetUrl}`);
+            logger.info(`Browser: Navigating to ${targetUrl} (engine=${this.browserEngine}, headless=${this.headlessMode})`);
             await this._page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
             await this.waitForStablePage(15000);
             this.lastNavigateTimestamp = Date.now();
 
             const bodyTextLength = await this._page.evaluate(() => document.body?.innerText?.trim().length ?? 0).catch(() => 0);
+            const navTitle = await this._page.title().catch(() => '');
+            const navElapsed = Date.now() - navStart;
+            logger.info(`Browser: Loaded ${targetUrl} in ${navElapsed}ms (title="${navTitle}", text=${bodyTextLength})`);
             
             // If page appears empty and we're in headless mode, retry headful (only if display available)
             if (bodyTextLength < 100 && this.headlessMode && allowHeadfulRetry && !this.isHeadlessEnvironment()) {
@@ -484,6 +562,10 @@ export class WebBrowser {
             const title = await this._page.title();
             const content = await this._page.content();
             const looksBlank = (!title || title.trim().length === 0) && content.replace(/\s+/g, '').length < 1200;
+
+            if (this.debugAlwaysSaveArtifacts) {
+                await this.saveDebugArtifacts('navigate', content).catch(() => null);
+            }
 
             if (looksBlank && this.headlessMode && allowHeadfulRetry && !this.isHeadlessEnvironment()) {
                 logger.warn('Browser: Page appears blank in headless mode. Retrying headful...');
@@ -523,6 +605,12 @@ export class WebBrowser {
             this.recordProfileHistory({ url: targetUrl, title, timestamp: new Date().toISOString() });
             this.lastNavigatedUrl = targetUrl;
             this.stateManager.recordNavigation(targetUrl, 'navigate', true);
+            if (looksBlank) {
+                const debug = await this.saveDebugArtifacts('blank-navigate', content).catch(() => null);
+                if (debug?.screenshotPath || debug?.htmlPath) {
+                    logger.warn(`Browser: Blank page diagnostics saved (${debug.screenshotPath || 'no screenshot'}, ${debug.htmlPath || 'no html'})`);
+                }
+            }
             const blankWarning = looksBlank ? '\n\n[WARNING: Page appears blank or nearly empty. The site may require JavaScript that cannot render. Consider using web_search or extract_article instead. Do NOT keep navigating to this site.]' : '';
             return `Page Loaded: ${title}\nURL: ${url}${captcha ? `\n[WARNING: ${captcha}]` : ''}${blankWarning}`;
         } catch (e) {
@@ -729,9 +817,11 @@ export class WebBrowser {
         try {
             await this.ensureBrowser();
 
-            // Skip redundant stable-page wait if we just navigated (within 5s)
+            // Skip redundant stable-page wait if we just navigated (within 15s)
+            // The navigate() function already does a full waitForStablePage — re-running it
+            // can cause SPAs to re-enter transitional states (about:blank flicker).
             const timeSinceNavigate = Date.now() - this.lastNavigateTimestamp;
-            if (timeSinceNavigate > 5000) {
+            if (timeSinceNavigate > 15000) {
                 await this.waitForStablePage();
             }
 
@@ -798,6 +888,7 @@ export class WebBrowser {
                 });
             };
 
+            const snapshotStart = Date.now();
             let snapshot = await buildSnapshot();
             let title = await this.page!.title();
             let url = this.page!.url();
@@ -818,14 +909,16 @@ export class WebBrowser {
                 }
             }
 
-            // If still blank after settling, try navigating back to the last known URL
+            // If still blank after the 3s poll, reload the last known URL immediately.
+            // Don't add more settle waits — the poll already proved the page isn't recovering on its own.
             if ((!url || url === 'about:blank') && contentLength < 500 && blankReloadAttempts < maxBlankReloads) {
                 const fallbackUrl = this.lastNavigatedUrl;
                 if (fallbackUrl) {
-                    logger.warn(`Semantic snapshot: blank URL detected (content: ${contentLength} bytes). Attempting single reload.`);
+                    logger.warn(`Semantic snapshot: blank URL detected (content: ${contentLength} bytes). Reloading ${fallbackUrl}.`);
                     blankReloadAttempts++;
-                    await this.page!.goto(fallbackUrl, { waitUntil: 'load', timeout: 30000 }).catch(() => { });
-                    await this.waitForStablePage(15000);
+                    await this.page!.goto(fallbackUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => { });
+                    // Shorter stabilization — the site already loaded once, this is a recovery reload
+                    await this.waitForStablePage(5000);
                     snapshot = await buildSnapshot();
                     title = await this.page!.title();
                     url = this.page!.url();
@@ -859,13 +952,20 @@ export class WebBrowser {
                 }
             }
 
+            const interactiveLineCount = (snapshot || '').split('\n').filter(l => l.includes('[ref=')).length;
+            const snapshotElapsed = Date.now() - snapshotStart;
+            logger.info(`Semantic snapshot: url="${url}" title="${title}" html=${contentLength} elements=${interactiveLineCount} in ${snapshotElapsed}ms`);
             const diagnostics = `URL: ${url}\nHTML length: ${contentLength}`;
             const baseResult = `PAGE: "${title}"\n${diagnostics}\n\nSEMANTIC SNAPSHOT:\n${snapshot || '(No interactive elements found)'}`;
+
+            if (this.debugAlwaysSaveArtifacts) {
+                const html = await this.page!.content().catch(() => '');
+                await this.saveDebugArtifacts('snapshot', html).catch(() => null);
+            }
 
             // Auto-vision fallback: if the page has substantial HTML but the semantic snapshot
             // found very few interactive elements, use vision to describe what's actually visible.
             // This helps with canvas-heavy pages, image-based UIs, and SPAs with custom components.
-            const interactiveLineCount = (snapshot || '').split('\n').filter(l => l.includes('[ref=')).length;
             const hasSubstantialContent = contentLength > 1500;
             const snapshotIsThin = interactiveLineCount < 5 && (!snapshot || snapshot.length < 200);
 
@@ -887,6 +987,14 @@ export class WebBrowser {
                     }
                 } catch (e) {
                     logger.warn(`Auto-vision fallback failed: ${e}`);
+                }
+            }
+
+            if (looksBlank) {
+                const html = await this.page!.content().catch(() => '');
+                const debug = await this.saveDebugArtifacts('blank-snapshot', html).catch(() => null);
+                if (debug?.screenshotPath || debug?.htmlPath) {
+                    logger.warn(`Semantic snapshot blank: saved diagnostics (${debug.screenshotPath || 'no screenshot'}, ${debug.htmlPath || 'no html'})`);
                 }
             }
 
@@ -995,6 +1103,7 @@ export class WebBrowser {
     public async click(selector: string): Promise<string> {
         try {
             await this.ensureBrowser();
+            logger.info(`Browser: Click ${selector} (url=${this.lastNavigatedUrl || 'unknown'})`);
 
             // Resolve ref ID → CSS selector (with re-attachment if SPA re-rendered)
             const finalSelector = await this.resolveSelector(selector);
@@ -1089,6 +1198,7 @@ export class WebBrowser {
             const url = this.page!.url();
             const title = await this.page!.title().catch(() => '');
             const urlChanged = url !== this.lastNavigatedUrl;
+            logger.info(`Browser: Clicked ${selector}${urlChanged ? ` -> ${url}` : ''}`);
             return `Successfully clicked: ${selector}${urlChanged ? `\nPage navigated to: "${title}" (${url})` : ''}`;
         } catch (e) {
             const error = String(e);
@@ -1100,6 +1210,7 @@ export class WebBrowser {
     public async type(selector: string, text: string): Promise<string> {
         try {
             await this.ensureBrowser();
+            logger.info(`Browser: Type ${selector} (len=${text.length})`);
 
             // Resolve ref ID → CSS selector (with re-attachment if SPA re-rendered)
             const finalSelector = await this.resolveSelector(selector);
@@ -1201,6 +1312,7 @@ export class WebBrowser {
 
             await this.waitAfterInteraction(1000);
             this.stateManager.recordAction('type', this.lastNavigatedUrl || 'unknown', selector, true);
+            logger.info(`Browser: Typed ${selector} (len=${text.length})`);
             return `Successfully typed into ${selector}: "${text}"`;
         } catch (e) {
             const error = String(e);
@@ -1335,16 +1447,71 @@ export class WebBrowser {
         try {
             await this.ensureBrowser();
 
-            // Ensure visual stability before snapping
-            await this.page!.waitForLoadState('load');
-            await this.page!.waitForTimeout(1000); // 1s "paint wait" to avoid white screens
+            // Recover from blank page before screenshotting — sites can die between steps
+            const currentUrl = this.page!.url();
+            const currentContent = (await this.page!.content().catch(() => '')).length;
+            if ((!currentUrl || currentUrl === 'about:blank') && currentContent < 500 && this.lastNavigatedUrl) {
+                logger.warn(`Browser: Page is blank before screenshot, reloading ${this.lastNavigatedUrl}`);
+                await this.page!.goto(this.lastNavigatedUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+                await this.waitForStablePage(5000);
+            } else {
+                // Ensure visual stability before snapping
+                await this.page!.waitForLoadState('load').catch(() => {});
+                await this.page!.waitForTimeout(1000); // 1s "paint wait" to avoid white screens
+            }
 
             const screenshotPath = path.join(os.homedir(), '.orcbot', 'screenshot.png');
             await this.page!.screenshot({ path: screenshotPath, type: 'png' });
 
+            const minBytes = 15000;
+            try {
+                const size = fs.statSync(screenshotPath).size;
+                if (size < minBytes) {
+                    logger.warn(`Browser: Screenshot looks blank/small (${size} bytes). Retrying...`);
+                    // If still blank and we have a URL, try one more reload
+                    if (this.lastNavigatedUrl) {
+                        await this.page!.goto(this.lastNavigatedUrl, { waitUntil: 'load', timeout: 20000 }).catch(() => {});
+                        await this.waitForStablePage(3000);
+                    } else {
+                        await this.page!.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
+                        await this.page!.waitForTimeout(1200);
+                    }
+                    await this.page!.screenshot({ path: screenshotPath, type: 'png' });
+                    const retrySize = fs.statSync(screenshotPath).size;
+                    if (retrySize < minBytes) {
+                        return `Screenshot saved to: ${screenshotPath}. (Warning: image appears blank; ${retrySize} bytes)`;
+                    }
+                }
+            } catch {
+                // Best effort
+            }
+
             return `Screenshot saved to: ${screenshotPath}. (Verified: Page state is stable)`;
         } catch (e) {
             return `Failed to take screenshot: ${e}`;
+        }
+    }
+
+    private async saveDebugArtifacts(tag: string, html?: string): Promise<{ screenshotPath?: string; htmlPath?: string } | null> {
+        try {
+            if (!this.page) return null;
+            const debugDir = path.join(os.homedir(), '.orcbot', 'browser-debug');
+            if (!fs.existsSync(debugDir)) {
+                fs.mkdirSync(debugDir, { recursive: true });
+            }
+            const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const base = `${tag}-${stamp}`;
+            const screenshotPath = path.join(debugDir, `${base}.png`);
+            await this.page.screenshot({ path: screenshotPath, type: 'png' });
+            let htmlPath: string | undefined;
+            if (html && html.trim().length > 0) {
+                htmlPath = path.join(debugDir, `${base}.html`);
+                fs.writeFileSync(htmlPath, html, 'utf-8');
+            }
+            return { screenshotPath, htmlPath };
+        } catch (e) {
+            logger.warn(`Browser: Failed to save debug artifacts (${tag}): ${e}`);
+            return null;
         }
     }
 
@@ -1365,7 +1532,400 @@ export class WebBrowser {
         }
     }
 
+    // ─── API INTERCEPTION ──────────────────────────────────────────────────────
+
+    /**
+     * Enable API interception on the current page.
+     * Listens for XHR/fetch responses and records their URLs, methods, content types.
+     * The agent can later call these endpoints directly via http_fetch.
+     */
+    public async enableApiInterception(): Promise<string> {
+        try {
+            await this.ensureBrowser();
+            if (!this._page) return 'Error: No browser page.';
+            if (this._apiInterceptionEnabled) return 'API interception already active.';
+
+            this._interceptedApis = [];
+            this._apiInterceptionEnabled = true;
+
+            this._page.on('response', async (response) => {
+                try {
+                    const request = response.request();
+                    const resourceType = request.resourceType();
+
+                    // Only track API-like requests (XHR, fetch), skip images/scripts/stylesheets
+                    if (!['xhr', 'fetch'].includes(resourceType)) return;
+
+                    const url = response.url();
+                    const method = request.method();
+                    const contentType = response.headers()['content-type'] || '';
+                    const status = response.status();
+
+                    // Skip tracking errors, redirects, and non-data responses
+                    if (status < 200 || status >= 400) return;
+
+                    // Estimate response size from content-length header
+                    const contentLength = parseInt(response.headers()['content-length'] || '0', 10);
+                    const isJson = contentType.includes('json');
+                    let domain = '';
+                    try { domain = new URL(url).hostname; } catch {}
+
+                    // Deduplicate: skip if we already have this exact URL+method
+                    const exists = this._interceptedApis.some(a => a.url === url && a.method === method);
+                    if (exists) return;
+
+                    this._interceptedApis.push({
+                        url,
+                        method,
+                        contentType,
+                        status,
+                        timestamp: Date.now(),
+                        responseSize: contentLength,
+                        isJson,
+                        domain
+                    });
+
+                    // Cap stored entries
+                    if (this._interceptedApis.length > this._apiInterceptionMaxEntries) {
+                        this._interceptedApis = this._interceptedApis.slice(-this._apiInterceptionMaxEntries);
+                    }
+
+                    logger.debug(`API intercepted: ${method} ${url} (${contentType}, ${status})`);
+                } catch {
+                    // Best effort — don't crash on listener errors
+                }
+            });
+
+            logger.info('Browser: API interception enabled');
+            return 'API interception enabled. Navigate pages normally — discovered API endpoints will be collected automatically.';
+        } catch (e) {
+            return `Failed to enable API interception: ${e}`;
+        }
+    }
+
+    /**
+     * Get all intercepted API endpoints, optionally filtered by JSON only.
+     */
+    public getInterceptedApis(jsonOnly: boolean = false): InterceptedApi[] {
+        if (jsonOnly) return this._interceptedApis.filter(a => a.isJson);
+        return [...this._interceptedApis];
+    }
+
+    /**
+     * Format intercepted APIs as a readable string for the agent.
+     */
+    public formatInterceptedApis(jsonOnly: boolean = false): string {
+        const apis = this.getInterceptedApis(jsonOnly);
+        if (apis.length === 0) {
+            return 'No API endpoints intercepted yet. Navigate to a page first.';
+        }
+
+        const lines = apis.map((a, i) => {
+            const size = a.responseSize > 0 ? ` ${Math.round(a.responseSize / 1024)}KB` : '';
+            return `${i + 1}. ${a.method} ${a.url} [${a.status}${a.isJson ? ' JSON' : ''} ${a.contentType.split(';')[0]}${size}]`;
+        });
+
+        return `Intercepted API Endpoints (${apis.length}):\n${lines.join('\n')}\n\nTip: Use http_fetch(url, method) to call these endpoints directly — much faster than browser navigation.`;
+    }
+
+    public clearInterceptedApis(): void {
+        this._interceptedApis = [];
+    }
+
+    // ─── CONTENT EXTRACTION ────────────────────────────────────────────────────
+
+    /**
+     * Extract readable text content from the current page (readability-style).
+     * Strips nav, footer, ads, scripts — returns the main body text.
+     * Much lighter than a full semantic snapshot when the agent just needs info.
+     */
+    public async extractContent(): Promise<string> {
+        try {
+            await this.ensureBrowser();
+            if (!this._page) return 'Error: No browser page.';
+
+            const result = await this._page.evaluate(() => {
+                // Remove noise elements
+                const noiseSelectors = [
+                    'script', 'style', 'noscript', 'iframe', 'svg',
+                    'nav', 'footer', 'header',
+                    '[role="navigation"]', '[role="banner"]', '[role="contentinfo"]',
+                    '.cookie-banner', '.cookie-consent', '#cookie-notice',
+                    '.ad', '.ads', '.advertisement', '[class*="advert"]',
+                    '.sidebar', 'aside',
+                    '.popup', '.modal', '.overlay'
+                ];
+
+                // Clone body so we don't destroy the real DOM
+                const clone = document.body.cloneNode(true) as HTMLElement;
+                for (const sel of noiseSelectors) {
+                    clone.querySelectorAll(sel).forEach(el => el.remove());
+                }
+
+                // Try to find the main content area
+                const mainSelectors = ['main', 'article', '[role="main"]', '#content', '#main', '.content', '.post', '.article'];
+                let contentEl: HTMLElement | null = null;
+                for (const sel of mainSelectors) {
+                    contentEl = clone.querySelector(sel);
+                    if (contentEl && contentEl.innerText.trim().length > 200) break;
+                    contentEl = null;
+                }
+
+                const source = contentEl || clone;
+                const title = document.title || '';
+                const url = window.location.href;
+
+                // Extract text with basic structure preservation
+                const lines: string[] = [];
+                const walk = (node: Node, depth: number = 0) => {
+                    if (node.nodeType === Node.TEXT_NODE) {
+                        const text = node.textContent?.trim();
+                        if (text && text.length > 1) lines.push(text);
+                        return;
+                    }
+                    if (node.nodeType !== Node.ELEMENT_NODE) return;
+                    const el = node as HTMLElement;
+                    const tag = el.tagName.toLowerCase();
+
+                    // Add line breaks before block elements
+                    if (['p', 'div', 'li', 'tr', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tag)) {
+                        lines.push('');
+                    }
+                    // Prefix headings
+                    if (/^h[1-6]$/.test(tag)) {
+                        const level = parseInt(tag[1]);
+                        lines.push('#'.repeat(level) + ' ' + el.innerText.trim());
+                        return; // Don't walk children of headings
+                    }
+                    // List items
+                    if (tag === 'li') {
+                        lines.push('- ' + el.innerText.trim());
+                        return;
+                    }
+                    // Links — include href inline
+                    if (tag === 'a') {
+                        const href = (el as HTMLAnchorElement).href;
+                        const text = el.innerText.trim();
+                        if (text && href && !href.startsWith('javascript:')) {
+                            lines.push(`[${text}](${href})`);
+                        }
+                        return;
+                    }
+
+                    for (const child of Array.from(node.childNodes)) {
+                        walk(child, depth + 1);
+                    }
+                };
+
+                walk(source);
+
+                // Clean up: remove empty lines, collapse whitespace
+                const cleaned = lines
+                    .map(l => l.replace(/\s+/g, ' ').trim())
+                    .filter((l, i, arr) => l.length > 0 || (i > 0 && arr[i - 1]?.length > 0))
+                    .join('\n')
+                    .replace(/\n{3,}/g, '\n\n')
+                    .trim();
+
+                return { title, url, text: cleaned, length: cleaned.length };
+            });
+
+            if (!result || result.length < 20) {
+                return 'Error: Could not extract meaningful content from this page.';
+            }
+
+            // Truncate very long extractions
+            const maxLen = 10000;
+            let text = result.text;
+            if (text.length > maxLen) {
+                text = text.substring(0, maxLen) + `\n\n... [truncated, ${result.length} total chars]`;
+            }
+
+            return `PAGE: "${result.title}"\nURL: ${result.url}\nExtracted: ${result.length} chars\n\n${text}`;
+        } catch (e) {
+            return `Failed to extract content: ${e}`;
+        }
+    }
+
+    // ─── DATA EXTRACTION ───────────────────────────────────────────────────────
+
+    /**
+     * Extract structured data from elements matching a CSS selector.
+     * Optionally extract specific attributes. Returns JSON-formatted results.
+     */
+    public async extractData(
+        selector: string,
+        options: { attribute?: string; limit?: number; includeHtml?: boolean } = {}
+    ): Promise<string> {
+        try {
+            await this.ensureBrowser();
+            if (!this._page) return 'Error: No browser page.';
+
+            const { attribute, limit = 50, includeHtml = false } = options;
+
+            const data = await this._page.evaluate(({ sel, attr, lim, html }) => {
+                const elements = Array.from(document.querySelectorAll(sel)).slice(0, lim) as HTMLElement[];
+                return elements.map((el, i) => {
+                    const result: Record<string, any> = { index: i };
+
+                    if (attr) {
+                        result.value = el.getAttribute(attr) || '';
+                    } else {
+                        result.text = el.innerText?.trim().slice(0, 500) || '';
+                        result.tag = el.tagName.toLowerCase();
+
+                        // Auto-extract common useful attributes
+                        const href = el.getAttribute('href');
+                        const src = el.getAttribute('src');
+                        const value = (el as HTMLInputElement).value;
+                        const name = el.getAttribute('name');
+                        const id = el.getAttribute('id');
+                        const cls = el.className?.toString().slice(0, 100);
+
+                        if (href) result.href = href;
+                        if (src) result.src = src;
+                        if (value) result.value = value;
+                        if (name) result.name = name;
+                        if (id) result.id = id;
+                        if (cls) result.class = cls;
+                    }
+
+                    if (html) {
+                        result.outerHtml = el.outerHTML.slice(0, 1000);
+                    }
+
+                    return result;
+                });
+            }, { sel: selector, attr: attribute, lim: limit, html: includeHtml });
+
+            if (!data || data.length === 0) {
+                return `No elements found matching "${selector}".`;
+            }
+
+            return `Extracted ${data.length} element(s) matching "${selector}":\n${JSON.stringify(data, null, 2)}`;
+        } catch (e) {
+            return `Failed to extract data: ${e}`;
+        }
+    }
+
+    // ─── FORM FILL ─────────────────────────────────────────────────────────────
+
+    /**
+     * Batch fill and optionally submit a form.
+     * `fields` is an array of { selector, value, action? } where action defaults to 'fill'.
+     * Reduces a multi-step click→type→click→type flow to a single call.
+     */
+    public async fillForm(
+        fields: Array<{ selector: string; value: string; action?: 'fill' | 'select' | 'check' | 'click' }>,
+        submitSelector?: string
+    ): Promise<string> {
+        try {
+            await this.ensureBrowser();
+            if (!this._page) return 'Error: No browser page.';
+
+            const results: string[] = [];
+            let failCount = 0;
+
+            for (const field of fields) {
+                const { value, action = 'fill' } = field;
+                const resolvedSelector = await this.resolveSelector(field.selector);
+                if (!resolvedSelector) {
+                    results.push(`SKIP ${field.selector}: stale ref`);
+                    failCount++;
+                    continue;
+                }
+
+                try {
+                    switch (action) {
+                        case 'fill':
+                            // Try Playwright fill first, then click+type fallback
+                            try {
+                                await this._page.fill(resolvedSelector, value, { timeout: 3000 });
+                            } catch {
+                                await this._page.click(resolvedSelector, { force: true, timeout: 2000 });
+                                await this._page.keyboard.press('Control+a');
+                                await this._page.keyboard.press('Backspace');
+                                await this._page.keyboard.type(value, { delay: 30 });
+                            }
+                            results.push(`OK fill "${field.selector}" = "${value.slice(0, 30)}${value.length > 30 ? '...' : ''}"`);
+                            break;
+
+                        case 'select':
+                            await this._page.selectOption(resolvedSelector, { label: value }, { timeout: 3000 })
+                                .catch(() => this._page!.selectOption(resolvedSelector, { value }, { timeout: 2000 }));
+                            results.push(`OK select "${field.selector}" = "${value}"`);
+                            break;
+
+                        case 'check':
+                            const isChecked = await this._page.isChecked(resolvedSelector);
+                            const wantChecked = value.toLowerCase() !== 'false' && value !== '0';
+                            if (isChecked !== wantChecked) {
+                                await this._page.click(resolvedSelector, { force: true, timeout: 2000 });
+                            }
+                            results.push(`OK check "${field.selector}" = ${wantChecked}`);
+                            break;
+
+                        case 'click':
+                            await this._page.click(resolvedSelector, { timeout: 3000 });
+                            results.push(`OK click "${field.selector}"`);
+                            break;
+                    }
+                } catch (e) {
+                    results.push(`FAIL ${action} "${field.selector}": ${String(e).slice(0, 100)}`);
+                    failCount++;
+                }
+            }
+
+            // Submit if requested
+            if (submitSelector) {
+                const resolvedSubmit = await this.resolveSelector(submitSelector);
+                if (resolvedSubmit) {
+                    try {
+                        await this._page.click(resolvedSubmit, { timeout: 5000 });
+                        await this.waitAfterInteraction(3000);
+                        const title = await this._page.title().catch(() => '');
+                        const url = this._page.url();
+                        results.push(`OK submit "${submitSelector}" → "${title}" (${url})`);
+                    } catch (e) {
+                        results.push(`FAIL submit "${submitSelector}": ${e}`);
+                        failCount++;
+                    }
+                } else {
+                    results.push(`SKIP submit "${submitSelector}": stale ref`);
+                    failCount++;
+                }
+            }
+
+            const summary = failCount === 0
+                ? `Form filled successfully (${fields.length} fields${submitSelector ? ' + submit' : ''}).`
+                : `Form partially filled (${fields.length - failCount}/${fields.length} fields OK, ${failCount} failed).`;
+
+            return `${summary}\n\nDetails:\n${results.join('\n')}`;
+        } catch (e) {
+            return `Failed to fill form: ${e}`;
+        }
+    }
+
+    public async startTrace(): Promise<string> {
+        this.traceEnabled = true;
+        await this.ensureBrowser();
+        await this.ensureTracing();
+        if (this.traceActive && this.tracePath) {
+            return `Browser trace started. Output: ${this.tracePath}`;
+        }
+        return 'Browser trace start failed or tracing already active.';
+    }
+
+    public async stopTrace(): Promise<string> {
+        await this.stopTracing();
+        if (this.tracePath) {
+            return `Browser trace saved: ${this.tracePath}`;
+        }
+        return 'Browser trace stopped.';
+    }
+
     public async close() {
+        await this.stopTracing();
         if (this.browserEngine === 'lightpanda' && this.browser) {
             // For Lightpanda, just disconnect - don't close the server
             try {

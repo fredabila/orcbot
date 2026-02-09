@@ -67,6 +67,11 @@ export interface AgentConfig {
     browserEngine?: 'playwright' | 'lightpanda';  // Browser engine to use (default: playwright)
     lightpandaEndpoint?: string;                  // Lightpanda CDP endpoint (default: ws://127.0.0.1:9222)
     lightpandaPath?: string;                      // Path to Lightpanda binary
+    browserDebugAlwaysSave?: boolean;             // Save debug artifacts on every navigation/snapshot
+    browserTraceEnabled?: boolean;                // Enable Playwright trace recording
+    browserTraceDir?: string;                     // Optional trace output directory
+    browserTraceScreenshots?: boolean;            // Include screenshots in trace
+    browserTraceSnapshots?: boolean;              // Include DOM snapshots in trace
     tokenUsagePath?: string;
     tokenLogPath?: string;
     // Discord
@@ -417,6 +422,11 @@ export class ConfigManager {
             browserProfileName: 'default',
             browserEngine: 'playwright',
             lightpandaEndpoint: 'ws://127.0.0.1:9222',
+            browserDebugAlwaysSave: false,
+            browserTraceEnabled: false,
+            browserTraceDir: path.join(this.dataHome, 'browser-traces'),
+            browserTraceScreenshots: true,
+            browserTraceSnapshots: true,
             tokenUsagePath: path.join(this.dataHome, 'token-usage-summary.json'),
             tokenLogPath: path.join(this.dataHome, 'token-usage.log'),
             discordAutoReplyEnabled: false,

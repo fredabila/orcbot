@@ -72,6 +72,41 @@ export class ConfigPolicy {
             reason: 'Agents can optimize search provider selection',
             validation: (value: any) => Array.isArray(value)
         }],
+        ['browserDebugAlwaysSave', {
+            key: 'browserDebugAlwaysSave',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Save browser debug artifacts on every snapshot/navigation',
+            reason: 'Non-sensitive diagnostic setting',
+            validation: (value: any) => typeof value === 'boolean'
+        }],
+        ['browserTraceEnabled', {
+            key: 'browserTraceEnabled',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Enable Playwright tracing for browser sessions',
+            reason: 'Non-sensitive diagnostic setting',
+            validation: (value: any) => typeof value === 'boolean'
+        }],
+        ['browserTraceDir', {
+            key: 'browserTraceDir',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Output directory for browser traces',
+            reason: 'Non-sensitive path setting',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['browserTraceScreenshots', {
+            key: 'browserTraceScreenshots',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Include screenshots in trace output',
+            reason: 'Non-sensitive diagnostic setting',
+            validation: (value: any) => typeof value === 'boolean'
+        }],
+        ['browserTraceSnapshots', {
+            key: 'browserTraceSnapshots',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Include DOM snapshots in trace output',
+            reason: 'Non-sensitive diagnostic setting',
+            validation: (value: any) => typeof value === 'boolean'
+        }],
 
         // APPROVAL - Agent can suggest, but needs approval
         ['openaiApiKey', {

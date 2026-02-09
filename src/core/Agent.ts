@@ -40,6 +40,7 @@ export const ELEVATED_SKILLS = new Set([
     'write_file', 'write_to_file', 'create_file', 'delete_file', 'read_file',
     'install_npm_dependency',
     'browser_navigate', 'browser_click', 'browser_type', 'browser_snapshot', 'browser_close',
+    'browser_fill_form', 'browser_extract_data', 'browser_extract_content', 'browser_api_intercept',
     'schedule_task',
     'manage_skills', 'manage_config',
     'generate_image', 'send_image',
@@ -198,7 +199,14 @@ export class Agent {
             this.config.get('browserProfileName'),
             this.tuner, // Pass tuner to browser
             this.config.get('browserEngine'),      // Browser engine: 'playwright' | 'lightpanda'
-            this.config.get('lightpandaEndpoint')  // Lightpanda CDP endpoint
+            this.config.get('lightpandaEndpoint'),  // Lightpanda CDP endpoint
+            {
+                alwaysSaveArtifacts: this.config.get('browserDebugAlwaysSave'),
+                traceEnabled: this.config.get('browserTraceEnabled'),
+                traceDir: this.config.get('browserTraceDir'),
+                traceScreenshots: this.config.get('browserTraceScreenshots'),
+                traceSnapshots: this.config.get('browserTraceSnapshots')
+            }
         );
 
         // Wire vision analyzer so the browser can auto-fallback to screenshot + LLM vision
@@ -2098,7 +2106,6 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             usage: 'browser_press(key)',
             handler: async (args: any) => {
                 const key = args.key || args.name;
-                if (!key) return 'Error: Missing key.';
                 return this.browser.press(key);
             }
         });
@@ -2111,7 +2118,27 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             handler: async () => {
                 const captcha = await this.browser.detectCaptcha();
                 const result = await this.browser.screenshot();
-                return captcha ? `${result}\n[SYSTEM ALERT: ${captcha}. You should use browser_solve_captcha() now.]` : result;
+                return `${captcha ? `[WARNING: ${captcha}]\n` : ''}${result}`;
+            }
+        });
+
+        // Skill: Browser Trace Start
+        this.skills.registerSkill({
+            name: 'browser_trace_start',
+            description: 'Start Playwright tracing for the current browser session.',
+            usage: 'browser_trace_start()',
+            handler: async () => {
+                return this.browser.startTrace();
+            }
+        });
+
+        // Skill: Browser Trace Stop
+        this.skills.registerSkill({
+            name: 'browser_trace_stop',
+            description: 'Stop Playwright tracing and save the trace to disk.',
+            usage: 'browser_trace_stop()',
+            handler: async () => {
+                return this.browser.stopTrace();
             }
         });
 
@@ -2261,7 +2288,14 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                     this.config.get('browserProfileName'),
                     this.tuner,
                     this.config.get('browserEngine'),
-                    this.config.get('lightpandaEndpoint')
+                    this.config.get('lightpandaEndpoint'),
+                    {
+                        alwaysSaveArtifacts: this.config.get('browserDebugAlwaysSave'),
+                        traceEnabled: this.config.get('browserTraceEnabled'),
+                        traceDir: this.config.get('browserTraceDir'),
+                        traceScreenshots: this.config.get('browserTraceScreenshots'),
+                        traceSnapshots: this.config.get('browserTraceSnapshots')
+                    }
                 );
                 
                 // Update skills context
@@ -2277,6 +2311,75 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                     return `Switched to Lightpanda browser engine. CDP endpoint: ${ep}. Make sure Lightpanda is running: ./lightpanda serve --host 127.0.0.1 --port 9222`;
                 }
                 return 'Switched to Playwright browser engine (Chrome/Chromium).';
+            }
+        });
+
+        // Skill: Browser API Intercept — auto-discover XHR/fetch endpoints
+        this.skills.registerSkill({
+            name: 'browser_api_intercept',
+            description: 'Enable API interception to auto-discover XHR/fetch endpoints that pages call. After enabling, navigate normally — discovered endpoints are collected. Use browser_api_list to see them, then call them directly with http_fetch for speed.',
+            usage: 'browser_api_intercept()',
+            handler: async () => {
+                return this.browser.enableApiInterception();
+            }
+        });
+
+        // Skill: Browser API List — show discovered API endpoints
+        this.skills.registerSkill({
+            name: 'browser_api_list',
+            description: 'List all API endpoints discovered by API interception. Shows URL, method, content type, and status. Use json_only=true to filter to JSON APIs only.',
+            usage: 'browser_api_list(json_only?)',
+            handler: async (args: any) => {
+                const jsonOnly = args.json_only === true || args.json_only === 'true' || args.jsonOnly === true;
+                return this.browser.formatInterceptedApis(jsonOnly);
+            }
+        });
+
+        // Skill: Browser Extract Content — readability-style text extraction
+        this.skills.registerSkill({
+            name: 'browser_extract_content',
+            description: 'Extract the readable text content from the current page, stripping navigation, ads, and noise. Returns clean markdown-style text. Much faster than a semantic snapshot when you just need to read page content.',
+            usage: 'browser_extract_content()',
+            handler: async () => {
+                return this.browser.extractContent();
+            }
+        });
+
+        // Skill: Browser Extract Data — CSS-based structured data extraction
+        this.skills.registerSkill({
+            name: 'browser_extract_data',
+            description: 'Extract structured data from elements matching a CSS selector. Returns JSON with text, attributes, and metadata for each matching element. Great for scraping tables, lists, cards, or repeated elements.',
+            usage: 'browser_extract_data(selector, attribute?, limit?)',
+            handler: async (args: any) => {
+                const selector = args.selector || args.css;
+                if (!selector) return 'Error: Missing selector.';
+                return this.browser.extractData(selector, {
+                    attribute: args.attribute || args.attr,
+                    limit: args.limit ? parseInt(args.limit, 10) : 50,
+                    includeHtml: args.include_html === true || args.include_html === 'true'
+                });
+            }
+        });
+
+        // Skill: Browser Fill Form — batch fill + submit
+        this.skills.registerSkill({
+            name: 'browser_fill_form',
+            description: 'Fill multiple form fields and optionally submit in one call. Much more efficient than individual click→type→click→type sequences. Pass fields as an array of {selector, value, action?} objects. Actions: fill (default), select, check, click.',
+            usage: 'browser_fill_form(fields, submit_selector?)',
+            handler: async (args: any) => {
+                let fields = args.fields;
+                if (!fields) return 'Error: Missing fields array.';
+
+                // Parse fields if passed as string
+                if (typeof fields === 'string') {
+                    try { fields = JSON.parse(fields); } catch { return 'Error: fields must be a JSON array of {selector, value, action?} objects.'; }
+                }
+                if (!Array.isArray(fields) || fields.length === 0) {
+                    return 'Error: fields must be a non-empty array of {selector, value, action?} objects.';
+                }
+
+                const submitSelector = args.submit_selector || args.submit || args.submitSelector;
+                return this.browser.fillForm(fields, submitSelector);
             }
         });
 
@@ -4297,6 +4400,8 @@ Respond with ONLY valid JSON:
             'web_search', 'browser_navigate', 'browser_click', 'browser_type',
             'browser_examine_page', 'browser_screenshot', 'browser_back',
             'browser_scroll', 'browser_hover', 'browser_select',
+            'browser_fill_form', 'browser_extract_data', 'browser_extract_content',
+            'browser_api_intercept', 'browser_api_list',
             'computer_screenshot', 'computer_click', 'computer_vision_click',
             'computer_type', 'computer_key', 'computer_mouse_move',
             'computer_drag', 'computer_scroll', 'computer_locate', 'computer_describe',
@@ -6040,6 +6145,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 'web_search', 'browser_navigate', 'browser_click', 'browser_type',
                 'browser_examine_page', 'browser_screenshot', 'browser_back',
                 'browser_scroll', 'browser_hover', 'browser_select',
+                'browser_fill_form', 'browser_extract_data', 'browser_extract_content',
+                'browser_api_intercept', 'browser_api_list',
                 'computer_screenshot', 'computer_click', 'computer_vision_click',
                 'computer_type', 'computer_key', 'computer_locate', 'computer_describe',
                 'extract_article', 'http_fetch', 'download_file', 'read_file', 'write_to_file',
@@ -6101,6 +6208,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 'read_bootstrap_file', // Reading bootstrap files is not progress
                 'browser_examine_page', // Examining without action is low info
                 'browser_screenshot',
+                'browser_trace_start',
+                'browser_trace_stop',
                 'request_supporting_data'
             ];
 

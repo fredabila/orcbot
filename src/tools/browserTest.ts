@@ -28,7 +28,17 @@ async function run() {
     config.get('searxngUrl'),
     config.get('searchProviderOrder'),
     config.get('browserProfileDir'),
-    config.get('browserProfileName')
+    config.get('browserProfileName'),
+    undefined,
+    config.get('browserEngine'),
+    config.get('lightpandaEndpoint'),
+    {
+      alwaysSaveArtifacts: config.get('browserDebugAlwaysSave'),
+      traceEnabled: config.get('browserTraceEnabled'),
+      traceDir: config.get('browserTraceDir'),
+      traceScreenshots: config.get('browserTraceScreenshots'),
+      traceSnapshots: config.get('browserTraceSnapshots')
+    }
   );
 
   try {

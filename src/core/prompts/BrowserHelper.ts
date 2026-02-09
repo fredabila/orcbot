@@ -65,6 +65,12 @@ export class BrowserHelper implements PromptHelper {
     - **Escalation order**: browser_click → computer_vision_click → computer_click(x,y). Only escalate when the simpler tool fails.
     - **Do NOT use stale coordinates**: If the screen has changed since your last screenshot (you clicked something, scrolled, typed, etc.), treat all previous coordinates as invalid. The post-action feedback will tell you the new screen state — use that to plan your next action.
 - **Web Search Strategy**: If 'web_search' fails to yield results after 2 attempts, STOP searching. Instead, change strategy: navigate directly to a suspected URL, use 'extract_article' on a known portal, or inform the user you are unable to find the specific info. Do NOT repeat the same query.
-- **Lightweight HTTP Fetch**: For APIs, JSON endpoints, or simple pages that don't need JavaScript rendering, prefer \`http_fetch(url)\` over \`browser_navigate\`. It's faster, uses no browser resources, and supports GET/POST/PUT/PATCH/DELETE with custom headers and body.`;
+- **Lightweight HTTP Fetch**: For APIs, JSON endpoints, or simple pages that don't need JavaScript rendering, prefer \`http_fetch(url)\` over \`browser_navigate\`. It's faster, uses no browser resources, and supports GET/POST/PUT/PATCH/DELETE with custom headers and body.
+16. **Efficient Interaction Tools** (use these to reduce steps and improve reliability):
+    - \`browser_fill_form(fields, submit_selector?)\` — Fill multiple form fields AND submit in one call. Pass fields as [{selector, value, action?}]. Actions: fill, select, check, click. Much faster than individual click→type sequences.
+    - \`browser_extract_content()\` — Get clean readable text (markdown-style) from the current page. Strips nav/ads/noise. Use when you just need to READ a page, not interact with it.
+    - \`browser_extract_data(selector, attribute?, limit?)\` — Pull structured JSON data from elements matching a CSS selector. Great for tables, lists, cards. Use instead of manual snapshot + click loops.
+    - \`browser_api_intercept()\` then \`browser_api_list(json_only?)\` — Auto-discover XHR/fetch API endpoints as you navigate. Then call them directly via \`http_fetch\` — bypasses all rendering overhead.
+    - **Strategy priority**: API interception → http_fetch > extract_content > semantic snapshot > vision. Pick the lightest tool that gets the job done.`;
     }
 }
