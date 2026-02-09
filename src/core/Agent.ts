@@ -4063,6 +4063,7 @@ Be thorough and academic.`;
                         maxAttempts,
                         onSuccess: (jobId) => {
                             logger.info(`Polling job "${jobId}" succeeded`);
+                            this.pushTask(`Polling job ${jobId} completed: ${description}`, 7);
                             this.memory.saveMemory({
                                 id: `polling-success-${Date.now()}`,
                                 type: 'short',
@@ -6239,6 +6240,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             const skillFailCounts: Record<string, number> = {}; // Track consecutive failures per skill
             const recentSkillNames: string[] = []; // Track skill name sequence for pattern detection
             const recentSkillSignatures: string[] = []; // Track skill name+args for smarter pattern detection
+            let goalsMet = false; // Track if the task genuinely completed (prevents premature 'completed' marking)
             let imageGeneratedInAction = false; // Track if generate_image has been called in this action
             let imageDeliveredInAction = false; // Track if the generated image has been delivered
             let generatedImagePath = ''; // Path of the most recently generated image
@@ -6879,6 +6881,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         // HARD BREAK after scheduling to prevent loops
                         if (toolCall.name === 'schedule_task') {
                             logger.info(`Agent: Task scheduled for action ${action.id}. Terminating sequence.`);
+                            goalsMet = true;
                             forceBreak = true;
                             break;
                         }
@@ -6924,6 +6927,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 content: `[SYSTEM: IMAGE GENERATED AND DELIVERED SUCCESSFULLY. The user has received the image. Task is COMPLETE.]`,
                                 metadata: { actionId: action.id, step: currentStep, skill: 'send_image', delivered: true, imageGenerated: true }
                             });
+                            goalsMet = true;
                             forceBreak = true;
                             break;
                         }
@@ -6959,6 +6963,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         if ((toolCall.name === 'send_file' || toolCall.name === 'send_discord_file') && !resultIndicatesError && imageGeneratedInAction && !imageDeliveredInAction) {
                             imageDeliveredInAction = true;
                             logger.info(`Agent: Generated image delivered via ${toolCall.name} in action ${action.id}. Forcing break.`);
+                            goalsMet = true;
                             forceBreak = true;
                             break;
                         }
@@ -6973,6 +6978,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         
                         if (isChannelSend && isResponseTask && wasSuccessful) {
                             logger.info(`Agent: Channel message sent for response task ${action.id}. Terminating to prevent duplicates.`);
+                            goalsMet = true;
                             forceBreak = true;
                             break;
                         }
@@ -6989,6 +6995,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                                       taskDesc.includes('draw') || taskDesc.includes('generat');
                             if (isFileCentricTask) {
                                 logger.info(`Agent: File delivered for file-centric task ${action.id}. Terminating.`);
+                                goalsMet = true;
                                 forceBreak = true;
                                 break;
                             }
@@ -7026,6 +7033,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                     // NOW check goals_met AFTER tools have been executed
                     if (decision.verification?.goals_met) {
                         logger.info(`Agent: Strategic goal satisfied after execution. Terminating action ${action.id}.`);
+                        goalsMet = true;
                         break;
                     }
 
@@ -7033,6 +7041,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                     // sent a message, the task is done — the agent is just looping trying to send dupes.
                     if (totalSendToolsInStep > 0 && toolsBlockedByCooldown >= totalSendToolsInStep && messagesSent > 0) {
                         logger.info(`Agent: All ${totalSendToolsInStep} send tool(s) blocked by cooldown/dupe guards and message already delivered. Completing action ${action.id}.`);
+                        goalsMet = true;
                         break;
                     }
 
@@ -7098,6 +7107,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         }
                     }
                     logger.info(`Agent: Action ${action.id} reached self-termination. Reasoning: ${decision.reasoning || 'No further tools needed.'}`);
+                    goalsMet = true;
                     break;
                 }
             }
@@ -7213,11 +7223,13 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             // If we already sent the wrap-up message, no need for more bonus steps
                             if (bonusMessageSent) {
                                 logger.info(`Agent: Final message sent in bonus steps. Done.`);
+                                goalsMet = true;
                                 break;
                             }
 
                             if (bonusDecision.verification?.goals_met) {
                                 logger.info(`Agent: Goals met during bonus steps. Done.`);
+                                goalsMet = true;
                                 break;
                             }
                         } catch (e) {
@@ -7245,15 +7257,22 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
             // but didn't actually resume it (empty promise detection)
             await this.detectAndResumeIncompleteWork(action, sentMessagesInAction, currentStep);
 
+            // Determine final status based on whether goals were actually achieved
+            const actionStatus = goalsMet ? 'completed' : 'failed';
+
+            if (!goalsMet) {
+                logger.warn(`Agent: Action ${action.id} terminated without achieving goals (guard rail or exhaustion). Marked as failed.`);
+            }
+
             // Record Final Response/Reasoning in Memory upon completion
             this.memory.saveMemory({
                 id: `${action.id}-conclusion`,
                 type: 'episodic',
-                content: `Task Finished: ${action.payload.description}. Current status marked as completed.`,
-                metadata: { actionId: action.id, steps: currentStep }
+                content: `Task ${goalsMet ? 'Finished' : 'Terminated without completion'}: ${action.payload.description}. Status: ${actionStatus}.`,
+                metadata: { actionId: action.id, steps: currentStep, goalsMet }
             });
 
-            this.actionQueue.updateStatus(action.id, 'completed');
+            this.actionQueue.updateStatus(action.id, actionStatus);
 
             // CLEANUP: Remove step-scoped memories for this completed action.
             // These are ground-truth during execution but become cross-action pollution after.
