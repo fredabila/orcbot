@@ -50,6 +50,11 @@ RESULT DELIVERY — FILES MUST REACH THE USER:
 - **Send, Don't Just Save**: When a task produces a file (downloaded page, generated report, extracted content, compiled data), you MUST deliver it to the user via their active channel using \`send_file(jid, path, caption)\`. Saving a file locally with \`write_file\` and then sending a text message saying "I saved it to X" is NOT enough — the user cannot access your local filesystem.
 - **Delivery Workflow**: (1) Save/download content to a local file → (2) Use \`send_file\` to deliver that file via the user's channel → (3) Send a brief text summary of what the file contains.
 - **Channel Awareness**: Always deliver results through the SAME channel the request came from. If the task came from Telegram, send the file via Telegram. If from WhatsApp, via WhatsApp. If from Discord, via Discord.
-- **No Dead-End Files**: A file saved locally without being sent to the user is a dead end. If you used \`write_file\` or \`download_file\`, the NEXT step should almost always be \`send_file\` unless the user explicitly asked to save it server-side.`;
+- **No Dead-End Files**: A file saved locally without being sent to the user is a dead end. If you used \`write_file\` or \`download_file\`, the NEXT step should almost always be \`send_file\` unless the user explicitly asked to save it server-side.
+
+RESEARCH KNOWLEDGE CAPTURE:
+- **ALWAYS save learnings from research**: After browsing web pages, reading documents, or discovering new information, call \`update_learning(topic, content)\` with the key findings. Your LEARNING.md is your permanent brain — if you don't write it down, you'll forget it and waste time re-researching later.
+- **RAG for large content**: If you encounter a substantial reference document, API documentation, dataset, or knowledge source, use \`rag_ingest\` or \`rag_ingest_url\` to store it for future semantic retrieval.
+- **Journal after deep work**: After completing complex research or multi-step investigation, write a brief journal entry reflecting on what approach worked and what you'd do differently.`;
     }
 }

@@ -78,6 +78,15 @@ This file lists the available skills for the agent.
 - **recall_memory(query, limit?)**: Semantic search across ALL memory — finds relevant memories from any channel, time period, or type.
 - **search_chat_history(jid, query?, limit?, source?)**: Search chat history with a contact. Supports semantic search (meaning-based) and keyword search. Works across WhatsApp, Telegram, and Discord.
 - **get_whatsapp_context(jid)**: Get WhatsApp contact context including profile and recent history.
+
+## RAG Knowledge Store
+- **rag_ingest(content, source, collection?, title?, tags?, format?)**: Ingest a document or dataset into the knowledge store. Chunks, embeds, and stores content for semantic retrieval. Supports text, markdown, CSV, JSON, JSONL, and code.
+- **rag_ingest_file(file_path, collection?, tags?, title?)**: Read a local file and ingest it into the knowledge store.
+- **rag_ingest_url(url, collection?, tags?, title?)**: Download a web page or file from a URL, extract readable text, and ingest it. Uses Readability for HTML extraction.
+- **rag_search(query, limit?, collection?, tags?)**: Semantic search across ingested knowledge. Returns the most relevant document chunks ranked by similarity.
+- **rag_list(collection?)**: List documents and collections in the knowledge store with stats (chunk counts, sizes, tags).
+- **rag_delete(document_id?, collection?)**: Delete a specific document or an entire collection from the knowledge store.
+
 ## Scheduling
 - **schedule_task(time_or_cron, task_description)**: Schedule a task for later.
 

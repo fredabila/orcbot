@@ -14,6 +14,7 @@ import { ContextCompactor } from './ContextCompactor';
 import { ResponseValidator } from './ResponseValidator';
 import { BootstrapManager } from './BootstrapManager';
 import { PromptRouter, PromptHelperContext } from './prompts';
+import { KnowledgeStore } from '../memory/KnowledgeStore';
 
 export class DecisionEngine {
     private agentIdentity: string = '';
@@ -25,6 +26,7 @@ export class DecisionEngine {
     private maxRetries: number;
     private enableAutoCompaction: boolean;
     private bootstrap?: BootstrapManager;
+    private knowledgeStore?: KnowledgeStore;
 
     constructor(
         private memory: MemoryManager,
@@ -44,6 +46,13 @@ export class DecisionEngine {
         this.enableAutoCompaction = this.config?.get('decisionEngineAutoCompaction') !== false;
         this.promptRouter = new PromptRouter();
         this.promptRouter.setLLM(this.llm);
+    }
+
+    /**
+     * Set the KnowledgeStore for RAG auto-retrieval during decision making.
+     */
+    setKnowledgeStore(store: KnowledgeStore): void {
+        this.knowledgeStore = store;
     }
 
     /**
@@ -798,6 +807,20 @@ Respond conversationally. If the user asks you to do something that requires ele
         const safeOtherContext = isAdmin ? otherContextString : '';
         const safeContactProfile = isAdmin ? contactProfile : undefined;
 
+        // RAG auto-retrieval — fetch relevant knowledge store chunks for this task
+        let ragContext = '';
+        if (this.knowledgeStore) {
+            try {
+                const ragResult = await this.knowledgeStore.retrieveForTask(taskDescription, 5);
+                if (ragResult) {
+                    ragContext = ragResult;
+                    logger.info(`DecisionEngine: RAG retrieved ${ragResult.split('\n---').length} knowledge chunks for task`);
+                }
+            } catch (e: any) {
+                logger.warn(`DecisionEngine: RAG retrieval failed: ${e.message}`);
+            }
+        }
+
         const coreInstructions = await this.buildHelperPrompt(
             availableSkills,
             this.agentIdentity,
@@ -848,6 +871,8 @@ ${threadContextString ? `THREAD CONTEXT (Same Chat):\n${threadContextString}` : 
 ${safeEpisodic ? `EPISODIC MEMORY (Task-Relevant Summaries — past actions, outcomes, and learnings):\n${safeEpisodic}` : ''}
 
 ${safeSemanticRecall ? `LONG-TERM RECALL (Semantically relevant memories from all channels and time periods — your deep memory):\n${safeSemanticRecall}` : ''}
+
+${ragContext ? `RETRIEVED KNOWLEDGE (RAG — ingested documents, datasets, and external sources relevant to this task):\n${ragContext}` : ''}
 
 ⚠️ STEP HISTORY FOR THIS ACTION (Action ${actionId}) — THIS IS YOUR GROUND TRUTH:
 (If a tool SUCCEEDED here, that result is REAL and CONFIRMED. If a tool FAILED, DO NOT repeat the same call.)

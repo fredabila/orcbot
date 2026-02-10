@@ -17,6 +17,7 @@ import { eventBus } from '../core/EventBus';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { renderMarkdown, hasMarkdown } from '../utils/MarkdownRenderer';
 
 export class WhatsAppChannel implements IChannel {
     public name = 'whatsapp';
@@ -365,8 +366,11 @@ export class WhatsAppChannel implements IChannel {
             // If it's a group, ensure it ends with @g.us
             // (Basic check, user should usually provide correct ID for groups)
 
+            // Convert markdown to WhatsApp-native formatting (*bold*, _italic_, ~strike~, ```code```)
+            const formatted = hasMarkdown(message) ? renderMarkdown(message, 'whatsapp') : message;
+
             // Add agent prefix to distinguish agent messages from user self-chat commands
-            const prefixedMessage = `${this.AGENT_MESSAGE_PREFIX}${message}`;
+            const prefixedMessage = `${this.AGENT_MESSAGE_PREFIX}${formatted}`;
             await this.sock.sendMessage(jid, { text: prefixedMessage });
             logger.info(`WhatsAppChannel: Sent message to ${to} (as ${jid})`);
         } catch (error) {

@@ -877,7 +877,7 @@ export class AgentOrchestrator extends EventEmitter {
     }
 
     /**
-     * Get orchestration summary
+     * Get orchestration summary (enhanced with token usage and knowledge store info)
      */
     public getSummary(): string {
         const agents = this.getAgents();
@@ -898,7 +898,7 @@ export class AgentOrchestrator extends EventEmitter {
             failed: tasks.filter(t => t.status === 'failed').length
         };
 
-        return [
+        const lines = [
             `=== Orchestrator Summary ===`,
             `Agents: ${agents.length} total`,
             `  - Idle: ${agentsByStatus.idle}`,
@@ -912,7 +912,53 @@ export class AgentOrchestrator extends EventEmitter {
             `  - In Progress: ${tasksByStatus.inProgress}`,
             `  - Completed: ${tasksByStatus.completed}`,
             `  - Failed: ${tasksByStatus.failed}`
-        ].join('\n');
+        ];
+
+        // Add per-worker token usage if available
+        const workerTokens = this.getAggregateWorkerTokenUsage();
+        if (workerTokens.length > 0) {
+            lines.push('', `Worker Token Usage:`);
+            for (const wt of workerTokens) {
+                lines.push(`  - ${wt.name} (${wt.agentId}): ${wt.totalTokens.toLocaleString()} tokens (${wt.realTokens.toLocaleString()} real, ${wt.estimatedTokens.toLocaleString()} estimated)`);
+            }
+        }
+
+        return lines.join('\n');
+    }
+
+    /**
+     * Aggregate token usage from all worker directories
+     */
+    public getAggregateWorkerTokenUsage(): Array<{
+        agentId: string;
+        name: string;
+        totalTokens: number;
+        realTokens: number;
+        estimatedTokens: number;
+    }> {
+        const results: Array<{ agentId: string; name: string; totalTokens: number; realTokens: number; estimatedTokens: number }> = [];
+
+        for (const agent of this.agents.values()) {
+            if (agent.id === this.primaryAgentId || agent.status === 'terminated') continue;
+
+            const workerDir = path.dirname(agent.memoryPath);
+            const tokenSummaryPath = path.join(workerDir, 'token-usage-summary.json');
+
+            if (fs.existsSync(tokenSummaryPath)) {
+                try {
+                    const data = JSON.parse(fs.readFileSync(tokenSummaryPath, 'utf-8'));
+                    results.push({
+                        agentId: agent.id,
+                        name: agent.name,
+                        totalTokens: data.totals?.totalTokens || 0,
+                        realTokens: data.realTotals?.totalTokens || 0,
+                        estimatedTokens: data.estimatedTotals?.totalTokens || 0
+                    });
+                } catch { /* skip malformed files */ }
+            }
+        }
+
+        return results;
     }
 
     /**

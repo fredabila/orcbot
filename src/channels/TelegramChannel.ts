@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { logger } from '../utils/logger';
+import { renderMarkdown, hasMarkdown } from '../utils/MarkdownRenderer';
 import { Agent } from '../core/Agent';
 import { eventBus } from '../core/EventBus';
 
@@ -188,16 +189,31 @@ export class TelegramChannel implements IChannel {
 
     public async sendMessage(to: string, message: string): Promise<void> {
         try {
+            // Convert markdown to Telegram HTML if the message contains formatting
+            const useHtml = hasMarkdown(message);
+            const formatted = useHtml ? renderMarkdown(message, 'telegram_html') : message;
+            const sendOpts = useHtml ? { parse_mode: 'HTML' as const } : {};
+
             // Telegram has a 4096 character limit. We'll chunk the message into parts.
             const MAX_LENGTH = 4000;
-            if (message.length <= MAX_LENGTH) {
-                await this.bot.telegram.sendMessage(to, message);
-                logger.info(`TelegramChannel: Sent message to ${to}`);
+            if (formatted.length <= MAX_LENGTH) {
+                try {
+                    await this.bot.telegram.sendMessage(to, formatted, sendOpts);
+                } catch (parseErr: any) {
+                    // If HTML parsing fails, fall back to plain text
+                    if (useHtml && parseErr?.response?.description?.includes('parse')) {
+                        logger.warn(`TelegramChannel: HTML parse failed, falling back to plain text`);
+                        await this.bot.telegram.sendMessage(to, renderMarkdown(message, 'plain'));
+                    } else {
+                        throw parseErr;
+                    }
+                }
+                logger.info(`TelegramChannel: Sent message to ${to}${useHtml ? ' (HTML)' : ''}`);
             } else {
-                logger.warn(`TelegramChannel: Message too long (${message.length} chars). Chunking...`);
+                logger.warn(`TelegramChannel: Message too long (${formatted.length} chars). Chunking...`);
                 // Split by length, but ideally we'd split by newlines if possible
                 const chunks: string[] = [];
-                let current = message;
+                let current = formatted;
                 while (current.length > 0) {
                     if (current.length <= MAX_LENGTH) {
                         chunks.push(current);
@@ -214,11 +230,20 @@ export class TelegramChannel implements IChannel {
                 }
 
                 for (let i = 0; i < chunks.length; i++) {
-                    await this.bot.telegram.sendMessage(to, `[Part ${i + 1}/${chunks.length}]\n${chunks[i]}`);
+                    const chunkText = `[Part ${i + 1}/${chunks.length}]\n${chunks[i]}`;
+                    try {
+                        await this.bot.telegram.sendMessage(to, chunkText, sendOpts);
+                    } catch (parseErr: any) {
+                        if (useHtml && parseErr?.response?.description?.includes('parse')) {
+                            await this.bot.telegram.sendMessage(to, renderMarkdown(chunkText, 'plain'));
+                        } else {
+                            throw parseErr;
+                        }
+                    }
                     // Small delay to prevent rate limiting
                     await new Promise(r => setTimeout(r, 500));
                 }
-                logger.info(`TelegramChannel: Sent ${chunks.length} chunks to ${to}`);
+                logger.info(`TelegramChannel: Sent ${chunks.length} chunks to ${to}${useHtml ? ' (HTML)' : ''}`);
             }
         } catch (error) {
             logger.error(`TelegramChannel: Error sending message to ${to}: ${error}`);
@@ -242,14 +267,19 @@ export class TelegramChannel implements IChannel {
 
             const ext = filePath.split('.').pop()?.toLowerCase();
 
+            // Format captions with HTML if they contain markdown
+            const useHtml = caption ? hasMarkdown(caption) : false;
+            const formattedCaption = useHtml && caption ? renderMarkdown(caption, 'telegram_html') : caption;
+            const captionOpts = useHtml ? { caption: formattedCaption, parse_mode: 'HTML' as const } : { caption: formattedCaption };
+
             if (['png', 'jpg', 'jpeg', 'webp'].includes(ext || '')) {
-                await this.bot.telegram.sendPhoto(to, { source: filePath }, { caption });
+                await this.bot.telegram.sendPhoto(to, { source: filePath }, captionOpts);
             } else if (['mp4', 'mov'].includes(ext || '')) {
-                await this.bot.telegram.sendVideo(to, { source: filePath }, { caption });
+                await this.bot.telegram.sendVideo(to, { source: filePath }, captionOpts);
             } else if (['mp3', 'm4a', 'ogg'].includes(ext || '')) {
-                await this.bot.telegram.sendAudio(to, { source: filePath }, { caption });
+                await this.bot.telegram.sendAudio(to, { source: filePath }, captionOpts);
             } else {
-                await this.bot.telegram.sendDocument(to, { source: filePath }, { caption });
+                await this.bot.telegram.sendDocument(to, { source: filePath }, captionOpts);
             }
 
             logger.info(`TelegramChannel: Sent file ${filePath} to ${to}`);

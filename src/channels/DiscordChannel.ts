@@ -1,6 +1,7 @@
 import { Client, GatewayIntentBits, Message, Partials, AttachmentBuilder, TextBasedChannel } from 'discord.js';
 import { IChannel } from './IChannel';
 import { logger } from '../utils/logger';
+import { renderMarkdown, hasMarkdown } from '../utils/MarkdownRenderer';
 import fs from 'fs';
 import path from 'path';
 
@@ -252,13 +253,16 @@ export class DiscordChannel implements IChannel {
                 throw new Error(`Channel ${to} does not support sending messages`);
             }
 
+            // Convert markdown for Discord (headings → bold, clean up images)
+            const formatted = hasMarkdown(message) ? renderMarkdown(message, 'discord') : message;
+
             // Discord has a 2000 character limit, split if necessary
             const maxLength = 2000;
-            if (message.length <= maxLength) {
-                await textChannel.send(message);
+            if (formatted.length <= maxLength) {
+                await textChannel.send(formatted);
             } else {
                 // Split into chunks
-                const chunks = this.splitMessage(message, maxLength);
+                const chunks = this.splitMessage(formatted, maxLength);
                 for (const chunk of chunks) {
                     await textChannel.send(chunk);
                     // Small delay to avoid rate limiting

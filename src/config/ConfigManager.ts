@@ -107,6 +107,15 @@ export interface AgentConfig {
     imageGenModel?: string;                       // Model name (e.g. 'dall-e-3', 'gpt-image-1', 'gemini-2.5-flash-image')
     imageGenSize?: string;                        // Default size (e.g. '1024x1024')
     imageGenQuality?: string;                     // Default quality (e.g. 'medium', 'high', 'hd')
+    // Agentic User (autonomous HITL proxy)
+    agenticUserEnabled?: boolean;              // Master toggle (default false)
+    agenticUserResponseDelay?: number;         // Seconds to wait before intervening (default 120)
+    agenticUserConfidenceThreshold?: number;   // Min confidence 0-100 to auto-intervene (default 70)
+    agenticUserProactiveGuidance?: boolean;    // Enable proactive stuck-detection guidance (default true)
+    agenticUserProactiveStepThreshold?: number; // Steps before proactive guidance (default 8)
+    agenticUserCheckInterval?: number;         // Check interval in seconds (default 30)
+    agenticUserMaxInterventions?: number;      // Max interventions per action (default 3)
+    agenticUserNotifyUser?: boolean;              // Send notification to user on intervention (default true)
     // User Permissions
     adminUsers?: {
         telegram?: string[];   // Telegram numeric user IDs (e.g., ["123456789"])
@@ -253,7 +262,63 @@ export class ConfigManager {
             }
         });
 
-        return this.normalizePlatformPaths(mergedConfig, silent);
+        return this.repairWorkerCorruption(this.normalizePlatformPaths(mergedConfig, silent), silent);
+    }
+
+    /**
+     * Detect and repair config corruption caused by worker syncConfigAcrossPaths bug.
+     * Workers previously wrote their isolated paths (orchestrator/instances/agent-xxx)
+     * into the shared global config.  This detects those paths and resets them to defaults.
+     */
+    private repairWorkerCorruption(config: AgentConfig, silent: boolean): AgentConfig {
+        // Only repair if this is NOT a worker process (workers legitimately have instance paths)
+        if (process.env.ORCBOT_DATA_DIR?.includes('orchestrator')) return config;
+
+        const pathKeys: Array<keyof AgentConfig> = [
+            'memoryPath', 'skillsPath', 'userProfilePath', 'agentIdentityPath',
+            'actionQueuePath', 'journalPath', 'learningPath', 'tokenUsagePath', 'tokenLogPath'
+        ];
+        const defaults = this.getStringDefaultConfig();
+        let repaired = false;
+
+        for (const key of pathKeys) {
+            const value = config[key];
+            if (typeof value === 'string' && value.includes('orchestrator') && value.includes('instances')) {
+                if (!silent) logger.warn(`ConfigManager: Repairing worker-corrupted path for ${String(key)}: ${value} → default`);
+                (config as any)[key] = (defaults as any)[key];
+                repaired = true;
+            }
+        }
+
+        // Also reset agentName if it looks like a worker name
+        if (config.agentName && /^(Researcher|Worker|Agent)_\d+$/i.test(config.agentName)) {
+            if (!silent) logger.warn(`ConfigManager: Repairing worker-corrupted agentName: ${config.agentName} → default`);
+            config.agentName = defaults.agentName;
+            repaired = true;
+        }
+
+        // If telegramToken or discordToken are explicitly set to empty string (worker blanked them),
+        // delete them so env var fallback can work
+        if (config.telegramToken === '') {
+            delete (config as any).telegramToken;
+            repaired = true;
+        }
+        if (config.discordToken === '') {
+            delete (config as any).discordToken;
+            repaired = true;
+        }
+
+        if (repaired) {
+            if (!silent) logger.info('ConfigManager: Worker-corruption repair complete. Saving corrected config.');
+            // Save the repaired config (will also sync safely now)
+            try {
+                fs.writeFileSync(this.configPath, yaml.stringify(config));
+            } catch (e) {
+                logger.error(`ConfigManager: Failed to save repaired config: ${e}`);
+            }
+        }
+
+        return config;
     }
 
     /**
@@ -452,7 +517,16 @@ export class ConfigManager {
             imageGenProvider: undefined,
             imageGenModel: undefined,
             imageGenSize: '1024x1024',
-            imageGenQuality: 'medium'
+            imageGenQuality: 'medium',
+            // Agentic User defaults
+            agenticUserEnabled: false,
+            agenticUserResponseDelay: 120,
+            agenticUserConfidenceThreshold: 70,
+            agenticUserProactiveGuidance: true,
+            agenticUserProactiveStepThreshold: 8,
+            agenticUserCheckInterval: 30,
+            agenticUserMaxInterventions: 3,
+            agenticUserNotifyUser: true
         };
     }
 
@@ -488,10 +562,47 @@ export class ConfigManager {
         const targets = [globalPath, homePath, localPath]
             .filter(p => p !== this.configPath);
 
+        // Safety guard: never propagate worker-specific config to shared locations.
+        // Worker configs have isolated paths (e.g. orchestrator/instances/agent-xxx/)
+        // and empty channel tokens.  Syncing these would corrupt the parent config.
+        const isWorkerConfig = this.configPath.includes('orchestrator')
+            && this.configPath.includes('instances');
+        if (isWorkerConfig) {
+            return; // Workers must NEVER overwrite shared config files
+        }
+
         for (const target of targets) {
             if (!fs.existsSync(target) && target !== globalPath) continue;
             try {
-                fs.writeFileSync(target, yaml.stringify(this.config));
+                // If a target file already exists, merge rather than overwrite:
+                // preserve any keys in the target that are set but empty/missing in
+                // the current config (protects tokens set in different config locations).
+                if (fs.existsSync(target)) {
+                    let existing: any = {};
+                    try { existing = yaml.parse(fs.readFileSync(target, 'utf-8')) || {}; } catch { /* proceed with full overwrite */ }
+
+                    // Critical keys that should never be blanked by a sync
+                    const protectedKeys = [
+                        'telegramToken', 'discordToken', 'openaiApiKey', 'googleApiKey',
+                        'nvidiaApiKey', 'anthropicApiKey', 'openrouterApiKey', 'serperApiKey',
+                        'captchaApiKey', 'braveSearchApiKey', 'bedrockAccessKeyId',
+                        'bedrockSecretAccessKey', 'bedrockSessionToken'
+                    ];
+
+                    const merged = { ...this.config };
+                    for (const key of protectedKeys) {
+                        const current = (merged as any)[key];
+                        const targetVal = (existing as any)[key];
+                        // If we'd blank out a key that exists in the target, keep the target's value
+                        if ((!current || String(current).trim() === '') && targetVal && String(targetVal).trim() !== '') {
+                            (merged as any)[key] = targetVal;
+                        }
+                    }
+
+                    fs.writeFileSync(target, yaml.stringify(merged));
+                } else {
+                    fs.writeFileSync(target, yaml.stringify(this.config));
+                }
                 logger.info(`Configuration synced to ${target}`);
             } catch (error) {
                 logger.warn(`Failed to sync config to ${target}: ${error}`);

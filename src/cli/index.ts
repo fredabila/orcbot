@@ -733,8 +733,23 @@ program
 program
     .command('tokens')
     .description('Show token usage summary')
-    .action(() => {
-        showTokenUsage();
+    .argument('[action]', 'Action: recount (rebuild summary from raw log)')
+    .action((action) => {
+        if (action === 'recount') {
+            const tracker = new TokenTracker(
+                agent.config.get('tokenUsagePath'),
+                agent.config.get('tokenLogPath')
+            );
+            console.log(yellow('  Rebuilding token summary from raw log file...'));
+            const summary = tracker.recountFromLog();
+            const accuracy = tracker.getAccuracyReport();
+            console.log(green('  ✓ Summary rebuilt successfully.'));
+            console.log(dim(`    Total: ${summary.totals.totalTokens.toLocaleString()} tokens (${accuracy.realPct}% API-reported, ${accuracy.estimatedPct}% estimated)`));
+            console.log(dim(`    Calls: ${accuracy.totalCalls} (${accuracy.realCalls} real, ${accuracy.estimatedCalls} estimated)`));
+            console.log('');
+        } else {
+            showTokenUsage();
+        }
     });
 
 program
@@ -1209,10 +1224,14 @@ async function showMainMenu() {
         hasDiscord ? `${c.brightMagenta}DC${c.reset}` : `${c.gray}DC${c.reset}`,
     ].join(dim(' │ '));
 
+    const auActive = agent.agenticUser?.isActive();
+    const auEnabled = !!agent.config.get('agenticUserEnabled');
+
     box([
         `${dim('Agent')}    ${bold(agentName)}${sudoMode ? `  ${c.bgRed}${c.white}${c.bold} SUDO ${c.reset}` : ''}${agent.config.get('overrideMode') ? `  ${c.bgRed}${c.white}${c.bold} OVERRIDE ${c.reset}` : ''}`,
         `${dim('Model')}    ${brightCyan(model)} ${dim('via')} ${cyan(provider)}`,
         `${dim('Channels')} ${channelDots}  ${dim(`(${channelCount}/3 active)`)}`,
+        `${dim('HITL')}     ${auActive ? green(bold('● Active')) : auEnabled ? yellow('● Standby') : gray('○ Off')}`,
         '',
         `${dim('Queue')}    ${pendingCount > 0 ? yellow(bold(String(pendingCount))) + dim(' active') : green('idle')}${queueLen > pendingCount ? dim(` │ ${queueLen - pendingCount} completed`) : ''}`,
         `${dim('Memory')}   ${cyan(String(shortMem))} ${dim('short-term entries')} ${progressBar(shortMem, 100, 12)}`,
@@ -1238,6 +1257,7 @@ async function showMainMenu() {
                 { name: `${c.brightGreen}🌐${c.reset} Web Gateway`, value: 'gateway' },
                 { name: `${c.brightMagenta}🪪${c.reset}  Worker Profile`, value: 'worker' },
                 { name: `${c.brightCyan}🐙${c.reset} Multi-Agent Orchestration`, value: 'orchestration' },
+                { name: `${c.brightYellow || c.yellow}🤖${c.reset} Agentic User (HITL Proxy)`, value: 'agentic_user' },
                 { name: `${c.red}🔒${c.reset} Security & Permissions`, value: 'security' },
                 { name: `${c.green}📈${c.reset} Token Usage`, value: 'tokens' },
                 new inquirer.Separator(cyan(' ─── System ') + gray('─'.repeat(27))),
@@ -1282,6 +1302,9 @@ async function showMainMenu() {
             break;
         case 'orchestration':
             await showOrchestrationMenu();
+            break;
+        case 'agentic_user':
+            await showAgenticUserMenu();
             break;
         case 'security':
             await showSecurityMenu();
@@ -2557,6 +2580,188 @@ async function showWorkerWebsitesMenu() {
     return showWorkerWebsitesMenu();
 }
 
+async function showAgenticUserMenu() {
+    console.clear();
+    banner();
+    sectionHeader('🤖', 'Agentic User (HITL Proxy)');
+
+    const au = agent.agenticUser;
+    const settings = au.getSettings();
+    const stats = au.getStats();
+    const isActive = au.isActive();
+
+    console.log('');
+    const enabledBadge = settings.enabled
+        ? (isActive ? green(bold('● ACTIVE')) : yellow(bold('● ENABLED (not running)')))
+        : gray(bold('○ DISABLED'));
+    const proactiveBadge = settings.proactiveGuidance ? green('ON') : gray('OFF');
+
+    const notifyUser = agent.config.get('agenticUserNotifyUser') !== false;
+    const notifyBadge = notifyUser ? green('ON') : gray('OFF');
+
+    const auLines = [
+        `${dim('Status')}         ${enabledBadge}`,
+        `${dim('Response Delay')} ${cyan(bold(String(settings.responseDelay)))}${dim('s')}  ${dim('(wait before intervening)')}`,
+        `${dim('Confidence')}     ${cyan(bold(String(settings.confidenceThreshold)))}${dim('%')}  ${dim('(min to auto-intervene)')}`,
+        `${dim('Proactive')}      ${proactiveBadge}  ${dim(`after ${settings.proactiveStepThreshold} steps`)}`,
+        `${dim('Notify User')}    ${notifyBadge}  ${dim('(send updates to channel)')}`,
+        `${dim('Max per Action')} ${cyan(bold(String(settings.maxInterventionsPerAction)))}`,
+        `${dim('Check Interval')} ${cyan(bold(String(settings.checkIntervalSeconds)))}${dim('s')}`,
+        '',
+        `${dim('Interventions')}  ${cyan(bold(String(stats.totalInterventions)))} total  ${dim('│')}  ${green(bold(String(stats.appliedInterventions)))} applied`,
+        `${dim('Active Timers')}  ${cyan(bold(String(stats.activeTimers)))}`,
+    ];
+    box(auLines, { title: '🤖 AGENTIC USER STATUS', width: 56, color: isActive ? c.green : c.gray });
+    console.log('');
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: cyan('Agentic User Options:'),
+            choices: [
+                new inquirer.Separator(gradient('  ─── Control ──────────────────────', [c.cyan, c.gray])),
+                { name: settings.enabled
+                    ? `  ${red('○')} ${bold('Disable')} Agentic User`
+                    : `  ${green('●')} ${bold('Enable')} Agentic User`, value: 'toggle' },
+                new inquirer.Separator(gradient('  ─── Settings ─────────────────────', [c.yellow, c.gray])),
+                { name: `  ⏱️  Response Delay ${dim(`(${settings.responseDelay}s)`)}`, value: 'response_delay' },
+                { name: `  📊 Confidence Threshold ${dim(`(${settings.confidenceThreshold}%)`)}`, value: 'confidence' },
+                { name: `  🔄 Proactive Guidance ${dim(`(${proactiveBadge})`)}`, value: 'proactive' },
+                { name: `  📈 Proactive Step Threshold ${dim(`(${settings.proactiveStepThreshold})`)}`, value: 'step_threshold' },
+                { name: `  🔁 Check Interval ${dim(`(${settings.checkIntervalSeconds}s)`)}`, value: 'check_interval' },
+                { name: `  🚫 Max Interventions/Action ${dim(`(${settings.maxInterventionsPerAction})`)}`, value: 'max_interventions' },
+                { name: `  🔔 Notify User on Intervention ${dim(`(${notifyBadge})`)}`, value: 'notify_user' },
+                new inquirer.Separator(gradient('  ─── History ──────────────────────', [c.magenta, c.gray])),
+                { name: `  📜 View Intervention Log ${dim(`(${stats.totalInterventions} entries)`)}`, value: 'view_log' },
+                { name: `  🗑️  Clear History`, value: 'clear_history' },
+                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.gray, c.gray])),
+                { name: dim('  ← Back'), value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showMainMenu();
+
+    switch (action) {
+        case 'toggle': {
+            const newVal = !settings.enabled;
+            agent.config.set('agenticUserEnabled', newVal);
+            au.reloadSettings();
+            console.log(newVal
+                ? `\n${green('●')} Agentic User ${green(bold('enabled'))}. It will monitor actions and intervene when confident.`
+                : `\n${gray('○')} Agentic User ${gray(bold('disabled'))}. No autonomous interventions will occur.`);
+            break;
+        }
+        case 'response_delay': {
+            const { val } = await inquirer.prompt([
+                { type: 'input', name: 'val', message: `Response delay in seconds (current: ${settings.responseDelay}):`, validate: (v: string) => !isNaN(Number(v)) && Number(v) >= 0 ? true : 'Enter a non-negative number' }
+            ]);
+            if (val !== undefined && val !== '') {
+                agent.config.set('agenticUserResponseDelay', Number(val));
+                au.reloadSettings();
+                console.log(`\n⏱️  Response delay set to ${bold(val)}s`);
+            }
+            break;
+        }
+        case 'confidence': {
+            const { val } = await inquirer.prompt([
+                { type: 'input', name: 'val', message: `Confidence threshold 0-100 (current: ${settings.confidenceThreshold}):`, validate: (v: string) => { const n = Number(v); return !isNaN(n) && n >= 0 && n <= 100 ? true : 'Enter a number 0-100'; } }
+            ]);
+            if (val !== undefined && val !== '') {
+                agent.config.set('agenticUserConfidenceThreshold', Number(val));
+                au.reloadSettings();
+                console.log(`\n📊 Confidence threshold set to ${bold(val)}%`);
+            }
+            break;
+        }
+        case 'proactive': {
+            const newVal = !settings.proactiveGuidance;
+            agent.config.set('agenticUserProactiveGuidance', newVal);
+            au.reloadSettings();
+            console.log(newVal
+                ? `\n🔄 Proactive guidance ${green(bold('enabled'))}. Agent will receive guidance when stuck.`
+                : `\n🔄 Proactive guidance ${gray(bold('disabled'))}.`);
+            break;
+        }
+        case 'step_threshold': {
+            const { val } = await inquirer.prompt([
+                { type: 'input', name: 'val', message: `Steps before proactive guidance kicks in (current: ${settings.proactiveStepThreshold}):`, validate: (v: string) => !isNaN(Number(v)) && Number(v) >= 1 ? true : 'Enter a positive number' }
+            ]);
+            if (val !== undefined && val !== '') {
+                agent.config.set('agenticUserProactiveStepThreshold', Number(val));
+                au.reloadSettings();
+                console.log(`\n📈 Proactive step threshold set to ${bold(val)}`);
+            }
+            break;
+        }
+        case 'check_interval': {
+            const { val } = await inquirer.prompt([
+                { type: 'input', name: 'val', message: `Check interval in seconds (current: ${settings.checkIntervalSeconds}):`, validate: (v: string) => !isNaN(Number(v)) && Number(v) >= 5 ? true : 'Enter a number ≥ 5' }
+            ]);
+            if (val !== undefined && val !== '') {
+                agent.config.set('agenticUserCheckInterval', Number(val));
+                au.reloadSettings();
+                console.log(`\n🔁 Check interval set to ${bold(val)}s`);
+            }
+            break;
+        }
+        case 'max_interventions': {
+            const { val } = await inquirer.prompt([
+                { type: 'input', name: 'val', message: `Max interventions per action (current: ${settings.maxInterventionsPerAction}):`, validate: (v: string) => !isNaN(Number(v)) && Number(v) >= 1 ? true : 'Enter a positive number' }
+            ]);
+            if (val !== undefined && val !== '') {
+                agent.config.set('agenticUserMaxInterventions', Number(val));
+                au.reloadSettings();
+                console.log(`\n🚫 Max interventions per action set to ${bold(val)}`);
+            }
+            break;
+        }
+        case 'notify_user': {
+            const newVal = !notifyUser;
+            agent.config.set('agenticUserNotifyUser', newVal);
+            console.log(newVal
+                ? `\n🔔 User notifications ${green(bold('enabled'))}. You'll be messaged on the originating channel when the Agentic User intervenes.`
+                : `\n🔕 User notifications ${gray(bold('disabled'))}. Interventions will happen silently.`);
+            break;
+        }
+        case 'view_log': {
+            const log = au.getInterventionLog(20);
+            console.log('');
+            if (log.length === 0) {
+                console.log(dim('  No interventions recorded yet.'));
+            } else {
+                for (const entry of log) {
+                    const appliedTag = entry.applied ? green(bold('APPLIED')) : yellow('SKIPPED');
+                    const typeTag = entry.type === 'question-answer' ? cyan('Q&A')
+                        : entry.type === 'direction-guidance' ? magenta('GUIDE')
+                        : yellow('STUCK');
+                    console.log(`  ${dim(entry.timestamp.slice(0, 19))}  ${typeTag}  ${appliedTag}  ${dim('conf:')}${entry.confidence}%`);
+                    console.log(`    ${dim('Action:')} ${entry.actionId}`);
+                    console.log(`    ${dim('Trigger:')} ${entry.trigger.slice(0, 80)}${entry.trigger.length > 80 ? '…' : ''}`);
+                    console.log(`    ${dim('Response:')} ${entry.response.slice(0, 100)}${entry.response.length > 100 ? '…' : ''}`);
+                    console.log('');
+                }
+            }
+            await waitKeyPress();
+            return showAgenticUserMenu();
+        }
+        case 'clear_history': {
+            const { confirm } = await inquirer.prompt([
+                { type: 'confirm', name: 'confirm', message: 'Clear all intervention history?', default: false }
+            ]);
+            if (confirm) {
+                au.clearHistory();
+                console.log('\n🗑️  Intervention history cleared.');
+            }
+            break;
+        }
+    }
+
+    await waitKeyPress();
+    return showAgenticUserMenu();
+}
+
 async function showOrchestrationMenu() {
     console.clear();
     banner();
@@ -2575,7 +2780,27 @@ async function showOrchestrationMenu() {
         `${dim('Completed')}        ${green(bold(String(status.completedTasks)))}`,
         `${dim('Failed')}           ${status.failedTasks > 0 ? red(bold(String(status.failedTasks))) : gray('0')}`,
     ];
-    box(orchLines, { title: '📊 ORCHESTRATION STATUS', width: 46, color: c.magenta });
+
+    // Per-worker summary lines
+    if (detailedWorkers.length > 0) {
+        orchLines.push('');
+        const workerTokens = orchestrator.getAggregateWorkerTokenUsage();
+        const tokenMap = new Map(workerTokens.map(wt => [wt.agentId, wt]));
+
+        for (const w of detailedWorkers) {
+            const statusIcon = w.isRunning ? (w.currentTaskId ? '🔄' : '💤') : '⏸️';
+            const statusColor = w.isRunning ? (w.currentTaskId ? yellow : green) : gray;
+            const statusLabel = w.isRunning ? (w.currentTaskId ? 'working' : 'idle') : 'stopped';
+            const tokens = tokenMap.get(w.agentId);
+            const tokenStr = tokens ? dim(` ${(tokens.totalTokens / 1000).toFixed(1)}k tok`) : '';
+            const taskStr = w.currentTaskDescription
+                ? dim(` → ${w.currentTaskDescription.slice(0, 30)}${w.currentTaskDescription.length > 30 ? '…' : ''}`)
+                : '';
+            orchLines.push(`${statusIcon} ${bold(w.name.slice(0, 14).padEnd(14))} ${statusColor(statusLabel.padEnd(7))}${tokenStr}${taskStr}`);
+        }
+    }
+
+    box(orchLines, { title: '📊 ORCHESTRATION STATUS', width: 64, color: c.magenta });
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -2612,39 +2837,160 @@ async function showOrchestrationMenu() {
     switch (action) {
         case 'status': {
             console.clear();
-            console.log('📊 Orchestration Status');
-            console.log('=======================');
-            console.log(JSON.stringify(status, null, 2));
-            console.log('\n🔄 Running Worker Processes:');
-            if (runningWorkers.length === 0) {
-                console.log('  No worker processes running.');
-            } else {
-                runningWorkers.forEach(w => {
-                    console.log(`  - ${w.name} (${w.agentId}) - PID: ${w.pid}`);
-                });
+            banner();
+            sectionHeader('📊', 'Orchestration Dashboard');
+
+            // Summary box
+            const summaryLines = [
+                `${dim('Agents')}     ${brightCyan(bold(String(status.activeAgents)))} active  ${dim('(')}${green(String(status.idleAgents))} idle${dim(',')} ${yellow(String(status.workingAgents))} working${dim(')')}`,
+                `${dim('Workers')}    ${runningWorkers.length > 0 ? green(bold(String(runningWorkers.length))) : gray('0')} running`,
+                `${dim('Tasks')}      ${status.pendingTasks > 0 ? yellow(bold(String(status.pendingTasks))) + ' pending' : green('0 pending')}  ${green(String(status.completedTasks))} done  ${status.failedTasks > 0 ? red(String(status.failedTasks)) + ' failed' : dim('0 failed')}`,
+            ];
+            console.log('');
+            box(summaryLines, { title: '📈 OVERVIEW', width: 64, color: c.cyan });
+
+            // Token usage box
+            const workerTokens = orchestrator.getAggregateWorkerTokenUsage();
+            if (workerTokens.length > 0) {
+                const totalAllTokens = workerTokens.reduce((sum, wt) => sum + wt.totalTokens, 0);
+                const totalRealTokens = workerTokens.reduce((sum, wt) => sum + wt.realTokens, 0);
+                const tokenLines = [
+                    `${dim('Total')}    ${bold((totalAllTokens / 1000).toFixed(1) + 'k')} tokens  ${dim('(')}${green((totalRealTokens / 1000).toFixed(1) + 'k real')}${dim(')')}`,
+                    '',
+                ];
+                for (const wt of workerTokens) {
+                    const bar = '█'.repeat(Math.min(20, Math.round((wt.totalTokens / Math.max(1, totalAllTokens)) * 20)));
+                    const pad = '░'.repeat(20 - bar.length);
+                    tokenLines.push(
+                        `  ${bold(wt.name.slice(0, 12).padEnd(12))} ${cyan(bar)}${dim(pad)} ${dim((wt.totalTokens / 1000).toFixed(1).padStart(7) + 'k')} ${dim('(' + (wt.realTokens / 1000).toFixed(1) + 'k real)')}`
+                    );
+                }
+                console.log('');
+                box(tokenLines, { title: '🔢 WORKER TOKEN USAGE', width: 64, color: c.yellow });
             }
+
+            // Per-worker details
+            if (detailedWorkers.length > 0) {
+                console.log('');
+                console.log(gradient('  ─── Worker Details ──────────────────────────────────', [c.magenta, c.gray]));
+                for (const w of detailedWorkers) {
+                    const statusIcon = w.isRunning ? (w.currentTaskId ? '🔄' : '💤') : '⏸️';
+                    const statusLabel = w.isRunning ? (w.currentTaskId ? yellow('working') : green('idle')) : gray('stopped');
+                    const pidStr = w.pid ? dim(` PID:${w.pid}`) : '';
+                    const agentIdShort = w.agentId.slice(0, 10);
+
+                    console.log(`\n  ${statusIcon} ${bold(w.name)} ${dim('(' + agentIdShort + '…)')} ${statusLabel}${pidStr}`);
+                    console.log(`     ${dim('Role')} ${w.role}  ${dim('Last')} ${new Date(w.lastActiveAt).toLocaleTimeString()}`);
+
+                    if (w.currentTaskId) {
+                        const desc = w.currentTaskDescription || '(no description)';
+                        console.log(`     ${dim('Task')} ${cyan(desc.slice(0, 60))}${desc.length > 60 ? dim('…') : ''}`);
+                    }
+
+                    // Read memory stats from worker dir if accessible
+                    const agentData = orchestrator.getAgent(w.agentId);
+                    if (agentData?.memoryPath) {
+                        try {
+                            const workerDir = require('path').dirname(agentData.memoryPath);
+                            // Memory counts
+                            if (require('fs').existsSync(agentData.memoryPath)) {
+                                const memData = JSON.parse(require('fs').readFileSync(agentData.memoryPath, 'utf-8'));
+                                const shortCount = memData.short?.length || 0;
+                                const episodicCount = memData.episodic?.length || 0;
+                                console.log(`     ${dim('Memory')} ${shortCount} short, ${episodicCount} episodic`);
+                            }
+                            // Knowledge store
+                            const ksPath = require('path').join(workerDir, 'knowledge_store.json');
+                            if (require('fs').existsSync(ksPath)) {
+                                const ksData = JSON.parse(require('fs').readFileSync(ksPath, 'utf-8'));
+                                const docs = ksData.documents?.length || 0;
+                                const chunks = ksData.chunks?.length || 0;
+                                if (docs > 0) console.log(`     ${dim('Knowledge')} ${docs} docs, ${chunks} chunks`);
+                            }
+                        } catch { /* skip if files unreadable */ }
+                    }
+                }
+            } else {
+                console.log(`\n  ${dim('No workers spawned. Use ')}${cyan('Spawn New Agent')}${dim(' to create one.')}`);
+            }
+
+            // Running processes
+            if (runningWorkers.length > 0) {
+                console.log('');
+                console.log(gradient('  ─── Processes ───────────────────────────────────────', [c.green, c.gray]));
+                for (const w of runningWorkers) {
+                    console.log(`  ⚡ ${bold(w.name)} ${dim('PID:' + w.pid)} ${dim('(' + w.agentId.slice(0, 10) + '…)')}`);
+                }
+            }
+            console.log('');
             break;
         }
         case 'worker_details': {
             console.clear();
-            console.log('🔍 Worker Task Details');
-            console.log('======================');
+            banner();
+            sectionHeader('🔍', 'Worker Task Details');
             if (detailedWorkers.length === 0) {
-                console.log('No workers available.');
+                console.log(`\n  ${dim('No workers available.')}`);
             } else {
-                detailedWorkers.forEach(w => {
-                    console.log(`\n[${w.agentId.slice(0, 12)}...] ${w.name}`);
-                    console.log(`  Status: ${w.status} | Running: ${w.isRunning ? '✅ Yes' : '❌ No'}${w.pid ? ` (PID: ${w.pid})` : ''}`);
-                    console.log(`  Role: ${w.role}`);
-                    console.log(`  Last Active: ${new Date(w.lastActiveAt).toLocaleString()}`);
+                const workerTokens = orchestrator.getAggregateWorkerTokenUsage();
+                const tokenMap = new Map(workerTokens.map(wt => [wt.agentId, wt]));
+
+                for (const w of detailedWorkers) {
+                    const statusIcon = w.isRunning ? (w.currentTaskId ? '🔄' : '💤') : '⏸️';
+                    const statusLabel = w.isRunning ? (w.currentTaskId ? 'WORKING' : 'IDLE') : 'STOPPED';
+                    const statusColor = w.isRunning ? (w.currentTaskId ? yellow : green) : gray;
+
+                    const wLines: string[] = [];
+                    wLines.push(`${dim('Status')}     ${statusIcon} ${statusColor(bold(statusLabel))}${w.pid ? dim(` (PID: ${w.pid})`) : ''}`);
+                    wLines.push(`${dim('Role')}       ${w.role}`);
+                    wLines.push(`${dim('Last Active')} ${new Date(w.lastActiveAt).toLocaleString()}`);
+
                     if (w.currentTaskId) {
-                        console.log(`  Current Task ID: ${w.currentTaskId}`);
-                        console.log(`  Task Description: ${w.currentTaskDescription || '(no description)'}`);
+                        wLines.push(`${dim('Task ID')}    ${cyan(w.currentTaskId)}`);
+                        const desc = w.currentTaskDescription || '(no description)';
+                        // Wrap long descriptions
+                        if (desc.length <= 50) {
+                            wLines.push(`${dim('Task')}       ${desc}`);
+                        } else {
+                            wLines.push(`${dim('Task')}       ${desc.slice(0, 50)}`);
+                            for (let i = 50; i < desc.length; i += 50) {
+                                wLines.push(`             ${desc.slice(i, i + 50)}`);
+                            }
+                        }
                     } else {
-                        console.log(`  Current Task: (none)`);
+                        wLines.push(`${dim('Task')}       ${gray('(none)')}`);
                     }
-                });
+
+                    // Token usage for this worker
+                    const tokens = tokenMap.get(w.agentId);
+                    if (tokens) {
+                        wLines.push(`${dim('Tokens')}     ${bold((tokens.totalTokens / 1000).toFixed(1) + 'k')} total ${dim('(')}${green((tokens.realTokens / 1000).toFixed(1) + 'k')} real, ${yellow((tokens.estimatedTokens / 1000).toFixed(1) + 'k')} est${dim(')')}`);
+                    }
+
+                    // Memory stats from disk
+                    const agentData = orchestrator.getAgent(w.agentId);
+                    if (agentData?.memoryPath) {
+                        try {
+                            const workerDir = require('path').dirname(agentData.memoryPath);
+                            if (require('fs').existsSync(agentData.memoryPath)) {
+                                const memData = JSON.parse(require('fs').readFileSync(agentData.memoryPath, 'utf-8'));
+                                wLines.push(`${dim('Memory')}     ${memData.short?.length || 0} short, ${memData.episodic?.length || 0} episodic`);
+                            }
+                            const ksPath = require('path').join(workerDir, 'knowledge_store.json');
+                            if (require('fs').existsSync(ksPath)) {
+                                const ksData = JSON.parse(require('fs').readFileSync(ksPath, 'utf-8'));
+                                if (ksData.documents?.length > 0) {
+                                    wLines.push(`${dim('Knowledge')}  ${ksData.documents.length} docs, ${ksData.chunks?.length || 0} chunks`);
+                                }
+                            }
+                        } catch { /* skip */ }
+                    }
+
+                    console.log('');
+                    box(wLines, { title: `🤖 ${w.name.toUpperCase()}`, width: 64, color: w.isRunning ? c.cyan : c.gray });
+                }
             }
+            console.log('');
             break;
         }
         case 'list': {
@@ -3773,16 +4119,36 @@ function showTokenUsage() {
         agent.config.get('tokenLogPath')
     );
     const summary = tracker.getSummary();
+    const accuracy = tracker.getAccuracyReport();
 
-    // Totals Panel
+    // Accuracy banner — the key info users need to understand their numbers
+    console.log('');
+    const realPct = accuracy.realPct;
+    const estPct = accuracy.estimatedPct;
+    const accuracyColor = realPct >= 80 ? c.green : realPct >= 50 ? c.yellow : c.red;
+    const accuracyLabel = realPct >= 80 ? '✓ High' : realPct >= 50 ? '~ Medium' : '⚠ Low';
+    box([
+        `${dim('Data source accuracy:')} ${accuracyColor}${bold(`${accuracyLabel} (${realPct}% API-reported)`)}${c.reset}`,
+        `${dim('API-reported calls:')}   ${bold(accuracy.realCalls.toLocaleString().padStart(8))}  ${dim('│')} ${green(summary.realTotals?.totalTokens?.toLocaleString().padStart(12) || '0')} tokens`,
+        `${dim('Estimated calls:')}      ${bold(accuracy.estimatedCalls.toLocaleString().padStart(8))}  ${dim('│')} ${c.yellow}${(summary.estimatedTotals?.totalTokens?.toLocaleString().padStart(12) || '0')}${c.reset} tokens`,
+        `${dim('─'.repeat(52))}`,
+        `${dim('If numbers seem high, estimated calls use a heuristic')}`,
+        `${dim('that can over-count. Run')} ${bold('orcbot tokens recount')} ${dim('to rebuild.')}`,
+    ], { title: '🎯 DATA ACCURACY', width: 58, color: accuracyColor });
+
+    // Totals Panel — now with real vs estimated breakdown
     console.log('');
     const totalTokens = summary.totals.totalTokens;
+    const realTotal = summary.realTotals?.totalTokens || 0;
+    const estTotal = summary.estimatedTotals?.totalTokens || 0;
     box([
         `${dim('Prompt')}      ${bold(summary.totals.promptTokens.toLocaleString().padStart(12))} tokens`,
         `${dim('Completion')}  ${bold(summary.totals.completionTokens.toLocaleString().padStart(12))} tokens`,
         `${dim('─'.repeat(34))}`,
         `${dim('Total')}       ${brightCyan(bold(totalTokens.toLocaleString().padStart(12)))} tokens`,
-    ], { title: '🔢 TOKEN TOTALS', width: 42, color: c.brightCyan });
+        `  ${dim('├ API-reported:')} ${green(realTotal.toLocaleString().padStart(10))}`,
+        `  ${dim('└ Estimated:')}    ${c.yellow}${estTotal.toLocaleString().padStart(10)}${c.reset}  ${estTotal > 0 ? dim('(~30-60% inflated)') : ''}`,
+    ], { title: '🔢 TOKEN TOTALS', width: 48, color: c.brightCyan });
 
     // Provider breakdown
     const providers = Object.entries(summary.byProvider);
@@ -3793,10 +4159,15 @@ function showTokenUsage() {
         for (const [prov, totals] of providers) {
             const ratio = totals.totalTokens / Math.max(totalTokens, 1);
             const pct = Math.round(ratio * 100);
-            const bar = progressBar(totals.totalTokens, maxProviderTokens, 18, { colorFn: cyan });
-            providerLines.push(`${bold(prov.padEnd(14))} ${bar} ${dim(totals.totalTokens.toLocaleString().padStart(10))} ${dim(`(${pct}%)`)}`);
+            const bar = progressBar(totals.totalTokens, maxProviderTokens, 14, { colorFn: cyan });
+            const realT = (totals as any).real?.totalTokens || 0;
+            const estT = (totals as any).estimated?.totalTokens || 0;
+            providerLines.push(`${bold(prov.padEnd(12))} ${bar} ${dim(totals.totalTokens.toLocaleString().padStart(10))} ${dim(`(${pct}%)`)}`);
+            if (estT > 0) {
+                providerLines.push(`${dim(' '.repeat(12))} ${dim('real:')} ${green(realT.toLocaleString().padStart(8))} ${dim('est:')} ${c.yellow}${estT.toLocaleString().padStart(8)}${c.reset}`);
+            }
         }
-        box(providerLines, { title: '🏢 BY PROVIDER', width: 56, color: c.green });
+        box(providerLines, { title: '🏢 BY PROVIDER', width: 58, color: c.green });
     }
 
     // Model breakdown
@@ -3806,11 +4177,13 @@ function showTokenUsage() {
         const modelLines: string[] = [];
         const maxModelTokens = Math.max(...models.map(([, t]) => t.totalTokens), 1);
         for (const [mdl, totals] of models) {
-            const bar = progressBar(totals.totalTokens, maxModelTokens, 14, { colorFn: magenta });
-            const displayName = mdl.length > 26 ? mdl.slice(0, 24) + '…' : mdl;
-            modelLines.push(`${displayName.padEnd(26)} ${bar} ${dim(totals.totalTokens.toLocaleString().padStart(10))}`);
+            const bar = progressBar(totals.totalTokens, maxModelTokens, 12, { colorFn: magenta });
+            const displayName = mdl.length > 22 ? mdl.slice(0, 20) + '…' : mdl;
+            const estT = (totals as any).estimated?.totalTokens || 0;
+            const suffix = estT > 0 ? ` ${c.yellow}~est${c.reset}` : '';
+            modelLines.push(`${displayName.padEnd(22)} ${bar} ${dim(totals.totalTokens.toLocaleString().padStart(10))}${suffix}`);
         }
-        box(modelLines, { title: '🤖 TOP MODELS', width: 56, color: c.magenta });
+        box(modelLines, { title: '🤖 TOP MODELS', width: 58, color: c.magenta });
     }
 
     console.log('');

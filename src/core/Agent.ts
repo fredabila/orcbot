@@ -18,6 +18,8 @@ import { WorkerProfileManager } from './WorkerProfile';
 import { AgentOrchestrator } from './AgentOrchestrator';
 import { RuntimeTuner } from './RuntimeTuner';
 import { BootstrapManager } from './BootstrapManager';
+import { AgenticUser } from './AgenticUser';
+import { KnowledgeStore } from '../memory/KnowledgeStore';
 import { memoryToolsSkills } from '../skills/memoryTools';
 import { Cron } from 'croner';
 import { Readability } from '@mozilla/readability';
@@ -26,6 +28,7 @@ import { eventBus } from './EventBus';
 import { logger } from '../utils/logger';
 import { ErrorHandler } from '../utils/ErrorHandler';
 import { resolveEmoji, detectChannelFromMetadata } from '../utils/ReactionHelper';
+import { renderMarkdown, hasMarkdown } from '../utils/MarkdownRenderer';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -78,6 +81,8 @@ export class Agent {
     public workerProfile: WorkerProfileManager;
     public orchestrator: AgentOrchestrator;
     public bootstrap: BootstrapManager;
+    public agenticUser: AgenticUser;
+    public knowledgeStore: KnowledgeStore;
     private lastActionTime: number;
     private lastHeartbeatAt: number = 0;
     private consecutiveIdleHeartbeats: number = 0;
@@ -109,7 +114,11 @@ export class Agent {
     private knownUsersPath: string = '';
     private knownUsersDirty: boolean = false;
 
-    constructor() {
+    /** True when this Agent instance runs inside a worker process (AgentWorker). */
+    public readonly isWorker: boolean;
+
+    constructor(options?: { isWorker?: boolean }) {
+        this.isWorker = options?.isWorker ?? false;
         this.config = new ConfigManager();
         this.agentConfigFile = this.config.get('agentIdentityPath');
         this.initializeStorage();
@@ -181,6 +190,7 @@ export class Agent {
             this.config,
             this.bootstrap  // Pass bootstrap manager
         );
+        this.decisionEngine.setKnowledgeStore(this.knowledgeStore);
         this.simulationEngine = new SimulationEngine(this.llm);
         this.actionQueue = new ActionQueue(this.config.get('actionQueuePath') || './actions.json');
         this.scheduler = new Scheduler();
@@ -228,11 +238,11 @@ export class Agent {
         this.loadLastActionTime();
         this.loadLastHeartbeatTime();
         this.heartbeatSchedulePath = path.join(path.dirname(this.config.get('actionQueuePath')), 'heartbeat-schedules.json');
-        this.loadHeartbeatSchedules();
+        if (!this.isWorker) this.loadHeartbeatSchedules();
         this.scheduledTasksPath = path.join(path.dirname(this.config.get('actionQueuePath')), 'scheduled-tasks.json');
-        this.loadScheduledTasks();
+        if (!this.isWorker) this.loadScheduledTasks();
         this.knownUsersPath = path.join(this.config.getDataHome(), 'known_users.json');
-        this.loadKnownUsers();
+        if (!this.isWorker) this.loadKnownUsers();
 
         // Ensure context is up to date (supports reconfiguration)
         this.skills.setContext({
@@ -244,9 +254,30 @@ export class Agent {
             orchestrator: this.orchestrator
         });
 
+        // Initialize RAG Knowledge Store
+        this.knowledgeStore = new KnowledgeStore(this.config.getDataHome(), {
+            openaiApiKey: this.config.get('openaiApiKey'),
+            googleApiKey: this.config.get('googleApiKey'),
+            preferredProvider: this.config.get('llmProvider'),
+        });
+
+        // Initialize Agentic User only for primary agent (workers don't manage HITL)
+        this.agenticUser = new AgenticUser(
+            this.memory,
+            this.actionQueue,
+            this.llm,
+            this.config
+        );
+        if (!this.isWorker) {
+            this.agenticUser.start();
+        }
+
         this.loadAgentIdentity();
         this.setupEventListeners();
-        this.setupChannels();
+        // Workers don't set up messaging channels — only the primary agent manages channels
+        if (!this.isWorker) {
+            this.setupChannels();
+        }
         this.registerInternalSkills();
     }
 
@@ -343,6 +374,12 @@ export class Agent {
     }
 
     private registerInternalSkills() {
+        // ═══════════════════════════════════════════
+        // Channel Messaging & Reaction Skills
+        // Workers don't have channel connections — skip these.
+        // ═══════════════════════════════════════════
+        if (!this.isWorker) {
+
         // Skill: Send Telegram
         this.skills.registerSkill({
             name: 'send_telegram',
@@ -497,6 +534,7 @@ export class Agent {
                     type: 'chat:message',
                     role: 'assistant',
                     content: message,
+                    format: hasMarkdown(message) ? 'markdown' : 'text',
                     timestamp: new Date().toISOString(),
                     messageId
                 });
@@ -686,6 +724,8 @@ export class Agent {
                 return 'Discord channel not available';
             }
         });
+
+        } // end !isWorker channel skills guard
 
         // Skill: Download File
         this.skills.registerSkill({
@@ -3532,6 +3572,9 @@ Be thorough and academic.`;
         });
 
         // ==================== MULTI-AGENT ORCHESTRATION SKILLS ====================
+        // Workers MUST NOT have orchestration capabilities — prevents recursive
+        // spawning and circular delegation. Only the primary agent orchestrates.
+        if (!this.isWorker) {
 
         // Skill: Spawn Agent (Self-Duplication)
         this.skills.registerSkill({
@@ -3762,6 +3805,45 @@ Be thorough and academic.`;
                 return `Created clone "${clone.name}" (${clone.id}) with full capabilities. Use delegate_task() to assign work to this clone.`;
             }
         });
+
+        // Skill: Get Worker Token Usage
+        this.skills.registerSkill({
+            name: 'get_worker_token_usage',
+            description: 'Get aggregated token usage across all worker agents, broken down by real API-reported vs estimated tokens.',
+            usage: 'get_worker_token_usage()',
+            handler: async () => {
+                const workerTokens = this.orchestrator.getAggregateWorkerTokenUsage();
+                if (workerTokens.length === 0) return 'No worker token usage data available. Workers may not have been active yet.';
+
+                let total = 0, totalReal = 0, totalEst = 0;
+                const lines = workerTokens.map(wt => {
+                    total += wt.totalTokens;
+                    totalReal += wt.realTokens;
+                    totalEst += wt.estimatedTokens;
+                    return `- ${wt.name} (${wt.agentId}): ${wt.totalTokens.toLocaleString()} tokens (${wt.realTokens.toLocaleString()} real, ${wt.estimatedTokens.toLocaleString()} estimated)`;
+                });
+                lines.push(`\nTotal across workers: ${total.toLocaleString()} tokens (${totalReal.toLocaleString()} real, ${totalEst.toLocaleString()} estimated)`);
+                return lines.join('\n');
+            }
+        });
+
+        // Skill: Get Detailed Worker Status
+        this.skills.registerSkill({
+            name: 'get_worker_status',
+            description: 'Get detailed status of all worker agents including PID, current task, and whether they are running.',
+            usage: 'get_worker_status()',
+            handler: async () => {
+                const workers = this.orchestrator.getDetailedWorkerStatus();
+                if (workers.length === 0) return 'No worker agents are currently registered.';
+
+                return workers.map(w => {
+                    const taskInfo = w.currentTaskDescription ? `\n  Task: ${w.currentTaskDescription.slice(0, 100)}...` : '';
+                    return `- ${w.name} (${w.agentId}): ${w.status} | PID: ${w.pid || 'N/A'} | Running: ${w.isRunning} | Role: ${w.role}${taskInfo}`;
+                }).join('\n');
+            }
+        });
+
+        } // end !isWorker orchestration skills guard
 
         // ============ SELF-TUNING SKILLS ============
         
@@ -4029,88 +4111,238 @@ Be thorough and academic.`;
             logger.info(`Registered memory tool: ${skill.name}`);
         }
 
-        // Polling Manager Skills
+        // ─── RAG Knowledge Store Skills ──────────────────────────────────
+
         this.skills.registerSkill({
-            name: 'register_polling_job',
-            description: 'Register a polling job to wait for a condition to be met. Useful for monitoring tasks, waiting for file changes, or checking status periodically.',
-            usage: 'register_polling_job(id, description, checkCommand, intervalMs, maxAttempts?)',
+            name: 'rag_ingest',
+            description: 'Ingest a document or dataset into the RAG knowledge store for future retrieval. Supports text, markdown, CSV, JSON, JSONL, and code files. The content will be chunked, embedded, and stored for semantic search. Use this when the user asks you to learn from, study, or memorize a document/dataset/file. The content parameter should be the full text content to ingest.',
+            usage: 'rag_ingest(content, source, collection?, title?, tags?, format?)',
             handler: async (args: any) => {
-                const id = args.id || args.job_id;
-                const description = args.description || args.desc;
-                const checkCommand = args.checkCommand || args.command || args.check;
-                const intervalMs = args.intervalMs || args.interval || 5000;
-                const maxAttempts = args.maxAttempts || args.max_attempts;
-
-                if (!id) return 'Error: Missing job id.';
-                if (!description) return 'Error: Missing description.';
-                if (!checkCommand) return 'Error: Missing checkCommand (a shell command that returns exit code 0 when condition is met).';
-
                 try {
-                    this.pollingManager.registerJob({
-                        id,
-                        description,
-                        checkFn: async () => {
-                            // Execute shell command and check exit code
-                            const { exec } = require('child_process');
-                            return new Promise((resolve) => {
-                                exec(checkCommand, (error: any) => {
-                                    // Exit code 0 = success = condition met
-                                    resolve(!error);
-                                });
-                            });
-                        },
-                        intervalMs,
-                        maxAttempts,
-                        onSuccess: (jobId) => {
-                            logger.info(`Polling job "${jobId}" succeeded`);
-                            this.pushTask(`Polling job ${jobId} completed: ${description}`, 7);
-                            this.memory.saveMemory({
-                                id: `polling-success-${Date.now()}`,
-                                type: 'short',
-                                content: `Polling job "${jobId}" (${description}) completed successfully`,
-                                timestamp: new Date().toISOString(),
-                                metadata: { source: 'polling', jobId }
-                            });
-                        },
-                        onFailure: (jobId, reason) => {
-                            logger.warn(`Polling job "${jobId}" failed: ${reason}`);
-                            this.memory.saveMemory({
-                                id: `polling-failure-${Date.now()}`,
-                                type: 'short',
-                                content: `Polling job "${jobId}" (${description}) failed: ${reason}`,
-                                timestamp: new Date().toISOString(),
-                                metadata: { source: 'polling', jobId, reason }
-                            });
-                        }
+                    const content = args.content || args.text || args.data;
+                    const source = args.source || args.url || args.filename || 'unknown';
+                    const collection = args.collection || 'default';
+                    const title = args.title;
+                    const tags = args.tags ? (Array.isArray(args.tags) ? args.tags : args.tags.split(',').map((t: string) => t.trim())) : [];
+                    const format = args.format;
+
+                    if (!content) return { success: false, error: 'Missing content. Provide the document text to ingest.' };
+
+                    // Auto-parse structured formats
+                    const detected = format || this.knowledgeStore['detectFormat'](source);
+                    const parsed = this.knowledgeStore.parseContent(content, detected);
+
+                    const result = await this.knowledgeStore.ingest(parsed, source, collection, { title, tags, format: detected });
+                    return {
+                        success: true,
+                        documentId: result.documentId,
+                        chunksCreated: result.chunksCreated,
+                        collection,
+                        message: `Ingested "${title || source}" into knowledge store: ${result.chunksCreated} chunks in collection "${collection}".`
+                    };
+                } catch (e: any) {
+                    return { success: false, error: e.message || String(e) };
+                }
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'rag_ingest_file',
+            description: 'Read a local file and ingest it into the RAG knowledge store. Reads the file from disk, then chunks and embeds it. Use when the user points you to a file path to learn from.',
+            usage: 'rag_ingest_file(file_path, collection?, tags?)',
+            handler: async (args: any) => {
+                try {
+                    const filePath = args.file_path || args.path || args.filePath;
+                    if (!filePath) return { success: false, error: 'Missing file_path.' };
+                    if (!fs.existsSync(filePath)) return { success: false, error: `File not found: ${filePath}` };
+
+                    const content = fs.readFileSync(filePath, 'utf-8');
+                    const collection = args.collection || 'default';
+                    const tags = args.tags ? (Array.isArray(args.tags) ? args.tags : args.tags.split(',').map((t: string) => t.trim())) : [];
+                    const detected = this.knowledgeStore['detectFormat'](filePath);
+                    const parsed = this.knowledgeStore.parseContent(content, detected);
+
+                    const result = await this.knowledgeStore.ingest(parsed, filePath, collection, {
+                        title: args.title || path.basename(filePath),
+                        tags,
+                        format: detected,
                     });
-                    return `Polling job "${id}" registered. Will check every ${intervalMs}ms${maxAttempts ? ` (max ${maxAttempts} attempts)` : ''}.`;
-                } catch (e) {
-                    return `Failed to register polling job: ${e}`;
+                    return {
+                        success: true,
+                        documentId: result.documentId,
+                        chunksCreated: result.chunksCreated,
+                        collection,
+                        message: `Ingested file "${path.basename(filePath)}" → ${result.chunksCreated} chunks in "${collection}".`
+                    };
+                } catch (e: any) {
+                    return { success: false, error: e.message || String(e) };
                 }
             }
         });
 
         this.skills.registerSkill({
-            name: 'cancel_polling_job',
-            description: 'Cancel a running polling job by ID.',
-            usage: 'cancel_polling_job(id)',
+            name: 'rag_ingest_url',
+            description: 'Download a web page or file from a URL and ingest it into the RAG knowledge store. Fetches the content, extracts readable text, then chunks and embeds it. Use when the user asks you to learn from a webpage, dataset URL, or online document.',
+            usage: 'rag_ingest_url(url, collection?, tags?, title?)',
             handler: async (args: any) => {
-                const id = args.id || args.job_id;
-                if (!id) return 'Error: Missing job id.';
-
                 try {
-                    const cancelled = this.pollingManager.cancelJob(id);
-                    if (cancelled) {
-                        return `Polling job "${id}" cancelled successfully.`;
-                    } else {
-                        return `Polling job "${id}" not found.`;
+                    const url = args.url || args.link;
+                    if (!url) return { success: false, error: 'Missing url.' };
+
+                    const collection = args.collection || 'default';
+                    const tags = args.tags ? (Array.isArray(args.tags) ? args.tags : args.tags.split(',').map((t: string) => t.trim())) : [];
+
+                    // Fetch the URL
+                    const response = await fetch(url, {
+                        headers: { 'User-Agent': 'OrcBot/1.0 (Knowledge Ingestion)' },
+                        signal: AbortSignal.timeout(30000),
+                    });
+                    if (!response.ok) return { success: false, error: `HTTP ${response.status}: ${response.statusText}` };
+
+                    const contentType = response.headers.get('content-type') || '';
+                    let text = await response.text();
+
+                    // Extract readable content from HTML
+                    if (contentType.includes('html') || text.trim().startsWith('<!') || text.trim().startsWith('<html')) {
+                        try {
+                            const doc = new DOMParser().parseFromString(text, 'text/html');
+                            const reader = new Readability(doc as any);
+                            const article = reader.parse();
+                            if (article?.textContent) {
+                                text = (article.title ? `# ${article.title}\n\n` : '') + article.textContent;
+                            }
+                        } catch { /* use raw text */ }
                     }
-                } catch (e) {
-                    return `Failed to cancel polling job: ${e}`;
+
+                    if (text.trim().length < 50) return { success: false, error: 'Page content too short or empty after extraction.' };
+
+                    const format = contentType.includes('json') ? 'json'
+                        : contentType.includes('csv') ? 'csv'
+                        : contentType.includes('html') ? 'text'
+                        : 'text';
+                    const parsed = this.knowledgeStore.parseContent(text, format);
+
+                    const result = await this.knowledgeStore.ingest(parsed, url, collection, {
+                        title: args.title,
+                        tags,
+                        format,
+                    });
+                    return {
+                        success: true,
+                        documentId: result.documentId,
+                        chunksCreated: result.chunksCreated,
+                        collection,
+                        message: `Ingested "${url}" → ${result.chunksCreated} chunks in "${collection}".`
+                    };
+                } catch (e: any) {
+                    return { success: false, error: e.message || String(e) };
                 }
             }
         });
 
+        this.skills.registerSkill({
+            name: 'rag_search',
+            description: 'Search the RAG knowledge store for information relevant to a query. Returns the most similar document chunks with relevance scores. Use this when you need to recall ingested knowledge — documentation, datasets, files, or web pages that were previously stored.',
+            usage: 'rag_search(query, limit?, collection?, tags?)',
+            handler: async (args: any) => {
+                try {
+                    const query = args.query || args.q || args.search;
+                    if (!query) return { success: false, error: 'Missing query.' };
+
+                    const limit = parseInt(args.limit) || 5;
+                    const collection = args.collection;
+                    const tags = args.tags ? (Array.isArray(args.tags) ? args.tags : args.tags.split(',').map((t: string) => t.trim())) : undefined;
+
+                    const results = await this.knowledgeStore.search(query, limit, { collection, tags });
+                    if (results.length === 0) {
+                        return { success: true, results: [], message: 'No relevant knowledge found for this query.' };
+                    }
+
+                    const formatted = results.map((r, i) => ({
+                        rank: i + 1,
+                        score: `${(r.score * 100).toFixed(1)}%`,
+                        source: r.source,
+                        title: r.title || '(untitled)',
+                        collection: r.collection,
+                        chunk: `${r.chunkIndex + 1}/${r.totalChunks}`,
+                        content: r.content,
+                    }));
+
+                    return { success: true, results: formatted, count: results.length };
+                } catch (e: any) {
+                    return { success: false, error: e.message || String(e) };
+                }
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'rag_list',
+            description: 'List documents and collections in the RAG knowledge store. Shows what knowledge has been ingested, organized by collection.',
+            usage: 'rag_list(collection?)',
+            handler: async (args: any) => {
+                try {
+                    const collections = this.knowledgeStore.listCollections();
+                    const collection = args.collection;
+                    const documents = this.knowledgeStore.listDocuments(collection);
+                    const stats = this.knowledgeStore.getStats();
+
+                    return {
+                        success: true,
+                        stats: {
+                            totalDocuments: stats.totalDocuments,
+                            totalChunks: stats.totalChunks,
+                            collections: stats.collections,
+                            provider: stats.provider,
+                            enabled: stats.enabled,
+                        },
+                        collections: collections.map(c => ({
+                            name: c.name,
+                            documents: c.documentCount,
+                            chunks: c.chunkCount,
+                        })),
+                        documents: documents.slice(0, 30).map(d => ({
+                            id: d.id,
+                            title: d.title,
+                            source: d.source,
+                            collection: d.collection,
+                            chunks: d.totalChunks,
+                            size: `${(d.sizeBytes / 1024).toFixed(1)}KB`,
+                            tags: d.tags,
+                            ingestedAt: d.ingestedAt,
+                        }))
+                    };
+                } catch (e: any) {
+                    return { success: false, error: e.message || String(e) };
+                }
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'rag_delete',
+            description: 'Delete a document or collection from the RAG knowledge store. Use document_id to delete a specific document, or collection to delete all documents in a collection.',
+            usage: 'rag_delete(document_id?, collection?)',
+            handler: async (args: any) => {
+                try {
+                    if (args.document_id || args.documentId || args.doc_id) {
+                        const docId = args.document_id || args.documentId || args.doc_id;
+                        const deleted = this.knowledgeStore.deleteDocument(docId);
+                        return deleted
+                            ? { success: true, message: `Document ${docId} deleted.` }
+                            : { success: false, error: `Document ${docId} not found.` };
+                    }
+                    if (args.collection) {
+                        const count = this.knowledgeStore.deleteCollection(args.collection);
+                        return { success: true, message: `Collection "${args.collection}" deleted (${count} documents removed).` };
+                    }
+                    return { success: false, error: 'Provide document_id or collection to delete.' };
+                } catch (e: any) {
+                    return { success: false, error: e.message || String(e) };
+                }
+            }
+        });
+
+        // Additional Polling Manager Skills (list/status — the core register/cancel
+        // skills are registered above in the main polling section)
         this.skills.registerSkill({
             name: 'list_polling_jobs',
             description: 'List all active polling jobs with their status.',
@@ -4150,6 +4382,65 @@ Be thorough and academic.`;
                 }
             }
         });
+
+        // ═══════════════════════════════════════════════════════════════
+        // Agentic User Skills — review and control the autonomous HITL proxy
+        // Workers don't run AgenticUser — skip these.
+        // ═══════════════════════════════════════════════════════════════
+        if (!this.isWorker) {
+
+        this.skills.registerSkill({
+            name: 'agentic_user_status',
+            description: 'Check the Agentic User status — whether the autonomous HITL proxy is active, its configuration, and recent intervention stats.',
+            usage: 'agentic_user_status()',
+            handler: async () => {
+                const stats = this.agenticUser.getStats();
+                const settings = this.agenticUser.getSettings();
+                return JSON.stringify({
+                    active: stats.isActive,
+                    settings: {
+                        enabled: settings.enabled,
+                        responseDelay: `${settings.responseDelay}s`,
+                        confidenceThreshold: `${settings.confidenceThreshold}%`,
+                        proactiveGuidance: settings.proactiveGuidance,
+                        maxInterventionsPerAction: settings.maxInterventionsPerAction,
+                    },
+                    stats: {
+                        totalInterventions: stats.totalInterventions,
+                        appliedInterventions: stats.appliedInterventions,
+                        activeTimers: stats.activeTimers,
+                    }
+                }, null, 2);
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'agentic_user_log',
+            description: 'Get recent Agentic User interventions — see what the autonomous HITL proxy decided on behalf of the user.',
+            usage: 'agentic_user_log(limit?)',
+            handler: async (args: any) => {
+                const limit = args.limit || args.count || 10;
+                const log = this.agenticUser.getInterventionLog(limit);
+                if (log.length === 0) {
+                    return 'No Agentic User interventions recorded yet.';
+                }
+                return log.map(entry =>
+                    `[${entry.timestamp}] ${entry.type} | Action: ${entry.actionId} | Confidence: ${entry.confidence}% | Applied: ${entry.applied}\n  Trigger: ${entry.trigger.slice(0, 100)}\n  Response: ${entry.response.slice(0, 150)}`
+                ).join('\n\n');
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'agentic_user_clear',
+            description: 'Clear Agentic User intervention history.',
+            usage: 'agentic_user_clear()',
+            handler: async () => {
+                this.agenticUser.clearHistory();
+                return 'Agentic User intervention history cleared.';
+            }
+        });
+
+        } // end !isWorker agentic user skills guard
     }
 
     private loadAgentIdentity() {
@@ -4572,6 +4863,134 @@ Respond with ONLY valid JSON:
         }
     }
 
+    // ─── Post-Action Reflection & Learning ───────────────────────────
+
+    /**
+     * POST-ACTION REFLECTION: After an action completes, use the LLM to extract
+     * learnings and write a journal reflection. This ensures:
+     * 1. Knowledge captured from research/web browsing/tool usage goes into LEARNING.md
+     * 2. Reflections on what worked/failed go into JOURNAL.md
+     * 3. The agent builds a growing knowledge base automatically
+     *
+     * Only triggers for substantive actions (3+ steps), not trivial messages.
+     */
+    private async postActionReflection(
+        action: any,
+        status: string,
+        stepCount: number,
+        skillCallCounts: Record<string, number>
+    ): Promise<void> {
+        // Skip trivial actions (simple messages, quick replies) — not worth reflecting on
+        if (stepCount < 3) return;
+
+        // Skip heartbeats — they have their own learning system
+        const desc = action.payload?.description || '';
+        if (desc.includes('[HEARTBEAT]') || action.payload?.source === 'heartbeat') return;
+
+        // Gather step memories for this action (before cleanup deletes them)
+        const actionMemories = this.memory.getActionMemories(action.id);
+        if (actionMemories.length < 2) return;
+
+        // Build a compact summary of what happened in this action
+        const stepSummary = actionMemories
+            .slice(-15) // Last 15 memories max
+            .map(m => m.content.slice(0, 300))
+            .join('\n---\n');
+
+        const skillsUsed = Object.entries(skillCallCounts)
+            .filter(([_, count]) => count > 0)
+            .map(([skill, count]) => `${skill}(×${count})`)
+            .join(', ');
+
+        try {
+            // Use a fast, cheap LLM call to extract learnings + reflection
+            const extractPrompt = `You are a post-action reviewer for an AI agent. Analyze this completed action and extract two things:
+
+ACTION: "${desc}"
+STATUS: ${status}
+STEPS: ${stepCount}
+SKILLS USED: ${skillsUsed}
+
+STEP OBSERVATIONS:
+${stepSummary.slice(0, 4000)}
+
+Extract:
+1. **LEARNINGS** — Any factual knowledge, technical insights, useful URLs, API patterns, tool tips, user preferences, or problem-solving techniques discovered during this action. Focus on things that would be useful for FUTURE tasks. If the action was just a simple conversation with no new knowledge, write "NONE".
+2. **REFLECTION** — A brief 1-2 sentence reflection on what went well or what could be improved. If learning from a failure, note what approach would work better next time.
+
+Format your response EXACTLY as:
+LEARNINGS: <content or NONE>
+REFLECTION: <1-2 sentences>`;
+
+            const response = await this.llm.call(extractPrompt, 'Post-action reflection');
+            if (!response || response.length < 20) return;
+
+            // Parse the LLM response
+            const learningsMatch = response.match(/LEARNINGS?:\s*([\s\S]*?)(?=REFLECTION:|$)/i);
+            const reflectionMatch = response.match(/REFLECTION:\s*([\s\S]*?)$/i);
+
+            const learnings = learningsMatch?.[1]?.trim() || '';
+            const reflection = reflectionMatch?.[1]?.trim() || '';
+
+            // Write learnings to LEARNING.md (if substantive)
+            if (learnings && learnings.toUpperCase() !== 'NONE' && learnings.length > 30) {
+                const learningPath = this.config.get('learningPath');
+                const topic = this.extractTopicFromDescription(desc);
+                const entry = `\n\n## ${topic}\n**Date**: ${new Date().toISOString().split('T')[0]}\n**Source**: Auto-extracted from action ${action.id}\n\n${learnings}\n\n---`;
+                
+                try {
+                    fs.appendFileSync(learningPath, entry);
+                    logger.info(`Agent: Auto-learning captured for topic "${topic}" (${learnings.length} chars)`);
+                } catch (e) {
+                    logger.warn(`Agent: Failed to write auto-learning: ${e}`);
+                }
+
+                // NOTE: We intentionally do NOT ingest auto-learnings into the RAG
+                // KnowledgeStore.  The store is for user-directed datasets and external
+                // documents (rag_ingest / rag_ingest_file / rag_ingest_url).
+                // Auto-learnings already persist in LEARNING.md and are surfaced via
+                // the DecisionEngine's learning-tail context window.
+            }
+
+            // Write reflection to JOURNAL.md
+            if (reflection && reflection.length > 15) {
+                const journalPath = this.config.get('journalPath');
+                const entry = `\n\n## [${new Date().toISOString()}] Post-Action Reflection\n**Task**: ${desc.slice(0, 150)}\n**Status**: ${status} (${stepCount} steps)\n**Skills**: ${skillsUsed || 'none'}\n\n${reflection}\n`;
+                
+                try {
+                    fs.appendFileSync(journalPath, entry);
+                    logger.info(`Agent: Journal reflection written for action ${action.id}`);
+                } catch (e) {
+                    logger.warn(`Agent: Failed to write journal reflection: ${e}`);
+                }
+            }
+
+        } catch (e) {
+            // Background task — never let this crash the main flow
+            logger.debug(`Agent: postActionReflection error: ${e}`);
+        }
+    }
+
+    /**
+     * Extract a topic label from a task description for LEARNING.md headings.
+     */
+    private extractTopicFromDescription(description: string): string {
+        // Remove channel/user prefixes
+        let topic = description
+            .replace(/^\[.*?\]\s*/g, '')
+            .replace(/^Message from .*?:\s*/ig, '')
+            .replace(/^Reply to .*?:\s*/ig, '')
+            .trim();
+
+        // Truncate to a reasonable heading length
+        if (topic.length > 80) {
+            // Try to cut at a word boundary
+            topic = topic.slice(0, 80).replace(/\s+\S*$/, '') + '...';
+        }
+
+        return topic || 'Miscellaneous Action';
+    }
+
     /**
      * Classify task complexity using a fast LLM call.
      * Returns a complexity level that drives all downstream limits (steps, messages, simulation).
@@ -4757,8 +5176,74 @@ Respond with ONLY valid JSON:
                     });
                     logger.info('Agent: Memory limits reloaded');
                 }
+
+                // Reload AgenticUser settings if changed
+                const agenticUserChanged = 
+                    oldConfig.agenticUserEnabled !== newConfig.agenticUserEnabled ||
+                    oldConfig.agenticUserResponseDelay !== newConfig.agenticUserResponseDelay ||
+                    oldConfig.agenticUserConfidenceThreshold !== newConfig.agenticUserConfidenceThreshold ||
+                    oldConfig.agenticUserProactiveGuidance !== newConfig.agenticUserProactiveGuidance ||
+                    oldConfig.agenticUserCheckInterval !== newConfig.agenticUserCheckInterval ||
+                    oldConfig.agenticUserMaxInterventions !== newConfig.agenticUserMaxInterventions;
+
+                if (agenticUserChanged) {
+                    this.agenticUser.reloadSettings();
+                    logger.info('Agent: AgenticUser settings reloaded');
+                }
             } catch (e) {
                 logger.error(`Agent: Error handling config change: ${e}`);
+            }
+        });
+
+        // ── Agentic User → notify real user on the originating channel ──
+        eventBus.on('agentic-user:intervention', async (data: any) => {
+            try {
+                // Check if user notifications are enabled
+                if (this.config.get('agenticUserNotifyUser') === false) return;
+
+                const { type, confidence, response, source, sourceId, trigger } = data;
+                if (!source || source === 'unknown' || !sourceId || sourceId === 'unknown') {
+                    logger.debug('AgenticUser notification skipped: no channel info on action');
+                    return;
+                }
+
+                // Build a concise notification
+                const typeLabel = type === 'question-answer' ? '💬 Answered a question'
+                    : type === 'direction-guidance' ? '🧭 Provided direction'
+                    : '🔧 Stuck recovery';
+                const notification = [
+                    `🤖 *Agentic User Intervention* (${confidence}% confidence)`,
+                    `${typeLabel}`,
+                    '',
+                    trigger ? `_Trigger:_ ${trigger.slice(0, 150)}${trigger.length > 150 ? '…' : ''}` : '',
+                    `_Response:_ ${response.slice(0, 300)}${response.length > 300 ? '…' : ''}`,
+                    '',
+                    `_Review this and correct if needed. Reply to override._`,
+                ].filter(Boolean).join('\n');
+
+                // Route to the originating channel
+                if (source === 'telegram' && this.telegram) {
+                    await this.telegram.sendMessage(sourceId, notification);
+                    logger.info(`Agent: Sent AgenticUser notification to Telegram ${sourceId}`);
+                } else if (source === 'whatsapp' && this.whatsapp) {
+                    await this.whatsapp.sendMessage(sourceId, notification);
+                    logger.info(`Agent: Sent AgenticUser notification to WhatsApp ${sourceId}`);
+                } else if (source === 'discord' && this.discord) {
+                    await this.discord.sendMessage(sourceId, notification);
+                    logger.info(`Agent: Sent AgenticUser notification to Discord ${sourceId}`);
+                } else if (source === 'gateway' || source === 'gateway-chat') {
+                    eventBus.emit('gateway:chat:response', {
+                        type: 'chat:message',
+                        role: 'system',
+                        content: notification,
+                        format: 'markdown',
+                        agenticUser: true,
+                        timestamp: new Date().toISOString()
+                    });
+                    logger.info(`Agent: Sent AgenticUser notification to Gateway`);
+                }
+            } catch (err) {
+                logger.error(`Agent: Failed to send AgenticUser notification: ${err}`);
             }
         });
     }
@@ -5603,6 +6088,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 this.config,
                 this.bootstrap
             );
+            this.decisionEngine.setKnowledgeStore(this.knowledgeStore);
         }
 
         // Reload plugins if we cleared them (so core skills still work)
@@ -5768,6 +6254,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
             await this.discord.stop();
         }
         await this.browser.close();
+        if (this.knowledgeStore) {
+            this.knowledgeStore.shutdown();
+        }
         this.releaseInstanceLock();
         logger.info('Agent stopped.');
     }
@@ -5817,6 +6306,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 this.actionQueue.shutdown();
                 if (this.memory.vectorMemory) {
                     this.memory.vectorMemory.shutdown();
+                }
+                if (this.knowledgeStore) {
+                    this.knowledgeStore.shutdown();
                 }
                 this.saveKnownUsers(); // Flush known users to disk on shutdown
                 this.releaseInstanceLock();
@@ -6004,6 +6496,12 @@ Respond with a single actionable task description (one sentence). Be specific ab
         // (dedup and waiting-action resume both return before the end of pushTask)
         this.trackKnownUser(metadata);
 
+        // Emit user:activity event so AgenticUser suppresses interventions while user is present
+        // Only for real user messages (not scheduler, heartbeat, or autonomy tasks)
+        if (lane === 'user' && metadata?.source && metadata?.sourceId && !metadata?.isHeartbeat) {
+            eventBus.emit('user:activity', { source: metadata.source, sourceId: metadata.sourceId });
+        }
+
         // If we have an action paused waiting for a reply from this same source/thread,
         // resume it instead of pushing a brand-new action.
         // We do NOT require platform reply/quote usage; users often respond normally.
@@ -6018,13 +6516,37 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
             if (waitingAction) {
                 logger.info(`Agent: Resuming waiting action ${waitingAction.id} due to new inbound message${messageId ? ` ${messageId}` : ''}`);
-                // Update the ACTION DESCRIPTION to include the new user message.
-                // This is critical — the DecisionEngine deliberates on payload.description,
-                // so if we don't update it, the LLM keeps re-reading the stale original task.
-                const originalDesc = waitingAction.payload?.description || '';
-                const updatedDesc = `${originalDesc}\n\n[USER FOLLOW-UP]: ${description}`;
+
+                // --- Step history contamination fix ---
+                // The old action accumulated step memories (e.g. {id}-step-1-web_search, etc.)
+                // that will pollute the DecisionEngine's context when the action resumes.
+                // Clean them up and save an episodic summary so the old work isn't lost but
+                // doesn't dominate the LLM's next decision.
+                const oldStepCount = this.memory.getActionStepCount(waitingAction.id);
+                if (oldStepCount > 0) {
+                    const originalDesc = waitingAction.payload?.description || '(unknown task)';
+                    this.memory.saveMemory({
+                        id: `${waitingAction.id}-paused-summary`,
+                        type: 'episodic',
+                        content: `Previous task "${originalDesc.slice(0, 120)}" was paused after ${oldStepCount} steps while waiting for user reply. User has now sent a new message.`,
+                        timestamp: new Date().toISOString(),
+                        metadata: {
+                            actionId: waitingAction.id,
+                            source: metadata.source,
+                            sourceId: metadata.sourceId,
+                            previousStepCount: oldStepCount
+                        }
+                    });
+                    this.memory.cleanupActionMemories(waitingAction.id);
+                    logger.info(`Agent: Cleaned up ${oldStepCount} old step memories for resumed action ${waitingAction.id}`);
+                }
+
+                // Use ONLY the new user message as the description.
+                // The old description caused the LLM to re-execute the original task.
+                // The episodic summary above preserves awareness of prior work.
                 this.actionQueue.updatePayload(waitingAction.id, {
-                    description: updatedDesc,
+                    description: description,
+                    previousDescription: waitingAction.payload?.description || undefined,
                     lastUserMessageId: messageId || undefined,
                     lastUserMessageText: description,
                     resumedFromWaitingAt: new Date().toISOString()
@@ -6034,7 +6556,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 this.memory.saveMemory({
                     id: `${waitingAction.id}-resume-${messageId || Date.now()}`,
                     type: 'short',
-                    content: `[SYSTEM: New user message received; resuming previously paused action ${waitingAction.id}.]`,
+                    content: `[SYSTEM: User sent a new message. This is now your PRIMARY task: "${description.slice(0, 200)}". Focus on this new request. Any prior steps from the previous task have been cleared.]`,
                     timestamp: new Date().toISOString(),
                     metadata: {
                         actionId: waitingAction.id,
@@ -6253,7 +6775,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 'send_discord',
                 'send_gateway_chat',
                 'update_journal',
-                'update_learning',
+                // update_learning is NOT in this list — it IS productive work
                 'update_user_profile',
                 'update_agent_identity',
                 'get_system_info',
@@ -7153,6 +7675,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                     const bonusSteps = Math.min(5, MAX_STEPS);
                     let bonusMessageSent = false;
                     let bonusNoToolsRetryCount = 0;
+                    let lastBonusTool = '';
+                    let bonusSameToolCount = 0;
                     // Continue the loop for bonus steps (simple approach: just don't break, 
                     // but we need to adjust MAX_STEPS since the while loop already exited)
                     // We'll run a mini-loop here
@@ -7238,6 +7762,21 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                     logger.error(`Bonus step skill failed: ${toolCall.name} - ${e}`);
                                 }
                             }
+
+                            // Detect bonus-step looping on the same non-messaging tool
+                            const primaryBonusTool = bonusDecision.tools[0]?.name || '';
+                            if (primaryBonusTool && !primaryBonusTool.startsWith('send_')) {
+                                if (primaryBonusTool === lastBonusTool) {
+                                    bonusSameToolCount++;
+                                    if (bonusSameToolCount >= 2) {
+                                        logger.warn(`Agent: Bonus steps looping on ${primaryBonusTool} (${bonusSameToolCount + 1}x). Stopping — send a wrap-up message instead.`);
+                                        break;
+                                    }
+                                } else {
+                                    lastBonusTool = primaryBonusTool;
+                                    bonusSameToolCount = 0;
+                                }
+                            }
                             
                             // If we already sent the wrap-up message, no need for more bonus steps
                             if (bonusMessageSent) {
@@ -7292,6 +7831,14 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
             });
 
             this.actionQueue.updateStatus(action.id, actionStatus);
+
+            // POST-ACTION REFLECTION: Extract learnings and journal entries
+            // Run BEFORE cleanup so we still have step memories to analyze
+            try {
+                await this.postActionReflection(action, actionStatus, currentStep, skillCallCounts);
+            } catch (e) {
+                logger.warn(`Agent: Post-action reflection failed for ${action.id}: ${e}`);
+            }
 
             // CLEANUP: Remove step-scoped memories for this completed action.
             // These are ground-truth during execution but become cross-action pollution after.

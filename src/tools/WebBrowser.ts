@@ -123,56 +123,172 @@ export class WebBrowser {
             // Launch with retry — if first attempt fails due to lock race, clean up and retry once
             const launchOptions = {
                 headless: this.headlessMode,
-                args: ['--disable-blink-features=AutomationControlled'],
+                args: [
+                    // ── Anti-detection ──
+                    '--disable-blink-features=AutomationControlled',
+
+                    // ── Stability: GPU & rendering ──
+                    '--disable-gpu',                          // Prevent GPU-related crashes in headless/VMs
+                    '--disable-gpu-sandbox',                  // GPU sandbox can cause exit code 21
+                    '--disable-software-rasterizer',          // Avoid software GPU fallback crashes
+                    '--disable-gpu-compositing',              // Don't need GPU compositing for scraping
+                    '--in-process-gpu',                       // Keep GPU in main process (reduces crash surface)
+
+                    // ── Stability: Sandbox & process model ──
+                    '--no-sandbox',                           // Required on many Linux servers / Docker
+                    '--disable-setuid-sandbox',               // Complement to --no-sandbox
+                    '--disable-dev-shm-usage',                // Use /tmp instead of /dev/shm (often too small in Docker)
+                    '--disable-namespace-sandbox',            // Prevents Linux namespace failures
+
+                    // ── Stability: Reduce crash surface ──
+                    '--disable-extensions',                   // No extensions to break things
+                    '--disable-component-update',             // Don't try to update components
+                    '--disable-background-networking',        // No background network requests
+                    '--disable-background-timer-throttling',  // Keep timers running in background tabs
+                    '--disable-backgrounding-occluded-windows',
+                    '--disable-renderer-backgrounding',       // Don't throttle renderers
+                    '--disable-breakpad',                     // Disable crash reporting
+                    '--disable-hang-monitor',                 // Don't kill "hung" renderers prematurely
+                    '--disable-ipc-flooding-protection',      // Prevent false-positive IPC flood kills
+                    '--disable-client-side-phishing-detection',
+                    '--disable-default-apps',
+                    '--disable-popup-blocking',               // Allow popups (useful for auth flows)
+                    '--disable-prompt-on-repost',
+                    '--disable-sync',                         // No Chrome sync
+
+                    // ── Memory & resource limits ──
+                    '--disable-features=TranslateUI,BlinkGenPropertyTrees,IsolateOrigins,site-per-process,PaintHolding,HttpsUpgrades',
+                    '--disable-site-isolation-trials',        // Reduce process count (less memory)
+                    '--disable-web-security',                 // Allow cross-origin requests (needed for some scraping)
+                    '--js-flags=--max-old-space-size=512',    // Cap V8 heap per renderer
+
+                    // ── Networking ──
+                    '--ignore-certificate-errors',            // Don't fail on self-signed/expired certs
+                    '--allow-running-insecure-content',       // Allow mixed content
+
+                    // ── Rendering ──
+                    '--force-color-profile=srgb',
+                    '--metrics-recording-only',
+                    '--no-first-run',
+                    '--password-store=basic',
+                    '--use-mock-keychain',
+                    '--export-tagged-pdf',
+
+                    // ── Shared memory ──
+                    '--disable-shared-memory',                // Fallback when /dev/shm is unavailable
+
+                    // ── Window/display ──
+                    ...(this.headlessMode ? [
+                        '--window-size=1280,720',
+                        '--hide-scrollbars',
+                        '--mute-audio',
+                    ] : []),
+                ],
                 viewport: { width: 1280, height: 720 } as { width: number; height: number },
-                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
                 deviceScaleFactor: 1,
+                timeout: 30000,                               // 30s launch timeout (default is sometimes too short)
+                ignoreDefaultArgs: ['--enable-automation'],    // Remove automation flag that sites detect
             };
 
             try {
                 this.context = await chromium.launchPersistentContext(userDataDir, launchOptions);
             } catch (launchErr: any) {
                 const errMsg = launchErr.message || String(launchErr);
-                
-                // Display/headful failure — permanently mark display as broken & fall back to headless
-                if (!this.headlessMode && (errMsg.includes('display') || errMsg.includes('DISPLAY') || errMsg.includes('Xlib') || errMsg.includes('X11') || errMsg.includes('cannot open') || errMsg.includes('main display'))) {
-                    logger.warn(`Browser: Headful launch failed (${errMsg}). Display unavailable — falling back to headless permanently.`);
+                logger.warn(`Browser: Initial launch failed: ${errMsg.slice(0, 200)}`);
+
+                // ── Attempt 2: Handle specific known failure modes ──
+
+                // Display/headful failure → fall back to headless permanently
+                if (!this.headlessMode && /display|DISPLAY|Xlib|X11|cannot open|main display/i.test(errMsg)) {
+                    logger.warn(`Browser: Display unavailable — falling back to headless permanently.`);
                     this._displayBroken = true;
                     this.headlessMode = true;
                     launchOptions.headless = true;
-                    try {
-                        this.context = await chromium.launchPersistentContext(userDataDir, launchOptions);
-                    } catch (fallbackErr) {
-                        throw fallbackErr;
-                    }
-                } else if (errMsg.includes('process_singleton') || errMsg.includes('profile') || errMsg.includes('SingletonLock')) {
-                    logger.warn(`Browser: Launch failed due to profile lock, retrying after cleanup...`);
+                }
+
+                // Profile lock → clean up lock files
+                if (/process_singleton|profile|SingletonLock|lock/i.test(errMsg)) {
+                    logger.warn(`Browser: Profile lock detected, cleaning up...`);
                     this.cleanStaleLockFiles(userDataDir);
-                    // Wait a beat for the OS to release handles
+                    await new Promise(r => setTimeout(r, 1500));
+                }
+
+                // Crashed / signal / exit code → profile may be corrupted, clean crash files
+                if (/crash|signal|exit.?code|gpu.?process|process.*exit/i.test(errMsg)) {
+                    logger.warn(`Browser: Crash detected, cleaning crash artifacts...`);
+                    this.cleanCrashArtifacts(userDataDir);
                     await new Promise(r => setTimeout(r, 1000));
+                }
+
+                // ── Attempt 2: Retry with cleaned state ──
+                try {
+                    this.context = await chromium.launchPersistentContext(userDataDir, launchOptions);
+                } catch (retryErr: any) {
+                    const retryMsg = retryErr.message || String(retryErr);
+                    logger.warn(`Browser: Retry 1 failed: ${retryMsg.slice(0, 200)}`);
+
+                    // If headful retry failed with display, switch to headless
+                    if (!launchOptions.headless && /display|DISPLAY|cannot open/i.test(retryMsg)) {
+                        this._displayBroken = true;
+                        this.headlessMode = true;
+                        launchOptions.headless = true;
+                    }
+
+                    // ── Attempt 3: Fresh profile as last resort ──
+                    // If the profile itself is corrupt, try a temporary fresh profile
+                    logger.warn(`Browser: Attempting fresh temporary profile as fallback...`);
+                    this.cleanStaleLockFiles(userDataDir);
+                    this.cleanCrashArtifacts(userDataDir);
+                    await new Promise(r => setTimeout(r, 1000));
+
                     try {
                         this.context = await chromium.launchPersistentContext(userDataDir, launchOptions);
-                    } catch (retryErr: any) {
-                        // If the retry also fails with a display error, fall back to headless
-                        const retryMsg = retryErr.message || String(retryErr);
-                        if (!this.headlessMode && (retryMsg.includes('display') || retryMsg.includes('DISPLAY') || retryMsg.includes('cannot open'))) {
-                            logger.warn(`Browser: Retry also hit display error. Falling back to headless.`);
-                            this._displayBroken = true;
-                            this.headlessMode = true;
-                            launchOptions.headless = true;
-                            this.context = await chromium.launchPersistentContext(userDataDir, launchOptions);
-                        } else {
-                            throw retryErr;
+                    } catch (finalErr: any) {
+                        // ── Attempt 4: Non-persistent context (no profile at all) ──
+                        logger.warn(`Browser: Persistent context failed. Trying non-persistent context as emergency fallback...`);
+                        try {
+                            const browser = await chromium.launch({
+                                headless: true, // Always headless for emergency
+                                args: launchOptions.args,
+                                timeout: launchOptions.timeout,
+                            });
+                            this.context = await browser.newContext({
+                                viewport: launchOptions.viewport,
+                                userAgent: launchOptions.userAgent,
+                                deviceScaleFactor: launchOptions.deviceScaleFactor,
+                            });
+                            this.browser = browser;
+                            logger.info(`Browser: Emergency non-persistent context launched successfully.`);
+                        } catch (emergencyErr: any) {
+                            logger.error(`Browser: All launch attempts failed. Last error: ${emergencyErr.message?.slice(0, 200)}`);
+                            throw new Error(
+                                `Browser failed to launch after 4 attempts.\n` +
+                                `Original: ${errMsg.slice(0, 150)}\n` +
+                                `Final: ${emergencyErr.message?.slice(0, 150)}\n` +
+                                `Hints: Check if Chromium is installed (npx playwright install chromium), ` +
+                                `ensure sufficient memory, and verify no zombie chrome processes.`
+                            );
                         }
                     }
-                } else {
-                    throw launchErr;
                 }
             }
 
-            // Sneaky: Remove webdriver property
+            // Sneaky: Remove webdriver property & enhance stealth
             await this.context.addInitScript(() => {
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                // Hide chrome.runtime (Playwright detection vector)
+                if (!(window as any).chrome) {
+                    (window as any).chrome = { runtime: {} };
+                }
+                // Normalize plugins array
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5]
+                });
+                // Normalize languages
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['en-US', 'en']
+                });
             });
 
             this._page = await this.context.newPage();
@@ -368,6 +484,42 @@ export class WebBrowser {
             }
         } catch (err: any) {
             logger.debug(`Browser: Stale process cleanup failed (non-fatal): ${err.message}`);
+        }
+    }
+
+    /**
+     * Clean crash artifacts from the profile directory.
+     * GPU cache, crash reports, and corrupt session data can prevent re-launch.
+     */
+    private cleanCrashArtifacts(userDataDir: string): void {
+        const dirsToClean = ['GPUCache', 'ShaderCache', 'GrShaderCache', 'Crashpad', 'crash_reports', 'BrowserMetrics'];
+        const filesToClean = ['Local State.tmp', 'lockfile', '.org.chromium.Chromium.lock'];
+
+        for (const dir of dirsToClean) {
+            const target = path.join(userDataDir, dir);
+            try {
+                if (fs.existsSync(target)) {
+                    fs.rmSync(target, { recursive: true, force: true });
+                    logger.debug(`Browser: Cleaned crash artifact dir: ${dir}`);
+                }
+            } catch { /* best-effort */ }
+            // Also check in Default subfolder
+            const defaultTarget = path.join(userDataDir, 'Default', dir);
+            try {
+                if (fs.existsSync(defaultTarget)) {
+                    fs.rmSync(defaultTarget, { recursive: true, force: true });
+                }
+            } catch { /* best-effort */ }
+        }
+
+        for (const file of filesToClean) {
+            const target = path.join(userDataDir, file);
+            try {
+                if (fs.existsSync(target)) {
+                    fs.unlinkSync(target);
+                    logger.debug(`Browser: Cleaned crash artifact file: ${file}`);
+                }
+            } catch { /* best-effort */ }
         }
     }
 
