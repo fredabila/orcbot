@@ -21,6 +21,11 @@ export class BootstrapManager {
     private workspaceDir: string;
     private files: Map<string, string> = new Map();
 
+    // ── Mtime-based cache: eliminates redundant disk reads ──
+    // Each entry stores the file content and its last-known mtime.
+    // On loadBootstrapContext(), we stat each file and only re-read if mtime changed.
+    private _cache: Map<string, { content: string; mtimeMs: number }> = new Map();
+
     constructor(workspaceDir?: string) {
         this.workspaceDir = workspaceDir || path.join(os.homedir(), '.orcbot');
         
@@ -53,8 +58,10 @@ export class BootstrapManager {
     }
 
     /**
-     * Load all bootstrap files into memory
-     * Returns a context object with file contents
+     * Load all bootstrap files into memory.
+     * Uses mtime-based caching — files are only re-read from disk when their
+     * modification time changes. This eliminates 5 redundant disk reads per
+     * DecisionEngine step (called every action step via buildHelperPrompt).
      */
     public loadBootstrapContext(): Partial<BootstrapFiles> {
         const context: Partial<BootstrapFiles> = {};
@@ -64,27 +71,37 @@ export class BootstrapManager {
             const filePath = path.join(this.workspaceDir, fileName);
             
             try {
-                if (fs.existsSync(filePath)) {
-                    const content = fs.readFileSync(filePath, 'utf-8');
-                    // Only include non-empty files
-                    if (content.trim()) {
-                        const key = fileName.replace('.md', '') as keyof BootstrapFiles;
-                        context[key] = content;
-                        this.files.set(fileName, content);
-                    }
+                if (!fs.existsSync(filePath)) continue;
+
+                const stat = fs.statSync(filePath);
+                const cached = this._cache.get(fileName);
+
+                let content: string;
+                if (cached && cached.mtimeMs === stat.mtimeMs) {
+                    // Cache hit — skip disk read
+                    content = cached.content;
+                } else {
+                    // Cache miss or stale — read from disk and update cache
+                    content = fs.readFileSync(filePath, 'utf-8');
+                    this._cache.set(fileName, { content, mtimeMs: stat.mtimeMs });
+                }
+
+                if (content.trim()) {
+                    const key = fileName.replace('.md', '') as keyof BootstrapFiles;
+                    context[key] = content;
+                    this.files.set(fileName, content);
                 }
             } catch (error) {
                 logger.error(`Failed to load ${fileName}: ${error}`);
             }
         }
 
-        logger.info(`Loaded ${Object.keys(context).length} bootstrap files`);
         return context;
     }
 
     /**
-     * Get formatted bootstrap context for injection into agent prompts
-     * Returns a string with all bootstrap content properly formatted
+     * Get formatted bootstrap context for injection into agent prompts.
+     * Delegates to loadBootstrapContext() which uses mtime caching.
      */
     public getFormattedContext(maxLength: number = 10000): string {
         const context = this.loadBootstrapContext();
@@ -124,6 +141,8 @@ export class BootstrapManager {
         try {
             fs.writeFileSync(filePath, content);
             this.files.set(fileName, content);
+            // Invalidate mtime cache so next loadBootstrapContext() picks up the change
+            this._cache.delete(fileName);
             logger.info(`Updated bootstrap file: ${fileName}`);
             return true;
         } catch (error) {
@@ -143,6 +162,7 @@ export class BootstrapManager {
             try {
                 fs.writeFileSync(filePath, content);
                 this.files.set(fileName, content);
+                this._cache.delete(fileName); // Invalidate mtime cache
                 logger.info(`BootstrapManager: Reset ${fileName} to defaults`);
             } catch (error) {
                 logger.error(`BootstrapManager: Failed to reset ${fileName}: ${error}`);

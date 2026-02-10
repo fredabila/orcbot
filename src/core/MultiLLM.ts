@@ -77,6 +77,71 @@ export class MultiLLM {
         logger.info(`MultiLLM: Initialized with model ${this.modelName}`);
     }
 
+    // ── Fast model for internal reasoning (reviews, reflections, classification) ──
+    // Uses a cheaper/faster model for non-user-facing LLM calls.
+    // Set via config key `fastModelName` (default: gpt-4o-mini).
+    private fastModelName?: string;
+
+    /**
+     * Set the fast model name used for internal reasoning tasks
+     * (task classification, termination review, post-action reflection).
+     * These calls don't need the full primary model's quality.
+     */
+    public setFastModel(modelName: string): void {
+        this.fastModelName = modelName;
+        logger.info(`MultiLLM: Fast model set to ${modelName}`);
+    }
+
+    /**
+     * Call the LLM using the fast/cheap model for internal reasoning.
+     * Resolution order:
+     *   1. Explicit fastModelName from config → use it with its native provider
+     *   2. If that provider has no API key → pick a fast model for the primary provider
+     *   3. If no fastModelName configured → auto-select a fast model for the primary provider
+     */
+    public async callFast(prompt: string, systemMessage?: string): Promise<string> {
+        // If user explicitly configured a fast model, try its native provider first
+        if (this.fastModelName) {
+            const provider = this.inferProvider(this.fastModelName);
+            if (this.hasKeyForProvider(provider)) {
+                return this.call(prompt, systemMessage, provider, this.fastModelName);
+            }
+            // Configured fast model's provider has no key — fall through
+            logger.info(`MultiLLM: Fast model ${this.fastModelName} needs ${provider} key (not configured). Auto-selecting from primary provider.`);
+        }
+
+        // Auto-select a fast model for the primary provider
+        const primaryProvider = this.preferredProvider || this.inferProvider(this.modelName);
+        const fastModel = this.getFastModelForProvider(primaryProvider);
+        return this.call(prompt, systemMessage, primaryProvider, fastModel);
+    }
+
+    /** Check whether we have a usable API key for the given provider. */
+    private hasKeyForProvider(provider: LLMProvider): boolean {
+        switch (provider) {
+            case 'openai': return !!this.openaiKey && !this.openaiKey.startsWith('your_');
+            case 'google': return !!this.googleKey && !this.googleKey.startsWith('your_');
+            case 'anthropic': return !!this.anthropicKey && !this.anthropicKey.startsWith('your_');
+            case 'nvidia': return !!this.nvidiaKey && !this.nvidiaKey.startsWith('your_');
+            case 'openrouter': return !!this.openrouterKey && !this.openrouterKey.startsWith('your_');
+            case 'bedrock': return !!this.bedrockAccessKeyId;
+            default: return false;
+        }
+    }
+
+    /** Return a cheap/fast model name appropriate for the given provider. */
+    private getFastModelForProvider(provider: LLMProvider): string {
+        switch (provider) {
+            case 'openai': return 'gpt-4o-mini';
+            case 'google': return 'gemini-2.0-flash-lite';
+            case 'anthropic': return 'claude-3-5-haiku-latest';
+            case 'nvidia': return 'meta/llama-3.3-70b-instruct';
+            case 'openrouter': return 'google/gemini-2.0-flash-exp:free';
+            case 'bedrock': return this.modelName;
+            default: return this.modelName;
+        }
+    }
+
     public async call(prompt: string, systemMessage?: string, provider?: LLMProvider, modelOverride?: string): Promise<string> {
         const primaryProvider = provider || this.preferredProvider || this.inferProvider(modelOverride || this.modelName);
         
@@ -269,7 +334,14 @@ export class MultiLLM {
             tools: anthropicTools,
         };
         if (systemMessage) {
-            body.system = systemMessage;
+            // Use structured content block with cache_control for prompt caching
+            body.system = [
+                {
+                    type: 'text',
+                    text: systemMessage,
+                    cache_control: { type: 'ephemeral' }
+                }
+            ];
         }
 
         try {
@@ -279,6 +351,7 @@ export class MultiLLM {
                     'Content-Type': 'application/json',
                     'x-api-key': this.anthropicKey,
                     'anthropic-version': '2023-06-01',
+                    'anthropic-beta': 'prompt-caching-2024-07-31',
                 },
                 body: JSON.stringify(body),
             });
@@ -1000,9 +1073,17 @@ export class MultiLLM {
             ]
         };
 
-        // Anthropic Messages API uses a top-level "system" field, not a system message in the array
+        // Anthropic Messages API uses a top-level "system" field, not a system message in the array.
+        // Use structured content block with cache_control for prompt caching.
+        // This can save 90% of input token costs on repeated system prompts.
         if (systemMessage) {
-            body.system = systemMessage;
+            body.system = [
+                {
+                    type: 'text',
+                    text: systemMessage,
+                    cache_control: { type: 'ephemeral' }
+                }
+            ];
         }
 
         try {
@@ -1012,6 +1093,7 @@ export class MultiLLM {
                     'Content-Type': 'application/json',
                     'x-api-key': this.anthropicKey,
                     'anthropic-version': '2023-06-01',
+                    'anthropic-beta': 'prompt-caching-2024-07-31',
                 },
                 body: JSON.stringify(body),
             });

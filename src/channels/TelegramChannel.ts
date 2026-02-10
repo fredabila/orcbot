@@ -100,17 +100,39 @@ export class TelegramChannel implements IChannel {
                 }
             }
 
+            // Auto-analyze images/video/documents so the agent sees media context immediately
+            // instead of needing a separate analyze_media step (which causes split responses)
+            let mediaAnalysis = '';
+            if (mediaPath && !transcription && (photo || doc || video)) {
+                try {
+                    const mediaType = photo ? 'image' : video ? 'video' : 'document';
+                    logger.info(`Telegram: Auto-analyzing ${mediaType} from ${userName}...`);
+                    const prompt = text
+                        ? `The user sent this ${mediaType} with the message: "${text}". Describe what you see in detail.`
+                        : `Describe the content of this ${mediaType} in detail.`;
+                    mediaAnalysis = await this.agent.llm.analyzeMedia(mediaPath, prompt);
+                    if (mediaAnalysis) {
+                        logger.info(`Telegram: Analyzed ${mediaType} from ${userName}: "${mediaAnalysis.substring(0, 100)}..."`);
+                    }
+                } catch (e) {
+                    logger.warn(`Telegram: Auto media analysis failed: ${e}`);
+                }
+            }
+
             if (!text && !mediaPath) return;
 
             logger.info(`Telegram: Message from ${userName} (${userId}): ${text || transcription || '[Media]'} | autoReply=${autoReplyEnabled}`);
 
-            // Build content with transcription if available
+            // Build content with transcription / media analysis if available
             const voiceLabel = transcription ? ` [Voice message transcription: "${transcription}"]` : '';
+            const mediaLabel = mediaAnalysis ? ` [Media analysis: ${mediaAnalysis}]` : '';
             const content = text 
-                ? `User ${userName} (Telegram ${userId}) said: ${text}${voiceLabel}${replyContext ? ' ' + replyContext : ''}`
+                ? `User ${userName} (Telegram ${userId}) said: ${text}${voiceLabel}${mediaLabel}${replyContext ? ' ' + replyContext : ''}`
                 : transcription
                     ? `User ${userName} (Telegram ${userId}) sent a voice message: "${transcription}"${replyContext ? ' ' + replyContext : ''}`
-                    : `User ${userName} (Telegram ${userId}) sent a file: ${path.basename(mediaPath)}${replyContext ? ' ' + replyContext : ''}`;
+                    : mediaAnalysis
+                        ? `User ${userName} (Telegram ${userId}) sent media: ${path.basename(mediaPath)} [Media analysis: ${mediaAnalysis}]${replyContext ? ' ' + replyContext : ''}`
+                        : `User ${userName} (Telegram ${userId}) sent a file: ${path.basename(mediaPath)}${replyContext ? ' ' + replyContext : ''}`;
 
             // Store user message in memory
             this.agent.memory.saveMemory({
@@ -136,11 +158,12 @@ export class TelegramChannel implements IChannel {
                 return;
             }
 
-            // Push task to agent — include transcription in task so agent knows what was said
+            // Push task to agent — include transcription/analysis in task so agent has full context
             const displayText = text || (transcription ? `[Voice: "${transcription}"]` : '[Media]');
+            const mediaContext = mediaAnalysis ? ` [Media analysis: ${mediaAnalysis}]` : '';
             const taskDescription = replyContext
-                ? `Telegram message from ${userName}: "${displayText}" ${replyContext}${mediaPath ? ` (File stored at: ${mediaPath})` : ''}`
-                : `Telegram message from ${userName}: "${displayText}"${mediaPath ? ` (File stored at: ${mediaPath})` : ''}`;
+                ? `Telegram message from ${userName}: "${displayText}"${mediaContext} ${replyContext}${mediaPath ? ` (File stored at: ${mediaPath})` : ''}`
+                : `Telegram message from ${userName}: "${displayText}"${mediaContext}${mediaPath ? ` (File stored at: ${mediaPath})` : ''}`;
             
             await this.agent.pushTask(
                 taskDescription,

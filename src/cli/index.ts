@@ -753,6 +753,15 @@ program
     });
 
 program
+    .command('latency')
+    .description('Run latency benchmark on agent subsystems')
+    .option('--llm', 'Include LLM round-trip benchmark (requires API key)')
+    .action(async (opts) => {
+        banner();
+        await runLatencyBenchmark({ includeLLM: !!opts.llm });
+    });
+
+program
     .command('daemon')
     .description('Manage daemon process')
     .argument('[action]', 'Action: status, stop', 'status')
@@ -1200,6 +1209,281 @@ lightpandaCommand
         console.log('✅ Browser engine set to Playwright (Chrome)');
     });
 
+// ── Latency Benchmark ──────────────────────────────────────────────────
+
+interface BenchmarkResult {
+    name: string;
+    latencyMs: number;
+    detail?: string;
+    error?: string;
+}
+
+function latencyColor(ms: number): (s: string) => string {
+    if (ms < 50) return brightGreen;
+    if (ms < 200) return green;
+    if (ms < 500) return yellow;
+    return red;
+}
+
+function formatMs(ms: number): string {
+    if (ms < 1) return `${(ms * 1000).toFixed(0)}µs`;
+    if (ms < 1000) return `${ms.toFixed(1)}ms`;
+    return `${(ms / 1000).toFixed(2)}s`;
+}
+
+async function runLatencyBenchmark(opts: { includeLLM?: boolean; interactive?: boolean } = {}) {
+    const { performance } = await import('perf_hooks');
+    const results: BenchmarkResult[] = [];
+
+    sectionHeader('⏱️', 'Latency Benchmark');
+    console.log(dim('  Measuring key subsystem latencies...\n'));
+
+    // ── 1. Bootstrap file loading (cold) ────────────────────────────────
+    process.stdout.write(`  ${cyan('▸')} Bootstrap load (cold)...`);
+    try {
+        // Force cache clear for cold measurement
+        (agent.bootstrap as any)._cache?.clear?.();
+        const t0 = performance.now();
+        agent.bootstrap.loadBootstrapContext();
+        const dt = performance.now() - t0;
+        results.push({ name: 'Bootstrap load (cold)', latencyMs: dt });
+        console.log(`  ${latencyColor(dt)(formatMs(dt))}`);
+    } catch (e: any) {
+        results.push({ name: 'Bootstrap load (cold)', latencyMs: -1, error: e.message });
+        console.log(`  ${red('ERROR')}`);
+    }
+
+    // ── 2. Bootstrap file loading (cached / warm) ───────────────────────
+    process.stdout.write(`  ${cyan('▸')} Bootstrap load (warm)...`);
+    try {
+        const t0 = performance.now();
+        agent.bootstrap.loadBootstrapContext();
+        const dt = performance.now() - t0;
+        results.push({ name: 'Bootstrap load (warm)', latencyMs: dt });
+        console.log(`  ${latencyColor(dt)(formatMs(dt))}`);
+    } catch (e: any) {
+        results.push({ name: 'Bootstrap load (warm)', latencyMs: -1, error: e.message });
+        console.log(`  ${red('ERROR')}`);
+    }
+
+    // ── 3. Memory save (write-behind buffer) ────────────────────────────
+    process.stdout.write(`  ${cyan('▸')} Memory save (buffered)...`);
+    try {
+        const testEntry = {
+            id: `latency-bench-${Date.now()}`,
+            type: 'short' as const,
+            content: 'Latency benchmark test entry — safe to ignore',
+            timestamp: new Date().toISOString(),
+            metadata: { source: 'latency-bench' }
+        };
+        const t0 = performance.now();
+        agent.memory.saveMemory(testEntry);
+        const dt = performance.now() - t0;
+        results.push({ name: 'Memory save (buffered)', latencyMs: dt, detail: 'write-behind, no disk I/O' });
+        console.log(`  ${latencyColor(dt)(formatMs(dt))}`);
+
+        // Clean up test entry
+        const memories = agent.memory.searchMemory('short');
+        const idx = memories.findIndex(m => m.id === testEntry.id);
+        if (idx >= 0) memories.splice(idx, 1);
+    } catch (e: any) {
+        results.push({ name: 'Memory save (buffered)', latencyMs: -1, error: e.message });
+        console.log(`  ${red('ERROR')}`);
+    }
+
+    // ── 4. Memory flush to disk ─────────────────────────────────────────
+    process.stdout.write(`  ${cyan('▸')} Memory flush to disk...`);
+    try {
+        const t0 = performance.now();
+        agent.memory.flushToDisk();
+        const dt = performance.now() - t0;
+        results.push({ name: 'Memory flush (disk write)', latencyMs: dt });
+        console.log(`  ${latencyColor(dt)(formatMs(dt))}`);
+    } catch (e: any) {
+        results.push({ name: 'Memory flush (disk write)', latencyMs: -1, error: e.message });
+        console.log(`  ${red('ERROR')}`);
+    }
+
+    // ── 5. Memory search (short) ────────────────────────────────────────
+    process.stdout.write(`  ${cyan('▸')} Memory search (short)...`);
+    try {
+        const t0 = performance.now();
+        const shorts = agent.memory.searchMemory('short');
+        const dt = performance.now() - t0;
+        results.push({ name: 'Memory search (short)', latencyMs: dt, detail: `${shorts.length} entries` });
+        console.log(`  ${latencyColor(dt)(formatMs(dt))} ${dim(`(${shorts.length} entries)`)}`);
+    } catch (e: any) {
+        results.push({ name: 'Memory search (short)', latencyMs: -1, error: e.message });
+        console.log(`  ${red('ERROR')}`);
+    }
+
+    // ── 6. Memory search (episodic) ─────────────────────────────────────
+    process.stdout.write(`  ${cyan('▸')} Memory search (episodic)...`);
+    try {
+        const t0 = performance.now();
+        const eps = agent.memory.searchMemory('episodic');
+        const dt = performance.now() - t0;
+        results.push({ name: 'Memory search (episodic)', latencyMs: dt, detail: `${eps.length} entries` });
+        console.log(`  ${latencyColor(dt)(formatMs(dt))} ${dim(`(${eps.length} entries)`)}`);
+    } catch (e: any) {
+        results.push({ name: 'Memory search (episodic)', latencyMs: -1, error: e.message });
+        console.log(`  ${red('ERROR')}`);
+    }
+
+    // ── 7. Recent context retrieval ─────────────────────────────────────
+    process.stdout.write(`  ${cyan('▸')} Recent context (top 20)...`);
+    try {
+        const t0 = performance.now();
+        const ctx = agent.memory.getRecentContext(20);
+        const dt = performance.now() - t0;
+        results.push({ name: 'Recent context (top 20)', latencyMs: dt, detail: `${ctx.length} items` });
+        console.log(`  ${latencyColor(dt)(formatMs(dt))} ${dim(`(${ctx.length} items)`)}`);
+    } catch (e: any) {
+        results.push({ name: 'Recent context (top 20)', latencyMs: -1, error: e.message });
+        console.log(`  ${red('ERROR')}`);
+    }
+
+    // ── 8. Config read ──────────────────────────────────────────────────
+    process.stdout.write(`  ${cyan('▸')} Config read (hot)...`);
+    try {
+        const keys = ['model', 'maxSteps', 'sudoMode', 'fastModelName', 'telegramToken'];
+        const t0 = performance.now();
+        for (const k of keys) agent.config.get(k);
+        const dt = performance.now() - t0;
+        results.push({ name: 'Config read (5 keys)', latencyMs: dt });
+        console.log(`  ${latencyColor(dt)(formatMs(dt))}`);
+    } catch (e: any) {
+        results.push({ name: 'Config read (5 keys)', latencyMs: -1, error: e.message });
+        console.log(`  ${red('ERROR')}`);
+    }
+
+    // ── 9. Action queue operations ──────────────────────────────────────
+    process.stdout.write(`  ${cyan('▸')} Action queue peek...`);
+    try {
+        const t0 = performance.now();
+        agent.actionQueue.getNext();
+        const dt = performance.now() - t0;
+        const allActions = agent.actionQueue.getQueue();
+        results.push({ name: 'Action queue peek', latencyMs: dt, detail: `${allActions.length} queued` });
+        console.log(`  ${latencyColor(dt)(formatMs(dt))} ${dim(`(${allActions.length} queued)`)}`);
+    } catch (e: any) {
+        results.push({ name: 'Action queue peek', latencyMs: -1, error: e.message });
+        console.log(`  ${red('ERROR')}`);
+    }
+
+    // ── 10. Skills matching ─────────────────────────────────────────────
+    process.stdout.write(`  ${cyan('▸')} Skills match (sample task)...`);
+    try {
+        const t0 = performance.now();
+        const matched = agent.skills.matchSkillsForTask('search for latest news and send a summary');
+        const dt = performance.now() - t0;
+        results.push({ name: 'Skills match (sample)', latencyMs: dt, detail: `${matched.length} matched` });
+        console.log(`  ${latencyColor(dt)(formatMs(dt))} ${dim(`(${matched.length} skills)`)}`);
+    } catch (e: any) {
+        results.push({ name: 'Skills match (sample)', latencyMs: -1, error: e.message });
+        console.log(`  ${red('ERROR')}`);
+    }
+
+    // ── 11. LLM round-trip (optional) ───────────────────────────────────
+    if (opts.includeLLM) {
+        // Fast model ping
+        process.stdout.write(`  ${cyan('▸')} LLM ping (fast model)...`);
+        try {
+            const t0 = performance.now();
+            await agent.llm.callFast('Respond with the single word: pong');
+            const dt = performance.now() - t0;
+            const fastModel = agent.config.get('fastModelName') || 'gpt-4o-mini';
+            results.push({ name: `LLM ping (${fastModel})`, latencyMs: dt });
+            console.log(`  ${latencyColor(dt)(formatMs(dt))}`);
+        } catch (e: any) {
+            results.push({ name: 'LLM ping (fast model)', latencyMs: -1, error: e.message });
+            console.log(`  ${red('ERROR')} ${dim(e.message?.slice(0, 60))}`);
+        }
+
+        // Primary model ping
+        process.stdout.write(`  ${cyan('▸')} LLM ping (primary model)...`);
+        try {
+            const t0 = performance.now();
+            await agent.llm.call('Respond with the single word: pong');
+            const dt = performance.now() - t0;
+            const model = agent.config.get('model') || 'unknown';
+            results.push({ name: `LLM ping (${model})`, latencyMs: dt });
+            console.log(`  ${latencyColor(dt)(formatMs(dt))}`);
+        } catch (e: any) {
+            results.push({ name: 'LLM ping (primary model)', latencyMs: -1, error: e.message });
+            console.log(`  ${red('ERROR')} ${dim(e.message?.slice(0, 60))}`);
+        }
+    }
+
+    // ── Summary table ───────────────────────────────────────────────────
+    console.log('');
+    const successResults = results.filter(r => r.latencyMs >= 0);
+    const failedResults = results.filter(r => r.latencyMs < 0);
+
+    const summaryLines: string[] = [];
+    const maxNameLen = Math.max(...results.map(r => r.name.length));
+
+    for (const r of successResults) {
+        const nameStr = r.name.padEnd(maxNameLen + 2);
+        const msStr = formatMs(r.latencyMs);
+        const colorFn = latencyColor(r.latencyMs);
+        const barW = 15;
+        // Scale: <1ms = 1 block, 50ms = 4, 200ms = 8, 1s = 12, 5s+ = 15
+        const logMs = Math.log10(Math.max(r.latencyMs, 0.01) + 1);
+        const blocks = Math.min(barW, Math.max(1, Math.round(logMs * 4)));
+        const bar = colorFn('█'.repeat(blocks)) + dim('░'.repeat(barW - blocks));
+        summaryLines.push(`${dim(nameStr)}${bar} ${colorFn(msStr.padStart(8))}${r.detail ? '  ' + dim(r.detail) : ''}`);
+    }
+
+    for (const r of failedResults) {
+        const nameStr = r.name.padEnd(maxNameLen + 2);
+        summaryLines.push(`${dim(nameStr)}${red('FAILED'.padStart(24))}  ${dim(r.error?.slice(0, 40) || '')}`);
+    }
+
+    box(summaryLines, { title: 'BENCHMARK RESULTS', width: 78, color: c.brightCyan });
+
+    // ── Totals and ratings ──────────────────────────────────────────────
+    const totalLocal = successResults
+        .filter(r => !r.name.startsWith('LLM'))
+        .reduce((sum, r) => sum + r.latencyMs, 0);
+    const totalLLM = successResults
+        .filter(r => r.name.startsWith('LLM'))
+        .reduce((sum, r) => sum + r.latencyMs, 0);
+
+    console.log('');
+    kvLine('Local ops total:', latencyColor(totalLocal)(formatMs(totalLocal)));
+    if (totalLLM > 0) {
+        kvLine('LLM round-trips:', latencyColor(totalLLM)(formatMs(totalLLM)));
+    }
+    kvLine('Estimated per-step:', dim(`~${formatMs(totalLocal + (totalLLM || 0))} + prompt assembly`));
+
+    // Rating
+    const rating = totalLocal < 10 ? 'Excellent' : totalLocal < 50 ? 'Good' : totalLocal < 200 ? 'Acceptable' : 'Needs optimization';
+    const ratingColor = totalLocal < 10 ? brightGreen : totalLocal < 50 ? green : totalLocal < 200 ? yellow : red;
+    kvLine('Rating (local):', ratingColor(`${rating}`));
+
+    if (!opts.includeLLM) {
+        console.log('');
+        console.log(dim('  Tip: Use ') + cyan('orcbot latency --llm') + dim(' to include LLM round-trip benchmarks'));
+    }
+    console.log('');
+
+    // In TUI interactive mode, offer to run with LLM
+    if (opts.interactive && !opts.includeLLM) {
+        const { runLLM } = await inquirer.prompt([{
+            type: 'confirm',
+            name: 'runLLM',
+            message: 'Also benchmark LLM round-trip latency?',
+            default: false
+        }]);
+        if (runLLM) {
+            await runLatencyBenchmark({ includeLLM: true, interactive: false });
+        } else {
+            await waitKeyPress();
+        }
+    }
+}
+
 async function showMainMenu() {
     console.clear();
     banner();
@@ -1260,6 +1544,7 @@ async function showMainMenu() {
                 { name: `${c.brightYellow || c.yellow}🤖${c.reset} Agentic User (HITL Proxy)`, value: 'agentic_user' },
                 { name: `${c.red}🔒${c.reset} Security & Permissions`, value: 'security' },
                 { name: `${c.green}📈${c.reset} Token Usage`, value: 'tokens' },
+                { name: `${c.brightCyan}⏱️${c.reset}  Latency Benchmark`, value: 'latency' },
                 new inquirer.Separator(cyan(' ─── System ') + gray('─'.repeat(27))),
                 { name: `${c.gray}⚙️ ${c.reset} Configure Agent`, value: 'config' },
                 { name: `${c.gray}⬆️ ${c.reset} Update OrcBot`, value: 'update' },
@@ -1312,6 +1597,10 @@ async function showMainMenu() {
         case 'tokens':
             showTokenUsage();
             await waitKeyPress();
+            await showMainMenu();
+            break;
+        case 'latency':
+            await runLatencyBenchmark({ includeLLM: false, interactive: true });
             await showMainMenu();
             break;
         case 'config':

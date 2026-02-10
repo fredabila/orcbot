@@ -9,10 +9,21 @@ export class JSONAdapter {
     private cache: any = null;
     private writeLock: boolean = false;
 
-    constructor(filePath: string) {
+    // ── Write-behind buffer ──
+    // Instead of writing to disk on every save(), we mark the cache as dirty
+    // and flush periodically (default 500ms) or on explicit flush() call.
+    // This coalesces multiple saves per step into a single disk write.
+    private _dirty: boolean = false;
+    private _flushTimer: ReturnType<typeof setTimeout> | null = null;
+    private _flushIntervalMs: number = 500;
+
+    constructor(filePath: string, options?: { flushIntervalMs?: number }) {
         this.filePath = filePath;
         this.backupPath = filePath + '.bak';
         this.tmpPath = filePath + '.tmp';
+        if (options?.flushIntervalMs !== undefined) {
+            this._flushIntervalMs = options.flushIntervalMs;
+        }
         this.initialize();
     }
 
@@ -71,7 +82,47 @@ export class JSONAdapter {
     public save(key: string, value: any) {
         if (!this.cache) this.read();
         this.cache[key] = value;
-        this.atomicWrite();
+        this._scheduleDeferredWrite();
+    }
+
+    /**
+     * Schedule a deferred disk write. Multiple save() calls within the flush
+     * interval are coalesced into a single atomicWrite(), eliminating redundant
+     * blocking I/O during high-frequency save bursts (e.g., multiple memory
+     * saves per agent step).
+     */
+    private _scheduleDeferredWrite(): void {
+        this._dirty = true;
+        if (this._flushTimer) return; // Already scheduled
+        this._flushTimer = setTimeout(() => {
+            this._flushTimer = null;
+            if (this._dirty) {
+                this.atomicWrite();
+                this._dirty = false;
+            }
+        }, this._flushIntervalMs);
+    }
+
+    /**
+     * Force an immediate flush of any pending writes to disk.
+     * Call this at step boundaries, action completion, or shutdown.
+     */
+    public flush(): void {
+        if (this._flushTimer) {
+            clearTimeout(this._flushTimer);
+            this._flushTimer = null;
+        }
+        if (this._dirty) {
+            this.atomicWrite();
+            this._dirty = false;
+        }
+    }
+
+    /**
+     * Shut down the adapter cleanly: flush pending writes and cancel timers.
+     */
+    public shutdown(): void {
+        this.flush();
     }
 
     public get(key: string) {

@@ -290,15 +290,36 @@ export class WhatsAppChannel implements IChannel {
                             }
                         }
 
+                        // Auto-analyze images/video/documents so agent sees media context immediately
+                        let mediaAnalysis = '';
+                        if (mediaPath && !transcription && (imageMsg || docMsg || videoMsg)) {
+                            try {
+                                const mediaType = imageMsg ? 'image' : videoMsg ? 'video' : 'document';
+                                logger.info(`WhatsApp: Auto-analyzing ${mediaType} from ${senderName}...`);
+                                const prompt = text
+                                    ? `The user sent this ${mediaType} with the message: "${text}". Describe what you see in detail.`
+                                    : `Describe the content of this ${mediaType} in detail.`;
+                                mediaAnalysis = await this.agent.llm.analyzeMedia(mediaPath, prompt);
+                                if (mediaAnalysis) {
+                                    logger.info(`WhatsApp: Analyzed ${mediaType} from ${senderName}: "${mediaAnalysis.substring(0, 100)}..."`);
+                                }
+                            } catch (e) {
+                                logger.warn(`WhatsApp: Auto media analysis failed: ${e}`);
+                            }
+                        }
+
                         logger.info(`WhatsApp Msg: ${senderName} (${senderId}): ${text || transcription || '[Media]'} [ID: ${messageId}] | autoReply=${this.autoReplyEnabled}`);
 
-                        // Build content string that includes media info + transcription
+                        // Build content string that includes media info + transcription/analysis
                         const voiceLabel = transcription ? ` [Voice message transcription: "${transcription}"]` : '';
+                        const mediaLabel = mediaAnalysis ? ` [Media analysis: ${mediaAnalysis}]` : '';
                         const contentStr = text 
-                            ? `User ${senderName} (${senderId}) said on WhatsApp: ${text}${voiceLabel}${replyContext ? ' ' + replyContext : ''}`
+                            ? `User ${senderName} (${senderId}) said on WhatsApp: ${text}${voiceLabel}${mediaLabel}${replyContext ? ' ' + replyContext : ''}`
                             : transcription
                                 ? `User ${senderName} (${senderId}) sent a voice message on WhatsApp: "${transcription}"${replyContext ? ' ' + replyContext : ''}`
-                                : `User ${senderName} (${senderId}) sent a file on WhatsApp: ${path.basename(mediaPath)}${replyContext ? ' ' + replyContext : ''}`;
+                                : mediaAnalysis
+                                    ? `User ${senderName} (${senderId}) sent media on WhatsApp: ${path.basename(mediaPath)} [Media analysis: ${mediaAnalysis}]${replyContext ? ' ' + replyContext : ''}`
+                                    : `User ${senderName} (${senderId}) sent a file on WhatsApp: ${path.basename(mediaPath)}${replyContext ? ' ' + replyContext : ''}`;
 
                         // Save to memory for context
                         this.agent.memory.saveMemory({
@@ -325,18 +346,19 @@ export class WhatsAppChannel implements IChannel {
                         // Treat as Command if from Owner (self-chat - message from yourself on another device)
                         // Note: isSelfChat means the remoteJid equals owner's JID (messaging yourself)
                         const mediaNote = mediaPath ? ` (File stored at: ${mediaPath})` : '';
+                        const mediaContext = mediaAnalysis ? ` [Media analysis: ${mediaAnalysis}]` : '';
                         const displayText = text || (transcription ? `[Voice: "${transcription}"]` : '[Media]');
 
                         if (isSelfChat) {
                             await this.agent.pushTask(
-                                `WhatsApp command from yourself (ID: ${messageId}): \"${displayText}\"${replyNote}${mediaNote}${profileInstruction}`,
+                                `WhatsApp command from yourself (ID: ${messageId}): \"${displayText}\"${mediaContext}${replyNote}${mediaNote}${profileInstruction}`,
                                 10,
                                 { source: 'whatsapp', sourceId: senderId, senderName: senderName, isOwner: true, messageId, quotedMessageId, replyContext: replyContext || undefined, mediaPath: mediaPath || undefined }
                             );
                         } else if (this.autoReplyEnabled) {
                             // Treat as External Interaction for AI to decide on
                             await this.agent.pushTask(
-                                `EXTERNAL WHATSAPP MESSAGE from ${senderName} (ID: ${messageId}): \"${displayText}\"${replyNote}${mediaNote}. \n\nGoal: Decide if you should respond${reactInstruction} to this person on my behalf based on our history and my persona. If yes, use 'send_whatsapp'${reactInstruction}.${profileInstruction}`,
+                                `EXTERNAL WHATSAPP MESSAGE from ${senderName} (ID: ${messageId}): \"${displayText}\"${mediaContext}${replyNote}${mediaNote}. \n\nGoal: Decide if you should respond${reactInstruction} to this person on my behalf based on our history and my persona. If yes, use 'send_whatsapp'${reactInstruction}.${profileInstruction}`,
                                 5,
                                 { source: 'whatsapp', sourceId: senderId, senderName: senderName, isExternal: true, messageId, quotedMessageId, replyContext: replyContext || undefined, mediaPath: mediaPath || undefined }
                             );

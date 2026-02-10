@@ -28,6 +28,13 @@ export class DecisionEngine {
     private bootstrap?: BootstrapManager;
     private knowledgeStore?: KnowledgeStore;
 
+    // ── Per-action prompt cache ──
+    // The core instructions (bootstrap + identity + skills + helpers) are ~80% identical
+    // across steps within the same action. Cache the expensive buildHelperPrompt() result
+    // and only rebuild on first step or when the action ID changes.
+    private _cachedCoreInstructions: string = '';
+    private _cachedCoreActionId: string = '';
+
     constructor(
         private memory: MemoryManager,
         private llm: MultiLLM,
@@ -680,25 +687,27 @@ The user appreciates knowing what's happening, especially during complex tasks. 
             ? otherMemories.map(c => `[${c.type}] ${c.content}`).join('\n')
             : '';
 
-        // SEMANTIC LONG-TERM RECALL: Search the entire vector store for memories
-        // relevant to this task — across ALL channels, ALL memory types.
-        // This is how the agent "remembers" things from days/weeks ago.
-        // Skip for heartbeats — the heartbeat prompt includes its own recent context.
+        // ── PARALLEL ASYNC RETRIEVAL ──
+        // Semantic recall, episodic retrieval, and RAG are independent async operations.
+        // Running them in parallel instead of sequentially saves 200-1000ms per step.
         let semanticRecallString = '';
-        if (!isHeartbeat) {
-        try {
-            if (this.memory.vectorMemory?.isEnabled()) {
-                // Collect IDs already shown to avoid duplicates
-                const shownIds = new Set<string>();
-                for (const m of [...actionMemories, ...otherMemories]) {
-                    if (m.id) shownIds.add(m.id);
-                }
-                // Also exclude thread context memories
-                // (threadContextString is already built from merged memories above)
+        let semanticEpisodicString = '';
+        let ragContext = '';
 
-                const recalled = await this.memory.semanticRecall(taskDescription, 6, shownIds);
-                if (recalled.length > 0) {
-                    semanticRecallString = recalled
+        if (!isHeartbeat) {
+            // Collect shown IDs for dedup (used by semantic recall)
+            const shownIds = new Set<string>();
+            for (const m of [...actionMemories, ...otherMemories]) {
+                if (m.id) shownIds.add(m.id);
+            }
+
+            const [recallResult, episodicResult, ragResult] = await Promise.allSettled([
+                // 1. Semantic long-term recall
+                (async () => {
+                    if (!this.memory.vectorMemory?.isEnabled()) return '';
+                    const recalled = await this.memory.semanticRecall(taskDescription, 6, shownIds);
+                    if (recalled.length === 0) return '';
+                    return recalled
                         .map(r => {
                             const ts = r.timestamp || '';
                             const src = r.metadata?.source ? ` [${r.metadata.source}]` : '';
@@ -706,32 +715,33 @@ The user appreciates knowing what's happening, especially during complex tasks. 
                             return `[${ts}]${src} (relevance: ${(r.score * 100).toFixed(0)}%) ${content}`;
                         })
                         .join('\n');
-                }
-            }
-        } catch {
-            // Best-effort only — agent still works without this
-        }
-        }
+                })(),
+                // 2. Semantic episodic retrieval
+                (async () => {
+                    const relevantEpisodic = await this.memory.getRelevantEpisodicMemories(taskDescription, 5);
+                    if (relevantEpisodic.length === 0) return '';
+                    return relevantEpisodic
+                        .map(m => {
+                            const ts = m.timestamp || '';
+                            const content = (m.content || '').length > 500 ? m.content.slice(0, 500) + '…' : m.content;
+                            return `[${ts}] ${content}`;
+                        })
+                        .join('\n');
+                })(),
+                // 3. RAG knowledge store retrieval
+                (async () => {
+                    if (!this.knowledgeStore) return '';
+                    const result = await this.knowledgeStore.retrieveForTask(taskDescription, 5);
+                    if (result) {
+                        logger.info(`DecisionEngine: RAG retrieved ${result.split('\n---').length} knowledge chunks for task`);
+                    }
+                    return result || '';
+                })()
+            ]);
 
-        // SEMANTIC EPISODIC RETRIEVAL: Instead of just the last N episodic summaries,
-        // find the ones most relevant to the current task
-        // Skip for heartbeats — the heartbeat prompt is self-contained.
-        let semanticEpisodicString = '';
-        if (!isHeartbeat) {
-        try {
-            const relevantEpisodic = await this.memory.getRelevantEpisodicMemories(taskDescription, 5);
-            if (relevantEpisodic.length > 0) {
-                semanticEpisodicString = relevantEpisodic
-                    .map(m => {
-                        const ts = m.timestamp || '';
-                        const content = (m.content || '').length > 500 ? m.content.slice(0, 500) + '…' : m.content;
-                        return `[${ts}] ${content}`;
-                    })
-                    .join('\n');
-            }
-        } catch {
-            // Fall through — episodic context is still available via getRecentContext
-        }
+            semanticRecallString = recallResult.status === 'fulfilled' ? recallResult.value : '';
+            semanticEpisodicString = episodicResult.status === 'fulfilled' ? episodicResult.value : '';
+            ragContext = ragResult.status === 'fulfilled' ? ragResult.value : '';
         }
 
         // Channel instructions and contact profiles — irrelevant for heartbeats (source='autonomy')
@@ -807,31 +817,29 @@ Respond conversationally. If the user asks you to do something that requires ele
         const safeOtherContext = isAdmin ? otherContextString : '';
         const safeContactProfile = isAdmin ? contactProfile : undefined;
 
-        // RAG auto-retrieval — fetch relevant knowledge store chunks for this task
-        let ragContext = '';
-        if (this.knowledgeStore) {
-            try {
-                const ragResult = await this.knowledgeStore.retrieveForTask(taskDescription, 5);
-                if (ragResult) {
-                    ragContext = ragResult;
-                    logger.info(`DecisionEngine: RAG retrieved ${ragResult.split('\n---').length} knowledge chunks for task`);
-                }
-            } catch (e: any) {
-                logger.warn(`DecisionEngine: RAG retrieval failed: ${e.message}`);
-            }
+        // ── Per-action prompt cache ──
+        // The core instructions (bootstrap + identity + skills + prompt helpers) change
+        // rarely within an action — typically only on step 1 when skills are auto-activated.
+        // Reuse the cached version for subsequent steps to skip the expensive
+        // PromptRouter + helper assembly + bootstrap loading.
+        let coreInstructions: string;
+        if (this._cachedCoreActionId === actionId && !isFirstStep && this._cachedCoreInstructions) {
+            coreInstructions = this._cachedCoreInstructions;
+        } else {
+            coreInstructions = await this.buildHelperPrompt(
+                availableSkills,
+                this.agentIdentity,
+                taskDescription,
+                metadata,
+                isFirstStep,
+                safeContactProfile,
+                isAdmin ? profilingEnabled : false,
+                isHeartbeat,
+                skillsUsedInAction
+            );
+            this._cachedCoreInstructions = coreInstructions;
+            this._cachedCoreActionId = actionId;
         }
-
-        const coreInstructions = await this.buildHelperPrompt(
-            availableSkills,
-            this.agentIdentity,
-            taskDescription,
-            metadata,
-            isFirstStep,
-            safeContactProfile,
-            isAdmin ? profilingEnabled : false,
-            isHeartbeat,
-            skillsUsedInAction
-        );
 
         // User context - skip for heartbeats (already in heartbeat prompt)
         // Strip sensitive owner context for non-admin users — they should not see

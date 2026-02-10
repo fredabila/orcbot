@@ -129,6 +129,20 @@ export class MemoryManager {
     }
 
     /**
+     * Force pending memory writes to disk immediately.
+     * Call at step boundaries, action completion, or shutdown.
+     */
+    public flushToDisk(): void {
+        this.storage.flush();
+    }
+
+    /**
+     * Shut down memory system cleanly: flush all pending writes.
+     */
+    public shutdown(): void {
+        this.storage.shutdown();
+    }
+    /**
      * Memory flush - reminds agent to write important memories before consolidation
      * Inspired by OpenClaw's automatic memory flush system
      */

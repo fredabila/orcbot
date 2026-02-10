@@ -97,6 +97,7 @@ export interface AgentConfig {
     // Token optimization
     skipSimulationForSimpleTasks?: boolean; // Skip planning step for simple tasks (default true)
     compactSkillsPrompt?: boolean;          // Use compact skills format (default false)
+    fastModelName?: string;                 // Cheaper/faster model for internal reasoning (auto-detected from primary provider if unset)
     // Web Gateway
     gatewayPort?: number;                 // Port for web gateway (default 3100)
     gatewayHost?: string;                 // Host to bind gateway (default 0.0.0.0)
@@ -514,6 +515,7 @@ export class ConfigManager {
             memoryConsolidationBatch: 20,
             skipSimulationForSimpleTasks: true,
             compactSkillsPrompt: false,
+            fastModelName: undefined,
             imageGenProvider: undefined,
             imageGenModel: undefined,
             imageGenSize: '1024x1024',

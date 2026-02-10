@@ -165,6 +165,13 @@ export class Agent {
             bedrockSessionToken: this.config.get('bedrockSessionToken'),
             tokenTracker
         });
+
+        // Configure fast model for internal reasoning (reviews, reflections, classification)
+        const fastModel = this.config.get('fastModelName');
+        if (fastModel) {
+            this.llm.setFastModel(fastModel);
+        }
+
         this.skills = new SkillsManager(
             this.config.get('skillsPath') || './SKILLS.md',
             this.config.get('pluginsPath') || './plugins',
@@ -4719,7 +4726,7 @@ RULES:
 Respond with ONLY valid JSON:
 { "decision": "continue" | "terminate", "reason": "brief explanation" }`;
 
-            const response = await this.llm.call(reviewPrompt, 'You are a task reviewer. Respond only with valid JSON.');
+            const response = await this.llm.callFast(reviewPrompt, 'You are a task reviewer. Respond only with valid JSON.');
             const match = response.match(/\{[\s\S]*\}/);
             if (match) {
                 const parsed = JSON.parse(match[0]);
@@ -4922,7 +4929,7 @@ Format your response EXACTLY as:
 LEARNINGS: <content or NONE>
 REFLECTION: <1-2 sentences>`;
 
-            const response = await this.llm.call(extractPrompt, 'Post-action reflection');
+            const response = await this.llm.callFast(extractPrompt, 'Post-action reflection');
             if (!response || response.length < 20) return;
 
             // Parse the LLM response
@@ -5014,7 +5021,7 @@ REFLECTION: <1-2 sentences>`;
         }
 
         try {
-            const response = await this.llm.call(
+            const response = await this.llm.callFast(
                 `Classify this message's complexity for an AI assistant. Message: "${payload.slice(0, 200)}"\n\nReply with ONLY one word: trivial, simple, standard, or complex.\n- trivial: greetings, thanks, acknowledgments, single emoji, casual openers\n- simple: quick factual questions, yes/no, preferences, one-line answers\n- standard: normal requests, conversation, short tasks\n- complex: research, building, coding, multi-step work, browsing, file creation, image generation`,
                 'You are a task classifier. Reply with exactly one word: trivial, simple, standard, or complex. Nothing else.'
             );
@@ -7871,6 +7878,9 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
             this.isBusy = false;
             this.currentActionId = null;
             this.currentActionStartAt = null;
+
+            // Flush any pending memory writes to disk before moving on
+            this.memory.flushToDisk();
 
             // BACKGROUND TASK: Memory Consolidation
             // We do this in the background after the agent is marked as not busy
