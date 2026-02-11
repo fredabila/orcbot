@@ -19,7 +19,7 @@ export class ToolingHelper implements PromptHelper {
     getPrompt(ctx: PromptHelperContext): string {
         return `STRATEGIC REASONING PROTOCOLS:
 1.  **TOOLING RULE**: You may ONLY call tools listed in "Available Skills". Do NOT invent or assume tools exist.
-1b. **CRITICAL — INVISIBLE TEXT RULE**: Your text/reasoning output is NEVER visible to the user. The user CANNOT see your thoughts, analysis, or any text you write outside of tool calls. The ONLY way to communicate with the user is by calling a messaging skill (send_telegram, send_whatsapp, send_discord, send_gateway_chat). If you "answer" in text without calling a send skill, the user receives NOTHING. NEVER set goals_met=true on a channel-sourced task without having called or calling a send skill.
+1b. **CRITICAL — INVISIBLE TEXT RULE**: Your text/reasoning output is NEVER visible to the user. The user CANNOT see your thoughts, analysis, or any text you write outside of tool calls. The ONLY way to communicate with the user is by calling a messaging skill (send_telegram, send_whatsapp, send_discord, send_slack, send_gateway_chat). If you "answer" in text without calling a send skill, the user receives NOTHING. NEVER set goals_met=true on a channel-sourced task without having called or calling a send skill.
 2.  **CHAIN OF VERIFICATION (CoVe)**: Before outputting any tools, you MUST perform a verification analysis.
     - Fill out the \`verification\` block in your JSON.
     - \`analysis\`: Review the history. Did you already answer the user? Is the requested file already downloaded?
@@ -28,7 +28,7 @@ export class ToolingHelper implements PromptHelper {
     - If goals_met is false, you MUST include at least one tool to make progress (or request clarification with request_supporting_data).
 9.  **Interactive Clarification**: If a task CANNOT be safely or fully completed due to missing details, you MUST use the \`request_supporting_data\` skill. 
     - Execution will PAUSE until the user provides the answer. Do NOT guess or hallucinate missing data.
-    - IMPORTANT: If you ask a question via send_telegram/send_whatsapp/send_discord/send_gateway_chat, the system will AUTO-PAUSE and wait for user response. DO NOT continue working after asking a question.
+    - IMPORTANT: If you ask a question via send_telegram/send_whatsapp/send_discord/send_slack/send_gateway_chat, the system will AUTO-PAUSE and wait for user response. DO NOT continue working after asking a question.
     - After asking a clarifying question, set goals_met: true to terminate. The user's reply will create a NEW action.
     - **URL EXCEPTION**: If the user's message IS or CONTAINS a URL (http/https link), this is NOT ambiguous — it is an implicit request to visit the URL and report what you find. Do NOT ask for clarification. Navigate to it, read the page, and tell the user what's there. URLs are ACTION, not questions.
 10. **User Correction Override**: If the user's NEW message provides corrective information (e.g., a new password after a failed login, a corrected URL, updated credentials), this is a RETRY TRIGGER. You MUST attempt the action AGAIN with the new data, even if you previously failed. The goal is always to SUCCEED, not just to try once and give up.

@@ -1498,7 +1498,8 @@ async function showMainMenu() {
     const hasTelegram = !!agent.config.get('telegramToken');
     const hasWhatsapp = !!agent.config.get('whatsappEnabled');
     const hasDiscord = !!agent.config.get('discordToken');
-    const channelCount = [hasTelegram, hasWhatsapp, hasDiscord].filter(Boolean).length;
+    const hasSlack = !!agent.config.get('slackBotToken');
+    const channelCount = [hasTelegram, hasWhatsapp, hasDiscord, hasSlack].filter(Boolean).length;
     const agentName = agent.config.get('agentName') || 'OrcBot';
     const sudoMode = agent.config.get('sudoMode');
 
@@ -1506,6 +1507,7 @@ async function showMainMenu() {
         hasTelegram ? `${c.brightCyan}TG${c.reset}` : `${c.gray}TG${c.reset}`,
         hasWhatsapp ? `${c.brightGreen}WA${c.reset}` : `${c.gray}WA${c.reset}`,
         hasDiscord ? `${c.brightMagenta}DC${c.reset}` : `${c.gray}DC${c.reset}`,
+        hasSlack ? `${c.brightYellow}SL${c.reset}` : `${c.gray}SL${c.reset}`,
     ].join(dim(' │ '));
 
     const auActive = agent.agenticUser?.isActive();
@@ -1514,7 +1516,7 @@ async function showMainMenu() {
     box([
         `${dim('Agent')}    ${bold(agentName)}${sudoMode ? `  ${c.bgRed}${c.white}${c.bold} SUDO ${c.reset}` : ''}${agent.config.get('overrideMode') ? `  ${c.bgRed}${c.white}${c.bold} OVERRIDE ${c.reset}` : ''}`,
         `${dim('Model')}    ${brightCyan(model)} ${dim('via')} ${cyan(provider)}`,
-        `${dim('Channels')} ${channelDots}  ${dim(`(${channelCount}/3 active)`)}`,
+        `${dim('Channels')} ${channelDots}  ${dim(`(${channelCount}/4 active)`)}`,
         `${dim('HITL')}     ${auActive ? green(bold('● Active')) : auEnabled ? yellow('● Standby') : gray('○ Off')}`,
         '',
         `${dim('Queue')}    ${pendingCount > 0 ? yellow(bold(String(pendingCount))) + dim(' active') : green('idle')}${queueLen > pendingCount ? dim(` │ ${queueLen - pendingCount} completed`) : ''}`,
@@ -2433,15 +2435,18 @@ async function showConnectionsMenu() {
     const hasTelegram = !!agent.config.get('telegramToken');
     const hasWhatsapp = !!agent.config.get('whatsappEnabled');
     const hasDiscord = !!agent.config.get('discordToken');
+    const hasSlack = !!agent.config.get('slackBotToken');
     const tgAuto = agent.config.get('telegramAutoReplyEnabled');
     const waAuto = agent.config.get('whatsappAutoReplyEnabled');
     const dcAuto = agent.config.get('discordAutoReplyEnabled');
+    const slAuto = agent.config.get('slackAutoReplyEnabled');
 
     console.log('');
     const channelLines = [
         `${statusDot(hasTelegram, '')} ${bold('Telegram')}    ${hasTelegram ? green('Connected') : gray('Not configured')}  ${tgAuto ? dim('auto-reply ✓') : ''}`,
         `${statusDot(hasWhatsapp, '')} ${bold('WhatsApp')}    ${hasWhatsapp ? green('Enabled') : gray('Disabled')}        ${waAuto ? dim('auto-reply ✓') : ''}`,
         `${statusDot(hasDiscord, '')} ${bold('Discord')}     ${hasDiscord ? green('Connected') : gray('Not configured')}  ${dcAuto ? dim('auto-reply ✓') : ''}`,
+        `${statusDot(hasSlack, '')} ${bold('Slack')}       ${hasSlack ? green('Connected') : gray('Not configured')}  ${slAuto ? dim('auto-reply ✓') : ''}`,
     ];
     box(channelLines, { title: '📡 CHANNEL STATUS', width: 58, color: c.cyan });
     console.log('');
@@ -3500,6 +3505,7 @@ async function showSecurityMenu() {
     const tgAdmins = (adminUsers.telegram || []) as string[];
     const dcAdmins = (adminUsers.discord || []) as string[];
     const waAdmins = (adminUsers.whatsapp || []) as string[];
+    const slAdmins = (adminUsers.slack || []) as string[];
     const totalAdmins = tgAdmins.length + dcAdmins.length + waAdmins.length;
     const adminConfigured = totalAdmins > 0;
 
@@ -3678,14 +3684,16 @@ async function showAdminUsersMenu() {
     const tgAdmins = (adminUsers.telegram || []) as string[];
     const dcAdmins = (adminUsers.discord || []) as string[];
     const waAdmins = (adminUsers.whatsapp || []) as string[];
+    const slAdmins = (adminUsers.slack || []) as string[];
 
     // Fetch known users per channel for pick-lists (excluding already-admin users)
     const knownTg = agent.getKnownUsers('telegram').filter(u => !tgAdmins.includes(u.id));
     const knownDc = agent.getKnownUsers('discord').filter(u => !dcAdmins.includes(u.id));
     const knownWa = agent.getKnownUsers('whatsapp').filter(u => !waAdmins.includes(u.id));
+    const knownSl = agent.getKnownUsers('slack').filter(u => !slAdmins.includes(u.id));
 
     // Helper: format admin ID with known user name if available
-    const nameForId = (id: string, channel: 'telegram' | 'discord' | 'whatsapp') => {
+    const nameForId = (id: string, channel: 'telegram' | 'discord' | 'whatsapp' | 'slack') => {
         const user = agent.getKnownUsers(channel).find(u => u.id === id);
         return user ? `${user.name}${user.username ? ` (@${user.username})` : ''} — ${id}` : id;
     };
@@ -3700,8 +3708,9 @@ async function showAdminUsersMenu() {
         `${dim('Telegram')}    ${cyan(bold(String(tgAdmins.length)))} admin(s)  ${dim(tgAdmins.length > 0 ? tgAdmins.slice(0, 3).map(id => nameForId(id, 'telegram')).join(', ') + (tgAdmins.length > 3 ? '…' : '') : '(open — all users are admin)')}`,
         `${dim('Discord')}     ${cyan(bold(String(dcAdmins.length)))} admin(s)  ${dim(dcAdmins.length > 0 ? dcAdmins.slice(0, 3).map(id => nameForId(id, 'discord')).join(', ') + (dcAdmins.length > 3 ? '…' : '') : '(open — all users are admin)')}`,
         `${dim('WhatsApp')}    ${cyan(bold(String(waAdmins.length)))} admin(s)  ${dim(waAdmins.length > 0 ? waAdmins.slice(0, 3).map(id => nameForId(id, 'whatsapp')).join(', ') + (waAdmins.length > 3 ? '…' : '') : '(open — all users are admin)')}`,
+        `${dim('Slack')}       ${cyan(bold(String(slAdmins.length)))} admin(s)  ${dim(slAdmins.length > 0 ? slAdmins.slice(0, 3).map(id => nameForId(id, 'slack')).join(', ') + (slAdmins.length > 3 ? '…' : '') : '(open — all users are admin)')}`,
         ``,
-        `${dim('Known users')} ${cyan(bold(String(knownTg.length + knownDc.length + knownWa.length)))} ${dim('available to add')}  ${dim(`(${knownTg.length} tg, ${knownDc.length} dc, ${knownWa.length} wa)`)}`,
+        `${dim('Known users')} ${cyan(bold(String(knownTg.length + knownDc.length + knownWa.length + knownSl.length)))} ${dim('available to add')}  ${dim(`(${knownTg.length} tg, ${knownDc.length} dc, ${knownWa.length} wa, ${knownSl.length} sl)`)}`,
     ];
     box(adminLines, { title: '👤 ADMIN USERS', width: 62, color: c.cyan });
     console.log('');
@@ -3875,7 +3884,7 @@ async function showConfigMenu() {
 
     const config = agent.config.getAll();
     // Ensure we show explicit keys relative to core config
-    const keys = ['agentName', 'llmProvider', 'modelName', 'openaiApiKey', 'anthropicApiKey', 'openrouterApiKey', 'openrouterBaseUrl', 'openrouterReferer', 'openrouterAppName', 'googleApiKey', 'nvidiaApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl', 'searchProviderOrder', 'captchaApiKey', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'whatsappAutoReplyEnabled', 'progressFeedbackEnabled', 'memoryContextLimit', 'memoryEpisodicLimit', 'memoryConsolidationThreshold', 'memoryConsolidationBatch', 'maxStepsPerAction', 'maxMessagesPerAction', 'memoryPath', 'commandAllowList', 'commandDenyList', 'safeMode', 'sudoMode', 'pluginAllowList', 'pluginDenyList', 'browserProfileDir', 'browserProfileName'] as const;
+    const keys = ['agentName', 'llmProvider', 'modelName', 'openaiApiKey', 'anthropicApiKey', 'openrouterApiKey', 'openrouterBaseUrl', 'openrouterReferer', 'openrouterAppName', 'googleApiKey', 'nvidiaApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl', 'searchProviderOrder', 'captchaApiKey', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'slackBotToken', 'slackAutoReplyEnabled', 'whatsappAutoReplyEnabled', 'progressFeedbackEnabled', 'memoryContextLimit', 'memoryEpisodicLimit', 'memoryConsolidationThreshold', 'memoryConsolidationBatch', 'maxStepsPerAction', 'maxMessagesPerAction', 'memoryPath', 'commandAllowList', 'commandDenyList', 'safeMode', 'sudoMode', 'pluginAllowList', 'pluginDenyList', 'browserProfileDir', 'browserProfileName'] as const;
 
     const choices: { name: string, value: string }[] = keys.map(key => ({
         name: `${key}: ${config[key as keyof typeof config] || '(empty)'}`,
@@ -4340,6 +4349,7 @@ function showStatus() {
     const hasTelegram = !!agent.telegram;
     const hasWhatsapp = !!agent.whatsapp;
     const hasDiscord = !!agent.discord;
+    const hasSlack = !!agent.slack;
     const model = agent.config.get('modelName') || 'gpt-4o';
     const provider = agent.config.get('llmProvider') || 'auto';
     const agentName = agent.config.get('agentName') || 'OrcBot';

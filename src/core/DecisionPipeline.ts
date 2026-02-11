@@ -172,7 +172,7 @@ export class DecisionPipeline {
         let lastSendIndex = -1;
         for (let i = actionMemories.length - 1; i >= 0; i--) {
             const tool = actionMemories[i].metadata?.tool;
-            if (tool === 'send_telegram' || tool === 'send_whatsapp' || tool === 'send_discord') {
+            if (tool === 'send_telegram' || tool === 'send_whatsapp' || tool === 'send_discord' || tool === 'send_slack') {
                 lastSendIndex = i;
                 break;
             }
@@ -182,7 +182,7 @@ export class DecisionPipeline {
 
         for (let i = lastSendIndex + 1; i < actionMemories.length; i++) {
             const tool = actionMemories[i].metadata?.tool;
-            if (tool && tool !== 'send_telegram' && tool !== 'send_whatsapp' && tool !== 'send_discord') {
+            if (tool && tool !== 'send_telegram' && tool !== 'send_whatsapp' && tool !== 'send_discord' && tool !== 'send_slack') {
                 return true;
             }
         }
@@ -359,7 +359,7 @@ export class DecisionPipeline {
                 continue;
             }
 
-            const isSend = tool.name === 'send_telegram' || tool.name === 'send_whatsapp' || tool.name === 'send_discord';
+            const isSend = tool.name === 'send_telegram' || tool.name === 'send_whatsapp' || tool.name === 'send_discord' || tool.name === 'send_slack';
             if (!isSend) {
                 filteredTools.push(tool);
                 continue;
@@ -376,6 +376,8 @@ export class DecisionPipeline {
             } else if (tool.name === 'send_whatsapp') {
                 destination = (tool.metadata?.jid || tool.metadata?.to || tool.metadata?.id || ctx.sourceId || '').toString();
             } else if (tool.name === 'send_discord') {
+                destination = (tool.metadata?.channel_id || tool.metadata?.channelId || tool.metadata?.to || tool.metadata?.id || ctx.sourceId || '').toString();
+            } else if (tool.name === 'send_slack') {
                 destination = (tool.metadata?.channel_id || tool.metadata?.channelId || tool.metadata?.to || tool.metadata?.id || ctx.sourceId || '').toString();
             }
 
@@ -424,7 +426,7 @@ export class DecisionPipeline {
 
         // If we dropped all proposed tools, decide whether to force-terminate or just warn
         if ((proposed.tools?.length || 0) > 0 && (filteredTools.length === 0)) {
-            const sendToolNames = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_gateway_chat'];
+            const sendToolNames = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat'];
             const allDroppedWereSends = proposed.tools!.every(t => sendToolNames.includes(t.name));
 
             if (allDroppedWereSends && ctx.messagesSent > 0) {

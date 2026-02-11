@@ -11,6 +11,7 @@ import { ConfigManager } from '../config/ConfigManager';
 import { TelegramChannel } from '../channels/TelegramChannel';
 import { WhatsAppChannel } from '../channels/WhatsAppChannel';
 import { DiscordChannel } from '../channels/DiscordChannel';
+import { SlackChannel } from '../channels/SlackChannel';
 import { configManagementSkill } from '../skills/configManagement';
 import { WebBrowser } from '../tools/WebBrowser';
 import { ComputerUse } from '../tools/ComputerUse';
@@ -56,7 +57,7 @@ export const ELEVATED_SKILLS = new Set([
 export interface KnownUser {
     id: string;           // channel-specific user ID
     name: string;         // display name
-    channel: 'telegram' | 'discord' | 'whatsapp';
+    channel: 'telegram' | 'discord' | 'whatsapp' | 'slack';
     username?: string;    // @username if available
     lastSeen: string;     // ISO timestamp
     messageCount: number;
@@ -76,6 +77,7 @@ export class Agent {
     public telegram: TelegramChannel | undefined;
     public whatsapp: WhatsAppChannel | undefined;
     public discord: DiscordChannel | undefined;
+    public slack: SlackChannel | undefined;
     public browser: WebBrowser;
     public computerUse: ComputerUse;
     public workerProfile: WorkerProfileManager;
@@ -356,6 +358,12 @@ export class Agent {
             this.discord = new DiscordChannel(discordToken, this);
             logger.info('Agent: Discord channel configured');
         }
+
+        const slackBotToken = this.config.get('slackBotToken');
+        if (slackBotToken) {
+            this.slack = new SlackChannel(slackBotToken, this);
+            logger.info('Agent: Slack channel configured');
+        }
     }
 
     /**
@@ -497,6 +505,57 @@ export class Agent {
             }
         });
 
+        // Skill: Send Slack
+        this.skills.registerSkill({
+            name: 'send_slack',
+            description: 'Send a message to a Slack channel or DM',
+            usage: 'send_slack(channel_id, message)',
+            handler: async (args: any) => {
+                const channel_id = args.channel_id || args.channelId || args.to || args.id;
+                const message = args.message || args.content || args.text;
+
+                if (!channel_id) return 'Error: Missing channel_id.';
+                if (!message) return 'Error: Missing message content.';
+
+                if (this.slack) {
+                    await this.slack.sendMessage(channel_id, message);
+
+                    this.memory.saveMemory({
+                        id: `slack-out-${Date.now()}`,
+                        type: 'short',
+                        content: `Assistant sent Slack message to ${channel_id}: ${message}`,
+                        timestamp: new Date().toISOString(),
+                        metadata: {
+                            source: 'slack',
+                            role: 'assistant',
+                            channelId: channel_id
+                        }
+                    });
+                    return `Message sent to Slack channel ${channel_id}`;
+                }
+                return 'Slack channel not available';
+            }
+        });
+
+        // Skill: Send Slack File
+        this.skills.registerSkill({
+            name: 'send_slack_file',
+            description: 'Send a file to a Slack channel or DM',
+            usage: 'send_slack_file(channel_id, file_path, caption?)',
+            handler: async (args: any) => {
+                const channel_id = args.channel_id || args.channelId || args.to || args.id;
+                const file_path = args.file_path || args.filePath || args.path;
+                const caption = args.caption || args.message;
+
+                if (!channel_id) return 'Error: Missing channel_id.';
+                if (!file_path) return 'Error: Missing file_path.';
+                if (!this.slack) return 'Slack channel not available';
+
+                await this.slack.sendFile(channel_id, file_path, caption);
+                return `File sent to Slack channel ${channel_id}`;
+            }
+        });
+
         // Skill: Send Discord File
         this.skills.registerSkill({
             name: 'send_discord_file',
@@ -592,7 +651,7 @@ export class Agent {
                     }
                 }
 
-                if (!channel) return 'Error: Could not detect channel. Specify channel (telegram/whatsapp/discord) explicitly.';
+                if (!channel) return 'Error: Could not detect channel. Specify channel (telegram/whatsapp/discord/slack) explicitly.';
                 if (!chatId) return 'Error: Could not detect chat_id. Specify it explicitly.';
 
                 try {
@@ -602,6 +661,8 @@ export class Agent {
                         await this.whatsapp.react(chatId, messageId, emoji);
                     } else if (channel === 'discord' && this.discord) {
                         await this.discord.react(chatId, messageId, emoji);
+                    } else if (channel === 'slack' && this.slack) {
+                        await this.slack.react(chatId, messageId, emoji);
                     } else {
                         return `Error: Channel "${channel}" not available or not recognized.`;
                     }
@@ -688,6 +749,30 @@ export class Agent {
                 try {
                     await this.discord.react(channelId, messageId, emoji);
                     return `Reacted with ${emoji} to Discord message ${messageId}`;
+                } catch (e) {
+                    return `Error: ${e}`;
+                }
+            }
+        });
+
+        // Skill: React Slack
+        this.skills.registerSkill({
+            name: 'react_slack',
+            description: 'React to a Slack message with an emoji. message_id should be the Slack message timestamp.',
+            usage: 'react_slack(channel_id, message_id, emoji)',
+            handler: async (args: any) => {
+                const channelId = args.channel_id || args.channelId || args.to;
+                const messageId = args.message_id || args.messageId || args.id;
+                const emojiInput = args.emoji || args.reaction || 'thumbs_up';
+
+                if (!channelId) return 'Error: Missing channel_id.';
+                if (!messageId) return 'Error: Missing message_id (Slack timestamp).';
+                if (!this.slack) return 'Slack channel not available';
+
+                const emoji = resolveEmoji(emojiInput);
+                try {
+                    await this.slack.react(channelId, messageId, emoji);
+                    return `Reacted with ${emoji} to Slack message ${messageId}`;
                 } catch (e) {
                     return `Error: ${e}`;
                 }
@@ -1037,7 +1122,7 @@ export class Agent {
         // Skill: Send Image (compound: generate + send in one step — preferred over generate_image)
         this.skills.registerSkill({
             name: 'send_image',
-            description: 'Generate an AI image from a text prompt and immediately send it to a contact. This is the PREFERRED way to deliver generated images — it generates and sends in one step, preventing duplicates. Use this instead of generate_image + send_file. IMPORTANT: set "channel" to the correct platform (discord/telegram/whatsapp).',
+            description: 'Generate an AI image from a text prompt and immediately send it to a contact. This is the PREFERRED way to deliver generated images — it generates and sends in one step, preventing duplicates. Use this instead of generate_image + send_file. IMPORTANT: set "channel" to the correct platform (discord/telegram/whatsapp/slack).',
             usage: 'send_image(jid, prompt, channel?, size?, quality?, caption?)',
             handler: async (args: any) => {
                 const jid = args.jid || args.to;
@@ -4674,6 +4759,8 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 await this.whatsapp.sendMessage(sourceId, message);
             } else if (source === 'discord' && this.discord) {
                 await this.discord.sendMessage(sourceId, message);
+            } else if (source === 'slack' && this.slack) {
+                await this.slack.sendMessage(sourceId, message);
             } else if (source === 'gateway-chat') {
                 eventBus.emit('gateway:chat:response', {
                     type: 'chat:message',
@@ -4759,7 +4846,7 @@ Respond with ONLY valid JSON:
             'computer_drag', 'computer_scroll', 'computer_locate', 'computer_describe',
             'extract_article', 'http_fetch', 'download_file', 'read_file', 'write_to_file',
             'write_file', 'create_file', 'delete_file', 'run_command',
-            'send_telegram', 'send_whatsapp', 'send_discord', 'send_gateway_chat',
+            'send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat',
             'send_voice_note', 'text_to_speech', 'analyze_media',
             'generate_image', 'send_image',
             'update_journal', 'update_learning', 'update_user_profile',
@@ -5240,6 +5327,9 @@ REFLECTION: <1-2 sentences>`;
                 } else if (source === 'discord' && this.discord) {
                     await this.discord.sendMessage(sourceId, notification);
                     logger.info(`Agent: Sent AgenticUser notification to Discord ${sourceId}`);
+                } else if (source === 'slack' && this.slack) {
+                    await this.slack.sendMessage(sourceId, notification);
+                    logger.info(`Agent: Sent AgenticUser notification to Slack ${sourceId}`);
                 } else if (source === 'gateway' || source === 'gateway-chat') {
                     eventBus.emit('gateway:chat:response', {
                         type: 'chat:message',
@@ -5426,6 +5516,7 @@ REFLECTION: <1-2 sentences>`;
         if (this.telegram) channels.push('Telegram (send_telegram)');
         if (this.whatsapp) channels.push('WhatsApp (send_whatsapp)');
         if (this.discord) channels.push('Discord (send_discord)');
+        if (this.slack) channels.push('Slack (send_slack)');
         const channelStatus = channels.length > 0 ? channels.join(', ') : 'No channels active';
 
         // ── 8. Contact profiles summary ──
@@ -5462,6 +5553,7 @@ REFLECTION: <1-2 sentences>`;
         if (this.telegram) channelSkills.push('send_telegram');
         if (this.whatsapp) channelSkills.push('send_whatsapp');
         if (this.discord) channelSkills.push('send_discord');
+        if (this.slack) channelSkills.push('send_slack');
         const channelSkillNote = channelSkills.length > 0 
             ? `Messaging: ${channelSkills.join(', ')}` 
             : 'No messaging channels active';
@@ -6238,6 +6330,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
         if (this.discord) {
             startupTasks.push({ name: 'discord', promise: this.discord.start() });
         }
+        if (this.slack) {
+            startupTasks.push({ name: 'slack', promise: this.slack.start() });
+        }
 
         const results = await Promise.allSettled(startupTasks.map(t => t.promise));
         results.forEach((result, index) => {
@@ -6261,6 +6356,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
         }
         if (this.discord) {
             await this.discord.stop();
+        }
+        if (this.slack) {
+            await this.slack.stop();
         }
         await this.browser.close();
         if (this.knowledgeStore) {
@@ -6384,7 +6482,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
      */
     private trackKnownUser(metadata: any): void {
         const source = metadata?.source;
-        if (!source || !['telegram', 'discord', 'whatsapp'].includes(source)) return;
+        if (!source || !['telegram', 'discord', 'whatsapp', 'slack'].includes(source)) return;
 
         let userId: string | undefined;
         let name: string = metadata.senderName || 'Unknown';
@@ -6397,6 +6495,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
             username = metadata.username;
         } else if (source === 'whatsapp') {
             userId = metadata.sourceId; // JID
+        } else if (source === 'slack') {
+            userId = metadata.userId || metadata.sourceId;
+            username = metadata.username;
         }
 
         if (!userId) return;
@@ -6413,7 +6514,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             this.knownUsers.set(key, {
                 id: userId,
                 name,
-                channel: source as 'telegram' | 'discord' | 'whatsapp',
+                channel: source as 'telegram' | 'discord' | 'whatsapp' | 'slack',
                 username,
                 lastSeen: new Date().toISOString(),
                 messageCount: 1
@@ -6430,7 +6531,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
     /**
      * Get all known users, optionally filtered by channel.
      */
-    public getKnownUsers(channel?: 'telegram' | 'discord' | 'whatsapp'): KnownUser[] {
+    public getKnownUsers(channel?: 'telegram' | 'discord' | 'whatsapp' | 'slack'): KnownUser[] {
         const users = Array.from(this.knownUsers.values());
         if (channel) return users.filter(u => u.channel === channel);
         return users.sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime());
@@ -6467,6 +6568,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
             const list: string[] = adminUsers.whatsapp || [];
             if (list.length === 0) return true;
             return list.includes(String(payload.sourceId));
+        }
+        if (source === 'slack') {
+            const list: string[] = adminUsers.slack || [];
+            if (list.length === 0) return true;
+            return list.includes(String(payload.userId)) || list.includes(String(payload.sourceId));
         }
         return true; // Unknown source = admin
     }
@@ -6816,6 +6922,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 'send_telegram',
                 'send_whatsapp',
                 'send_discord',
+                'send_slack',
                 'send_gateway_chat',
                 'update_journal',
                 // update_learning is NOT in this list — it IS productive work
@@ -6880,6 +6987,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                 if (this.telegram && action.payload.source === 'telegram') {
                     await this.telegram.sendTypingIndicator(action.payload.sourceId);
+                } else if (this.slack && action.payload.source === 'slack') {
+                    await this.slack.sendTypingIndicator(action.payload.sourceId);
                 }
 
                 let decision;
@@ -7093,7 +7202,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             deepToolExecutedSinceLastMessage = true;
                         }
 
-                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_discord' || toolCall.name === 'send_gateway_chat') {
+                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_discord' || toolCall.name === 'send_slack' || toolCall.name === 'send_gateway_chat') {
                             const currentMessage = (toolCall.metadata?.message || '').trim();
                             totalSendToolsInStep++;
 
@@ -7202,6 +7311,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 try { await this.discord.sendMessage(sourceId, denialMsg); messagesSent++; } catch (e) { /* best effort */ }
                             } else if (source === 'whatsapp' && this.whatsapp && sourceId) {
                                 try { await this.whatsapp.sendMessage(sourceId, denialMsg); messagesSent++; } catch (e) { /* best effort */ }
+                            } else if (source === 'slack' && this.slack && sourceId) {
+                                try { await this.slack.sendMessage(sourceId, denialMsg); messagesSent++; } catch (e) { /* best effort */ }
                             }
 
                             this.memory.saveMemory({
@@ -7266,6 +7377,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 await this.whatsapp.sendMessage(action.payload.sourceId, `❓ Clarification Needed: ${question}`);
                             } else if (this.discord && action.payload.source === 'discord') {
                                 await this.discord.sendMessage(action.payload.sourceId, `❓ **Clarification Needed**: ${question}`);
+                            } else if (this.slack && action.payload.source === 'slack') {
+                                await this.slack.sendMessage(action.payload.sourceId, `❓ *Clarification Needed*: ${question}`);
                             }
                             
                             logger.info(`Agent: Clarification requested. Pausing action ${action.id} - waiting for user response.`);
@@ -7410,7 +7523,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         } else {
                             observation = `Observation: Tool ${toolCall.name} returned: ${resultString.slice(0, 500)}`;
                         }
-                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_gateway_chat' || toolCall.name === 'send_discord') {
+                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_gateway_chat' || toolCall.name === 'send_discord' || toolCall.name === 'send_slack') {
                             messagesSent++;
                             
                             // QUESTION PAUSE: If this message asked a question, pause and wait for response
@@ -7518,7 +7631,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 this.memory.saveMemory({
                                     id: `${action.id}-step-${currentStep}-image-generated-send-failed`,
                                     type: 'short',
-                                    content: `[SYSTEM: Image was GENERATED at ${generatedImagePath || 'downloads folder'} but SEND FAILED. Do NOT generate another image. Use the correct channel skill to deliver: send_discord_file(channel_id, "${generatedImagePath}") for Discord, send_file(jid, "${generatedImagePath}") for Telegram/WhatsApp.]`,
+                                    content: `[SYSTEM: Image was GENERATED at ${generatedImagePath || 'downloads folder'} but SEND FAILED. Do NOT generate another image. Use the correct channel skill to deliver: send_discord_file(channel_id, "${generatedImagePath}") for Discord, send_slack_file(channel_id, "${generatedImagePath}") for Slack, and send_file(jid, "${generatedImagePath}") for Telegram/WhatsApp.]`,
                                     metadata: { actionId: action.id, step: currentStep, skill: 'send_image', imageGenerated: true, sendFailed: true }
                                 });
                             }
@@ -7536,7 +7649,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
 
                         // HARD BREAK after successful channel message send for "respond to" tasks
                         // This prevents duplicate messages when the LLM doesn't set goals_met correctly
-                        const isChannelSend = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_gateway_chat'].includes(toolCall.name);
+                        const isChannelSend = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat'].includes(toolCall.name);
                         const isFileDelivery = toolCall.name === 'send_file' || toolCall.name === 'send_image';
                         const isResponseTask = action.payload?.description?.toLowerCase().includes('respond to') ||
                                                action.payload?.requiresResponse === true;
@@ -7676,7 +7789,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                     // Case 3: goals_met=true or undefined with no tools - legitimate termination
                     // BUT: catch silent termination — if from a channel and never sent a message, force a retry
                     const isChannelTask = action.payload.source === 'telegram' || action.payload.source === 'whatsapp' || 
-                                          action.payload.source === 'discord' || action.payload.source === 'gateway-chat';
+                                          action.payload.source === 'discord' || action.payload.source === 'slack' || action.payload.source === 'gateway-chat';
                     if (isChannelTask && messagesSent === 0 && currentStep < MAX_STEPS) {
                         noToolsRetryCount++;
                         if (noToolsRetryCount < MAX_NO_TOOLS_RETRIES) {
@@ -7764,7 +7877,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             
                             let bonusMsgSentThisStep = false;
                             for (const toolCall of bonusDecision.tools) {
-                                const isSendTool = toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_discord' || toolCall.name === 'send_gateway_chat';
+                                const isSendTool = toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_discord' || toolCall.name === 'send_slack' || toolCall.name === 'send_gateway_chat';
                                 
                                 // Apply message guards to bonus steps too
                                 if (isSendTool) {
@@ -7909,6 +8022,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                 await this.telegram.sendMessage(action.payload.sourceId, sosMessage + `\n\nI've logged this to my journal and will attempt to recover in the next turn.`);
             } else if (this.whatsapp && action.payload.source === 'whatsapp') {
                 await this.whatsapp.sendMessage(action.payload.sourceId, sosMessage);
+            } else if (this.slack && action.payload.source === 'slack') {
+                await this.slack.sendMessage(action.payload.sourceId, sosMessage);
             }
         } finally {
             this.isBusy = false;

@@ -187,6 +187,12 @@ export class ConfigPolicy {
             description: 'Telegram bot token',
             reason: 'Critical authentication credential',
         }],
+        ['slackBotToken', {
+            key: 'slackBotToken',
+            level: ConfigChangeLevel.LOCKED,
+            description: 'Slack bot token',
+            reason: 'Critical authentication credential',
+        }],
         ['whatsappEnabled', {
             key: 'whatsappEnabled',
             level: ConfigChangeLevel.LOCKED,

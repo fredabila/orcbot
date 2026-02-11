@@ -24,6 +24,7 @@ export type RenderTarget =
     | 'telegram_html' // HTML parse_mode for Telegram
     | 'whatsapp'     // WhatsApp-native subset
     | 'discord'      // Full markdown (pass-through, minor cleanup)
+    | 'slack'        // Full markdown (Slack mrkdwn compatible subset)
     | 'gateway'      // Raw markdown (client renders)
     | 'terminal'     // ANSI color codes
     | 'plain';       // Strip all formatting
@@ -410,6 +411,7 @@ export function renderMarkdown(text: string, target: RenderTarget, options: Rend
                 result = renderWhatsApp(cleaned, blocks);
                 break;
             case 'discord':
+            case 'slack':
                 result = renderDiscord(cleaned, blocks);
                 break;
             case 'gateway':
@@ -477,6 +479,8 @@ export function channelToRenderTarget(source: string): RenderTarget {
             return 'whatsapp';
         case 'discord':
             return 'discord';
+        case 'slack':
+            return 'slack';
         case 'gateway':
         case 'gateway-chat':
             return 'gateway';

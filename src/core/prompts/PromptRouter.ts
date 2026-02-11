@@ -297,7 +297,7 @@ Rules:
         const fallbacks: string[] = [];
 
         // Has a messaging channel active
-        const hasChannel = ['telegram', 'whatsapp', 'discord', 'gateway-chat'].includes(context.metadata.source);
+        const hasChannel = ['telegram', 'whatsapp', 'discord', 'slack', 'gateway-chat'].includes(context.metadata.source);
         // Long description suggests complexity
         const isComplex = task.length > 100;
 

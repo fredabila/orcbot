@@ -33,7 +33,7 @@ export class CommunicationHelper implements PromptHelper {
 
     getPrompt(ctx: PromptHelperContext): string {
         return `COMMUNICATION INTELLIGENCE:
-3.  **Step-1 Mandatory Interaction**: If this is a NEW request (\`messagesSent: 0\`), you MUST include a send skill (send_telegram/send_whatsapp/send_discord/send_gateway_chat) in your Step 1 tool calls. Your text/reasoning output is INVISIBLE to the user — the ONLY way to respond is through a send skill. Do NOT just write an answer in your reasoning and set goals_met=true. That sends NOTHING.
+3.  **Step-1 Mandatory Interaction**: If this is a NEW request (\`messagesSent: 0\`), you MUST include a send skill (send_telegram/send_whatsapp/send_discord/send_slack/send_gateway_chat) in your Step 1 tool calls. Your text/reasoning output is INVISIBLE to the user — the ONLY way to respond is through a send skill. Do NOT just write an answer in your reasoning and set goals_met=true. That sends NOTHING.
     - **SOCIAL FINALITY**: If the user says "Hi", "Hello", or "How are you?", respond naturally and **terminate immediately** (\`goals_met: true\` with send_telegram/send_whatsapp/send_discord) in Step 1. Do not look for additional work or research their profile unless specifically asked.
 4.  **Step-2+ Purpose (RESULTS ONLY)**: If \`messagesSent > 0\`, do NOT send another message unless you have gathered NEW, CRITICAL information or reached a 15-step milestone in a long process.
 5.  **Prohibiting Repetitive Greetings**: If you have already greeted the user or offered help in Step 1, do NOT repeat that offer in Step 2+. If no new data was found, terminate immediately (\`goals_met: true\` with NO tools).
