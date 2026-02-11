@@ -108,6 +108,8 @@ export class Agent {
     // Track processed messages to prevent duplicates
     private processedMessages: Set<string> = new Set();
     private processedMessagesMaxSize: number = 1000;
+    private recentTaskFingerprints: Map<string, number> = new Map();
+    private readonly recentTaskDedupWindowMs: number = 60_000;
 
     // Known users tracker — populated from inbound channel messages
     private knownUsers: Map<string, KnownUser> = new Map();
@@ -6470,6 +6472,40 @@ Respond with a single actionable task description (one sentence). Be specific ab
     }
 
     public async pushTask(description: string, priority: number = 5, metadata: any = {}, lane: 'user' | 'autonomy' = 'user') {
+        const normalizedDescription = (description || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+        // Channel-side duplicates are not always guaranteed to carry a stable messageId.
+        // Add a short rolling fingerprint guard to prevent enqueuing the same request twice.
+        if (lane === 'user' && metadata?.source && metadata?.sourceId && normalizedDescription.length > 0) {
+            const fingerprint = `${metadata.source}:${metadata.sourceId}:${normalizedDescription}`;
+            const now = Date.now();
+            const previous = this.recentTaskFingerprints.get(fingerprint);
+            if (previous && now - previous < this.recentTaskDedupWindowMs) {
+                logger.info(`Agent: Suppressing near-duplicate inbound task within ${this.recentTaskDedupWindowMs}ms window (${metadata.source}:${metadata.sourceId})`);
+                return;
+            }
+
+            // Cleanup stale entries while we're already touching this map.
+            for (const [key, ts] of this.recentTaskFingerprints.entries()) {
+                if (now - ts > this.recentTaskDedupWindowMs) {
+                    this.recentTaskFingerprints.delete(key);
+                }
+            }
+            this.recentTaskFingerprints.set(fingerprint, now);
+
+            // Defensive check against currently active queue entries with semantically identical payload.
+            const existingSimilarActiveTask = this.actionQueue.getQueue().find(a => {
+                if (!['pending', 'waiting', 'in-progress'].includes(a.status)) return false;
+                if (a.payload?.source !== metadata.source || a.payload?.sourceId !== metadata.sourceId) return false;
+                const candidate = (a.payload?.description || '').trim().replace(/\s+/g, ' ').toLowerCase();
+                return candidate.length > 0 && candidate === normalizedDescription;
+            });
+            if (existingSimilarActiveTask) {
+                logger.info(`Agent: Suppressing duplicate task; similar active action already exists (${existingSimilarActiveTask.id})`);
+                return;
+            }
+        }
+
         // Deduplication: If this message was already processed, skip
         const messageId = metadata.messageId;
         if (messageId) {
