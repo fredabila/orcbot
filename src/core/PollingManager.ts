@@ -26,6 +26,9 @@ export class PollingManager {
         interval: NodeJS.Timeout;
         attempts: number;
         startedAt: number;
+        inFlight: boolean;
+        timeout: NodeJS.Timeout | null;
+        currentIntervalMs: number;
     }> = new Map();
     private isRunning: boolean = false;
 
@@ -52,7 +55,7 @@ export class PollingManager {
 
         // Clear all active jobs
         for (const [id, jobData] of this.jobs.entries()) {
-            clearInterval(jobData.interval);
+            if (jobData.timeout) clearTimeout(jobData.timeout);
             logger.debug(`PollingManager: Stopped job ${id}`);
         }
         this.jobs.clear();
@@ -81,95 +84,108 @@ export class PollingManager {
             job,
             interval: null as any,
             attempts: 0,
-            startedAt
+            startedAt,
+            inFlight: false,
+            timeout: null as NodeJS.Timeout | null,
+            currentIntervalMs: Math.max(100, job.intervalMs)
         };
         this.jobs.set(job.id, jobData);
 
-        const interval = setInterval(async () => {
+        const runAttempt = async () => {
             if (!this.isRunning) {
                 this.cancelJob(job.id);
                 return;
             }
 
-            // Get current job data and increment attempts
             const currentJobData = this.jobs.get(job.id);
             if (!currentJobData) return;
-            
+            if (currentJobData.inFlight) {
+                logger.debug(`PollingManager: Job "${job.id}" check still in-flight, skipping overlap`);
+                currentJobData.timeout = setTimeout(runAttempt, currentJobData.currentIntervalMs);
+                return;
+            }
+
+            currentJobData.inFlight = true;
             currentJobData.attempts++;
             const attempts = currentJobData.attempts;
-            
+
             logger.debug(`PollingManager: Job "${job.id}" - attempt ${attempts}`);
 
-            // Emit progress event
             if (job.onProgress) {
                 job.onProgress(job.id, attempts);
             }
-            eventBus.emit('polling:progress', { 
-                jobId: job.id, 
-                attempt: attempts, 
-                description: job.description 
+            eventBus.emit('polling:progress', {
+                jobId: job.id,
+                attempt: attempts,
+                description: job.description
             });
 
             try {
                 const result = await job.checkFn();
-                
+
                 if (result) {
-                    // Condition met, job successful
                     logger.info(`PollingManager: Job "${job.id}" completed successfully after ${attempts} attempts`);
-                    
+
                     if (job.onSuccess) {
                         job.onSuccess(job.id);
                     }
-                    
-                    eventBus.emit('polling:success', { 
-                        jobId: job.id, 
-                        attempts, 
+
+                    eventBus.emit('polling:success', {
+                        jobId: job.id,
+                        attempts,
                         duration: Date.now() - startedAt,
-                        description: job.description 
+                        description: job.description
                     });
-                    
+
                     this.cancelJob(job.id);
                     return;
                 }
 
-                // Check if max attempts reached
                 if (job.maxAttempts && attempts >= job.maxAttempts) {
                     const reason = `Max attempts (${job.maxAttempts}) reached`;
                     logger.warn(`PollingManager: Job "${job.id}" failed - ${reason}`);
-                    
+
                     if (job.onFailure) {
                         job.onFailure(job.id, reason);
                     }
-                    
-                    eventBus.emit('polling:failure', { 
-                        jobId: job.id, 
-                        attempts, 
+
+                    eventBus.emit('polling:failure', {
+                        jobId: job.id,
+                        attempts,
                         reason,
-                        description: job.description 
+                        description: job.description
                     });
-                    
+
                     this.cancelJob(job.id);
+                    return;
                 }
+
+                // Adaptive waiting: backoff up to 4x base interval to reduce noisy polling.
+                currentJobData.currentIntervalMs = Math.min(job.intervalMs * 4, Math.floor(currentJobData.currentIntervalMs * 1.5));
+                currentJobData.timeout = setTimeout(runAttempt, currentJobData.currentIntervalMs);
             } catch (error: any) {
                 logger.error(`PollingManager: Job "${job.id}" error - ${error.message}`);
-                
+
                 if (job.onFailure) {
                     job.onFailure(job.id, error.message);
                 }
-                
-                eventBus.emit('polling:error', { 
-                    jobId: job.id, 
+
+                eventBus.emit('polling:error', {
+                    jobId: job.id,
                     attempts,
                     error: error.message,
-                    description: job.description 
+                    description: job.description
                 });
-                
-                this.cancelJob(job.id);
-            }
-        }, job.intervalMs);
 
-        // Update with the actual interval
-        jobData.interval = interval;
+                this.cancelJob(job.id);
+            } finally {
+                const latest = this.jobs.get(job.id);
+                if (latest) latest.inFlight = false;
+            }
+        };
+
+        // First attempt uses the requested base interval.
+        jobData.timeout = setTimeout(runAttempt, job.intervalMs);
 
         eventBus.emit('polling:registered', { 
             jobId: job.id, 
@@ -192,7 +208,7 @@ export class PollingManager {
             return false;
         }
 
-        clearInterval(jobData.interval);
+        if (jobData.timeout) clearTimeout(jobData.timeout);
         this.jobs.delete(jobId);
         
         logger.info(`PollingManager: Job "${jobId}" cancelled`);
