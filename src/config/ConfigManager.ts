@@ -77,6 +77,8 @@ export interface AgentConfig {
     // Discord
     discordToken?: string;                // Discord bot token
     discordAutoReplyEnabled?: boolean;    // Auto-reply in Discord (default false)
+    slackBotToken?: string;               // Slack bot token (xoxb-...)
+    slackAutoReplyEnabled?: boolean;      // Auto-reply in Slack (default false)
     // Operational
     autoExecuteCommands?: boolean;        // Auto-execute commands without confirmation (default false)
     skillRoutingRules?: Array<{
@@ -122,6 +124,7 @@ export interface AgentConfig {
         telegram?: string[];   // Telegram numeric user IDs (e.g., ["123456789"])
         discord?: string[];    // Discord snowflake user IDs (e.g., ["876513738667229184"])
         whatsapp?: string[];   // WhatsApp JIDs (e.g., ["5511999998888@s.whatsapp.net"])
+        slack?: string[];      // Slack user IDs (e.g., ["U012ABCDEF"])
     };
 }
 
@@ -232,6 +235,7 @@ export class ConfigManager {
             captchaApiKey: process.env.CAPTCHA_API_KEY,
             telegramToken: process.env.TELEGRAM_TOKEN,
             discordToken: process.env.DISCORD_TOKEN,
+            slackBotToken: process.env.SLACK_BOT_TOKEN,
             bedrockRegion: process.env.BEDROCK_REGION || process.env.AWS_REGION,
             bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
             bedrockSecretAccessKey: process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY,
@@ -306,6 +310,10 @@ export class ConfigManager {
         }
         if (config.discordToken === '') {
             delete (config as any).discordToken;
+            repaired = true;
+        }
+        if ((config as any).slackBotToken === '') {
+            delete (config as any).slackBotToken;
             repaired = true;
         }
 
@@ -496,6 +504,7 @@ export class ConfigManager {
             tokenUsagePath: path.join(this.dataHome, 'token-usage-summary.json'),
             tokenLogPath: path.join(this.dataHome, 'token-usage.log'),
             discordAutoReplyEnabled: false,
+            slackAutoReplyEnabled: false,
             autoExecuteCommands: false,
             bedrockRegion: process.env.BEDROCK_REGION || process.env.AWS_REGION,
             bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
@@ -585,7 +594,7 @@ export class ConfigManager {
 
                     // Critical keys that should never be blanked by a sync
                     const protectedKeys = [
-                        'telegramToken', 'discordToken', 'openaiApiKey', 'googleApiKey',
+                        'telegramToken', 'discordToken', 'slackBotToken', 'openaiApiKey', 'googleApiKey',
                         'nvidiaApiKey', 'anthropicApiKey', 'openrouterApiKey', 'serperApiKey',
                         'captchaApiKey', 'braveSearchApiKey', 'bedrockAccessKeyId',
                         'bedrockSecretAccessKey', 'bedrockSessionToken'
@@ -627,6 +636,8 @@ export class ConfigManager {
             serperApiKey: 'SERPER_API_KEY',
             captchaApiKey: 'CAPTCHA_API_KEY',
             telegramToken: 'TELEGRAM_TOKEN',
+            discordToken: 'DISCORD_TOKEN',
+            slackBotToken: 'SLACK_BOT_TOKEN',
             bedrockRegion: 'BEDROCK_REGION',
             bedrockAccessKeyId: 'BEDROCK_ACCESS_KEY_ID',
             bedrockSecretAccessKey: 'BEDROCK_SECRET_ACCESS_KEY',

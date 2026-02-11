@@ -119,7 +119,7 @@ export class ResponseValidator {
             const toolName = tool.name?.toLowerCase();
 
             // Messaging tools validation
-            if (toolName && ['send_telegram', 'send_whatsapp', 'send_discord', 'send_gateway_chat'].includes(toolName)) {
+            if (toolName && ['send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat'].includes(toolName)) {
                 if (!tool.metadata || !tool.metadata.message) {
                     errors.push(`${tool.name} missing required 'message' metadata`);
                 }
@@ -129,6 +129,10 @@ export class ResponseValidator {
                 }
 
                 if (toolName === 'send_discord' && !tool.metadata?.channel_id) {
+                    errors.push(`${tool.name} missing required 'channel_id' metadata`);
+                }
+
+                if (toolName === 'send_slack' && !tool.metadata?.channel_id) {
                     errors.push(`${tool.name} missing required 'channel_id' metadata`);
                 }
 

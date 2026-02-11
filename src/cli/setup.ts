@@ -176,6 +176,19 @@ export async function runSetup() {
             message: 'Enable Discord AI Auto-Reply?',
             default: currentConfig.discordAutoReplyEnabled || false,
             when: (ans) => !!ans.discordToken || !!existingEnv['DISCORD_TOKEN']
+        },
+        {
+            type: 'input',
+            name: 'slackBotToken',
+            message: `Slack Bot Token ${maskHint('SLACK_BOT_TOKEN')}:`,
+            mask: '*'
+        },
+        {
+            type: 'confirm',
+            name: 'slackAutoReplyEnabled',
+            message: 'Enable Slack AI Auto-Reply?',
+            default: currentConfig.slackAutoReplyEnabled || false,
+            when: (ans) => !!ans.slackBotToken || !!existingEnv['SLACK_BOT_TOKEN']
         }
     ]);
 
@@ -239,6 +252,7 @@ export async function runSetup() {
         whatsappEnabled: answers.whatsappEnabled || false,
         whatsappAutoReplyEnabled: answers.whatsappAutoReplyEnabled || false,
         discordAutoReplyEnabled: answers.discordAutoReplyEnabled || false,
+        slackAutoReplyEnabled: answers.slackAutoReplyEnabled || false,
         // Autonomy
         autonomyEnabled: answers.autonomyEnabled !== false,
         autonomyInterval: answers.autonomyInterval ?? 15,
@@ -268,7 +282,8 @@ export async function runSetup() {
         bedrockSecretAccessKey: 'BEDROCK_SECRET_ACCESS_KEY',
         serperApiKey: 'SERPER_API_KEY',
         telegramToken: 'TELEGRAM_TOKEN',
-        discordToken: 'DISCORD_TOKEN'
+        discordToken: 'DISCORD_TOKEN',
+        slackBotToken: 'SLACK_BOT_TOKEN'
     };
 
     for (const [field, envKey] of Object.entries(envMap)) {

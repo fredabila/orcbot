@@ -111,14 +111,15 @@ export function resolveEmoji(input: string): string {
 
 /**
  * Detect the source channel from metadata of a memory entry.
- * Returns 'telegram' | 'whatsapp' | 'discord' | 'unknown'.
+ * Returns 'telegram' | 'whatsapp' | 'discord' | 'slack' | 'unknown'.
  */
-export function detectChannelFromMetadata(metadata: any): 'telegram' | 'whatsapp' | 'discord' | 'unknown' {
+export function detectChannelFromMetadata(metadata: any): 'telegram' | 'whatsapp' | 'discord' | 'slack' | 'unknown' {
     if (!metadata) return 'unknown';
     const source = (metadata.source || '').toLowerCase();
     if (source === 'telegram') return 'telegram';
     if (source === 'whatsapp') return 'whatsapp';
     if (source === 'discord') return 'discord';
+    if (source === 'slack') return 'slack';
     return 'unknown';
 }
 

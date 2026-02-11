@@ -172,6 +172,12 @@ The user appreciates knowing what's happening, especially during complex tasks. 
                 }
             }
 
+            if (name === 'send_slack') {
+                if ((source === 'slack') && sourceId && !toolMetadata.channel_id) {
+                    toolMetadata.channel_id = sourceId;
+                }
+            }
+
             if (name === 'send_gateway_chat') {
                 if ((source === 'gateway-chat') && sourceId && !toolMetadata.chatId) {
                     toolMetadata.chatId = sourceId;
@@ -773,6 +779,13 @@ ACTIVE CHANNEL CONTEXT:
 - Channel ID: "${metadata.sourceId}" (User: ${metadata.senderName})
 - Rule: To message this user, you MUST use the "send_discord" skill with channel_id="${metadata.sourceId}".
 `;
+        } else if (metadata.source === 'slack') {
+            channelInstructions = `
+ACTIVE CHANNEL CONTEXT:
+- Channel: Slack
+- Channel ID: "${metadata.sourceId}" (User: ${metadata.senderName})
+- Rule: To message this user, you MUST use the "send_slack" skill with channel_id="${metadata.sourceId}".
+`;
         } else if (metadata.source === 'gateway-chat') {
             channelInstructions = `
 ACTIVE CHANNEL CONTEXT:
@@ -961,7 +974,7 @@ Your job is to decide if the agent should truly terminate or continue working.
 ADDITIONAL REVIEW RULES:
 - If the task is TRULY complete (user got their answer, file downloaded, message sent, etc.), return goals_met=true with no tools.
 - If the task is NOT complete and the agent stopped prematurely, return goals_met=false and include the WORK tools needed to continue (e.g., browser_navigate, web_search, run_command, send_telegram, etc.).
-- CRITICAL: If this task came from a messaging channel (Telegram/WhatsApp/Discord/Gateway) and messagesSent is 0, the user has received NOTHING. The agent's text reasoning is invisible to the user. You MUST return goals_met=false and include the appropriate send skill (send_telegram, send_whatsapp, send_discord, send_gateway_chat) with the response message.
+- CRITICAL: If this task came from a messaging channel (Telegram/WhatsApp/Discord/Slack/Gateway) and messagesSent is 0, the user has received NOTHING. The agent's text reasoning is invisible to the user. You MUST return goals_met=false and include the appropriate send skill (send_telegram, send_whatsapp, send_discord, send_slack, send_gateway_chat) with the response message.
 - Do NOT default to asking questions. Only use request_supporting_data if genuinely missing critical info that cannot be inferred.
 - Prefer ACTION over CLARIFICATION. If the agent can make progress with available context, it should.
 

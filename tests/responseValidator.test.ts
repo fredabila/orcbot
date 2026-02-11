@@ -3,7 +3,7 @@ import { ResponseValidator } from '../src/core/ResponseValidator';
 import { StandardResponse } from '../src/core/ParserLayer';
 
 describe('ResponseValidator', () => {
-    const allowedTools = ['send_telegram', 'send_whatsapp', 'web_search', 'browser_navigate', 'write_file', 'run_command'];
+    const allowedTools = ['send_telegram', 'send_whatsapp', 'send_slack', 'web_search', 'browser_navigate', 'write_file', 'run_command'];
 
     describe('Tool name validation', () => {
         it('should accept valid tool names', () => {
@@ -85,6 +85,20 @@ describe('ResponseValidator', () => {
             const validation = ResponseValidator.validateResponse(response, allowedTools);
             expect(validation.valid).toBe(false);
             expect(validation.errors.some(e => e.includes('missing required \'chatId\''))).toBe(true);
+        });
+
+
+        it('should require channel_id for send_slack', () => {
+            const response: StandardResponse = {
+                success: true,
+                tools: [
+                    { name: 'send_slack', metadata: { message: 'Hello' } }
+                ]
+            };
+
+            const validation = ResponseValidator.validateResponse(response, allowedTools);
+            expect(validation.valid).toBe(false);
+            expect(validation.errors.some(e => e.includes("missing required 'channel_id'"))).toBe(true);
         });
 
         it('should reject empty messages', () => {
