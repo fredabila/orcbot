@@ -2460,6 +2460,7 @@ async function showConnectionsMenu() {
                 { name: `  ${hasTelegram ? '✈️ ' : '  '}${bold('Telegram Bot')}      ${hasTelegram ? green('●') : gray('○')}`, value: 'telegram' },
                 { name: `  ${hasWhatsapp ? '💬' : '  '} ${bold('WhatsApp (Baileys)')} ${hasWhatsapp ? green('●') : gray('○')}`, value: 'whatsapp' },
                 { name: `  ${hasDiscord ? '🎮' : '  '} ${bold('Discord Bot')}       ${hasDiscord ? green('●') : gray('○')}`, value: 'discord' },
+                { name: `  ${hasSlack ? '💼' : '  '} ${bold('Slack Bot')}         ${hasSlack ? green('●') : gray('○')}`, value: 'slack' },
                 new inquirer.Separator(gradient('  ─────────────────────────────────', [c.cyan, c.gray])),
                 { name: dim('  ← Back'), value: 'back' },
             ]
@@ -2474,6 +2475,8 @@ async function showConnectionsMenu() {
         await showWhatsAppConfig();
     } else if (channel === 'discord') {
         await showDiscordConfig();
+    } else if (channel === 'slack') {
+        await showSlackConfig();
     }
 }
 
@@ -2629,6 +2632,64 @@ async function showWhatsAppConfig() {
     console.log('WhatsApp settings updated!');
     await waitKeyPress();
     return showWhatsAppConfig();
+}
+
+async function showSlackConfig() {
+    const currentToken = agent.config.get('slackBotToken') || 'Not Set';
+    const autoReply = agent.config.get('slackAutoReplyEnabled');
+    console.clear();
+    banner();
+    sectionHeader('💼', 'Slack Settings');
+    console.log('');
+    const slLines = [
+        `${dim('Bot Token')}   ${currentToken === 'Not Set' ? gray('Not Set') : green(currentToken.substring(0, 8) + '…' + currentToken.slice(-4))}`,
+        `${dim('Auto-Reply')}  ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
+    ];
+    box(slLines, { title: '💼 SLACK', width: 46, color: c.brightCyan });
+    console.log('');
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: 'Slack Options:',
+            choices: [
+                { name: 'Set Bot Token', value: 'set' },
+                { name: autoReply ? 'Disable Auto-Reply' : 'Enable Auto-Reply', value: 'toggle_auto' },
+                { name: 'Test Connection', value: 'test' },
+                { name: 'Back', value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showConnectionsMenu();
+
+    if (action === 'set') {
+        const { token } = await inquirer.prompt([
+            { type: 'input', name: 'token', message: 'Enter Slack Bot Token (xoxb-...):' }
+        ]);
+        agent.config.set('slackBotToken', token);
+        console.log('Token updated! (Restart required for token changes)');
+        await waitKeyPress();
+        return showSlackConfig();
+    } else if (action === 'toggle_auto') {
+        agent.config.set('slackAutoReplyEnabled', !autoReply);
+        return showSlackConfig();
+    } else if (action === 'test') {
+        if (!agent.slack) {
+            console.log('Slack channel not initialized. Please set a token and restart.');
+        } else {
+            console.log('Testing Slack connection...');
+            try {
+                await agent.slack.start();
+                console.log(green('  ✓ Slack auth successful!'));
+            } catch (error: any) {
+                console.log(red(`  ✗ Connection test failed: ${error.message}`));
+            }
+        }
+        await waitKeyPress();
+        return showSlackConfig();
+    }
 }
 
 async function showDiscordConfig() {
