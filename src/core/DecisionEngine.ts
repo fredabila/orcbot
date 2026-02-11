@@ -15,6 +15,7 @@ import { ResponseValidator } from './ResponseValidator';
 import { BootstrapManager } from './BootstrapManager';
 import { PromptRouter, PromptHelperContext } from './prompts';
 import { KnowledgeStore } from '../memory/KnowledgeStore';
+import { ToolsManager } from './ToolsManager';
 
 export class DecisionEngine {
     private agentIdentity: string = '';
@@ -27,6 +28,7 @@ export class DecisionEngine {
     private enableAutoCompaction: boolean;
     private bootstrap?: BootstrapManager;
     private knowledgeStore?: KnowledgeStore;
+    private tools?: ToolsManager;
 
     // ── Per-action prompt cache ──
     // The core instructions (bootstrap + identity + skills + helpers) are ~80% identical
@@ -42,9 +44,11 @@ export class DecisionEngine {
         private journalPath: string = './JOURNAL.md',
         private learningPath: string = './LEARNING.md',
         private config?: ConfigManager,
-        bootstrap?: BootstrapManager
+        bootstrap?: BootstrapManager,
+        tools?: ToolsManager
     ) {
         this.bootstrap = bootstrap;
+        this.tools = tools;
         this.pipeline = new DecisionPipeline(this.config || new ConfigManager());
         this.systemContext = this.buildSystemContext();
         this.executionStateManager = new ExecutionStateManager();
@@ -249,7 +253,19 @@ The user appreciates knowing what's happening, especially during complex tasks. 
         if (activatedContext) {
             agentSkillsSection += `\n\nACTIVATED SKILL INSTRUCTIONS (Loaded on demand):\n${activatedContext}`;
         }
+        let toolsSection = '';
+        if (this.tools) {
+            const toolsPrompt = this.tools.getToolsPrompt();
+            if (toolsPrompt) {
+                toolsSection += `\n\nTHIRD-PARTY TOOLS:\n${toolsPrompt}`;
+            }
+            const activatedTools = this.tools.getActivatedToolsContext();
+            if (activatedTools) {
+                toolsSection += `\n\nACTIVATED TOOL CONTEXT:\n${activatedTools}`;
+            }
+        }
 
+        return result.composedPrompt + agentSkillsSection + toolsSection;
         return result.composedPrompt + agentSkillsSection;
     }
 

@@ -136,7 +136,7 @@ export class MultiLLM {
             case 'google': return 'gemini-2.0-flash-lite';
             case 'anthropic': return 'claude-3-5-haiku-latest';
             case 'nvidia': return 'meta/llama-3.3-70b-instruct';
-            case 'openrouter': return 'google/gemini-2.0-flash-exp:free';
+            case 'openrouter': return 'openai/gpt-oss-120b:free';
             case 'bedrock': return this.modelName;
             default: return this.modelName;
         }
@@ -490,11 +490,19 @@ export class MultiLLM {
                     messages,
                     temperature: 0.7,
                     tools,
+                    // Tell OpenRouter to only route to providers that support tool use
+                    provider: { require: ['tools'] },
                 }),
             });
 
             if (!response.ok) {
                 const err = await response.text();
+                // If no provider supports tools for this model, fall back to text-based call
+                if (response.status === 404 && err.includes('tool use')) {
+                    logger.warn(`MultiLLM: OpenRouter model "${resolvedModel}" has no tool-capable providers, falling back to text-based call`);
+                    const textResponse = await this.callOpenRouter(prompt, systemMessage, model);
+                    return { content: textResponse, toolCalls: [] };
+                }
                 throw new Error(`OpenRouter Tool Call API Error: ${response.status} ${err}`);
             }
 
@@ -511,7 +519,13 @@ export class MultiLLM {
             logger.debug(`MultiLLM: OpenRouter tool call returned ${toolCalls.length} tool(s) + ${textContent.length} chars text`);
 
             return { content: textContent, toolCalls, raw: data };
-        } catch (error) {
+        } catch (error: any) {
+            // Also catch retried 404 tool-use errors gracefully
+            if (error?.message?.includes('tool use') && error?.message?.includes('404')) {
+                logger.warn(`MultiLLM: OpenRouter model "${resolvedModel}" tool call failed, falling back to text-based call`);
+                const textResponse = await this.callOpenRouter(prompt, systemMessage, model);
+                return { content: textResponse, toolCalls: [] };
+            }
             logger.error(`MultiLLM OpenRouter tool call error: ${error}`);
             throw error;
         }
@@ -572,17 +586,39 @@ export class MultiLLM {
         }
     }
 
+    public async analyzeMediaWithModel(filePath: string, prompt: string, modelName: string): Promise<string> {
+        if (!modelName) return this.analyzeMedia(filePath, prompt);
+
+        const provider = this.inferProvider(modelName);
+        if (provider === 'google') {
+            return this.analyzeMediaGoogle(filePath, prompt, modelName);
+        }
+        if (provider === 'openai') {
+            return this.analyzeMediaOpenAI(filePath, prompt);
+        }
+        return this.analyzeMedia(filePath, prompt);
+    }
+
     /**
-     * Text-to-Speech: Convert text to an audio file using OpenAI TTS API.
+     * Text-to-Speech: Convert text to an audio file using the primary provider.
+     * Uses Google TTS when primary provider is google; otherwise OpenAI TTS.
      * Returns the path to the generated audio file.
      * 
      * @param text The text to convert to speech
      * @param outputPath Where to save the audio file
-     * @param voice The voice to use (alloy, echo, fable, onyx, nova, shimmer). Default: nova
+     * @param voice The voice to use. OpenAI voices: alloy, echo, fable, onyx, nova, shimmer. Google: e.g. kore.
      * @param speed Speech speed multiplier (0.25 to 4.0). Default: 1.0
      */
     public async textToSpeech(text: string, outputPath: string, voice: string = 'nova', speed: number = 1.0): Promise<string> {
-        if (!this.openaiKey) throw new Error('OpenAI API key not configured — required for TTS');
+        const primaryProvider = this.preferredProvider || this.inferProvider(this.modelName);
+
+        if (primaryProvider === 'google' && this.googleKey) {
+            return this.textToSpeechGoogle(text, outputPath, voice);
+        }
+
+        if (!this.openaiKey) {
+            throw new Error('OpenAI API key not configured — required for TTS');
+        }
 
         const validVoices = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'];
         if (!validVoices.includes(voice)) {
@@ -617,7 +653,7 @@ export class MultiLLM {
             if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
             fs.writeFileSync(outputPath, buffer);
-            logger.info(`MultiLLM TTS: Generated ${buffer.length} bytes → ${outputPath}`);
+            logger.info(`MultiLLM TTS (OpenAI): Generated ${buffer.length} bytes → ${outputPath}`);
             return outputPath;
         } catch (error) {
             logger.error(`MultiLLM TTS Error: ${error}`);
@@ -625,15 +661,94 @@ export class MultiLLM {
         }
     }
 
-    private async analyzeMediaGoogle(filePath: string, prompt: string): Promise<string> {
+    private async textToSpeechGoogle(text: string, outputPath: string, voice: string = 'kore'): Promise<string> {
+        if (!this.googleKey) throw new Error('Google API key not configured — required for TTS');
+
+        const url = `https://generativelanguage.googleapis.com/v1beta/interactions?key=${this.googleKey}`;
+        const body = {
+            model: 'gemini-2.5-flash-preview-tts',
+            input: text,
+            response_modalities: ['AUDIO'],
+            generation_config: {
+                speech_config: {
+                    language: 'en-us',
+                    voice: voice || 'kore'
+                }
+            }
+        };
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+
+            if (!response.ok) {
+                const err = await response.text();
+                throw new Error(`Google TTS Error: ${response.status} ${err}`);
+            }
+
+            const data: any = await response.json().catch(() => ({}));
+            const outputs = data?.outputs || [];
+            const audio = outputs.find((o: any) => o?.type === 'audio');
+            const base64 = audio?.data;
+            if (!base64) {
+                throw new Error('Google TTS Error: No audio data returned');
+            }
+
+            const pcmBuffer = Buffer.from(base64, 'base64');
+
+            const wavPath = path.extname(outputPath).toLowerCase() === '.wav'
+                ? outputPath
+                : outputPath.replace(path.extname(outputPath) || '', '') + '.wav';
+
+            // Ensure output directory exists
+            const dir = path.dirname(wavPath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+            this.writeWavFile(pcmBuffer, wavPath, 24000, 1, 16);
+            logger.info(`MultiLLM TTS (Google): Generated ${pcmBuffer.length} bytes PCM → ${wavPath}`);
+            return wavPath;
+        } catch (error) {
+            logger.error(`MultiLLM TTS Error: ${error}`);
+            throw error;
+        }
+    }
+
+    private writeWavFile(pcmData: Buffer, outputPath: string, sampleRate: number, channels: number, bitDepth: number): void {
+        const byteRate = sampleRate * channels * (bitDepth / 8);
+        const blockAlign = channels * (bitDepth / 8);
+        const dataSize = pcmData.length;
+        const header = Buffer.alloc(44);
+
+        header.write('RIFF', 0);
+        header.writeUInt32LE(36 + dataSize, 4);
+        header.write('WAVE', 8);
+        header.write('fmt ', 12);
+        header.writeUInt32LE(16, 16); // PCM header size
+        header.writeUInt16LE(1, 20);  // Audio format PCM
+        header.writeUInt16LE(channels, 22);
+        header.writeUInt32LE(sampleRate, 24);
+        header.writeUInt32LE(byteRate, 28);
+        header.writeUInt16LE(blockAlign, 32);
+        header.writeUInt16LE(bitDepth, 34);
+        header.write('data', 36);
+        header.writeUInt32LE(dataSize, 40);
+
+        const wav = Buffer.concat([header, pcmData]);
+        fs.writeFileSync(outputPath, wav);
+    }
+
+    private async analyzeMediaGoogle(filePath: string, prompt: string, modelOverride?: string): Promise<string> {
         if (!this.googleKey) throw new Error('Google API key not configured');
 
         const buffer = fs.readFileSync(filePath);
         const mimeType = this.getMimeType(filePath);
         const base64Data = buffer.toString('base64');
 
-        // Use flash for analysis as it's faster and cheaper
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${this.googleKey}`;
+        const model = (modelOverride && modelOverride.trim()) ? modelOverride.trim() : 'gemini-2.5-flash';
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.googleKey}`;
 
         const body = {
             contents: [{

@@ -68,6 +68,40 @@ export class GatewayServer {
         return `gateway-chat-${crypto.randomUUID()}`;
     }
 
+    private verifySlackSignature(req: Request, rawBody: string, signingSecret: string): boolean {
+        const timestamp = req.headers['x-slack-request-timestamp'];
+        const signature = req.headers['x-slack-signature'];
+        if (!timestamp || !signature) {
+            logger.warn('Slack signature verification failed: missing headers.');
+            return false;
+        }
+
+        const ts = Number(timestamp);
+        if (!Number.isFinite(ts)) {
+            logger.warn('Slack signature verification failed: invalid timestamp.');
+            return false;
+        }
+
+        // Reject if request is too old (5 minutes)
+        const ageSeconds = Math.abs(Date.now() / 1000 - ts);
+        if (ageSeconds > 60 * 5) {
+            logger.warn('Slack signature verification failed: stale request.');
+            return false;
+        }
+
+        const baseString = `v0:${timestamp}:${rawBody}`;
+        const hash = crypto.createHmac('sha256', signingSecret).update(baseString).digest('hex');
+        const expected = `v0=${hash}`;
+        const provided = String(signature);
+
+        if (provided.length !== expected.length) return false;
+        try {
+            return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+        } catch {
+            return false;
+        }
+    }
+
     /**
      * Save a chat message to memory and broadcast it
      */
@@ -136,7 +170,11 @@ export class GatewayServer {
         }));
 
         // JSON parsing
-        this.app.use(express.json());
+        this.app.use((req: Request, res: Response, next: NextFunction) => {
+            // Slack Events API needs raw body for signature verification
+            if (req.path === '/slack/events') return next();
+            return express.json()(req, res, next);
+        });
 
         // API Key authentication (if configured)
         this.app.use('/api', (req: Request, res: Response, next: NextFunction) => {
@@ -169,6 +207,43 @@ export class GatewayServer {
 
     private setupRoutes() {
         const router = express.Router();
+        // ===== SLACK EVENTS API =====
+        // Uses raw body parsing for signature verification
+        this.app.post('/slack/events', express.raw({ type: 'application/json' }), async (req: Request, res: Response) => {
+            const signingSecret = this.config.get('slackSigningSecret');
+            if (!signingSecret) {
+                logger.warn('Slack Events API called but slackSigningSecret is not configured.');
+                return res.status(500).json({ error: 'Slack signing secret not configured' });
+            }
+
+            const rawBody = req.body instanceof Buffer ? req.body.toString('utf8') : '';
+            if (!this.verifySlackSignature(req, rawBody, signingSecret)) {
+                return res.status(401).json({ error: 'Invalid Slack signature' });
+            }
+
+            let payload: any = {};
+            try {
+                payload = rawBody ? JSON.parse(rawBody) : {};
+            } catch {
+                return res.status(400).json({ error: 'Invalid JSON payload' });
+            }
+
+            // URL verification handshake
+            if (payload?.type === 'url_verification' && payload?.challenge) {
+                return res.status(200).send(payload.challenge);
+            }
+
+            // Acknowledge quickly, then process async
+            res.status(200).send('OK');
+
+            try {
+                if (this.agent.slack && payload?.type === 'event_callback') {
+                    await this.agent.slack.handleEvent(payload);
+                }
+            } catch (error: any) {
+                logger.warn(`Slack Events API processing error: ${error.message || error}`);
+            }
+        });
 
         // ===== STATUS & INFO =====
         router.get('/status', (_req: Request, res: Response) => {

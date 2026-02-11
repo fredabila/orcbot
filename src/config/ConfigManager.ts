@@ -40,6 +40,7 @@ export interface AgentConfig {
     journalPath?: string;
     learningPath?: string;
     pluginsPath?: string;
+    toolsPath?: string;
     whatsappEnabled?: boolean;
     whatsappSessionPath?: string;
     whatsappAutoReplyEnabled?: boolean;
@@ -72,13 +73,28 @@ export interface AgentConfig {
     browserTraceDir?: string;                     // Optional trace output directory
     browserTraceScreenshots?: boolean;            // Include screenshots in trace
     browserTraceSnapshots?: boolean;              // Include DOM snapshots in trace
+    googleComputerUseEnabled?: boolean;           // Enable Gemini computer-use routing for browser tools
+    googleComputerUseModel?: string;              // Gemini computer-use model name
     tokenUsagePath?: string;
     tokenLogPath?: string;
     // Discord
     discordToken?: string;                // Discord bot token
     discordAutoReplyEnabled?: boolean;    // Auto-reply in Discord (default false)
     slackBotToken?: string;               // Slack bot token (xoxb-...)
+    slackAppToken?: string;               // Slack app token (xapp-...) for Socket Mode
+    slackSigningSecret?: string;          // Slack signing secret (for events API)
     slackAutoReplyEnabled?: boolean;      // Auto-reply in Slack (default false)
+    // World events
+    worldEventsSources?: string[];        // e.g. ['gdelt', 'usgs', 'opensky']
+    worldEventsRefreshSeconds?: number;   // Live view refresh (default 60)
+    worldEventsLookbackMinutes?: number;  // GDELT/USGS lookback window (default 60)
+    worldEventsMaxRecords?: number;       // Max records per fetch (default 250)
+    worldEventsBatchMinutes?: number;     // Summarization batch window (default 10)
+    worldEventsStoreEnabled?: boolean;    // Store summaries in vector memory
+    worldEventsGdeltQuery?: string;       // GDELT query filter (default 'global')
+    worldEventsGlobeRenderer?: 'ascii' | 'external' | 'map' | 'mapscii'; // Renderer mode
+    worldEventsGlobeCommand?: string;     // External globe CLI command
+    worldEventsGlobeArgs?: string[];      // External globe CLI args
     // Operational
     autoExecuteCommands?: boolean;        // Auto-execute commands without confirmation (default false)
     skillRoutingRules?: Array<{
@@ -236,6 +252,8 @@ export class ConfigManager {
             telegramToken: process.env.TELEGRAM_TOKEN,
             discordToken: process.env.DISCORD_TOKEN,
             slackBotToken: process.env.SLACK_BOT_TOKEN,
+            slackAppToken: process.env.SLACK_APP_TOKEN,
+            slackSigningSecret: process.env.SLACK_SIGNING_SECRET,
             bedrockRegion: process.env.BEDROCK_REGION || process.env.AWS_REGION,
             bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
             bedrockSecretAccessKey: process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY,
@@ -316,6 +334,14 @@ export class ConfigManager {
             delete (config as any).slackBotToken;
             repaired = true;
         }
+        if ((config as any).slackAppToken === '') {
+            delete (config as any).slackAppToken;
+            repaired = true;
+        }
+            if ((config as any).slackSigningSecret === '') {
+                delete (config as any).slackSigningSecret;
+                repaired = true;
+            }
 
         if (repaired) {
             if (!silent) logger.info('ConfigManager: Worker-corruption repair complete. Saving corrected config.');
@@ -349,6 +375,7 @@ export class ConfigManager {
             'journalPath',
             'learningPath',
             'pluginsPath',
+            'toolsPath',
             'whatsappSessionPath',
             'browserProfileDir',
             'tokenUsagePath',
@@ -420,6 +447,7 @@ export class ConfigManager {
             journalPath: path.join(this.dataHome, 'JOURNAL.md'),
             learningPath: path.join(this.dataHome, 'LEARNING.md'),
             pluginsPath: path.join(this.dataHome, 'plugins'),
+            toolsPath: path.join(this.dataHome, 'tools'),
             whatsappEnabled: false,
             whatsappSessionPath: path.join(this.dataHome, 'whatsapp-session'),
             whatsappAutoReplyEnabled: false,
@@ -501,10 +529,24 @@ export class ConfigManager {
             browserTraceDir: path.join(this.dataHome, 'browser-traces'),
             browserTraceScreenshots: true,
             browserTraceSnapshots: true,
+            googleComputerUseEnabled: false,
+            googleComputerUseModel: 'gemini-2.5-computer-use-preview-10-2025',
             tokenUsagePath: path.join(this.dataHome, 'token-usage-summary.json'),
             tokenLogPath: path.join(this.dataHome, 'token-usage.log'),
             discordAutoReplyEnabled: false,
             slackAutoReplyEnabled: false,
+            slackAppToken: undefined,
+            slackSigningSecret: undefined,
+            worldEventsSources: ['gdelt', 'usgs'],
+            worldEventsRefreshSeconds: 60,
+            worldEventsLookbackMinutes: 60,
+            worldEventsMaxRecords: 250,
+            worldEventsBatchMinutes: 10,
+            worldEventsStoreEnabled: true,
+            worldEventsGdeltQuery: 'global',
+            worldEventsGlobeRenderer: 'mapscii',
+            worldEventsGlobeCommand: 'mapscii',
+            worldEventsGlobeArgs: [],
             autoExecuteCommands: false,
             bedrockRegion: process.env.BEDROCK_REGION || process.env.AWS_REGION,
             bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
@@ -594,7 +636,7 @@ export class ConfigManager {
 
                     // Critical keys that should never be blanked by a sync
                     const protectedKeys = [
-                        'telegramToken', 'discordToken', 'slackBotToken', 'openaiApiKey', 'googleApiKey',
+                        'telegramToken', 'discordToken', 'slackBotToken', 'slackAppToken', 'slackSigningSecret', 'openaiApiKey', 'googleApiKey',
                         'nvidiaApiKey', 'anthropicApiKey', 'openrouterApiKey', 'serperApiKey',
                         'captchaApiKey', 'braveSearchApiKey', 'bedrockAccessKeyId',
                         'bedrockSecretAccessKey', 'bedrockSessionToken'
@@ -638,6 +680,8 @@ export class ConfigManager {
             telegramToken: 'TELEGRAM_TOKEN',
             discordToken: 'DISCORD_TOKEN',
             slackBotToken: 'SLACK_BOT_TOKEN',
+            slackAppToken: 'SLACK_APP_TOKEN',
+            slackSigningSecret: 'SLACK_SIGNING_SECRET',
             bedrockRegion: 'BEDROCK_REGION',
             bedrockAccessKeyId: 'BEDROCK_ACCESS_KEY_ID',
             bedrockSecretAccessKey: 'BEDROCK_SECRET_ACCESS_KEY',

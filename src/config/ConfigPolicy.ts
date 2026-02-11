@@ -193,6 +193,18 @@ export class ConfigPolicy {
             description: 'Slack bot token',
             reason: 'Critical authentication credential',
         }],
+        ['slackAppToken', {
+            key: 'slackAppToken',
+            level: ConfigChangeLevel.LOCKED,
+            description: 'Slack app token (Socket Mode)',
+            reason: 'Critical authentication credential',
+        }],
+        ['slackSigningSecret', {
+            key: 'slackSigningSecret',
+            level: ConfigChangeLevel.LOCKED,
+            description: 'Slack signing secret',
+            reason: 'Critical authentication credential',
+        }],
         ['whatsappEnabled', {
             key: 'whatsappEnabled',
             level: ConfigChangeLevel.LOCKED,

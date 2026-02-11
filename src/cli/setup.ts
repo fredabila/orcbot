@@ -184,6 +184,18 @@ export async function runSetup() {
             mask: '*'
         },
         {
+            type: 'input',
+            name: 'slackAppToken',
+            message: `Slack App Token (Socket Mode) ${maskHint('SLACK_APP_TOKEN')}:`,
+            mask: '*'
+        },
+        {
+            type: 'input',
+            name: 'slackSigningSecret',
+            message: `Slack Signing Secret ${maskHint('SLACK_SIGNING_SECRET')}:`,
+            mask: '*'
+        },
+        {
             type: 'confirm',
             name: 'slackAutoReplyEnabled',
             message: 'Enable Slack AI Auto-Reply?',
@@ -283,7 +295,9 @@ export async function runSetup() {
         serperApiKey: 'SERPER_API_KEY',
         telegramToken: 'TELEGRAM_TOKEN',
         discordToken: 'DISCORD_TOKEN',
-        slackBotToken: 'SLACK_BOT_TOKEN'
+        slackBotToken: 'SLACK_BOT_TOKEN',
+        slackAppToken: 'SLACK_APP_TOKEN',
+        slackSigningSecret: 'SLACK_SIGNING_SECRET'
     };
 
     for (const [field, envKey] of Object.entries(envMap)) {

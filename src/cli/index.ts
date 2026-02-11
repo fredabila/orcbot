@@ -11,9 +11,11 @@ import qrcode from 'qrcode-terminal';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
+import { spawnSync } from 'child_process';
 import { WorkerProfileManager } from '../core/WorkerProfile';
 import { DaemonManager } from '../utils/daemon';
 import { TokenTracker } from '../core/TokenTracker';
+import { aggregateWorldEvents, fetchWorldEvents, summarizeWorldEvents, WorldEvent, WorldEventSource, getRootCodeLabel } from '../tools/WorldEvents';
 
 dotenv.config(); // Local .env
 dotenv.config({ path: path.join(os.homedir(), '.orcbot', '.env') }); // Global .env
@@ -92,6 +94,165 @@ function box(lines: string[], opts: { title?: string; width?: number; color?: st
         console.log(`${color}║${c.reset}${' '.repeat(pad)}${line}${' '.repeat(rightPad)}${color}║${c.reset}`);
     }
     console.log(bot);
+}
+
+async function showToolsManagerMenu() {
+    console.clear();
+    banner();
+    sectionHeader('🧰', 'Tools Manager');
+
+    const tools = agent.tools.listTools();
+    const activeCount = tools.filter(t => t.active).length;
+    const approvedCount = tools.filter(t => t.approved).length;
+
+    console.log('');
+    const summaryLines = [
+        `${dim('Installed')}   ${brightCyan(bold(String(tools.length)))}`,
+        `${dim('Active')}      ${activeCount > 0 ? green(bold(String(activeCount))) : gray('0')}`,
+        `${dim('Approved')}    ${approvedCount > 0 ? green(bold(String(approvedCount))) : gray('0')}`,
+    ];
+    box(summaryLines, { title: '🧰 TOOL INVENTORY', width: 40, color: c.magenta });
+    console.log('');
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: cyan('Tools Options:'),
+            choices: [
+                { name: `  ➕ ${bold('Install Tool')}`, value: 'install' },
+                { name: `  ✅ ${bold('Approve Tool')}`, value: 'approve' },
+                { name: `  ⚡ ${bold('Activate / Deactivate Tool')}`, value: 'activate' },
+                { name: `  ▶️  ${bold('Run Tool Command')}`, value: 'run' },
+                { name: `  📖 ${bold('Read Tool README')}`, value: 'readme' },
+                { name: `  🗑️  ${bold('Uninstall Tool')}`, value: 'uninstall' },
+                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.magenta, c.gray])),
+                { name: dim('  ← Back'), value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showMainMenu();
+
+    const pickToolName = async (label: string): Promise<string> => {
+        if (tools.length > 0) {
+            const choices = tools.map(t => ({
+                name: `${t.active ? green('●') : gray('○')} ${t.name} ${t.approved ? green('✔') : red('✖')}${t.description ? dim(` — ${t.description.slice(0, 40)}`) : ''}`,
+                value: t.name
+            }));
+            choices.push({ name: dim('  ✏️  Enter name manually'), value: '__manual__' });
+            const { selected } = await inquirer.prompt([
+                { type: 'list', name: 'selected', message: label, choices }
+            ]);
+            if (selected !== '__manual__') return selected;
+        }
+        const { name } = await inquirer.prompt([
+            { type: 'input', name: 'name', message: `${label} (tool name):` }
+        ]);
+        return (name || '').trim();
+    };
+
+    switch (action) {
+        case 'install': {
+            if (agent.config.get('safeMode')) {
+                console.log('\n🔒 Safe mode is enabled. Tool installation is disabled.');
+                break;
+            }
+            const { source } = await inquirer.prompt([
+                { type: 'input', name: 'source', message: 'Git URL or local path:' }
+            ]);
+            const { name } = await inquirer.prompt([
+                { type: 'input', name: 'name', message: 'Optional tool name (leave blank to infer):' }
+            ]);
+            const { subdir } = await inquirer.prompt([
+                { type: 'input', name: 'subdir', message: 'Optional subdir (leave blank if repo root):' }
+            ]);
+            const { allowed } = await inquirer.prompt([
+                { type: 'input', name: 'allowed', message: 'Allowed commands (comma-separated, or * for all):' }
+            ]);
+            const { description } = await inquirer.prompt([
+                { type: 'input', name: 'description', message: 'Optional description:' }
+            ]);
+            const allowedCommands = allowed ? allowed.split(',').map((s: string) => s.trim()).filter(Boolean) : undefined;
+            const result = await agent.tools.installTool({ source, name: name || undefined, subdir: subdir || undefined, allowedCommands, description: description || undefined });
+            if (result.success && result.name) {
+                agent.tools.activateTool(result.name, true);
+            }
+            console.log(`\n${result.success ? '✅' : '❌'} ${result.message}`);
+            break;
+        }
+        case 'approve': {
+            const name = await pickToolName('Select tool to approve');
+            if (!name) break;
+            const { allowed } = await inquirer.prompt([
+                { type: 'input', name: 'allowed', message: 'Allowed commands (comma-separated, or * for all):' }
+            ]);
+            const allowedCommands = allowed ? allowed.split(',').map((s: string) => s.trim()).filter(Boolean) : undefined;
+            const result = agent.tools.approveTool(name, allowedCommands);
+            console.log(`\n${result.success ? '✅' : '❌'} ${result.message}`);
+            break;
+        }
+        case 'activate': {
+            const name = await pickToolName('Select tool to activate/deactivate');
+            if (!name) break;
+            const tool = agent.tools.getTool(name);
+            if (!tool) {
+                console.log('\n❌ Tool not found.');
+                break;
+            }
+            const { active } = await inquirer.prompt([
+                { type: 'confirm', name: 'active', message: `Set "${name}" active?`, default: !tool.active }
+            ]);
+            const result = agent.tools.activateTool(name, active);
+            console.log(`\n${result.success ? '✅' : '❌'} ${result.message}`);
+            break;
+        }
+        case 'run': {
+            if (agent.config.get('safeMode')) {
+                console.log('\n🔒 Safe mode is enabled. Tool execution is disabled.');
+                break;
+            }
+            const name = await pickToolName('Select tool to run');
+            if (!name) break;
+            const { command } = await inquirer.prompt([
+                { type: 'input', name: 'command', message: 'Command to run (e.g., node, python, ./bin/tool):' }
+            ]);
+            const { args } = await inquirer.prompt([
+                { type: 'input', name: 'args', message: 'Args (optional):' }
+            ]);
+            const { cwd } = await inquirer.prompt([
+                { type: 'input', name: 'cwd', message: 'Working dir relative to tool (optional):' }
+            ]);
+            const result = await agent.tools.runToolCommand(name, command, args || undefined, cwd || undefined);
+            console.log(`\n${result.success ? '✅' : '❌'} ${result.message}`);
+            break;
+        }
+        case 'readme': {
+            const name = await pickToolName('Select tool to read README');
+            if (!name) break;
+            const result = agent.tools.readToolReadme(name);
+            console.log(`\n${result.success ? '' : '❌ '}${result.message}`);
+            break;
+        }
+        case 'uninstall': {
+            if (agent.config.get('safeMode')) {
+                console.log('\n🔒 Safe mode is enabled. Tool uninstall is disabled.');
+                break;
+            }
+            const name = await pickToolName('Select tool to uninstall');
+            if (!name) break;
+            const { confirm } = await inquirer.prompt([
+                { type: 'confirm', name: 'confirm', message: `Uninstall "${name}"?`, default: false }
+            ]);
+            if (!confirm) break;
+            const result = agent.tools.uninstallTool(name);
+            console.log(`\n${result.success ? '✅' : '❌'} ${result.message}`);
+            break;
+        }
+    }
+
+    await waitKeyPress();
+    return showToolsManagerMenu();
 }
 
 /** Render a horizontal bar (progress/usage visualization) */
@@ -759,6 +920,48 @@ program
     .action(async (opts) => {
         banner();
         await runLatencyBenchmark({ includeLLM: !!opts.llm });
+    });
+
+program
+    .command('world')
+    .description('Live world events dashboard with globe')
+    .option('--sources <list>', 'Comma-separated sources (gdelt,usgs,opensky)')
+    .option('--refresh <seconds>', 'Refresh interval in seconds')
+    .option('--minutes <minutes>', 'Lookback window in minutes')
+    .option('--max <records>', 'Max records per fetch (50-500)')
+    .option('--batch-minutes <minutes>', 'Batch window for memory summary')
+    .option('--gdelt-query <query>', 'GDELT query filter (default: global)')
+    .option('--globe <mode>', 'Renderer: map | ascii | external | mapscii')
+    .option('--globe-cmd <command>', 'External globe CLI command (default: globe)')
+    .option('--globe-args <args>', 'External globe CLI args (space-separated)')
+    .option('--once', 'Fetch and render once, then exit')
+    .option('--no-store', 'Disable vector memory storage')
+    .action(async (opts) => {
+        const sources = parseWorldSources(opts.sources || agent.config.get('worldEventsSources'));
+        const refreshSeconds = Number(opts.refresh ?? agent.config.get('worldEventsRefreshSeconds') ?? 60);
+        const minutes = Number(opts.minutes ?? agent.config.get('worldEventsLookbackMinutes') ?? 60);
+        const maxRecords = Number(opts.max ?? agent.config.get('worldEventsMaxRecords') ?? 250);
+        const batchMinutes = Number(opts.batchMinutes ?? agent.config.get('worldEventsBatchMinutes') ?? 10);
+        const gdeltQuery = String(opts.gdeltQuery ?? agent.config.get('worldEventsGdeltQuery') ?? 'global');
+        const globeMode = (opts.globe ?? agent.config.get('worldEventsGlobeRenderer') ?? 'mapscii') as 'ascii' | 'external' | 'map' | 'mapscii';
+        const globeCommand = String(opts.globeCmd ?? agent.config.get('worldEventsGlobeCommand') ?? 'globe');
+        const globeArgs = parseGlobeArgs(opts.globeArgs ?? agent.config.get('worldEventsGlobeArgs'));
+        const once = Boolean(opts.once);
+        const store = opts.store !== false && agent.config.get('worldEventsStoreEnabled') !== false;
+
+        await runWorldEventsMonitor({
+            sources,
+            refreshSeconds,
+            minutes,
+            maxRecords,
+            batchMinutes,
+            gdeltQuery,
+            globeMode,
+            globeCommand,
+            globeArgs,
+            once,
+            store
+        });
     });
 
 program
@@ -1484,6 +1687,383 @@ async function runLatencyBenchmark(opts: { includeLLM?: boolean; interactive?: b
     }
 }
 
+// ── World Events (GDELT) Live View ─────────────────────────────────────
+
+function sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function parseWorldSources(input: string[] | string | undefined): WorldEventSource[] {
+    const raw = Array.isArray(input) ? input.join(',') : String(input || '');
+    const list = raw
+        .split(',')
+        .map(s => s.trim().toLowerCase())
+        .filter(Boolean);
+
+    const allowed: WorldEventSource[] = ['gdelt', 'usgs', 'opensky'];
+    const selected = list.filter(s => allowed.includes(s as WorldEventSource)) as WorldEventSource[];
+    return selected.length ? selected : ['gdelt'];
+}
+
+function parseGlobeArgs(input: string[] | string | undefined): string[] {
+    if (!input) return [];
+    if (Array.isArray(input)) return input;
+    return String(input)
+        .split(' ')
+        .map(s => s.trim())
+        .filter(Boolean);
+}
+
+function isCommandAvailable(command: string): boolean {
+    try {
+        const probe = spawnSync(command, ['--version'], { encoding: 'utf-8' });
+        return !probe.error;
+    } catch {
+        return false;
+    }
+}
+
+function ensureMapsciiInstalled(): boolean {
+    if (isCommandAvailable('mapscii')) return true;
+
+    console.log(yellow('mapscii not found. Installing globally with npm...'));
+    try {
+        const result = spawnSync('npm', ['i', '-g', 'mapscii'], { stdio: 'inherit' });
+        if (result.error || result.status !== 0) {
+            console.log(red('Failed to install mapscii. Falling back to built-in renderer.'));
+            return false;
+        }
+        return isCommandAvailable('mapscii');
+    } catch {
+        console.log(red('Failed to install mapscii. Falling back to built-in renderer.'));
+        return false;
+    }
+}
+
+function launchMapscii(args: string[] = []): boolean {
+    if (!ensureMapsciiInstalled()) return false;
+    const result = spawnSync('mapscii', args, { stdio: 'inherit' });
+    return !result.error;
+}
+
+function renderExternalGlobe(command: string, args: string[], maxLines = 20): string[] | null {
+    try {
+        const result = spawnSync(command, args, { encoding: 'utf-8' });
+        if (result.error || !result.stdout) return null;
+        const lines = result.stdout.trimEnd().split(/\r?\n/);
+        return lines.slice(0, maxLines);
+    } catch {
+        return null;
+    }
+}
+
+function projectToGlobe(lat: number, lon: number, rotationDeg: number): { x: number; y: number; z: number; visible: boolean } {
+    const degToRad = (d: number) => (d * Math.PI) / 180;
+    const latRad = degToRad(lat);
+    const lonRad = degToRad(lon + rotationDeg);
+
+    const x = Math.cos(latRad) * Math.cos(lonRad);
+    const y = Math.sin(latRad);
+    const z = Math.cos(latRad) * Math.sin(lonRad);
+
+    return { x, y, z, visible: z >= 0 };
+}
+
+function renderGlobeFrame(events: WorldEvent[], rotationDeg: number, width = 42, height = 20): string[] {
+    const grid: string[][] = Array.from({ length: height }, () => Array.from({ length: width }, () => ' '));
+    const shadeChars = ['.', ':', '-', '=', '+', '*', '#', '@'];
+    const light = { x: -0.4, y: 0.2, z: 1.0 };
+    const lightLen = Math.hypot(light.x, light.y, light.z) || 1;
+    const lx = light.x / lightLen;
+    const ly = light.y / lightLen;
+    const lz = light.z / lightLen;
+
+    for (let row = 0; row < height; row++) {
+        for (let col = 0; col < width; col++) {
+            const nx = (col / (width - 1)) * 2 - 1;
+            const ny = ((height - 1 - row) / (height - 1)) * 2 - 1;
+            const r2 = nx * nx + ny * ny;
+            if (r2 <= 1) {
+                const z = Math.sqrt(1 - r2);
+                const brightness = Math.max(0, nx * lx + ny * ly + z * lz);
+                const idx = Math.min(shadeChars.length - 1, Math.floor(brightness * shadeChars.length));
+                const baseChar = shadeChars[idx];
+
+                // Add a subtle limb outline for 3D shape
+                const isLimb = Math.abs(r2 - 1) < 0.02;
+                if (isLimb) {
+                    grid[row][col] = gray('·');
+                } else if (brightness > 0.7) {
+                    grid[row][col] = brightCyan(baseChar);
+                } else if (brightness > 0.5) {
+                    grid[row][col] = cyan(baseChar);
+                } else if (brightness > 0.3) {
+                    grid[row][col] = gray(baseChar);
+                } else {
+                    grid[row][col] = dim(baseChar);
+                }
+            }
+        }
+    }
+
+    const sample = events.slice(0, 250);
+    for (const e of sample) {
+        const proj = projectToGlobe(e.lat, e.lon, rotationDeg);
+        if (!proj.visible) continue;
+        const col = Math.round(((proj.x + 1) / 2) * (width - 1));
+        const row = Math.round(((1 - (proj.y + 1) / 2)) * (height - 1));
+        if (row >= 0 && row < height && col >= 0 && col < width) {
+            const point = proj.z > 0.6 ? brightCyan('•') : proj.z > 0.3 ? cyan('•') : dim('•');
+            grid[row][col] = point;
+        }
+    }
+
+    return grid.map(r => r.join(''));
+}
+
+function renderMapFrame(events: WorldEvent[], width = 68, height = 18): string[] {
+    const grid: string[][] = Array.from({ length: height }, () => Array.from({ length: width }, () => dim('·')));
+
+    const sample = events.slice(0, 500);
+    for (const e of sample) {
+        const col = Math.round(((e.lon + 180) / 360) * (width - 1));
+        const row = Math.round(((90 - e.lat) / 180) * (height - 1));
+        if (row >= 0 && row < height && col >= 0 && col < width) {
+            const point = e.source === 'usgs'
+                ? green('*')
+                : e.source === 'opensky'
+                    ? yellow('+')
+                    : cyan('•');
+            grid[row][col] = point;
+        }
+    }
+
+    return grid.map(r => r.join(''));
+}
+
+function clipLine(text: string, max = 70): string {
+    const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
+    if (stripAnsi(text).length <= max) return text;
+    const trimmed = stripAnsi(text).slice(0, max - 3) + '...';
+    return trimmed;
+}
+
+function parseEventTimeMs(e: WorldEvent): number {
+    if (!e.time) return 0;
+    const t = Date.parse(e.time);
+    if (!Number.isNaN(t)) return t;
+    // GDELT DATEADDED like YYYYMMDDHHMMSS
+    if (/^\d{14}$/.test(e.time)) {
+        const year = Number(e.time.slice(0, 4));
+        const month = Number(e.time.slice(4, 6)) - 1;
+        const day = Number(e.time.slice(6, 8));
+        const hour = Number(e.time.slice(8, 10));
+        const min = Number(e.time.slice(10, 12));
+        const sec = Number(e.time.slice(12, 14));
+        return Date.UTC(year, month, day, hour, min, sec);
+    }
+    return 0;
+}
+
+function formatEventLine(e: WorldEvent): string {
+    const src = (e.source || 'unknown').toUpperCase();
+    const location = e.location || e.country || 'Unknown location';
+    let detail = '';
+
+    if (e.source === 'gdelt') {
+        const label = getRootCodeLabel(e.eventRootCode);
+        const tone = typeof e.tone === 'number' ? `, tone ${e.tone.toFixed(1)}` : '';
+        detail = `${label}${tone}`;
+    } else if (e.source === 'usgs') {
+        detail = `Earthquake ${e.eventCode || ''}`.trim();
+    } else if (e.source === 'opensky') {
+        detail = `Flight ${e.location || e.id}`;
+    } else {
+        detail = 'Event';
+    }
+
+    return clipLine(`${dim(src)} ${location} ${dim('-')} ${detail}`);
+}
+
+function getTopEventLines(events: WorldEvent[], limit = 6): string[] {
+    const sorted = [...events].sort((a, b) => parseEventTimeMs(b) - parseEventTimeMs(a));
+    const lines = [] as string[];
+    for (const e of sorted) {
+        lines.push(formatEventLine(e));
+        if (lines.length >= limit) break;
+    }
+    return lines.length ? lines : [dim('No recent events in this window.')];
+}
+
+function renderWorldView(
+    events: WorldEvent[],
+    history: number[],
+    rotationDeg: number,
+    minutes: number,
+    error?: string,
+    sources?: WorldEventSource[],
+    globeMode?: 'ascii' | 'external' | 'map' | 'mapscii',
+    globeCommand?: string,
+    globeArgs?: string[]
+): void {
+    console.clear();
+    banner();
+    sectionHeader('🌍', 'World Events');
+
+    if (error) {
+        box([
+            red('Data fetch failed'),
+            dim(error)
+        ], { title: '⚠️  DATA ERROR', width: 74, color: c.red });
+        console.log('');
+    }
+
+    const stats = aggregateWorldEvents(events);
+    const trend = history.length ? sparkline(history) : dim('(no history)');
+    const activeSources = sources && sources.length ? sources.join(', ') : 'gdelt';
+    const topSources = stats.topSources.map(s => `${s.key}:${s.count}`).join('  ') || 'none';
+    const topCountries = stats.topCountries.map(c => `${c.key}:${c.count}`).join('  ') || 'none';
+    const topRoots = stats.topRootCodes.map(r => `${r.key}:${r.count}`).join('  ') || 'none';
+
+    const signalLines = [
+        `${dim('Sources')} ${activeSources}   ${dim('Window')} ${minutes}m   ${dim('Events')} ${stats.total.toLocaleString()}`,
+        `${dim('Trend')} ${trend}`,
+        `${dim('Top sources')} ${topSources}`,
+        `${dim('Avg tone')} ${stats.avgTone.toFixed(2)}   ${dim('Avg goldstein')} ${stats.avgGoldstein.toFixed(2)}`,
+        `${dim('Top countries')} ${topCountries}`,
+        `${dim('Top roots')} ${topRoots}`
+    ];
+
+    box(signalLines, { title: '📈 SIGNALS', width: 74, color: c.green });
+    console.log('');
+
+    const legendLines = [
+        `${cyan('gdelt')} News events (01-04: coop/conflict)`,
+        `${green('usgs')} Earthquakes (M#)`,
+        `${yellow('opensky')} Flight snapshots`,
+        globeMode === 'external'
+            ? `${dim('Renderer')} External CLI globe (no point overlay)`
+            : globeMode === 'ascii'
+                ? `${dim('Renderer')} ASCII globe with overlay points`
+                : globeMode === 'mapscii'
+                    ? `${dim('Renderer')} mapscii (full-screen, no overlay)`
+                    : `${dim('Renderer')} Flat map with overlay points`
+    ];
+    const topLines = getTopEventLines(events, 6);
+    box([...legendLines, '', dim('Top events:'), ...topLines], { title: '🧭 LEGEND & TOP EVENTS', width: 74, color: c.brightCyan });
+    console.log('');
+
+    let viewLines: string[] | null = null;
+    if (globeMode === 'external' && globeCommand) {
+        viewLines = renderExternalGlobe(globeCommand, globeArgs || [], 20);
+    }
+    if (!viewLines) {
+        viewLines = globeMode === 'ascii'
+            ? renderGlobeFrame(events, rotationDeg, 42, 20)
+            : renderMapFrame(events, 68, 18);
+    }
+    const title = globeMode === 'ascii'
+        ? '🌐 LIVE GLOBE'
+        : globeMode === 'external'
+            ? '🌐 EXTERNAL GLOBE'
+            : globeMode === 'mapscii'
+                ? '🗺️ MAPSCII'
+                : '🗺️ LIVE MAP';
+    box(viewLines, { title, width: 74, color: c.cyan });
+    console.log('');
+    console.log(dim(`  Updated: ${new Date().toLocaleTimeString()}  |  Showing ${Math.min(events.length, 250)} points`));
+}
+
+async function runWorldEventsMonitor(opts: {
+    sources: WorldEventSource[];
+    refreshSeconds: number;
+    minutes: number;
+    maxRecords: number;
+    batchMinutes: number;
+    gdeltQuery?: string;
+    globeMode?: 'ascii' | 'external' | 'map' | 'mapscii';
+    globeCommand?: string;
+    globeArgs?: string[];
+    once?: boolean;
+    store?: boolean;
+}): Promise<void> {
+    if (opts.globeMode === 'mapscii') {
+        const ok = launchMapscii(opts.globeArgs || []);
+        if (!ok) {
+            console.log(yellow('mapscii failed to launch. Falling back to embedded map.'));
+            opts.globeMode = 'map';
+        } else {
+            return;
+        }
+    }
+    const refreshMs = Math.max(5, opts.refreshSeconds) * 1000;
+    const batchMs = Math.max(5, opts.batchMinutes) * 60 * 1000;
+    const history: number[] = [];
+
+    let batchStart = new Date();
+    let batchEvents: WorldEvent[] = [];
+    let rotation = 0;
+
+    while (true) {
+        let events: WorldEvent[] = [];
+        let error: string | undefined;
+
+        try {
+            events = await fetchWorldEvents(opts.sources, {
+                minutes: opts.minutes,
+                maxRecords: opts.maxRecords,
+                gdeltQuery: opts.gdeltQuery
+            });
+            history.push(events.length);
+            if (history.length > 20) history.shift();
+            batchEvents = batchEvents.concat(events);
+        } catch (e: any) {
+            error = e?.message || String(e);
+        }
+
+        const frameCount = 12;
+        const frameDelay = 100;
+        for (let i = 0; i < frameCount; i++) {
+            renderWorldView(
+                events,
+                history,
+                rotation + i * 15,
+                opts.minutes,
+                error,
+                opts.sources,
+                opts.globeMode,
+                opts.globeCommand,
+                opts.globeArgs
+            );
+            await sleep(frameDelay);
+        }
+        rotation = (rotation + frameCount * 15) % 360;
+
+        const now = new Date();
+        if (opts.store !== false && batchEvents.length > 0 && now.getTime() - batchStart.getTime() >= batchMs) {
+            const summary = summarizeWorldEvents(batchEvents, batchStart, now);
+            agent.memory.saveMemory({
+                id: `world-events-${now.toISOString()}`,
+                type: 'episodic',
+                content: summary,
+                metadata: {
+                    source: 'gdelt',
+                    category: 'world_events',
+                    windowStart: batchStart.toISOString(),
+                    windowEnd: now.toISOString(),
+                    count: batchEvents.length,
+                    sources: opts.sources
+                }
+            });
+            batchEvents = [];
+            batchStart = now;
+        }
+
+        if (opts.once) break;
+        await sleep(refreshMs);
+    }
+}
+
 async function showMainMenu() {
     console.clear();
     banner();
@@ -1538,6 +2118,7 @@ async function showMainMenu() {
                 { name: `${c.magenta}🧠${c.reset} Manage AI Models`, value: 'models' },
                 { name: `${c.blue}🔌${c.reset} Manage Connections`, value: 'connections' },
                 { name: `${c.brightCyan}⚡${c.reset} Manage Skills ${dim(`(${agent.skills.getAgentSkills().length} installed)`)}`, value: 'skills' },
+                { name: `${c.brightMagenta}🧰${c.reset} Manage Tools ${dim(`(${agent.tools.listTools().length} installed)`)}`, value: 'tools' },
                 { name: `${c.yellow}🔧${c.reset} Tooling & APIs`, value: 'tooling' },
                 new inquirer.Separator(cyan(' ─── Advanced ') + gray('─'.repeat(25))),
                 { name: `${c.brightGreen}🌐${c.reset} Web Gateway`, value: 'gateway' },
@@ -1546,6 +2127,7 @@ async function showMainMenu() {
                 { name: `${c.brightYellow || c.yellow}🤖${c.reset} Agentic User (HITL Proxy)`, value: 'agentic_user' },
                 { name: `${c.red}🔒${c.reset} Security & Permissions`, value: 'security' },
                 { name: `${c.green}📈${c.reset} Token Usage`, value: 'tokens' },
+                { name: `${c.brightBlue}🌍${c.reset} World Events Live`, value: 'world_events' },
                 { name: `${c.brightCyan}⏱️${c.reset}  Latency Benchmark`, value: 'latency' },
                 new inquirer.Separator(cyan(' ─── System ') + gray('─'.repeat(27))),
                 { name: `${c.gray}⚙️ ${c.reset} Configure Agent`, value: 'config' },
@@ -1571,6 +2153,9 @@ async function showMainMenu() {
             break;
         case 'skills':
             await showSkillsMenu();
+            break;
+        case 'tools':
+            await showToolsManagerMenu();
             break;
         case 'connections':
             await showConnectionsMenu();
@@ -1600,6 +2185,9 @@ async function showMainMenu() {
             showTokenUsage();
             await waitKeyPress();
             await showMainMenu();
+            break;
+        case 'world_events':
+            await showWorldEventsMenu();
             break;
         case 'latency':
             await runLatencyBenchmark({ includeLLM: false, interactive: true });
@@ -1643,6 +2231,9 @@ async function showBrowserMenu() {
     banner();
     sectionHeader('🐼', 'Browser Engine');
     console.log('');
+    const computerUseEnabled = !!agent.config.get('googleComputerUseEnabled');
+    const computerUseModel = agent.config.get('googleComputerUseModel') || 'gemini-2.5-computer-use-preview-10-2025';
+    const hasGoogleKey = !!agent.config.get('googleApiKey');
     const browserLines = [
         `${dim('Engine')}     ${currentEngine === 'lightpanda' ? brightCyan(bold('🐼 Lightpanda')) : cyan(bold('🌐 Playwright (Chrome)'))}`,
         `${dim('Installed')}  ${isInstalled ? green('● Yes') : gray('○ No')}`,
@@ -1650,12 +2241,14 @@ async function showBrowserMenu() {
             `${dim('Server')}     ${isRunning ? green(`● Running ${dim(`(PID: ${runningPid})`)}`) : gray('○ Stopped')}`,
             `${dim('Endpoint')}   ${dim(lightpandaEndpoint)}`,
         ] : []),
+        `${dim('Gemini CU')}  ${computerUseEnabled ? green('● Enabled') : gray('○ Disabled')}${computerUseEnabled ? ` ${dim(computerUseModel)}` : ''}`,
     ];
     box(browserLines, { title: '🌐 BROWSER STATUS', width: 50, color: c.cyan });
     console.log('');
 
     const choices = [
         { name: currentEngine === 'playwright' ? '🐼 Switch to Lightpanda (9x less RAM)' : '🌐 Switch to Playwright (Chrome)', value: 'toggle' },
+        { name: computerUseEnabled ? `🤖 ${bold('Disable')} Gemini Computer Use` : `🤖 ${bold('Enable')} Gemini Computer Use ${dim('(vision-based browser control)')}`, value: 'computeruse' },
     ];
     
     if (!isInstalled) {
@@ -1703,6 +2296,41 @@ async function showBrowserMenu() {
             agent.config.set('browserEngine', 'playwright');
             console.log('\n✅ Switched to Playwright (Chrome)');
         }
+    } else if (action === 'computeruse') {
+        if (computerUseEnabled) {
+            agent.config.set('googleComputerUseEnabled', false);
+            console.log('\n✅ Gemini Computer Use disabled');
+            console.log('   Browser actions will use DOM-based selectors only.');
+        } else {
+            if (!hasGoogleKey) {
+                console.log('\n⚠️  Google API key is not set. Computer Use requires a Google API key.');
+                const { key } = await inquirer.prompt([
+                    { type: 'input', name: 'key', message: 'Enter Google API Key (or press Enter to skip):' }
+                ]);
+                if (key) {
+                    agent.config.set('googleApiKey', key);
+                    console.log('   ✅ Google API key saved.');
+                } else {
+                    console.log('   ⚠️  Skipped. Computer Use may not work without a Google API key.');
+                }
+            }
+            agent.config.set('googleComputerUseEnabled', true);
+            console.log(`\n✅ Gemini Computer Use enabled`);
+            console.log(`   Model: ${computerUseModel}`);
+            console.log('   All browser_* actions will prefer vision-based control with DOM fallback.');
+            const { changeModel } = await inquirer.prompt([
+                { type: 'confirm', name: 'changeModel', message: `Keep default model (${computerUseModel})?`, default: true }
+            ]);
+            if (!changeModel) {
+                const { model } = await inquirer.prompt([
+                    { type: 'input', name: 'model', message: 'Enter Gemini Computer Use model name:', default: computerUseModel }
+                ]);
+                if (model) {
+                    agent.config.set('googleComputerUseModel', model);
+                    console.log(`   ✅ Model set to: ${model}`);
+                }
+            }
+        }
     } else if (action === 'install') {
         console.log('\n📦 To install Lightpanda, run:');
         console.log('   orcbot lightpanda install\n');
@@ -1748,6 +2376,7 @@ async function showToolingMenu() {
     const hasSearxng = !!agent.config.get('searxngUrl');
     const hasCaptcha = !!agent.config.get('captchaApiKey');
     const browserEngine = agent.config.get('browserEngine') || 'playwright';
+    const computerUseOn = !!agent.config.get('googleComputerUseEnabled');
     const imageGenProvider = agent.config.get('imageGenProvider');
     const imageGenModel = agent.config.get('imageGenModel');
     const hasImageGen = !!(imageGenProvider || imageGenModel || agent.config.get('openaiApiKey') || agent.config.get('googleApiKey'));
@@ -1755,7 +2384,7 @@ async function showToolingMenu() {
 
     console.log('');
     const toolLines = [
-        `${statusDot(true, '')} ${bold('Browser')}       ${browserEngine === 'lightpanda' ? cyan('🐼 Lightpanda') : cyan('🌐 Playwright')}`,
+        `${statusDot(true, '')} ${bold('Browser')}       ${browserEngine === 'lightpanda' ? cyan('🐼 Lightpanda') : cyan('🌐 Playwright')}${computerUseOn ? ` + ${green('Gemini CU')}` : ''}`,
         `${statusDot(hasSerper, '')} ${bold('Serper')}        ${hasSerper ? green('Configured') : gray('Not set')}`,
         `${statusDot(hasBrave, '')} ${bold('Brave Search')}  ${hasBrave ? green('Configured') : gray('Not set')}`,
         `${statusDot(hasSearxng, '')} ${bold('SearxNG')}       ${hasSearxng ? green('Configured') : gray('Not set')}`,
@@ -2427,6 +3056,182 @@ async function showPushTaskMenu() {
     await showMainMenu();
 }
 
+async function showWorldEventsMenu() {
+    const sources = parseWorldSources(agent.config.get('worldEventsSources'));
+    const refreshSeconds = agent.config.get('worldEventsRefreshSeconds') ?? 60;
+    const lookbackMinutes = agent.config.get('worldEventsLookbackMinutes') ?? 60;
+    const maxRecords = agent.config.get('worldEventsMaxRecords') ?? 250;
+    const batchMinutes = agent.config.get('worldEventsBatchMinutes') ?? 10;
+    const storeEnabled = agent.config.get('worldEventsStoreEnabled') !== false;
+    const gdeltQuery = agent.config.get('worldEventsGdeltQuery') || 'global';
+    const globeMode = (agent.config.get('worldEventsGlobeRenderer') || 'mapscii') as 'ascii' | 'external' | 'map' | 'mapscii';
+    const globeCommand = agent.config.get('worldEventsGlobeCommand') || 'globe';
+    const globeArgs = parseGlobeArgs(agent.config.get('worldEventsGlobeArgs'));
+
+    console.clear();
+    banner();
+    sectionHeader('🌍', 'World Events');
+    console.log('');
+
+    const lines = [
+        `${dim('Sources')}      ${sources.join(', ')}`,
+        `${dim('Refresh')}      ${refreshSeconds}s`,
+        `${dim('Lookback')}     ${lookbackMinutes}m`,
+        `${dim('Max Records')}  ${maxRecords}`,
+        `${dim('Batch Window')} ${batchMinutes}m`,
+        `${dim('GDELT Query')}  ${gdeltQuery}`,
+        `${dim('Globe Mode')}   ${globeMode}`,
+        `${dim('Globe Cmd')}    ${globeCommand} ${globeArgs.join(' ')}`,
+        `${dim('Store to Memory')} ${storeEnabled ? green('● ON') : gray('○ OFF')}`
+    ];
+    box(lines, { title: '🌍 WORLD EVENTS', width: 56, color: c.brightBlue });
+    console.log('');
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: 'World Events Options:',
+            choices: [
+                { name: 'Run Live View', value: 'run' },
+                { name: 'Run Once (snapshot)', value: 'run_once' },
+                { name: 'Select Sources', value: 'sources' },
+                { name: `Set Refresh Interval (${refreshSeconds}s)`, value: 'refresh' },
+                { name: `Set Lookback Window (${lookbackMinutes}m)`, value: 'lookback' },
+                { name: `Set Max Records (${maxRecords})`, value: 'max' },
+                { name: `Set Batch Window (${batchMinutes}m)`, value: 'batch' },
+                { name: `Set GDELT Query (${gdeltQuery})`, value: 'query' },
+                { name: `Set Render Mode (${globeMode})`, value: 'globe_mode' },
+                { name: `Set Globe Command`, value: 'globe_cmd' },
+                { name: `Set Globe Args`, value: 'globe_args' },
+                { name: storeEnabled ? 'Disable Memory Storage' : 'Enable Memory Storage', value: 'toggle_store' },
+                { name: 'Back', value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showMainMenu();
+
+    if (action === 'sources') {
+        const { selected } = await inquirer.prompt([
+            {
+                type: 'checkbox',
+                name: 'selected',
+                message: 'Select world event sources:',
+                choices: [
+                    { name: 'GDELT (global news events)', value: 'gdelt', checked: sources.includes('gdelt') },
+                    { name: 'USGS Earthquakes (real-time)', value: 'usgs', checked: sources.includes('usgs') },
+                    { name: 'OpenSky Flights (telemetry)', value: 'opensky', checked: sources.includes('opensky') }
+                ]
+            }
+        ]);
+        if (!selected || selected.length === 0) {
+            console.log(yellow('At least one source must be selected.'));
+        } else {
+            agent.config.set('worldEventsSources', selected);
+        }
+        await waitKeyPress();
+        return showWorldEventsMenu();
+    }
+
+    if (action === 'refresh') {
+        const { val } = await inquirer.prompt([
+            { type: 'number', name: 'val', message: 'Refresh interval in seconds:', default: refreshSeconds }
+        ]);
+        agent.config.set('worldEventsRefreshSeconds', Number(val) || refreshSeconds);
+        return showWorldEventsMenu();
+    }
+
+    if (action === 'lookback') {
+        const { val } = await inquirer.prompt([
+            { type: 'number', name: 'val', message: 'Lookback window in minutes:', default: lookbackMinutes }
+        ]);
+        agent.config.set('worldEventsLookbackMinutes', Number(val) || lookbackMinutes);
+        return showWorldEventsMenu();
+    }
+
+    if (action === 'max') {
+        const { val } = await inquirer.prompt([
+            { type: 'number', name: 'val', message: 'Max records per fetch:', default: maxRecords }
+        ]);
+        agent.config.set('worldEventsMaxRecords', Number(val) || maxRecords);
+        return showWorldEventsMenu();
+    }
+
+    if (action === 'batch') {
+        const { val } = await inquirer.prompt([
+            { type: 'number', name: 'val', message: 'Batch window in minutes:', default: batchMinutes }
+        ]);
+        agent.config.set('worldEventsBatchMinutes', Number(val) || batchMinutes);
+        return showWorldEventsMenu();
+    }
+
+    if (action === 'query') {
+        const { val } = await inquirer.prompt([
+            { type: 'input', name: 'val', message: 'GDELT query filter:', default: gdeltQuery }
+        ]);
+        agent.config.set('worldEventsGdeltQuery', String(val || 'global'));
+        return showWorldEventsMenu();
+    }
+
+    if (action === 'globe_mode') {
+        const { val } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'val',
+                message: 'Select globe renderer:',
+                choices: [
+                    { name: 'mapscii (full-screen map)', value: 'mapscii' },
+                    { name: 'Flat map (embedded)', value: 'map' },
+                    { name: 'Built-in ASCII globe', value: 'ascii' },
+                    { name: 'External CLI globe', value: 'external' }
+                ]
+            }
+        ]);
+        agent.config.set('worldEventsGlobeRenderer', val);
+        return showWorldEventsMenu();
+    }
+
+    if (action === 'globe_cmd') {
+        const { val } = await inquirer.prompt([
+            { type: 'input', name: 'val', message: 'External globe CLI command:', default: globeCommand }
+        ]);
+        agent.config.set('worldEventsGlobeCommand', String(val || 'globe'));
+        return showWorldEventsMenu();
+    }
+
+    if (action === 'globe_args') {
+        const { val } = await inquirer.prompt([
+            { type: 'input', name: 'val', message: 'External globe CLI args (space-separated):', default: globeArgs.join(' ') }
+        ]);
+        agent.config.set('worldEventsGlobeArgs', parseGlobeArgs(val));
+        return showWorldEventsMenu();
+    }
+
+    if (action === 'toggle_store') {
+        agent.config.set('worldEventsStoreEnabled', !storeEnabled);
+        return showWorldEventsMenu();
+    }
+
+    if (action === 'run' || action === 'run_once') {
+        await runWorldEventsMonitor({
+            sources,
+            refreshSeconds,
+            minutes: lookbackMinutes,
+            maxRecords,
+            batchMinutes,
+            gdeltQuery,
+            globeMode,
+            globeCommand,
+            globeArgs,
+            once: action === 'run_once',
+            store: storeEnabled
+        });
+        await waitKeyPress();
+        return showWorldEventsMenu();
+    }
+}
+
 async function showConnectionsMenu() {
     console.clear();
     banner();
@@ -2636,6 +3441,8 @@ async function showWhatsAppConfig() {
 
 async function showSlackConfig() {
     const currentToken = agent.config.get('slackBotToken') || 'Not Set';
+    const currentAppToken = agent.config.get('slackAppToken') || 'Not Set';
+    const currentSigningSecret = agent.config.get('slackSigningSecret') || 'Not Set';
     const autoReply = agent.config.get('slackAutoReplyEnabled');
     console.clear();
     banner();
@@ -2643,6 +3450,8 @@ async function showSlackConfig() {
     console.log('');
     const slLines = [
         `${dim('Bot Token')}   ${currentToken === 'Not Set' ? gray('Not Set') : green(currentToken.substring(0, 8) + '…' + currentToken.slice(-4))}`,
+        `${dim('App Token')}   ${currentAppToken === 'Not Set' ? gray('Not Set') : green(currentAppToken.substring(0, 8) + '…' + currentAppToken.slice(-4))}`,
+        `${dim('Signing Secret')} ${currentSigningSecret === 'Not Set' ? gray('Not Set') : green(currentSigningSecret.substring(0, 6) + '…' + currentSigningSecret.slice(-4))}`,
         `${dim('Auto-Reply')}  ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
     ];
     box(slLines, { title: '💼 SLACK', width: 46, color: c.brightCyan });
@@ -2655,6 +3464,8 @@ async function showSlackConfig() {
             message: 'Slack Options:',
             choices: [
                 { name: 'Set Bot Token', value: 'set' },
+                { name: 'Set App Token (Socket Mode)', value: 'set_app' },
+                { name: 'Set Signing Secret', value: 'set_signing' },
                 { name: autoReply ? 'Disable Auto-Reply' : 'Enable Auto-Reply', value: 'toggle_auto' },
                 { name: 'Test Connection', value: 'test' },
                 { name: 'Back', value: 'back' }
@@ -2670,6 +3481,22 @@ async function showSlackConfig() {
         ]);
         agent.config.set('slackBotToken', token);
         console.log('Token updated! (Restart required for token changes)');
+        await waitKeyPress();
+        return showSlackConfig();
+    } else if (action === 'set_app') {
+        const { token } = await inquirer.prompt([
+            { type: 'input', name: 'token', message: 'Enter Slack App Token (xapp-...):' }
+        ]);
+        agent.config.set('slackAppToken', token);
+        console.log('App token updated! (Restart required for token changes)');
+        await waitKeyPress();
+        return showSlackConfig();
+    } else if (action === 'set_signing') {
+        const { secret } = await inquirer.prompt([
+            { type: 'input', name: 'secret', message: 'Enter Slack Signing Secret:' }
+        ]);
+        agent.config.set('slackSigningSecret', secret);
+        console.log('Signing secret updated! (Restart required for token changes)');
         await waitKeyPress();
         return showSlackConfig();
     } else if (action === 'toggle_auto') {

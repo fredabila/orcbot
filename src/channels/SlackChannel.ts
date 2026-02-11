@@ -2,6 +2,8 @@ import { IChannel } from './IChannel';
 import { logger } from '../utils/logger';
 import fs from 'fs';
 import path from 'path';
+import { SocketModeClient } from '@slack/socket-mode';
+import { LogLevel } from '@slack/logger';
 
 /**
  * SlackChannel - lightweight Slack Web API integration.
@@ -15,11 +17,16 @@ import path from 'path';
 export class SlackChannel implements IChannel {
     public readonly name = 'Slack';
     private readonly token: string;
+    private readonly appToken?: string;
     private readonly agent: any;
     private isReady = false;
+    private botUserId?: string;
+    private botId?: string;
+    private socketClient?: SocketModeClient;
 
-    constructor(token: string, agent: any) {
+    constructor(token: string, appToken: string | undefined, agent: any) {
         this.token = token;
+        this.appToken = appToken;
         this.agent = agent;
     }
 
@@ -29,11 +36,51 @@ export class SlackChannel implements IChannel {
             throw new Error(`Slack auth failed: ${ok?.error || 'unknown_error'}`);
         }
         this.isReady = true;
+        this.botUserId = ok.user_id;
+        this.botId = ok.bot_id;
         logger.info(`Slack bot authenticated as ${ok.user || ok.user_id || 'unknown-user'}`);
+
+        // Start Socket Mode if app token is provided
+        if (this.appToken && !this.socketClient) {
+            logger.info('Slack Socket Mode starting...');
+            this.socketClient = new SocketModeClient({
+                appToken: this.appToken,
+                logLevel: LogLevel.ERROR
+            });
+
+            this.socketClient.on('events_api', async (event) => {
+                try {
+                    const eventType = event?.body?.event?.type || 'unknown';
+                    const channelType = event?.body?.event?.channel_type || event?.body?.event?.channelType || 'unknown';
+                    logger.info(`Slack Socket Mode event received: ${eventType} (${channelType})`);
+                    await event.ack();
+                    await this.handleEvent(event.body);
+                } catch (e: any) {
+                    logger.warn(`Slack Socket Mode event handling error: ${e?.message || e}`);
+                }
+            });
+
+            this.socketClient.on('error', (error) => {
+                logger.warn(`Slack Socket Mode error: ${error}`);
+            });
+
+            await this.socketClient.start();
+            logger.info('Slack Socket Mode connected');
+        } else if (!this.appToken) {
+            logger.warn('Slack Socket Mode disabled: slackAppToken not set. Inbound messages will only arrive via Events API webhook.');
+        }
     }
 
     public async stop(): Promise<void> {
         this.isReady = false;
+        if (this.socketClient) {
+            try {
+                await this.socketClient.disconnect();
+            } catch {
+                // ignore
+            }
+            this.socketClient = undefined;
+        }
     }
 
     public async sendMessage(to: string, message: string): Promise<void> {
@@ -76,6 +123,106 @@ export class SlackChannel implements IChannel {
         const name = this.normalizeEmoji(emoji);
         const res = await this.callSlack('reactions.add', { channel: chatId, timestamp: messageId, name });
         if (!res?.ok) throw new Error(`Slack reaction failed: ${res?.error || 'unknown_error'}`);
+    }
+
+    /**
+     * Handle inbound Slack Events API payloads.
+     * This is called by the GatewayServer when Slack posts events to /slack/events.
+     */
+    public async handleEvent(payload: any): Promise<void> {
+        const event = payload?.event;
+        if (!event) {
+            logger.debug('Slack: handleEvent called without event payload');
+            return;
+        }
+
+        const type = event.type;
+        const subtype = event.subtype;
+
+        // Ignore bot/system events and edits/deletes
+        if (event.bot_id || subtype === 'bot_message' || subtype === 'message_changed' || subtype === 'message_deleted') {
+            logger.debug(`Slack: Ignoring bot/system event (${type}/${subtype || 'none'})`);
+            return;
+        }
+
+        const userId = event.user || event.message?.user;
+        if (!userId) {
+            logger.debug('Slack: Ignoring event without user id');
+            return;
+        }
+        if (this.botUserId && userId === this.botUserId) {
+            logger.debug('Slack: Ignoring self message');
+            return;
+        }
+
+        const channelId = event.channel;
+        const channelType = event.channel_type || event.channelType;
+        let text = event.text || event.message?.text || '';
+
+        // Determine if this message should trigger a response
+        const isDirect = channelType === 'im' || channelType === 'mpim';
+        const isMention = type === 'app_mention' || (this.botUserId && text.includes(`<@${this.botUserId}>`));
+        if (!isDirect && !isMention) {
+            logger.debug(`Slack: Ignoring non-mention channel message (${channelType || 'unknown'})`);
+            return; // Ignore non-mention channel chatter
+        }
+
+        // Remove mention token for cleaner text
+        if (this.botUserId && text) {
+            const mentionPattern = new RegExp(`<@${this.botUserId}>`, 'g');
+            text = text.replace(mentionPattern, '').trim();
+        }
+
+        const messageId = event.ts || event.message?.ts;
+        const threadTs = event.thread_ts || event.message?.thread_ts;
+        const autoReplyEnabled = this.agent.config.get('slackAutoReplyEnabled');
+
+        const content = text
+            ? `Slack message from ${userId}: ${text}`
+            : `Slack message from ${userId} (no text)`;
+
+        // Store in memory
+        this.agent.memory.saveMemory({
+            id: `slack-${messageId || Date.now()}`,
+            type: 'short',
+            content,
+            timestamp: new Date().toISOString(),
+            metadata: {
+                source: 'slack',
+                role: 'user',
+                channelId,
+                userId,
+                messageId,
+                threadTs,
+                channelType,
+                isMention
+            }
+        });
+
+        if (!autoReplyEnabled) {
+            logger.debug('Slack: Auto-reply disabled, skipping task creation.');
+            return;
+        }
+
+        const displayText = text || '[No text]';
+        const taskDescription = isMention
+            ? `Respond to Slack mention from ${userId} in channel ${channelId}: "${displayText}"`
+            : `Respond to Slack DM from ${userId}: "${displayText}"`;
+
+        await this.agent.pushTask(
+            taskDescription,
+            10,
+            {
+                source: 'slack',
+                sourceId: channelId,
+                senderName: userId,
+                channelId,
+                userId,
+                messageId,
+                threadTs,
+                requiresResponse: true
+            }
+        );
     }
 
     private async callSlack(endpoint: string, body: Record<string, any>): Promise<any> {

@@ -22,6 +22,7 @@ import { BootstrapManager } from './BootstrapManager';
 import { AgenticUser } from './AgenticUser';
 import { KnowledgeStore } from '../memory/KnowledgeStore';
 import { memoryToolsSkills } from '../skills/memoryTools';
+import { ToolsManager } from './ToolsManager';
 import { Cron } from 'croner';
 import { Readability } from '@mozilla/readability';
 import { DOMParser } from 'linkedom';
@@ -48,6 +49,7 @@ export const ELEVATED_SKILLS = new Set([
     'schedule_task',
     'manage_skills', 'manage_config',
     'generate_image', 'send_image',
+    'install_tool', 'approve_tool', 'run_tool_command', 'uninstall_tool', 'activate_tool', 'read_tool_readme',
 ]);
 
 /**
@@ -82,6 +84,7 @@ export class Agent {
     public computerUse: ComputerUse;
     public workerProfile: WorkerProfileManager;
     public orchestrator: AgentOrchestrator;
+    public tools: ToolsManager;
     public bootstrap: BootstrapManager;
     public agenticUser: AgenticUser;
     public knowledgeStore: KnowledgeStore;
@@ -126,6 +129,10 @@ export class Agent {
         this.config = new ConfigManager();
         this.agentConfigFile = this.config.get('agentIdentityPath');
         this.initializeStorage();
+
+        this.tools = new ToolsManager(
+            this.config.get('toolsPath') || path.join(this.config.getDataHome(), 'tools')
+        );
 
         this.memory = new MemoryManager(
             this.config.get('memoryPath'),
@@ -199,7 +206,8 @@ export class Agent {
             this.config.get('journalPath'),
             this.config.get('learningPath'),
             this.config,
-            this.bootstrap  // Pass bootstrap manager
+            this.bootstrap,  // Pass bootstrap manager
+            this.tools
         );
         this.decisionEngine.setKnowledgeStore(this.knowledgeStore);
         this.simulationEngine = new SimulationEngine(this.llm);
@@ -239,6 +247,10 @@ export class Agent {
         // Computer Use: vision-based mouse/keyboard control for browser + system
         this.computerUse = new ComputerUse();
         this.computerUse.setVisionAnalyzer(async (screenshotPath: string, prompt: string) => {
+            if (this.shouldUseGoogleComputerUse()) {
+                const model = this.getGoogleComputerUseModel();
+                return this.llm.analyzeMediaWithModel(screenshotPath, prompt, model);
+            }
             return this.llm.analyzeMedia(screenshotPath, prompt);
         });
         this.computerUse.setPageGetter(() => this.browser.page);
@@ -340,6 +352,19 @@ export class Agent {
         }
     }
 
+    private shouldUseGoogleComputerUse(): boolean {
+        const enabled = !!this.config.get('googleComputerUseEnabled');
+        if (!enabled) return false;
+
+        const modelName = String(this.config.get('modelName') || '').toLowerCase();
+        const provider = this.config.get('llmProvider') || (modelName.includes('gemini') ? 'google' : undefined);
+        return provider === 'google' && !!this.config.get('googleApiKey');
+    }
+
+    private getGoogleComputerUseModel(): string {
+        return this.config.get('googleComputerUseModel') || 'gemini-2.5-computer-use-preview-10-2025';
+    }
+
     public setupChannels() {
         const telegramToken = this.config.get('telegramToken');
         if (telegramToken) {
@@ -361,7 +386,8 @@ export class Agent {
 
         const slackBotToken = this.config.get('slackBotToken');
         if (slackBotToken) {
-            this.slack = new SlackChannel(slackBotToken, this);
+            const slackAppToken = this.config.get('slackAppToken');
+            this.slack = new SlackChannel(slackBotToken, slackAppToken, this);
             logger.info('Agent: Slack channel configured');
         }
     }
@@ -1883,6 +1909,126 @@ Output the fixed code:
             }
         });
 
+        // ─── Third-Party Tools (Installed under toolsPath) ────────────────
+        this.skills.registerSkill({
+            name: 'install_tool',
+            description: 'Install a third-party tool from a git URL or local directory into the tools registry. Reads README and creates a manifest.',
+            usage: 'install_tool(source, name?, subdir?, allowedCommands?, description?)',
+            handler: async (args: any) => {
+                if (this.config.get('safeMode')) {
+                    return 'Error: Safe mode is enabled. Tool installation is disabled.';
+                }
+                const source = args.source || args.url || args.path || args.repo;
+                if (!source) return 'Error: Missing source.';
+                const name = args.name;
+                const subdir = args.subdir;
+                const description = args.description;
+                let allowedCommands: string[] | undefined;
+                if (args.allowedCommands) {
+                    if (Array.isArray(args.allowedCommands)) {
+                        allowedCommands = args.allowedCommands.map((s: any) => String(s).trim()).filter(Boolean);
+                    } else if (typeof args.allowedCommands === 'string') {
+                        allowedCommands = args.allowedCommands.split(',').map((s: string) => s.trim()).filter(Boolean);
+                    }
+                }
+
+                const result = await this.tools.installTool({ source, name, subdir, allowedCommands, description });
+                if (result.success && result.name) {
+                    this.tools.activateTool(result.name, true);
+                }
+                return result.message;
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'list_tools',
+            description: 'List installed third-party tools and their approval/activation status.',
+            usage: 'list_tools()',
+            handler: async () => {
+                const tools = this.tools.listTools();
+                if (tools.length === 0) return 'No tools installed.';
+                return tools.map(t => {
+                    const status = t.active ? '🟢 active' : '⚪ inactive';
+                    const approval = t.approved ? '✅ approved' : '❌ unapproved';
+                    return `- ${t.name}: ${status}, ${approval}${t.description ? ` — ${t.description}` : ''}`;
+                }).join('\n');
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'activate_tool',
+            description: 'Activate or deactivate a tool to include its README in context.',
+            usage: 'activate_tool(name, active?)',
+            handler: async (args: any) => {
+                const name = args.name || args.tool || args.tool_name;
+                const active = args.active !== false && args.active !== 'false' && args.deactivate !== true;
+                if (!name) return 'Error: Missing tool name.';
+                return this.tools.activateTool(name, active).message;
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'approve_tool',
+            description: 'Approve a tool for execution. Optionally set allowedCommands (comma-separated or array).',
+            usage: 'approve_tool(name, allowedCommands?)',
+            handler: async (args: any) => {
+                const name = args.name || args.tool || args.tool_name;
+                if (!name) return 'Error: Missing tool name.';
+                let allowedCommands: string[] | undefined;
+                if (args.allowedCommands) {
+                    if (Array.isArray(args.allowedCommands)) {
+                        allowedCommands = args.allowedCommands.map((s: any) => String(s).trim()).filter(Boolean);
+                    } else if (typeof args.allowedCommands === 'string') {
+                        allowedCommands = args.allowedCommands.split(',').map((s: string) => s.trim()).filter(Boolean);
+                    }
+                }
+                return this.tools.approveTool(name, allowedCommands).message;
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'read_tool_readme',
+            description: 'Read the README of an installed tool.',
+            usage: 'read_tool_readme(name)',
+            handler: async (args: any) => {
+                const name = args.name || args.tool || args.tool_name;
+                if (!name) return 'Error: Missing tool name.';
+                const result = this.tools.readToolReadme(name);
+                return result.message;
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'run_tool_command',
+            description: 'Run a command for an approved tool (restricted to the tool directory and its allowlist).',
+            usage: 'run_tool_command(name, command, args?, cwd?)',
+            handler: async (args: any) => {
+                if (this.config.get('safeMode')) {
+                    return 'Error: Safe mode is enabled. Tool execution is disabled.';
+                }
+                const name = args.name || args.tool || args.tool_name;
+                const command = args.command || args.cmd;
+                const toolArgs = args.args;
+                const cwd = args.cwd;
+                if (!name || !command) return 'Error: Missing name and/or command.';
+                const result = await this.tools.runToolCommand(name, command, toolArgs, cwd);
+                return result.message;
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'uninstall_tool',
+            description: 'Uninstall a tool and remove its files.',
+            usage: 'uninstall_tool(name)',
+            handler: async (args: any) => {
+                if (this.config.get('safeMode')) {
+                    return 'Error: Safe mode is enabled. Tool uninstall is disabled.';
+                }
+                const name = args.name || args.tool || args.tool_name;
+                if (!name) return 'Error: Missing tool name.';
+                return this.tools.uninstallTool(name).message;
+            }
+        });
         // ─── Agent Skills (SKILL.md Format) ──────────────────────────────
 
         // Skill: Install Agent Skill (from URL or path)
@@ -2177,6 +2323,18 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 // Also track blank pages from examine_page calls
                 const looksBlank = snapshot.includes('(No interactive elements found)') ||
                     (snapshot.includes('HTML length:') && parseInt((snapshot.match(/HTML length: (\d+)/) || ['', '0'])[1]) < 500);
+                if (looksBlank && this.shouldUseGoogleComputerUse()) {
+                    try {
+                        this.computerUse.setContext('browser');
+                        const screenshotPath = await this.computerUse.captureScreen();
+                        const prompt = 'Describe the visible page layout and content. List ALL interactive elements you can see: buttons, links, input fields, menus, tabs, icons, and any clickable areas. For each element, describe its position (top/center/bottom, left/center/right) and apparent function.';
+                        const model = this.getGoogleComputerUseModel();
+                        const visual = await this.llm.analyzeMediaWithModel(screenshotPath, prompt, model);
+                        return `${snapshot}\n\n--- Visual fallback ---\n${visual}`;
+                    } catch (e) {
+                        logger.warn(`browser_examine_page: Computer-use fallback failed: ${e}`);
+                    }
+                }
                 if (looksBlank && this._blankPageCount >= 2) {
                     return snapshot + '\n\n[SYSTEM WARNING: Browser is consistently returning blank pages. STOP using browser tools for this task and switch to web_search instead. Do NOT fabricate or hallucinate page content.]';
                 }
@@ -2216,7 +2374,25 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             handler: async (args: any) => {
                 const selector = args.selector_or_ref || args.selector || args.css || args.ref;
                 if (!selector) return 'Error: Missing selector or ref.';
-                const clickResult = await this.browser.click(String(selector));
+                const selectorStr = String(selector);
+                const useComputerUse = this.shouldUseGoogleComputerUse();
+                const button = args.button || 'left';
+
+                if (useComputerUse) {
+                    this.computerUse.setContext('browser');
+                    const cuResult = await this.computerUse.visionClick(selectorStr, button);
+                    const failed = cuResult.startsWith('Error') || cuResult.startsWith('Failed') || cuResult.startsWith('Could not');
+                    if (!failed) {
+                        try {
+                            const snapshot = await this.browser.getSemanticSnapshot();
+                            return `${cuResult}\n\n--- Page after click ---\n${snapshot}`;
+                        } catch {
+                            return cuResult;
+                        }
+                    }
+                }
+
+                const clickResult = await this.browser.click(selectorStr);
                 if (clickResult.startsWith('Error') || clickResult.startsWith('Failed')) return clickResult;
 
                 // Auto-snapshot: Return what the page looks like after the click
@@ -2239,7 +2415,16 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 const selector = args.selector_or_ref || args.selector || args.css || args.ref;
                 const text = args.text || args.value;
                 if (!selector || !text) return 'Error: Missing selector/ref or text.';
-                return this.browser.type(String(selector), text);
+                const selectorStr = String(selector);
+                const useComputerUse = this.shouldUseGoogleComputerUse();
+                if (useComputerUse) {
+                    this.computerUse.setContext('browser');
+                    const cuResult = await this.computerUse.visionType(selectorStr, text);
+                    const failed = cuResult.startsWith('Error') || cuResult.startsWith('Failed') || cuResult.startsWith('Could not');
+                    if (!failed) return cuResult;
+                }
+
+                return this.browser.type(selectorStr, text);
             }
         });
 
@@ -2250,6 +2435,12 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             usage: 'browser_press(key)',
             handler: async (args: any) => {
                 const key = args.key || args.name;
+                const useComputerUse = this.shouldUseGoogleComputerUse();
+                if (useComputerUse) {
+                    this.computerUse.setContext('browser');
+                    const cuResult = await this.computerUse.keyPress(String(key));
+                    if (!cuResult.startsWith('Error')) return cuResult;
+                }
                 return this.browser.press(key);
             }
         });
@@ -2261,6 +2452,16 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             usage: 'browser_screenshot()',
             handler: async () => {
                 const captcha = await this.browser.detectCaptcha();
+                if (this.shouldUseGoogleComputerUse()) {
+                    try {
+                        this.computerUse.setContext('browser');
+                        const screenshotPath = await this.computerUse.captureScreen();
+                        const result = `Screenshot saved to: ${screenshotPath}.`;
+                        return `${captcha ? `[WARNING: ${captcha}]\n` : ''}${result}`;
+                    } catch (e) {
+                        logger.warn(`browser_screenshot: Computer-use screenshot failed: ${e}`);
+                    }
+                }
                 const result = await this.browser.screenshot();
                 return `${captcha ? `[WARNING: ${captcha}]\n` : ''}${result}`;
             }
@@ -2357,6 +2558,13 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 if (direction !== 'up' && direction !== 'down') {
                     return 'Error: direction must be "up" or "down".';
                 }
+                const useComputerUse = this.shouldUseGoogleComputerUse();
+                if (useComputerUse) {
+                    this.computerUse.setContext('browser');
+                    const ticks = amount ? Math.max(1, Math.round(amount / 200)) : 3;
+                    return this.computerUse.scroll(direction, ticks);
+                }
+
                 const result = await this.browser.scrollPage(direction, amount);
                 // Inject boundary warnings to prevent scroll loops
                 if (result.includes('(at bottom)') && direction === 'down') {
@@ -2377,7 +2585,16 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             handler: async (args: any) => {
                 const selector = args.selector || args.ref || args.element;
                 if (!selector) return 'Error: Missing selector.';
-                return this.browser.hover(String(selector));
+                const selectorStr = String(selector);
+                const useComputerUse = this.shouldUseGoogleComputerUse();
+                if (useComputerUse) {
+                    this.computerUse.setContext('browser');
+                    const located = await this.computerUse.locateElement(selectorStr);
+                    if (located.x >= 0 && located.y >= 0) {
+                        return this.computerUse.mouseMove(located.x, located.y);
+                    }
+                }
+                return this.browser.hover(selectorStr);
             }
         });
 
@@ -2391,7 +2608,22 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 const value = args.value || args.option || args.label;
                 if (!selector) return 'Error: Missing selector.';
                 if (!value) return 'Error: Missing value/option to select.';
-                return this.browser.selectOption(String(selector), String(value));
+                const selectorStr = String(selector);
+                const valueStr = String(value);
+                const useComputerUse = this.shouldUseGoogleComputerUse();
+                if (useComputerUse) {
+                    this.computerUse.setContext('browser');
+                    const openResult = await this.computerUse.visionClick(selectorStr);
+                    const openFailed = openResult.startsWith('Error') || openResult.startsWith('Failed') || openResult.startsWith('Could not');
+                    if (!openFailed) {
+                        const chooseResult = await this.computerUse.visionClick(valueStr);
+                        const chooseFailed = chooseResult.startsWith('Error') || chooseResult.startsWith('Failed') || chooseResult.startsWith('Could not');
+                        if (!chooseFailed) {
+                            return `Selected "${valueStr}" via computer use. Open: ${openResult}. Choose: ${chooseResult}`;
+                        }
+                    }
+                }
+                return this.browser.selectOption(selectorStr, valueStr);
             }
         });
 
@@ -2521,13 +2753,12 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             handler: async (args: any) => {
                 let fields = args.fields;
                 if (!fields) return 'Error: Missing fields array.';
-
-                // Parse fields if passed as string
-                if (typeof fields === 'string') {
-                    try { fields = JSON.parse(fields); } catch { return 'Error: fields must be a JSON array of {selector, value, action?} objects.'; }
-                }
-                if (!Array.isArray(fields) || fields.length === 0) {
-                    return 'Error: fields must be a non-empty array of {selector, value, action?} objects.';
+                if (!Array.isArray(fields)) {
+                    try {
+                        fields = JSON.parse(fields);
+                    } catch {
+                        return 'Error: fields must be an array of {selector, value, action?}.';
+                    }
                 }
 
                 const submitSelector = args.submit_selector || args.submit || args.submitSelector;
