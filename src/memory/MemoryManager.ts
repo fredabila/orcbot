@@ -112,19 +112,34 @@ export class MemoryManager {
     public saveMemory(entry: MemoryEntry) {
         const memories = this.storage.get('memories') || [];
         const ts = new Date().toISOString();
-        memories.push({ ...entry, timestamp: ts });
+        const maxContentLength = 500;
+        const rawContent = (entry.content || '').toString();
+        const content = rawContent.length > maxContentLength
+            ? `${rawContent.slice(0, maxContentLength)}...[truncated]`
+            : rawContent;
+
+        const normalizedEntry: MemoryEntry = {
+            ...entry,
+            content,
+            metadata: {
+                ...(entry.metadata || {}),
+                memoryContentTruncated: rawContent.length > maxContentLength ? true : (entry.metadata?.memoryContentTruncated || false)
+            }
+        };
+
+        memories.push({ ...normalizedEntry, timestamp: ts });
         this.storage.save('memories', memories);
-        logger.info(`Memory saved: [${entry.type}] ${entry.id}`);
+        logger.info(`Memory saved: [${entry.type}] ${entry.id}${rawContent.length > maxContentLength ? ' (truncated)' : ''}`);
 
         // Queue for vector embedding (non-blocking, skips short/system content automatically)
         if (this.vectorMemory?.isEnabled()) {
-            this.vectorMemory.queue(entry.id, entry.content, entry.type, entry.metadata, ts);
+            this.vectorMemory.queue(normalizedEntry.id, normalizedEntry.content, normalizedEntry.type, normalizedEntry.metadata, ts);
         }
 
         // Also save important memories to daily log
-        if (entry.type === 'long' || entry.metadata?.important) {
-            const category = entry.metadata?.category || 'Important';
-            this.dailyMemory.appendToDaily(entry.content, category);
+        if (normalizedEntry.type === 'long' || normalizedEntry.metadata?.important) {
+            const category = normalizedEntry.metadata?.category || 'Important';
+            this.dailyMemory.appendToDaily(normalizedEntry.content, category);
         }
     }
 
@@ -300,9 +315,45 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
         
         // Take the most recent N
         const recentShort = sorted.slice(0, effectiveLimit);
+        const qualityShort = this.filterContextMemories(recentShort);
+        const qualityEpisodic = this.filterContextMemories(episodic);
         
         // Return episodic summaries + recent short memories, with recent first
-        return [...recentShort, ...episodic];
+        return [...qualityShort, ...qualityEpisodic];
+    }
+
+    /**
+     * Lightweight memory quality controller for prompt injection:
+     * - remove exact duplicate content
+     * - throttle repetitive [SYSTEM:] memories per skill/tool
+     */
+    private filterContextMemories(memories: MemoryEntry[]): MemoryEntry[] {
+        const seenContent = new Set<string>();
+        const systemPerSkill = new Map<string, number>();
+        const filtered: MemoryEntry[] = [];
+
+        for (const m of memories) {
+            const content = (m.content || '').toString().trim();
+            const normalized = content.toLowerCase().replace(/\s+/g, ' ');
+            if (!normalized) continue;
+
+            // 1) Exact duplicate suppression
+            if (seenContent.has(normalized)) continue;
+            seenContent.add(normalized);
+
+            // 2) System-noise throttling (keep at most 2 system notes per tool/skill)
+            const isSystem = normalized.startsWith('[system:');
+            if (isSystem) {
+                const skillKey = String(m.metadata?.skill || m.metadata?.tool || 'system');
+                const count = systemPerSkill.get(skillKey) || 0;
+                if (count >= 2) continue;
+                systemPerSkill.set(skillKey, count + 1);
+            }
+
+            filtered.push(m);
+        }
+
+        return filtered;
     }
 
     public getContactProfile(jid: string): string | null {

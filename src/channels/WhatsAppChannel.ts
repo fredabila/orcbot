@@ -309,6 +309,9 @@ export class WhatsAppChannel implements IChannel {
                         }
 
                         logger.info(`WhatsApp Msg: ${senderName} (${senderId}): ${text || transcription || '[Media]'} [ID: ${messageId}] | autoReply=${this.autoReplyEnabled}`);
+                        const sessionScopeId = this.agent.resolveSessionScopeId('whatsapp', {
+                            sourceId: senderId
+                        });
 
                         // Build content string that includes media info + transcription/analysis
                         const voiceLabel = transcription ? ` [Voice message transcription: "${transcription}"]` : '';
@@ -330,6 +333,7 @@ export class WhatsAppChannel implements IChannel {
                             metadata: { 
                                 source: 'whatsapp', 
                                 role: 'user',
+                                sessionScopeId,
                                 messageId, 
                                 senderId, 
                                 senderName,
@@ -353,14 +357,14 @@ export class WhatsAppChannel implements IChannel {
                             await this.agent.pushTask(
                                 `WhatsApp command from yourself (ID: ${messageId}): \"${displayText}\"${mediaContext}${replyNote}${mediaNote}${profileInstruction}`,
                                 10,
-                                { source: 'whatsapp', sourceId: senderId, senderName: senderName, isOwner: true, messageId, quotedMessageId, replyContext: replyContext || undefined, mediaPath: mediaPath || undefined }
+                                { source: 'whatsapp', sourceId: senderId, sessionScopeId, senderName: senderName, isOwner: true, messageId, quotedMessageId, replyContext: replyContext || undefined, mediaPath: mediaPath || undefined }
                             );
                         } else if (this.autoReplyEnabled) {
                             // Treat as External Interaction for AI to decide on
                             await this.agent.pushTask(
                                 `EXTERNAL WHATSAPP MESSAGE from ${senderName} (ID: ${messageId}): \"${displayText}\"${mediaContext}${replyNote}${mediaNote}. \n\nGoal: Decide if you should respond${reactInstruction} to this person on my behalf based on our history and my persona. If yes, use 'send_whatsapp'${reactInstruction}.${profileInstruction}`,
                                 5,
-                                { source: 'whatsapp', sourceId: senderId, senderName: senderName, isExternal: true, messageId, quotedMessageId, replyContext: replyContext || undefined, mediaPath: mediaPath || undefined }
+                                { source: 'whatsapp', sourceId: senderId, sessionScopeId, senderName: senderName, isExternal: true, messageId, quotedMessageId, replyContext: replyContext || undefined, mediaPath: mediaPath || undefined }
                             );
                         } else {
                             logger.info(`WhatsApp: External message from ${senderName} not queued - autoReplyEnabled is false`);

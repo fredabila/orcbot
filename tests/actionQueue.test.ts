@@ -73,6 +73,24 @@ describe('ActionQueue', () => {
         expect(next!.id).toBe('a2'); // higher priority
     });
 
+    it('should prefer user lane over higher-priority autonomy lane', () => {
+        queue.push(makeAction({ id: 'auto-high', priority: 100, lane: 'autonomy' }));
+        queue.push(makeAction({ id: 'user-low', priority: 1, lane: 'user' }));
+
+        const next = queue.getNext();
+        expect(next).toBeDefined();
+        expect(next!.id).toBe('user-low');
+    });
+
+    it('should return autonomy lane task when no eligible user lane exists', () => {
+        queue.push(makeAction({ id: 'auto-high', priority: 100, lane: 'autonomy' }));
+        queue.push(makeAction({ id: 'auto-low', priority: 10, lane: 'autonomy' }));
+
+        const next = queue.getNext();
+        expect(next).toBeDefined();
+        expect(next!.id).toBe('auto-high');
+    });
+
     it('should update status', () => {
         queue.push(makeAction({ id: 'a1' }));
         queue.updateStatus('a1', 'in-progress');

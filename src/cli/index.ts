@@ -1126,8 +1126,17 @@ configCommand
     .command('set <key> <value>')
     .description('Set a configuration value')
     .action((key, value) => {
-        agent.config.set(key as any, value);
-        console.log(`Configuration updated: ${key} = ${value}`);
+        let parsed: any = value;
+        const lowered = String(value).trim().toLowerCase();
+        if (lowered === 'true') parsed = true;
+        else if (lowered === 'false') parsed = false;
+        else if (/^-?\d+(\.\d+)?$/.test(String(value).trim())) parsed = Number(value);
+        else if ((String(value).startsWith('{') && String(value).endsWith('}')) || (String(value).startsWith('[') && String(value).endsWith(']'))) {
+            try { parsed = JSON.parse(String(value)); } catch { parsed = value; }
+        }
+
+        agent.config.set(key as any, parsed);
+        console.log(`Configuration updated: ${key} = ${JSON.stringify(parsed)}`);
     });
 
 // Lightpanda browser management

@@ -36,6 +36,7 @@ export class DecisionEngine {
     // and only rebuild on first step or when the action ID changes.
     private _cachedCoreInstructions: string = '';
     private _cachedCoreActionId: string = '';
+    private _fileIntentCache: Map<string, 'requested' | 'not_requested' | 'unknown'> = new Map();
 
     constructor(
         private memory: MemoryManager,
@@ -136,6 +137,57 @@ The user appreciates knowing what's happening, especially during complex tasks. 
 
     private getSystemContext(): string {
         return this.systemContext;
+    }
+
+    private async inferFileIntentForAction(
+        actionId: string,
+        taskDescription: string,
+        recentMemories: any[]
+    ): Promise<'requested' | 'not_requested' | 'unknown'> {
+        const cached = this._fileIntentCache.get(actionId);
+        if (cached) return cached;
+
+        // Keep this classifier lightweight and bounded.
+        const recentUserContext = (recentMemories || [])
+            .slice(-8)
+            .map(m => (m?.content || '').toString())
+            .filter(Boolean)
+            .join('\n')
+            .slice(0, 1200);
+
+        const systemMessage = `You are an intent classifier for response delivery mode.
+Return ONLY valid JSON in this shape: {"file_requested": true|false, "confidence": 0-1}
+
+Set file_requested=true only when the user explicitly asks for a file/attachment/screenshot/image/document/audio file delivery.
+If the user asks for an opinion, explanation, summary, or normal chat response, set file_requested=false.`;
+
+        try {
+            const raw = await this.llm.callFast(
+                `Task: ${taskDescription}\n\nRecent user/context messages:\n${recentUserContext || '(none)'}`,
+                systemMessage
+            );
+
+            const jsonMatch = raw.match(/\{[\s\S]*\}/);
+            if (!jsonMatch) {
+                this._fileIntentCache.set(actionId, 'unknown');
+                return 'unknown';
+            }
+
+            const parsed = JSON.parse(jsonMatch[0]);
+            const confidence = Number(parsed?.confidence ?? 0);
+            const requested = parsed?.file_requested === true;
+
+            const verdict: 'requested' | 'not_requested' | 'unknown' =
+                confidence >= 0.65 ? (requested ? 'requested' : 'not_requested') : 'unknown';
+
+            this._fileIntentCache.set(actionId, verdict);
+            logger.info(`DecisionEngine: File intent classifier => ${verdict} (confidence=${isNaN(confidence) ? 0 : confidence.toFixed(2)})`);
+            return verdict;
+        } catch (e) {
+            logger.debug(`DecisionEngine: File intent classifier failed, falling back to heuristic: ${e}`);
+            this._fileIntentCache.set(actionId, 'unknown');
+            return 'unknown';
+        }
     }
 
     private applyChannelDefaultsToTools(parsed: StandardResponse, metadata: any): StandardResponse {
@@ -550,10 +602,18 @@ The user appreciates knowing what's happening, especially during complex tasks. 
             };
 
             const shortAll = this.memory.searchMemory('short');
+            const sessionScopeId = metadata?.sessionScopeId;
 
             const candidates = shortAll
-                .filter(m => (m as any)?.metadata?.source && ((m as any).metadata.source || '').toString().toLowerCase() === source)
                 .filter(m => {
+                    const md: any = (m as any)?.metadata || {};
+                    if (sessionScopeId) {
+                        return md.sessionScopeId?.toString() === sessionScopeId.toString();
+                    }
+                    return md.source && (md.source || '').toString().toLowerCase() === source;
+                })
+                .filter(m => {
+                    if (sessionScopeId) return true;
                     if (!sourceId && !telegramChatId && !telegramUserId) return false;
                     const md: any = (m as any).metadata || {};
 
@@ -963,18 +1023,25 @@ ${safeOtherContext ? `RECENT BACKGROUND CONTEXT (reference only — may describe
             }
         }
 
+        const pipelineActionId = metadata.id || metadata.actionId || 'unknown';
+        const parsedHasSendFile = (parsed.tools || []).some(t => (t.name || '').toLowerCase().trim() === 'send_file');
+        const inferredFileIntent = parsedHasSendFile
+            ? await this.inferFileIntentForAction(pipelineActionId, taskDescription, recentContext)
+            : 'unknown';
+
         // Run parsed response through structured pipeline guardrails
         let piped = this.pipeline.evaluate(parsed, {
-            actionId: metadata.id || metadata.actionId || 'unknown',
+            actionId: pipelineActionId,
             source: metadata.source,
             sourceId: metadata.sourceId,
             messagesSent: metadata.messagesSent || 0,
             currentStep: metadata.currentStep || 1,
             executionPlan: metadata.executionPlan,
             lane: metadata.lane,
-            recentMemories: this.memory.getRecentContext(),
+            recentMemories: recentContext,
             allowedTools: allowedToolNames,
-            taskDescription
+            taskDescription,
+            fileIntent: inferredFileIntent
         });
 
         // Termination review layer (always enabled)
@@ -1011,17 +1078,23 @@ QUESTION: Was the original task completed? If not, what tools should be called n
 
             const reviewRaw = await this.callLLMWithRetry(taskDescription, reviewPrompt, actionId);
             const reviewParsed = ParserLayer.normalize(reviewRaw);
+            const reviewHasSendFile = (reviewParsed.tools || []).some(t => (t.name || '').toLowerCase().trim() === 'send_file');
+            const reviewFileIntent = reviewHasSendFile
+                ? await this.inferFileIntentForAction(pipelineActionId, taskDescription, recentContext)
+                : 'unknown';
+
             const reviewed = this.pipeline.evaluate(reviewParsed, {
-                actionId: metadata.id || metadata.actionId || 'unknown',
+                actionId: pipelineActionId,
                 source: metadata.source,
                 sourceId: metadata.sourceId,
                 messagesSent: metadata.messagesSent || 0,
                 currentStep: metadata.currentStep || 1,
                 executionPlan: metadata.executionPlan,
                 lane: metadata.lane,
-                recentMemories: this.memory.getRecentContext(),
+                recentMemories: recentContext,
                 allowedTools: allowedToolNames,
-                taskDescription
+                taskDescription,
+                fileIntent: reviewFileIntent
             });
 
             if (reviewed?.verification?.goals_met === false || (reviewed.tools && reviewed.tools.length > 0)) {

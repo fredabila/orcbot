@@ -176,6 +176,10 @@ export class SlackChannel implements IChannel {
         const messageId = event.ts || event.message?.ts;
         const threadTs = event.thread_ts || event.message?.thread_ts;
         const autoReplyEnabled = this.agent.config.get('slackAutoReplyEnabled');
+        const sessionScopeId = this.agent.resolveSessionScopeId('slack', {
+            sourceId: channelId,
+            userId
+        });
 
         const content = text
             ? `Slack message from ${userId}: ${text}`
@@ -190,6 +194,7 @@ export class SlackChannel implements IChannel {
             metadata: {
                 source: 'slack',
                 role: 'user',
+                sessionScopeId,
                 channelId,
                 userId,
                 messageId,
@@ -215,6 +220,7 @@ export class SlackChannel implements IChannel {
             {
                 source: 'slack',
                 sourceId: channelId,
+                sessionScopeId,
                 senderName: userId,
                 channelId,
                 userId,

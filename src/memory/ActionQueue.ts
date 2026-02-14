@@ -136,6 +136,25 @@ export class ActionQueue {
         this.dirty = true;
     }
 
+    private getLane(action: Action): 'user' | 'autonomy' {
+        return action.lane === 'autonomy' ? 'autonomy' : 'user';
+    }
+
+    private isEligiblePendingAction(action: Action, nowIso: string): boolean {
+        if (action.status !== 'pending') return false;
+
+        // Dependency gate: wait for parent to complete
+        if (action.dependsOn) {
+            const dep = this.cache.find(d => d.id === action.dependsOn);
+            if (!dep || dep.status !== 'completed') return false;
+        }
+
+        // Retry backoff: not yet eligible
+        if (action.retry?.nextRetryAt && action.retry.nextRetryAt > nowIso) return false;
+
+        return true;
+    }
+
     // ─── Core Operations (all operate on in-memory cache) ────────────
 
     public push(action: Action) {
@@ -157,23 +176,18 @@ export class ActionQueue {
      * - Priority ordering (highest first, maintained by push sort)
      * - Dependency chains (skip if dependsOn action hasn't completed)
      * - Retry backoff (skip if nextRetryAt is in the future)
+     * - Lane fairness: user lane is preferred over autonomy lane when both are eligible
      */
     public getNext(): Action | undefined {
         const now = new Date().toISOString();
-        return this.cache.find(a => {
-            if (a.status !== 'pending') return false;
 
-            // Dependency gate: wait for parent to complete
-            if (a.dependsOn) {
-                const dep = this.cache.find(d => d.id === a.dependsOn);
-                if (!dep || dep.status !== 'completed') return false;
-            }
+        const eligible = this.cache.filter(a => this.isEligiblePendingAction(a, now));
+        if (eligible.length === 0) return undefined;
 
-            // Retry backoff: not yet eligible
-            if (a.retry?.nextRetryAt && a.retry.nextRetryAt > now) return false;
+        const nextUser = eligible.find(a => this.getLane(a) === 'user');
+        if (nextUser) return nextUser;
 
-            return true;
-        });
+        return eligible[0];
     }
 
     public updateStatus(id: string, status: Action['status']) {

@@ -13,12 +13,14 @@
             --bg-card: #12121a;
             --bg-hover: #1a1a25;
             --bg-input: #0d0d12;
+            --bg-glass: rgba(18, 18, 26, 0.74);
             --text: #e4e4e7;
             --text-dim: #71717a;
             --text-muted: #52525b;
             --accent: #22c55e;
             --accent-dim: #16a34a;
             --accent-glow: rgba(34, 197, 94, 0.2);
+            --accent-glow-strong: rgba(34, 197, 94, 0.35);
             --blue: #3b82f6;
             --purple: #a855f7;
             --orange: #f97316;
@@ -26,11 +28,17 @@
             --yellow: #eab308;
             --border: #27272a;
             --border-light: #3f3f46;
+            --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.35);
+            --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.28);
         }
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: var(--bg-dark);
+            background:
+                radial-gradient(circle at 8% 8%, rgba(34, 197, 94, 0.08), transparent 35%),
+                radial-gradient(circle at 92% 12%, rgba(59, 130, 246, 0.1), transparent 34%),
+                radial-gradient(circle at 80% 85%, rgba(168, 85, 247, 0.1), transparent 36%),
+                var(--bg-dark);
             color: var(--text);
             min-height: 100vh;
             overflow-x: hidden;
@@ -43,12 +51,14 @@
             top: 0;
             bottom: 0;
             width: 240px;
-            background: var(--bg-card);
+            background: var(--bg-glass);
+            backdrop-filter: blur(12px);
             border-right: 1px solid var(--border);
             padding: 20px 0;
             z-index: 100;
             display: flex;
             flex-direction: column;
+            box-shadow: var(--shadow-md);
         }
 
         .logo {
@@ -88,12 +98,21 @@
             border-radius: 8px;
             color: var(--text-dim);
             cursor: pointer;
-            transition: all 0.15s;
+            transition: all 0.2s ease;
             font-size: 14px;
+            border: 1px solid transparent;
         }
 
-        .nav-item:hover { background: var(--bg-hover); color: var(--text); }
-        .nav-item.active { background: var(--accent-glow); color: var(--accent); }
+        .nav-item:hover {
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text);
+            border-color: var(--border-light);
+        }
+        .nav-item.active {
+            background: linear-gradient(90deg, var(--accent-glow), rgba(34, 197, 94, 0.08));
+            color: var(--accent);
+            border-color: var(--accent-glow-strong);
+        }
         .nav-item i { width: 20px; text-align: center; }
 
         .sidebar-footer {
@@ -128,14 +147,40 @@
         .topbar {
             position: sticky;
             top: 0;
-            background: rgba(10, 10, 15, 0.8);
-            backdrop-filter: blur(10px);
+            background: rgba(10, 10, 15, 0.82);
+            backdrop-filter: blur(12px);
             border-bottom: 1px solid var(--border);
             padding: 15px 30px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             z-index: 50;
+        }
+
+        .topbar-left {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .gateway-meta {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .meta-pill {
+            font-size: 11px;
+            color: var(--text-dim);
+            border: 1px solid var(--border-light);
+            border-radius: 999px;
+            padding: 3px 8px;
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .meta-pill strong {
+            color: var(--text);
+            font-weight: 600;
         }
 
         .page-title {
@@ -162,11 +207,15 @@
         }
 
         .btn-primary {
-            background: var(--accent);
-            color: #000;
+            background: linear-gradient(135deg, var(--accent), #10b981);
+            color: #03160a;
+            box-shadow: 0 8px 20px rgba(16, 185, 129, 0.24);
         }
 
-        .btn-primary:hover { background: var(--accent-dim); }
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            filter: brightness(1.05);
+        }
 
         .btn-secondary {
             background: var(--bg-hover);
@@ -196,10 +245,17 @@
         }
 
         .stat-card {
-            background: var(--bg-card);
+            background: rgba(18, 18, 26, 0.88);
             border: 1px solid var(--border);
             border-radius: 12px;
             padding: 20px;
+            box-shadow: var(--shadow-md);
+            transition: transform 0.2s ease, border-color 0.2s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--border-light);
         }
 
         .stat-card .label {
@@ -227,10 +283,11 @@
 
         /* Cards */
         .card {
-            background: var(--bg-card);
+            background: rgba(18, 18, 26, 0.9);
             border: 1px solid var(--border);
             border-radius: 12px;
             margin-bottom: 20px;
+            box-shadow: var(--shadow-md);
         }
 
         .card-header {
@@ -996,6 +1053,9 @@
             <div class="nav-item" data-page="logs">
                 <i class="fas fa-terminal"></i> Logs
             </div>
+            <div class="nav-item" data-page="api">
+                <i class="fas fa-compass"></i> API Explorer
+            </div>
             <div class="nav-item" data-page="config">
                 <i class="fas fa-cog"></i> Configuration
             </div>
@@ -1012,7 +1072,14 @@
     <!-- Main Content -->
     <main class="main">
         <div class="topbar">
-            <h2 class="page-title" id="pageTitle">Dashboard</h2>
+            <div class="topbar-left">
+                <h2 class="page-title" id="pageTitle">Dashboard</h2>
+                <div class="gateway-meta">
+                    <span class="meta-pill">REST <strong id="apiEndpoint">/api</strong></span>
+                    <span class="meta-pill">WS <strong id="wsEndpoint">/</strong></span>
+                    <span class="meta-pill">Mode <strong id="gatewayMode">gateway-only</strong></span>
+                </div>
+            </div>
             <div class="topbar-actions">
                 <button class="btn btn-secondary" onclick="refreshAll()">
                     <i class="fas fa-sync-alt"></i> Refresh
@@ -1268,6 +1335,64 @@
                 </div>
             </div>
 
+            <!-- API Explorer Page -->
+            <div class="page" id="page-api">
+                <div class="two-col">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3><i class="fas fa-map-signs"></i> Endpoint Catalog</h3>
+                            <button class="btn btn-secondary" onclick="loadApiExplorer()">
+                                <i class="fas fa-refresh"></i>
+                            </button>
+                        </div>
+                        <div class="card-body no-padding">
+                            <div id="apiCatalog" style="padding: 16px; display: grid; gap: 12px;">
+                                <div class="empty-state">
+                                    <i class="fas fa-plug"></i>
+                                    <p>Loading endpoint capabilities...</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h3><i class="fas fa-flask"></i> Endpoint Tester</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="form-group">
+                                <label>Method</label>
+                                <select class="form-input" id="apiTestMethod">
+                                    <option value="GET">GET</option>
+                                    <option value="POST">POST</option>
+                                    <option value="PUT">PUT</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Endpoint</label>
+                                <input class="form-input" id="apiTestEndpoint" value="/status" placeholder="/status">
+                            </div>
+                            <div class="form-group">
+                                <label>JSON Body (optional)</label>
+                                <textarea class="form-input" id="apiTestBody" rows="6" placeholder='{"task":"hello"}'></textarea>
+                            </div>
+                            <button class="btn btn-primary" style="width: 100%;" onclick="runApiTest()">
+                                <i class="fas fa-play"></i> Run Test
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-code"></i> Response</h3>
+                    </div>
+                    <div class="card-body">
+                        <pre id="apiTestResult" class="log-viewer" style="max-height: 420px; white-space: pre-wrap; margin: 0;">Run a test to see API response output</pre>
+                    </div>
+                </div>
+            </div>
+
             <!-- Config Page -->
             <div class="page" id="page-config">
                 <div class="two-col">
@@ -1418,7 +1543,11 @@
 
         // API helpers
         const API_BASE = window.location.origin + '/api';
-        const WS_URL = `ws://${window.location.host}`;
+        function getWsUrl() {
+            const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+            const keyPart = apiKey ? `?apiKey=${encodeURIComponent(apiKey)}` : '';
+            return `${protocol}://${window.location.host}/${keyPart}`;
+        }
 
         function getHeaders() {
             const headers = { 'Content-Type': 'application/json' };
@@ -1428,7 +1557,8 @@
 
         async function api(endpoint, options = {}) {
             try {
-                const res = await fetch(API_BASE + endpoint, { ...options, headers: getHeaders() });
+                const optHeaders = options.headers || {};
+                const res = await fetch(API_BASE + endpoint, { ...options, headers: { ...getHeaders(), ...optHeaders } });
                 if (res.status === 401) {
                     showToast('Authentication required', 'error');
                     openApiKeyModal();
@@ -1468,7 +1598,19 @@
             document.querySelector(`.nav-item[data-page="${page}"]`).classList.add('active');
             document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
             document.getElementById(`page-${page}`).classList.add('active');
-            document.getElementById('pageTitle').textContent = page.charAt(0).toUpperCase() + page.slice(1);
+            const pageTitles = {
+                dashboard: 'Dashboard',
+                tasks: 'Task Queue',
+                skills: 'Skills',
+                memory: 'Memory',
+                orchestrator: 'Orchestrator',
+                channels: 'Channels',
+                logs: 'Logs',
+                api: 'API Explorer',
+                config: 'Configuration',
+                chat: 'Chat'
+            };
+            document.getElementById('pageTitle').textContent = pageTitles[page] || (page.charAt(0).toUpperCase() + page.slice(1));
             
             // Load page-specific data
             if (page === 'tasks') loadTasks();
@@ -1477,6 +1619,7 @@
             if (page === 'orchestrator') loadOrchestrator();
             if (page === 'channels') loadChannels();
             if (page === 'logs') loadLogs();
+            if (page === 'api') loadApiExplorer();
             if (page === 'config') loadConfig();
             if (page === 'chat') loadChatHistory();
         }
@@ -1484,7 +1627,7 @@
         // WebSocket
         function connectWS() {
             if (ws) ws.close();
-            ws = new WebSocket(WS_URL);
+            ws = new WebSocket(getWsUrl());
             
             ws.onopen = () => {
                 document.getElementById('wsStatusDot').classList.add('connected');
@@ -1549,6 +1692,9 @@
         async function loadStatus() {
             try {
                 const data = await api('/status');
+                document.getElementById('apiEndpoint').textContent = API_BASE;
+                document.getElementById('wsEndpoint').textContent = getWsUrl();
+                document.getElementById('gatewayMode').textContent = data.mode || 'unknown';
                 
                 // Show status based on mode
                 if (data.running) {
@@ -1674,7 +1820,8 @@
                 const data = await api('/memory');
                 const stats = await api('/memory/stats');
                 
-                document.getElementById('memoryTotal').textContent = stats.total || 0;
+                const total = stats.totalMemories || stats.total || 0;
+                document.getElementById('memoryTotal').textContent = total;
                 document.getElementById('memoryShortTerm').textContent = stats.shortTerm || 0;
                 document.getElementById('memoryEpisodic').textContent = stats.episodic || 0;
                 
@@ -1807,6 +1954,120 @@
                 viewer.scrollTop = viewer.scrollHeight;
             } catch (e) {
                 console.error('Failed to load logs:', e);
+            }
+        }
+
+        function parseEndpointDescriptor(descriptor) {
+            const parts = String(descriptor || '').trim().split(/\s+/);
+            if (parts.length < 2) return { method: 'GET', path: String(descriptor || '') };
+            return { method: parts[0].toUpperCase(), path: parts.slice(1).join(' ') };
+        }
+
+        function buildCatalogSection(title, endpoints = []) {
+            if (!Array.isArray(endpoints) || endpoints.length === 0) return '';
+            const rows = endpoints.map(ep => {
+                const parsed = parseEndpointDescriptor(ep);
+                return `
+                    <div class="config-row" style="align-items: center; gap: 10px;">
+                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <span class="task-status pending" style="font-size: 10px;">${parsed.method}</span>
+                            <span class="config-value" style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">${escapeHtml(parsed.path)}</span>
+                        </div>
+                        <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 11px;" onclick="prefillApiTest('${parsed.method}', '${parsed.path.replace(/'/g, "\\'")}')">
+                            <i class="fas fa-arrow-down"></i> Use
+                        </button>
+                    </div>
+                `;
+            }).join('');
+
+            return `
+                <div class="card" style="margin: 0;">
+                    <div class="card-header" style="padding: 10px 14px;">
+                        <h3 style="font-size: 13px;"><i class="fas fa-layer-group"></i> ${escapeHtml(title)}</h3>
+                    </div>
+                    <div class="card-body" style="padding: 10px 12px; display: grid; gap: 8px;">
+                        ${rows}
+                    </div>
+                </div>
+            `;
+        }
+
+        function prefillApiTest(method, endpoint) {
+            const m = String(method || 'GET').toUpperCase();
+            const p = String(endpoint || '/status').trim();
+            const methodEl = document.getElementById('apiTestMethod');
+            const endpointEl = document.getElementById('apiTestEndpoint');
+            if (methodEl) methodEl.value = m;
+            if (endpointEl) endpointEl.value = p.startsWith('/api/') ? p.slice(4) : p;
+            showToast(`Loaded ${m} ${p} into tester`);
+        }
+
+        async function loadApiExplorer() {
+            const catalog = document.getElementById('apiCatalog');
+            if (!catalog) return;
+
+            try {
+                const caps = await api('/gateway/capabilities');
+                const apiGroups = caps.api || {};
+
+                const sections = [
+                    buildCatalogSection('Status', apiGroups.status),
+                    buildCatalogSection('Tasks', apiGroups.tasks),
+                    buildCatalogSection('Chat', apiGroups.chat),
+                    buildCatalogSection('Memory', apiGroups.memory),
+                    buildCatalogSection('Runtime', apiGroups.runtime),
+                    buildCatalogSection('Skills', apiGroups.skills),
+                    buildCatalogSection('Orchestrator', apiGroups.orchestrator)
+                ].filter(Boolean).join('');
+
+                catalog.innerHTML = sections || '<div class="empty-state"><i class="fas fa-plug"></i><p>No endpoint metadata available</p></div>';
+            } catch (e) {
+                console.error('Failed to load API capabilities:', e);
+                catalog.innerHTML = '<div class="empty-state"><i class="fas fa-triangle-exclamation"></i><p>Failed to load capabilities</p></div>';
+            }
+        }
+
+        async function runApiTest() {
+            const method = (document.getElementById('apiTestMethod')?.value || 'GET').toUpperCase();
+            const endpointRaw = (document.getElementById('apiTestEndpoint')?.value || '/status').trim();
+            const bodyRaw = (document.getElementById('apiTestBody')?.value || '').trim();
+            const output = document.getElementById('apiTestResult');
+
+            if (!output) return;
+            if (!endpointRaw.startsWith('/')) {
+                output.textContent = 'Endpoint must start with /';
+                return;
+            }
+
+            const endpoint = endpointRaw.startsWith('/api/') ? endpointRaw.slice(4) : endpointRaw;
+
+            try {
+                output.textContent = `Running ${method} ${endpoint}...`;
+                let response;
+                if (method === 'GET') {
+                    response = await api(endpoint, { method: 'GET' });
+                } else {
+                    let parsedBody = {};
+                    if (bodyRaw) {
+                        try {
+                            parsedBody = JSON.parse(bodyRaw);
+                        } catch {
+                            output.textContent = 'Invalid JSON body';
+                            return;
+                        }
+                    }
+                    response = await api(endpoint, {
+                        method,
+                        body: JSON.stringify(parsedBody)
+                    });
+                }
+
+                output.textContent = JSON.stringify({
+                    request: { method, endpoint },
+                    response
+                }, null, 2);
+            } catch (e) {
+                output.textContent = `Request failed: ${e?.message || e}`;
             }
         }
 

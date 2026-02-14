@@ -388,6 +388,20 @@ OrcBot uses a **smart heartbeat** system that's context-aware and action-oriente
 - **maintenance**: Journal updates, memory consolidation
 - **delegate**: Spawn worker agents for parallel tasks
 
+### Completion Audit Codes (Troubleshooting)
+When OrcBot blocks premature completion, logs include a compact code like `AUDIT_BLOCK:ACK_ONLY+UNSENT_RESULTS`.
+
+| Code | Meaning | Typical Fix |
+|------|---------|-------------|
+| `NO_SEND` | No user-visible reply was sent for a channel task | Ensure a channel send skill is called before completion |
+| `UNSENT_RESULTS` | Deep tool output exists after the last sent message | Send a final results message after search/browser/command steps |
+| `NO_SUBSTANTIVE` | Deep/research tools ran, but no substantive delivery was sent | Replace status updates with concrete findings/outcomes |
+| `ACK_ONLY` | Only acknowledgement/status-style messages were sent | Follow ack with one content-rich delivery message |
+| `ERROR_UNRESOLVED` | Tool errors occurred without a substantive recovery/result message | Explain failure + next step, or retry with an alternate strategy |
+| `GENERIC` | Fallback classification for uncategorized audit issue | Inspect action step memories and recent pipeline notes |
+
+You can view these in daemon logs and in the action's short memory entries (look for `completion-audit-blocked`).
+
 ### Multi-Agent Orchestration
 For complex tasks, OrcBot can spawn worker processes:
 ```bash

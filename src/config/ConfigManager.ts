@@ -91,10 +91,14 @@ export interface AgentConfig {
     worldEventsMaxRecords?: number;       // Max records per fetch (default 250)
     worldEventsBatchMinutes?: number;     // Summarization batch window (default 10)
     worldEventsStoreEnabled?: boolean;    // Store summaries in vector memory
+    worldEventsHeartbeatEnabled?: boolean; // Enable heartbeat-time world event ingestion (default true)
     worldEventsGdeltQuery?: string;       // GDELT query filter (default 'global')
     worldEventsGlobeRenderer?: 'ascii' | 'external' | 'map' | 'mapscii'; // Renderer mode
     worldEventsGlobeCommand?: string;     // External globe CLI command
     worldEventsGlobeArgs?: string[];      // External globe CLI args
+    // Session scoping & identity links
+    sessionScope?: 'main' | 'per-peer' | 'per-channel-peer'; // Thread scope strategy for inbound context
+    identityLinks?: Record<string, string>; // Map channel identities (e.g. telegram:123) to canonical person keys
     // Operational
     autoExecuteCommands?: boolean;        // Auto-execute commands without confirmation (default false)
     skillRoutingRules?: Array<{
@@ -285,7 +289,51 @@ export class ConfigManager {
             }
         });
 
-        return this.repairWorkerCorruption(this.normalizePlatformPaths(mergedConfig, silent), silent);
+        const normalized = this.normalizePlatformPaths(mergedConfig, silent);
+        const typed = this.coerceConfigTypes(normalized, defaults);
+        return this.repairWorkerCorruption(typed, silent);
+    }
+
+    /**
+     * Coerce string values (from CLI/env/manual YAML edits) to expected types
+     * based on defaults. Prevents bugs like "false" being treated as truthy.
+     */
+    private coerceConfigTypes(config: AgentConfig, defaults: AgentConfig): AgentConfig {
+        const out: any = { ...config };
+
+        const toBool = (v: any): any => {
+            if (typeof v !== 'string') return v;
+            const s = v.trim().toLowerCase();
+            if (s === 'true') return true;
+            if (s === 'false') return false;
+            return v;
+        };
+
+        const toNumber = (v: any): any => {
+            if (typeof v === 'number') return v;
+            if (typeof v !== 'string') return v;
+            const s = v.trim();
+            if (!s) return v;
+            const n = Number(s);
+            return Number.isFinite(n) ? n : v;
+        };
+
+        for (const [key, defaultValue] of Object.entries(defaults as any)) {
+            const current = out[key];
+            if (current === undefined || current === null) continue;
+
+            if (typeof defaultValue === 'boolean') {
+                out[key] = toBool(current);
+                continue;
+            }
+
+            if (typeof defaultValue === 'number') {
+                out[key] = toNumber(current);
+                continue;
+            }
+        }
+
+        return out as AgentConfig;
     }
 
     /**
@@ -543,10 +591,13 @@ export class ConfigManager {
             worldEventsMaxRecords: 250,
             worldEventsBatchMinutes: 10,
             worldEventsStoreEnabled: true,
+            worldEventsHeartbeatEnabled: true,
             worldEventsGdeltQuery: 'global',
             worldEventsGlobeRenderer: 'mapscii',
             worldEventsGlobeCommand: 'mapscii',
             worldEventsGlobeArgs: [],
+            sessionScope: 'per-channel-peer',
+            identityLinks: {},
             autoExecuteCommands: false,
             bedrockRegion: process.env.BEDROCK_REGION || process.env.AWS_REGION,
             bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,

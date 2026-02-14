@@ -608,7 +608,7 @@ export class WebBrowser {
                 this._page.waitForLoadState('networkidle', { timeout: Math.min(timeout, 8000) }).catch(() => { })
             ]);
         } catch (e) {
-            logger.warn(`Stable page wait exceeded timeout: ${e}`);
+            logger.debug(`Stable page wait exceeded timeout: ${e}`);
         }
 
         // Phase 2: SPA content polling — wait for meaningful DOM content to appear.
@@ -1084,9 +1084,9 @@ export class WebBrowser {
             let url = this.page!.url();
             let contentLength = (await this.page!.content()).length;
 
-            // Track blank reload attempts to prevent infinite loops
-            const maxBlankReloads = 1;
-            let blankReloadAttempts = 0;
+            // Track recovery reload attempts to prevent churn and repeated full reloads
+            const maxRecoveryReloads = 1;
+            let recoveryReloadAttempts = 0;
 
             // SPAs often transition through about:blank briefly during client-side navigation.
             // Wait up to 3s for the URL to become non-blank before considering a reload.
@@ -1101,11 +1101,11 @@ export class WebBrowser {
 
             // If still blank after the 3s poll, reload the last known URL immediately.
             // Don't add more settle waits — the poll already proved the page isn't recovering on its own.
-            if ((!url || url === 'about:blank') && contentLength < 500 && blankReloadAttempts < maxBlankReloads) {
+            if ((!url || url === 'about:blank') && contentLength < 500 && recoveryReloadAttempts < maxRecoveryReloads) {
                 const fallbackUrl = this.lastNavigatedUrl;
                 if (fallbackUrl) {
-                    logger.warn(`Semantic snapshot: blank URL detected (content: ${contentLength} bytes). Reloading ${fallbackUrl}.`);
-                    blankReloadAttempts++;
+                    logger.info(`Semantic snapshot: blank URL detected (content: ${contentLength} bytes). Reloading ${fallbackUrl}.`);
+                    recoveryReloadAttempts++;
                     await this.page!.goto(fallbackUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => { });
                     // Shorter stabilization — the site already loaded once, this is a recovery reload
                     await this.waitForStablePage(5000);
@@ -1126,9 +1126,9 @@ export class WebBrowser {
             const hasSnapshotContent = snapshot && snapshot.length > 50;
             const looksBlank = (!title || title.trim().length === 0) && contentLength < 1200 && !hasSnapshotContent;
             
-            if (looksBlank && blankReloadAttempts < maxBlankReloads) {
-                logger.warn('Semantic snapshot appears blank; attempting a single reload before returning diagnostics.');
-                blankReloadAttempts++;
+            if (looksBlank && recoveryReloadAttempts < maxRecoveryReloads) {
+                logger.warn('Semantic snapshot appears blank; attempting one recovery reload before returning diagnostics.');
+                recoveryReloadAttempts++;
                 await this.page!.reload({ waitUntil: 'load', timeout: 30000 }).catch(() => { });
                 await this.waitForStablePage();
                 snapshot = await buildSnapshot();

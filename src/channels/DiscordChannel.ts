@@ -79,6 +79,10 @@ export class DiscordChannel implements IChannel {
         const content = message.content;
         const messageId = message.id;
         const guildId = message.guildId;
+        const sessionScopeId = this.agent.resolveSessionScopeId('discord', {
+            sourceId: channelId,
+            userId
+        });
         const channelName = message.channel.isDMBased()
             ? 'DM'
             : ('name' in message.channel ? message.channel.name : 'Unknown');
@@ -110,6 +114,7 @@ export class DiscordChannel implements IChannel {
             metadata: {
                 source: 'discord',
                 role: 'user',
+                sessionScopeId,
                 channelId,
                 userId,
                 username,
@@ -171,6 +176,7 @@ export class DiscordChannel implements IChannel {
                     timestamp: new Date().toISOString(),
                     metadata: {
                         source: 'discord',
+                        sessionScopeId,
                         attachmentType: transcription ? 'audio' : 'attachment',
                         channelId,
                         userId,
@@ -206,6 +212,7 @@ export class DiscordChannel implements IChannel {
                 {
                     source: 'discord',
                     sourceId: channelId,  // Use channelId as sourceId (where to reply)
+                    sessionScopeId,
                     senderName: username,  // Use username as senderName for DecisionEngine
                     channelId,
                     userId,

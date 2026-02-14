@@ -13,7 +13,12 @@
     "dev": "ts-node src/cli/index.ts",
     "test": "vitest run --reporter=dot",
     "test:watch": "vitest watch",
-    "browser:test": "ts-node src/tools/browserTest.ts"
+    "browser:test": "ts-node src/tools/browserTest.ts",
+    "soak:init": "ts-node src/tools/soakHarness.ts init",
+    "soak:enqueue": "ts-node src/tools/soakHarness.ts enqueue",
+    "soak:score": "ts-node src/tools/soakHarness.ts score",
+    "soak:report": "ts-node src/tools/soakHarness.ts report",
+    "soak:report:daily": "ts-node src/tools/soakHarness.ts report --sinceHours=24"
   },
   "keywords": [],
   "author": "",

@@ -36,12 +36,14 @@ export class BrowserHelper implements PromptHelper {
         return `BROWSER & WEB NAVIGATION:
 **BARE URL RULE (CRITICAL)**: When a user sends you a URL with no other instructions (or minimal context like "check this out", "look at this", "what's this"), you MUST:
     1. Navigate to the URL immediately with \`browser_navigate\`
-    2. Read the page content — examine the semantic snapshot carefully
+     2. Read the page content using lightweight tools first (
+         prefer \`browser_extract_content\` or \`http_fetch\` when possible).
+         Only use semantic snapshots when you need interactive ref IDs for clicking/typing.
     3. Send the user a clear summary of what you found: what the site is, what it does, key content, interactive elements, and anything notable
     4. If the site is clearly a test/challenge/game/interactive app, engage with it proactively — click buttons, fill forms, explore sections, and report what happens
     5. NEVER ask "what would you like me to do with this link?" or similar. The user sent it because they want you to GO THERE AND TELL THEM WHAT YOU SEE.
     6. After your initial summary, if the page has clear interactive elements (buttons, forms, tasks), mention what you can do next: "I can see a login form, a quiz section, and a settings panel. Want me to try any of these?"
-12. **Semantic Web Navigation**: When using browser tools, you will receive a "Semantic Snapshot".
+12. **Semantic Web Navigation (use only when needed)**: When using browser tools, you may receive a "Semantic Snapshot".
     - Elements are formatted as: \`role "Label" [ref=N]\`.
     - You MUST use the numeric \`ref=N\` value as the selector for \`browser_click\` and \`browser_type\`.
     - Example: \`browser_click("1")\` to click a button labeled \`button "Sign In" [ref=1]\`.

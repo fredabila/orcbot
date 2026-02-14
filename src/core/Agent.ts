@@ -31,6 +31,7 @@ import { logger } from '../utils/logger';
 import { ErrorHandler } from '../utils/ErrorHandler';
 import { resolveEmoji, detectChannelFromMetadata } from '../utils/ReactionHelper';
 import { renderMarkdown, hasMarkdown } from '../utils/MarkdownRenderer';
+import { fetchWorldEvents, summarizeWorldEvents, WorldEventSource } from '../tools/WorldEvents';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -94,6 +95,10 @@ export class Agent {
     private lastHeartbeatProductive: boolean = true;
     private heartbeatRunning: boolean = false;
     private lastHeartbeatPushAt: number = 0;
+    private lastWorldEventsRefreshAt: number = 0;
+    private lastWorldEventsMemoryWriteAt: number = 0;
+    private worldEventsRefreshRunning: boolean = false;
+    private lastWorldEventsSummary: string = '';
     private _blankPageCount: number = 0;
     private agentConfigFile: string;
     private agentIdentity: string = '';
@@ -355,10 +360,7 @@ export class Agent {
     private shouldUseGoogleComputerUse(): boolean {
         const enabled = !!this.config.get('googleComputerUseEnabled');
         if (!enabled) return false;
-
-        const modelName = String(this.config.get('modelName') || '').toLowerCase();
-        const provider = this.config.get('llmProvider') || (modelName.includes('gemini') ? 'google' : undefined);
-        return provider === 'google' && !!this.config.get('googleApiKey');
+        return !!this.config.get('googleApiKey');
     }
 
     private getGoogleComputerUseModel(): string {
@@ -414,6 +416,61 @@ export class Agent {
             return { id: String(match.metadata.chatId), resolved: true };
         }
         return null;
+    }
+
+    private getSessionScopeMode(): 'main' | 'per-peer' | 'per-channel-peer' {
+        const raw = String(this.config.get('sessionScope') || 'per-channel-peer').toLowerCase();
+        if (raw === 'main' || raw === 'per-peer' || raw === 'per-channel-peer') {
+            return raw;
+        }
+        return 'per-channel-peer';
+    }
+
+    private getIdentityLinks(): Record<string, string> {
+        const links = this.config.get('identityLinks');
+        if (!links || typeof links !== 'object' || Array.isArray(links)) {
+            return {};
+        }
+        return links as Record<string, string>;
+    }
+
+    private resolveIdentityAlias(source: string, candidate: string): string | null {
+        const cleanSource = String(source || '').trim().toLowerCase();
+        const cleanCandidate = String(candidate || '').trim();
+        if (!cleanSource || !cleanCandidate) return null;
+
+        const links = this.getIdentityLinks();
+        const directKey = `${cleanSource}:${cleanCandidate}`;
+        const linked = links[directKey];
+        if (typeof linked === 'string' && linked.trim().length > 0) {
+            return linked.trim();
+        }
+        return null;
+    }
+
+    public resolveSessionScopeId(source: string, identifiers: { sourceId?: string; userId?: string; chatId?: string }): string {
+        const mode = this.getSessionScopeMode();
+        const cleanSource = String(source || '').trim().toLowerCase() || 'unknown';
+        const sourceId = String(identifiers?.sourceId ?? identifiers?.chatId ?? '').trim();
+        const userId = String(identifiers?.userId ?? '').trim();
+
+        if (mode === 'main') {
+            return 'scope:main';
+        }
+
+        if (mode === 'per-peer') {
+            const linkedUser = userId ? this.resolveIdentityAlias(cleanSource, userId) : null;
+            if (linkedUser) return `scope:peer:${linkedUser}`;
+
+            const linkedSource = sourceId ? this.resolveIdentityAlias(cleanSource, sourceId) : null;
+            if (linkedSource) return `scope:peer:${linkedSource}`;
+
+            const fallback = userId || sourceId || 'unknown';
+            return `scope:peer:${cleanSource}:${fallback}`;
+        }
+
+        const peer = sourceId || userId || 'unknown';
+        return `scope:channel-peer:${cleanSource}:${peer}`;
     }
 
     private registerInternalSkills() {
@@ -647,12 +704,36 @@ export class Agent {
             description: 'React to a message with an emoji. Auto-detects the channel from context. Supports semantic names ("thumbs_up", "love", "fire", "laugh", "check", "eyes", "thinking") or raw emoji ("👍", "❤️"). The message_id comes from the incoming message metadata.',
             usage: 'react(message_id, emoji, channel?, chat_id?)',
             handler: async (args: any) => {
-                const messageId = args.message_id || args.messageId || args.id;
+                let messageId = args.message_id || args.messageId || args.id;
                 const emojiInput = args.emoji || args.reaction || args.text || 'thumbs_up';
                 let channel = (args.channel || args.source || '').toLowerCase();
                 let chatId = args.chat_id || args.chatId || args.jid || args.to;
 
+                const isTemplateId = (raw: any) => /\{\{[^}]+\}\}|\[\[[^\]]+\]\]/.test(String(raw || ''));
+                const resolveFallbackMessageId = (sourceHint?: string, chatHint?: string): string | null => {
+                    const recent = this.memory.searchMemory('short').slice().reverse();
+                    const found = recent.find((m: any) => {
+                        const md = m.metadata || {};
+                        if (!md.messageId) return false;
+                        if (sourceHint && md.source !== sourceHint) return false;
+                        if (chatHint && String(md.chatId || md.sourceId || '') !== String(chatHint)) return false;
+                        return true;
+                    });
+                    return found?.metadata?.messageId ? String(found.metadata.messageId) : null;
+                };
+
+                if (!messageId || isTemplateId(messageId)) {
+                    const fallback = resolveFallbackMessageId(channel || undefined, chatId ? String(chatId) : undefined)
+                        || resolveFallbackMessageId(channel || undefined)
+                        || resolveFallbackMessageId();
+                    if (fallback) {
+                        logger.warn(`react: Replaced invalid message_id "${messageId}" with fallback "${fallback}" from recent context`);
+                        messageId = fallback;
+                    }
+                }
+
                 if (!messageId) return 'Error: Missing message_id. Use the messageId from the incoming message metadata.';
+                if (isTemplateId(messageId)) return 'Error: Invalid message_id template (e.g., {{message.id}}). Use the real numeric/alphanumeric messageId from metadata.';
 
                 const emoji = resolveEmoji(emojiInput);
 
@@ -706,8 +787,21 @@ export class Agent {
             usage: 'react_telegram(chat_id, message_id, emoji)',
             handler: async (args: any) => {
                 let chatId = args.chat_id || args.chatId || args.to;
-                const messageId = args.message_id || args.messageId || args.id;
+                let messageId = args.message_id || args.messageId || args.id;
                 const emojiInput = args.emoji || args.reaction || 'thumbs_up';
+
+                const isTemplateId = (raw: any) => /\{\{[^}]+\}\}|\[\[[^\]]+\]\]/.test(String(raw || ''));
+                const resolveFallbackTelegramMessageId = (chatHint?: string): string | null => {
+                    const recent = this.memory.searchMemory('short').slice().reverse();
+                    const found = recent.find((m: any) => {
+                        const md = m.metadata || {};
+                        if (md.source !== 'telegram') return false;
+                        if (!md.messageId) return false;
+                        if (chatHint && String(md.chatId || md.sourceId || '') !== String(chatHint)) return false;
+                        return true;
+                    });
+                    return found?.metadata?.messageId ? String(found.metadata.messageId) : null;
+                };
 
                 if (!chatId) return 'Error: Missing chat_id (numeric Telegram ID).';
                 if (!messageId) return 'Error: Missing message_id.';
@@ -718,6 +812,18 @@ export class Agent {
                     return `Error: "${chatId}" is not a valid Telegram chat ID. Use the numeric ID from message metadata.`;
                 }
                 chatId = resolved.id;
+
+                if (isTemplateId(messageId)) {
+                    const fallback = resolveFallbackTelegramMessageId(String(chatId)) || resolveFallbackTelegramMessageId();
+                    if (fallback) {
+                        logger.warn(`react_telegram: Replaced invalid message_id "${messageId}" with fallback "${fallback}" from recent telegram context`);
+                        messageId = fallback;
+                    }
+                }
+
+                if (isTemplateId(messageId)) {
+                    return 'Error: Invalid Telegram message_id template (e.g., {{message.id}}). Use the actual numeric messageId from metadata.';
+                }
 
                 if (!this.telegram) return 'Telegram channel not available';
 
@@ -2289,13 +2395,24 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
         // Skill: Browser Navigate
         this.skills.registerSkill({
             name: 'browser_navigate',
-            description: 'Navigate to a URL and return a semantic snapshot of interactive elements.',
-            usage: 'browser_navigate(url)',
+            description: 'Navigate to a URL and return a fast readable summary. Use browser_examine_page when you need interactive ref IDs.',
+            usage: 'browser_navigate(url, include_snapshot?)',
             handler: async (args: any) => {
                 const url = args.url || args.link || args.site;
                 if (!url) return 'Error: Missing url.';
                 const res = await this.browser.navigate(url);
                 if (res.startsWith('Error')) return res;
+                const includeSnapshot = Boolean(args.include_snapshot || args.includeSnapshot || args.semantic || args.snapshot);
+
+                // Fast path: extract readable content first (lighter and less brittle than full semantic snapshots)
+                const extracted = await this.browser.extractContent();
+                const extractedOk = !(extracted.startsWith('Error') || extracted.startsWith('Failed'));
+
+                if (extractedOk && !includeSnapshot) {
+                    this._blankPageCount = 0;
+                    return `${res}\n\n--- QUICK READ ---\n${extracted}`;
+                }
+
                 const snapshot = await this.browser.getSemanticSnapshot();
 
                 // Track blank-page results and warn the agent to switch strategy
@@ -2325,6 +2442,7 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                     (snapshot.includes('HTML length:') && parseInt((snapshot.match(/HTML length: (\d+)/) || ['', '0'])[1]) < 500);
                 if (looksBlank && this.shouldUseGoogleComputerUse()) {
                     try {
+                        logger.info('browser_examine_page: Using Gemini Computer Use visual fallback');
                         this.computerUse.setContext('browser');
                         const screenshotPath = await this.computerUse.captureScreen();
                         const prompt = 'Describe the visible page layout and content. List ALL interactive elements you can see: buttons, links, input fields, menus, tabs, icons, and any clickable areas. For each element, describe its position (top/center/bottom, left/center/right) and apparent function.';
@@ -2379,10 +2497,12 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 const button = args.button || 'left';
 
                 if (useComputerUse) {
+                    logger.info(`browser_click: Trying Gemini Computer Use for selector "${selectorStr}"`);
                     this.computerUse.setContext('browser');
                     const cuResult = await this.computerUse.visionClick(selectorStr, button);
                     const failed = cuResult.startsWith('Error') || cuResult.startsWith('Failed') || cuResult.startsWith('Could not');
                     if (!failed) {
+                        logger.info('browser_click: Gemini Computer Use succeeded');
                         try {
                             const snapshot = await this.browser.getSemanticSnapshot();
                             return `${cuResult}\n\n--- Page after click ---\n${snapshot}`;
@@ -2390,6 +2510,7 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                             return cuResult;
                         }
                     }
+                    logger.warn(`browser_click: Gemini Computer Use failed, falling back to Playwright. Result: ${cuResult}`);
                 }
 
                 const clickResult = await this.browser.click(selectorStr);
@@ -2418,10 +2539,15 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 const selectorStr = String(selector);
                 const useComputerUse = this.shouldUseGoogleComputerUse();
                 if (useComputerUse) {
+                    logger.info(`browser_type: Trying Gemini Computer Use for selector "${selectorStr}"`);
                     this.computerUse.setContext('browser');
                     const cuResult = await this.computerUse.visionType(selectorStr, text);
                     const failed = cuResult.startsWith('Error') || cuResult.startsWith('Failed') || cuResult.startsWith('Could not');
-                    if (!failed) return cuResult;
+                    if (!failed) {
+                        logger.info('browser_type: Gemini Computer Use succeeded');
+                        return cuResult;
+                    }
+                    logger.warn(`browser_type: Gemini Computer Use failed, falling back to Playwright. Result: ${cuResult}`);
                 }
 
                 return this.browser.type(selectorStr, text);
@@ -2437,9 +2563,14 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 const key = args.key || args.name;
                 const useComputerUse = this.shouldUseGoogleComputerUse();
                 if (useComputerUse) {
+                    logger.info(`browser_press: Trying Gemini Computer Use for key "${String(key)}"`);
                     this.computerUse.setContext('browser');
                     const cuResult = await this.computerUse.keyPress(String(key));
-                    if (!cuResult.startsWith('Error')) return cuResult;
+                    if (!cuResult.startsWith('Error')) {
+                        logger.info('browser_press: Gemini Computer Use succeeded');
+                        return cuResult;
+                    }
+                    logger.warn(`browser_press: Gemini Computer Use failed, falling back to Playwright. Result: ${cuResult}`);
                 }
                 return this.browser.press(key);
             }
@@ -2454,6 +2585,7 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 const captcha = await this.browser.detectCaptcha();
                 if (this.shouldUseGoogleComputerUse()) {
                     try {
+                        logger.info('browser_screenshot: Using Gemini Computer Use capture');
                         this.computerUse.setContext('browser');
                         const screenshotPath = await this.computerUse.captureScreen();
                         const result = `Screenshot saved to: ${screenshotPath}.`;
@@ -2560,9 +2692,15 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 }
                 const useComputerUse = this.shouldUseGoogleComputerUse();
                 if (useComputerUse) {
+                    logger.info(`browser_scroll: Trying Gemini Computer Use (${direction}, ${amount ?? 600}px)`);
                     this.computerUse.setContext('browser');
                     const ticks = amount ? Math.max(1, Math.round(amount / 200)) : 3;
-                    return this.computerUse.scroll(direction, ticks);
+                    const cuResult = await this.computerUse.scroll(direction, ticks);
+                    if (!cuResult.startsWith('Error') && !cuResult.startsWith('Failed')) {
+                        logger.info('browser_scroll: Gemini Computer Use succeeded');
+                        return cuResult;
+                    }
+                    logger.warn(`browser_scroll: Gemini Computer Use failed, falling back to Playwright. Result: ${cuResult}`);
                 }
 
                 const result = await this.browser.scrollPage(direction, amount);
@@ -2588,11 +2726,14 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 const selectorStr = String(selector);
                 const useComputerUse = this.shouldUseGoogleComputerUse();
                 if (useComputerUse) {
+                    logger.info(`browser_hover: Trying Gemini Computer Use for selector "${selectorStr}"`);
                     this.computerUse.setContext('browser');
                     const located = await this.computerUse.locateElement(selectorStr);
                     if (located.x >= 0 && located.y >= 0) {
+                        logger.info(`browser_hover: Gemini Computer Use located target at (${located.x}, ${located.y})`);
                         return this.computerUse.mouseMove(located.x, located.y);
                     }
+                    logger.warn('browser_hover: Gemini Computer Use could not locate target, falling back to Playwright');
                 }
                 return this.browser.hover(selectorStr);
             }
@@ -2612,6 +2753,7 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 const valueStr = String(value);
                 const useComputerUse = this.shouldUseGoogleComputerUse();
                 if (useComputerUse) {
+                    logger.info(`browser_select: Trying Gemini Computer Use for selector "${selectorStr}" and value "${valueStr}"`);
                     this.computerUse.setContext('browser');
                     const openResult = await this.computerUse.visionClick(selectorStr);
                     const openFailed = openResult.startsWith('Error') || openResult.startsWith('Failed') || openResult.startsWith('Could not');
@@ -2619,9 +2761,11 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                         const chooseResult = await this.computerUse.visionClick(valueStr);
                         const chooseFailed = chooseResult.startsWith('Error') || chooseResult.startsWith('Failed') || chooseResult.startsWith('Could not');
                         if (!chooseFailed) {
+                            logger.info('browser_select: Gemini Computer Use succeeded');
                             return `Selected "${valueStr}" via computer use. Open: ${openResult}. Choose: ${chooseResult}`;
                         }
                     }
+                    logger.warn(`browser_select: Gemini Computer Use failed, falling back to Playwright. Open result: ${openResult}`);
                 }
                 return this.browser.selectOption(selectorStr, valueStr);
             }
@@ -5190,6 +5334,74 @@ Respond with ONLY valid JSON:
         }
     }
 
+    /**
+     * Pre-completion audit: research this action's own execution logs and block
+     * premature completion when there are unresolved outcomes.
+     */
+    private async auditCompletionFromActionLogs(
+        action: Action,
+        context: {
+            currentStep: number;
+            messagesSent: number;
+            substantiveDeliveriesSent: number;
+            deepToolExecutedSinceLastMessage: boolean;
+            sentMessagesInAction: string[];
+            skillCallCounts: Record<string, number>;
+        }
+    ): Promise<{ ok: boolean; issues: string[] }> {
+        try {
+            const source = action.payload?.source;
+            const isChannelTask = source === 'telegram' || source === 'whatsapp' || source === 'discord' || source === 'slack' || source === 'gateway-chat';
+            if (!isChannelTask) {
+                return { ok: true, issues: [] };
+            }
+
+            const issues: string[] = [];
+            const actionMemories = this.memory.getActionMemories(action.id);
+
+            const hadToolErrors = actionMemories.some(m => (m.content || '').includes('TOOL ERROR'));
+            const hadResearchOrDeepOutput =
+                Object.entries(context.skillCallCounts || {}).some(([skill, count]) => {
+                    if (!count || count <= 0) return false;
+                    return skill === 'web_search' ||
+                        skill.startsWith('browser_') ||
+                        skill === 'extract_article' ||
+                        skill === 'http_fetch' ||
+                        skill === 'run_command' ||
+                        skill === 'read_file';
+                });
+
+            const hadAckOnlyMessages =
+                context.sentMessagesInAction.length > 0 &&
+                context.sentMessagesInAction.every(msg => this.isLikelyAcknowledgementMessage(msg));
+
+            if (context.messagesSent === 0) {
+                issues.push('No user-visible message was sent for this channel task.');
+            }
+
+            if (context.deepToolExecutedSinceLastMessage) {
+                issues.push('Deep tool output exists after the last sent message (results likely not delivered).');
+            }
+
+            if (context.substantiveDeliveriesSent === 0 && hadResearchOrDeepOutput) {
+                issues.push('Deep/research tools ran, but no substantive delivery message was sent.');
+            }
+
+            if (context.substantiveDeliveriesSent === 0 && hadAckOnlyMessages) {
+                issues.push('Only acknowledgement/status-style messages were sent.');
+            }
+
+            if (hadToolErrors && context.substantiveDeliveriesSent === 0) {
+                issues.push('Tool errors occurred and no substantive user-facing recovery/result message was delivered.');
+            }
+
+            return { ok: issues.length === 0, issues };
+        } catch (e) {
+            logger.debug(`Agent: Completion log audit failed (non-blocking): ${e}`);
+            return { ok: true, issues: [] };
+        }
+    }
+
     // ─── Post-Action Reflection & Learning ───────────────────────────
 
     /**
@@ -5453,12 +5665,69 @@ REFLECTION: <1-2 sentences>`;
         return false;
     }
 
+    private isLikelyAcknowledgementMessage(message: string): boolean {
+        const normalized = (message || '').toLowerCase().trim();
+        if (!normalized) return false;
+
+        if (normalized.length > 220) return false;
+
+        const ackPatterns = [
+            /^(understood|got it|on it|acknowledged|okay|ok|alright|sure|perfect)\b/i,
+            /^thanks?[,.!\s]/i,
+            /\bi\s*(am|'m)\s*(ready|working on|going to|about to)\b/i,
+            /\bi\s*will\s*now\b/i,
+            /\bworking on it\b/i,
+            /\blet me\b/i
+        ];
+
+        const hasEnumeratedList = /\n\s*\d+\.|\b1\.|\b2\.|\b3\.|\b4\.|\b5\./.test(normalized);
+        const hasMultipleQuestions = (normalized.match(/\?/g) || []).length >= 2;
+        if (hasEnumeratedList || hasMultipleQuestions) return false;
+
+        return ackPatterns.some(p => p.test(normalized));
+    }
+
+    private isSubstantiveFollowUpMessage(message: string): boolean {
+        const normalized = (message || '').trim();
+        if (!normalized) return false;
+
+        const hasEnumeratedList = /\n\s*\d+\.|\b1\.|\b2\.|\b3\.|\b4\.|\b5\./.test(normalized);
+        const questionCount = (normalized.match(/\?/g) || []).length;
+        const isLongEnough = normalized.length >= 120;
+        const hasMultipleLines = normalized.split('\n').filter(Boolean).length >= 3;
+
+        return hasEnumeratedList || questionCount >= 2 || (isLongEnough && hasMultipleLines);
+    }
+
+    /**
+     * Detect whether a sent message is a substantive delivery (not a short status/reassurance).
+     * Used by completion gate to avoid terminating after only "working on it"-style replies.
+     */
+    private isSubstantiveDeliveryMessage(message: string): boolean {
+        const normalized = (message || '').toLowerCase().trim();
+        if (!normalized) return false;
+        if (normalized.length < 40) return false;
+
+        const lowValuePatterns = [
+            /^(got it|on it|working on it|one moment|hang tight|be right back|still working)[.!]?$/i,
+            /^i('m| am) (checking|working on|looking into)\b/i,
+            /^quick update[:\-]?\s*$/i,
+            /^sorry[,\s]/i,
+            /^(understood|acknowledged)[,.!\s]/i,
+            /\bi\s*(am|'m)\s*ready\s*to\b/i,
+            /\bi\s*will\s*now\b/i
+        ];
+        if (lowValuePatterns.some(p => p.test(normalized))) return false;
+
+        return true;
+    }
+
     private setupEventListeners() {
         eventBus.on('scheduler:tick', async () => {
             try {
                 await this.processNextAction();
                 await this.runPluginHealthCheck('tick');
-                this.checkHeartbeat();
+                await this.checkHeartbeat();
             } catch (e) {
                 logger.error(`Scheduler tick error (non-fatal): ${e}`);
             }
@@ -5578,9 +5847,71 @@ REFLECTION: <1-2 sentences>`;
         });
     }
 
-    private checkHeartbeat() {
+    private parseWorldEventSources(input: string[] | string | undefined): WorldEventSource[] {
+        const raw = Array.isArray(input) ? input.join(',') : String(input || '');
+        const list = raw
+            .split(',')
+            .map(s => s.trim().toLowerCase())
+            .filter(Boolean);
+        const allowed: WorldEventSource[] = ['gdelt', 'usgs', 'opensky'];
+        const selected = list.filter(s => allowed.includes(s as WorldEventSource)) as WorldEventSource[];
+        return selected.length ? selected : ['gdelt', 'usgs'];
+    }
+
+    private async maybeRefreshWorldEventsContext(force: boolean = false): Promise<void> {
+        if (this.config.get('worldEventsHeartbeatEnabled') === false) return;
+        if (this.worldEventsRefreshRunning) return;
+
+        const now = Date.now();
+        const refreshSeconds = Math.max(60, Number(this.config.get('worldEventsRefreshSeconds') ?? 60));
+        if (!force && (now - this.lastWorldEventsRefreshAt) < refreshSeconds * 1000) return;
+
+        const sources = this.parseWorldEventSources(this.config.get('worldEventsSources'));
+        if (!sources.length) return;
+
+        const minutes = Math.max(5, Number(this.config.get('worldEventsLookbackMinutes') ?? 60));
+        const maxRecords = Math.max(50, Number(this.config.get('worldEventsMaxRecords') ?? 250));
+        const batchMinutes = Math.max(5, Number(this.config.get('worldEventsBatchMinutes') ?? 10));
+        const gdeltQuery = String(this.config.get('worldEventsGdeltQuery') ?? 'global');
+
+        this.worldEventsRefreshRunning = true;
+        try {
+            const events = await fetchWorldEvents(sources, { minutes, maxRecords, gdeltQuery });
+            this.lastWorldEventsRefreshAt = now;
+
+            if (!events.length) return;
+
+            const windowEnd = new Date();
+            const windowStart = new Date(windowEnd.getTime() - batchMinutes * 60 * 1000);
+            const summary = summarizeWorldEvents(events, windowStart, windowEnd);
+            const changed = summary !== this.lastWorldEventsSummary;
+            this.lastWorldEventsSummary = summary;
+
+            const writeDue = force || (now - this.lastWorldEventsMemoryWriteAt) >= batchMinutes * 60 * 1000;
+            if (!changed || !writeDue) return;
+
+            this.memory.saveMemory({
+                id: `world-events-heartbeat-${Date.now()}`,
+                type: 'episodic',
+                content: `[WORLD EVENTS LIVE] ${summary}`,
+                metadata: {
+                    source: 'world-events-heartbeat',
+                    category: 'world-events',
+                    important: false
+                }
+            });
+            this.lastWorldEventsMemoryWriteAt = Date.now();
+        } catch (error) {
+            logger.debug(`Agent: World events refresh skipped due to fetch issue: ${error}`);
+        } finally {
+            this.worldEventsRefreshRunning = false;
+        }
+    }
+
+    private async checkHeartbeat() {
         this.detectStalledAction();
         this.recoverStaleInProgressActions();
+        await this.maybeRefreshWorldEventsContext();
 
         // Mutex: prevent overlapping heartbeat evaluations
         if (this.heartbeatRunning) {
@@ -5613,6 +5944,14 @@ REFLECTION: <1-2 sentences>`;
         // for user input, and heartbeat scheduled tasks should still fire.
         if (runningTasks.length > 0) {
             logger.debug(`Agent: Heartbeat skipped - ${runningTasks.length} active task(s) in queue`);
+            return;
+        }
+
+        const pendingHeartbeat = this.actionQueue.getQueue().find(a =>
+            (a.status === 'pending' || a.status === 'in-progress') && a.payload?.isHeartbeat
+        );
+        if (pendingHeartbeat) {
+            logger.debug(`Agent: Heartbeat skipped - pending heartbeat task ${pendingHeartbeat.id} already queued`);
             return;
         }
 
@@ -5789,6 +6128,13 @@ REFLECTION: <1-2 sentences>`;
             ? `Messaging: ${channelSkills.join(', ')}` 
             : 'No messaging channels active';
 
+        const worldEventAgeMinutes = this.lastWorldEventsRefreshAt > 0
+            ? Math.floor((now - this.lastWorldEventsRefreshAt) / 60000)
+            : -1;
+        const worldEventsContext = this.lastWorldEventsSummary
+            ? `LATEST WORLD EVENTS SIGNAL ${worldEventAgeMinutes >= 0 ? `(refreshed ${worldEventAgeMinutes}m ago)` : ''}:\n${this.lastWorldEventsSummary.slice(0, 1200)}`
+            : 'LATEST WORLD EVENTS SIGNAL: No recent world-event summary cached yet.';
+
         return `
 PROACTIVE HEARTBEAT — Idle for ${idleMinutes} minutes.
 Current Time: ${nowDate.toLocaleString()} (${dayOfWeek} ${timeOfDay})${isWeekend ? ' [Weekend]' : ''}
@@ -5803,6 +6149,8 @@ ${recentContext.slice(0, 2000) || 'No recent activity'}
 
 TASK QUEUE:
 ${taskSummary}
+
+${worldEventsContext}
 
 ACTIVE RECURRING SCHEDULES:
 ${activeSchedules}
@@ -5822,6 +6170,7 @@ Look at the context above and act on it:
 2. **Failed tasks** — Retry with a different strategy. Don't repeat the same approach.
 3. **Follow-ups** — User mentioned checking something later, monitoring something, or waiting for a result? Now is the time.
 4. **Stale conversations** — A contact hasn't been replied to? Compose a thoughtful response.
+5. **World-event deltas** — If world events suggest a risk/opportunity relevant to the user, propose a concrete, low-noise next action.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 MODE B — CREATIVE INITIATIVE (your own ideas)
@@ -5862,9 +6211,10 @@ DECISION FRAMEWORK
 
 **Priority Order:**
 1. REACTIVE items from the last few hours (unfinished work, failed retries, pending follow-ups)
-2. CREATIVE initiatives that are clearly high-value (real insight, real preparation, real discovery)
-3. Self-improvement (journal reflection, knowledge updates, skill analysis)
-4. If genuinely nothing valuable → terminate with goals_met: true
+2. Time-sensitive world-event implications relevant to user context (only if actionable)
+3. CREATIVE initiatives that are clearly high-value (real insight, real preparation, real discovery)
+4. Self-improvement (journal reflection, knowledge updates, skill analysis)
+5. If genuinely nothing valuable → terminate with goals_met: true
 
 **Time-of-day hints** (${dayOfWeek} ${timeOfDay}):
 ${timeOfDay === 'morning' ? '- Morning: Good time for briefings, daily prep, checking overnight messages' : ''}
@@ -5884,6 +6234,7 @@ ${autonomyLevel === 'low' ? '- Short idle. Prefer reacting to recent context ove
 - Never be performative. Every action must create real value.
 - If you message the user, have something worth reading. No "just checking in" without substance.
 - Don't repeat actions that recently failed unless you have a NEW strategy.
+- Keep world-event usage contextual: no generic doomscroll summaries; only tie events to user-relevant impact or planning.
 - If nothing meaningful to do, terminate cleanly (goals_met: true). Silence is better than noise.
 `;
     }
@@ -6809,16 +7160,27 @@ Respond with a single actionable task description (one sentence). Be specific ab
     }
 
     public async pushTask(description: string, priority: number = 5, metadata: any = {}, lane: 'user' | 'autonomy' = 'user') {
+        if (lane === 'user' && metadata?.source && !metadata?.sessionScopeId) {
+            metadata.sessionScopeId = this.resolveSessionScopeId(metadata.source, {
+                sourceId: metadata.sourceId,
+                userId: metadata.userId,
+                chatId: metadata.chatId
+            });
+        }
+
+        const threadScopeKey = metadata?.sessionScopeId || (metadata?.source && metadata?.sourceId
+            ? `${metadata.source}:${metadata.sourceId}`
+            : null);
         const normalizedDescription = (description || '').trim().replace(/\s+/g, ' ').toLowerCase();
 
         // Channel-side duplicates are not always guaranteed to carry a stable messageId.
         // Add a short rolling fingerprint guard to prevent enqueuing the same request twice.
-        if (lane === 'user' && metadata?.source && metadata?.sourceId && normalizedDescription.length > 0) {
-            const fingerprint = `${metadata.source}:${metadata.sourceId}:${normalizedDescription}`;
+        if (lane === 'user' && metadata?.source && threadScopeKey && normalizedDescription.length > 0) {
+            const fingerprint = `${threadScopeKey}:${normalizedDescription}`;
             const now = Date.now();
             const previous = this.recentTaskFingerprints.get(fingerprint);
             if (previous && now - previous < this.recentTaskDedupWindowMs) {
-                logger.info(`Agent: Suppressing near-duplicate inbound task within ${this.recentTaskDedupWindowMs}ms window (${metadata.source}:${metadata.sourceId})`);
+                logger.info(`Agent: Suppressing near-duplicate inbound task within ${this.recentTaskDedupWindowMs}ms window (${threadScopeKey})`);
                 return;
             }
 
@@ -6833,7 +7195,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
             // Defensive check against currently active queue entries with semantically identical payload.
             const existingSimilarActiveTask = this.actionQueue.getQueue().find(a => {
                 if (!['pending', 'waiting', 'in-progress'].includes(a.status)) return false;
-                if (a.payload?.source !== metadata.source || a.payload?.sourceId !== metadata.sourceId) return false;
+                const existingThreadScope = a.payload?.sessionScopeId ||
+                    ((a.payload?.source && a.payload?.sourceId) ? `${a.payload.source}:${a.payload.sourceId}` : null);
+                if (existingThreadScope !== threadScopeKey) return false;
                 const candidate = (a.payload?.description || '').trim().replace(/\s+/g, ' ').toLowerCase();
                 return candidate.length > 0 && candidate === normalizedDescription;
             });
@@ -6879,7 +7243,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
         // Emit user:activity event so AgenticUser suppresses interventions while user is present
         // Only for real user messages (not scheduler, heartbeat, or autonomy tasks)
         if (lane === 'user' && metadata?.source && metadata?.sourceId && !metadata?.isHeartbeat) {
-            eventBus.emit('user:activity', { source: metadata.source, sourceId: metadata.sourceId });
+            eventBus.emit('user:activity', {
+                source: metadata.source,
+                sourceId: metadata.sourceId,
+                sessionScopeId: metadata.sessionScopeId
+            });
         }
 
         // If we have an action paused waiting for a reply from this same source/thread,
@@ -6887,7 +7255,13 @@ Respond with a single actionable task description (one sentence). Be specific ab
         // We do NOT require platform reply/quote usage; users often respond normally.
         if (metadata?.source && metadata?.sourceId) {
             const waitingAction = this.actionQueue.getQueue()
-                .filter(a => a.status === 'waiting' && a.payload?.source === metadata.source && a.payload?.sourceId === metadata.sourceId)
+                .filter(a => {
+                    if (a.status !== 'waiting') return false;
+                    const currentScope = metadata.sessionScopeId || `${metadata.source}:${metadata.sourceId}`;
+                    const queuedScope = a.payload?.sessionScopeId ||
+                        ((a.payload?.source && a.payload?.sourceId) ? `${a.payload.source}:${a.payload.sourceId}` : null);
+                    return queuedScope === currentScope;
+                })
                 .sort((a, b) => {
                     const at = Date.parse(a.updatedAt || a.timestamp || '') || 0;
                     const bt = Date.parse(b.updatedAt || b.timestamp || '') || 0;
@@ -7110,8 +7484,14 @@ Respond with a single actionable task description (one sentence). Be specific ab
             ]);
 
             // Dynamic limits driven by task complexity classification
-            const configMaxSteps = this.config.get('maxStepsPerAction') || 25;
-            const configMaxMessages = this.config.get('maxMessagesPerAction') || 5;
+            const rawConfigMaxSteps = Number(this.config.get('maxStepsPerAction') || 25);
+            const rawConfigMaxMessages = Number(this.config.get('maxMessagesPerAction') || 5);
+            const configMaxSteps = Math.max(6, Number.isFinite(rawConfigMaxSteps) ? rawConfigMaxSteps : 25);
+            const configMaxMessages = Math.max(3, Number.isFinite(rawConfigMaxMessages) ? rawConfigMaxMessages : 5);
+
+            if (rawConfigMaxSteps < 6 || rawConfigMaxMessages < 3) {
+                logger.warn(`Agent: Runtime limits were too low (steps=${rawConfigMaxSteps}, messages=${rawConfigMaxMessages}). Applying safety floor to prevent premature looping (steps=${configMaxSteps}, messages=${configMaxMessages}).`);
+            }
 
             const COMPLEXITY_LIMITS: Record<string, { steps: number; messages: number }> = {
                 trivial:  { steps: 2, messages: 1 },
@@ -7138,6 +7518,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             let consecutiveNonDeepTurns = 0;
             let waitingForClarification = false; // Track if we're paused for user input
             const sentMessagesInAction: string[] = [];
+            let substantiveDeliveriesSent = 0;
             const skillCallCounts: Record<string, number> = {}; // Track how many times each skill is called
             const skillFailCounts: Record<string, number> = {}; // Track consecutive failures per skill
             const recentSkillNames: string[] = []; // Track skill name sequence for pattern detection
@@ -7423,7 +7804,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     }
 
                     let forceBreak = false;
-                    let hasSentMessageInThisStep = false;
+                    let sentMessageCountInThisStep = 0;
+                    let firstSentMessageInThisStep = '';
                     let toolsBlockedByCooldown = 0;
                     let totalSendToolsInStep = 0;
 
@@ -7471,15 +7853,28 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             }
 
                             // 3. Block double-messages in a single step
-                            if (hasSentMessageInThisStep) {
-                                logger.warn(`Agent: Blocked redundant message in action ${action.id} (Already sent message in this step).`);
-                                toolsBlockedByCooldown++;
-                                continue;
+                            if (sentMessageCountInThisStep > 0) {
+                                const allowSubstantiveFollowUp =
+                                    sentMessageCountInThisStep === 1 &&
+                                    this.isLikelyAcknowledgementMessage(firstSentMessageInThisStep) &&
+                                    this.isSubstantiveFollowUpMessage(currentMessage) &&
+                                    !sentMessagesInAction.includes(currentMessage);
+
+                                if (!allowSubstantiveFollowUp) {
+                                    logger.warn(`Agent: Blocked redundant message in action ${action.id} (Already sent message in this step).`);
+                                    toolsBlockedByCooldown++;
+                                    continue;
+                                }
+
+                                logger.info(`Agent: Allowing one substantive follow-up message after acknowledgement in step ${currentStep} for action ${action.id}.`);
                             }
 
                             sentMessagesInAction.push(currentMessage);
                             lastMessageContent = currentMessage;
-                            hasSentMessageInThisStep = true;
+                            sentMessageCountInThisStep++;
+                            if (!firstSentMessageInThisStep) {
+                                firstSentMessageInThisStep = currentMessage;
+                            }
                             deepToolExecutedSinceLastMessage = false; // Reset cooldown after sending
                             stepsSinceLastMessage = 0; // Reset status update timer
                             
@@ -7756,9 +8151,13 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         }
                         if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_gateway_chat' || toolCall.name === 'send_discord' || toolCall.name === 'send_slack') {
                             messagesSent++;
+                            const sentMessage = (toolCall.metadata?.message || '').toString();
+                            if (!resultIndicatesError && this.isSubstantiveDeliveryMessage(sentMessage)) {
+                                substantiveDeliveriesSent++;
+                            }
                             
                             // QUESTION PAUSE: If this message asked a question, pause and wait for response
-                            const sentMessage = toolCall.metadata?.message || '';
+                            
                             const wasSuccessfulSend = !resultIndicatesError;
                             if (this.messageContainsQuestion(sentMessage) && wasSuccessfulSend && !decision.verification?.goals_met) {
                                 this.memory.saveMemory({
@@ -7950,9 +8349,19 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                     // COOLDOWN COMPLETION: If ALL send tools in this step were blocked and we already
                     // sent a message, the task is done — the agent is just looping trying to send dupes.
                     if (totalSendToolsInStep > 0 && toolsBlockedByCooldown >= totalSendToolsInStep && messagesSent > 0) {
-                        logger.info(`Agent: All ${totalSendToolsInStep} send tool(s) blocked by cooldown/dupe guards and message already delivered. Completing action ${action.id}.`);
-                        goalsMet = true;
-                        break;
+                        if (substantiveDeliveriesSent > 0) {
+                            logger.info(`Agent: All ${totalSendToolsInStep} send tool(s) blocked by cooldown/dupe guards after substantive delivery. Completing action ${action.id}.`);
+                            goalsMet = true;
+                            break;
+                        }
+
+                        logger.warn(`Agent: All ${totalSendToolsInStep} send tool(s) blocked but no substantive delivery yet. Forcing continuation for action ${action.id}.`);
+                        this.memory.saveMemory({
+                            id: `${action.id}-step-${currentStep}-suppressed-before-substantive` ,
+                            type: 'short',
+                            content: `[SYSTEM: Your recent sends were suppressed, but you have NOT delivered a substantive answer yet. Send ONE concrete, content-rich response now (not an acknowledgment/status update). If needed, combine your acknowledgment and the actual content in a single message.]`,
+                            metadata: { actionId: action.id, step: currentStep }
+                        });
                     }
 
                     if (forceBreak) break;
@@ -8021,6 +8430,37 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                     // BUT: catch silent termination — if from a channel and never sent a message, force a retry
                     const isChannelTask = action.payload.source === 'telegram' || action.payload.source === 'whatsapp' || 
                                           action.payload.source === 'discord' || action.payload.source === 'slack' || action.payload.source === 'gateway-chat';
+                    if (isChannelTask && messagesSent > 0 && substantiveDeliveriesSent === 0 && currentStep < MAX_STEPS) {
+                        noToolsRetryCount++;
+                        if (noToolsRetryCount < MAX_NO_TOOLS_RETRIES) {
+                            logger.warn(`Agent: Action ${action.id} attempted completion after only non-substantive updates. Forcing retry ${noToolsRetryCount}/${MAX_NO_TOOLS_RETRIES}...`);
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-non-substantive-completion-blocked`,
+                                type: 'short',
+                                content: `[SYSTEM: BLOCKED PREMATURE COMPLETION. You sent updates but no substantive final answer. You MUST send a concrete result summary to the user (findings, answer, or outcome), not just status updates.]`,
+                                metadata: { actionId: action.id, step: currentStep, error: 'non_substantive_completion_blocked' }
+                            });
+                            continue;
+                        }
+                    }
+
+                    // Channel completion safety: if we have produced NEW deep-tool output since
+                    // the last user-visible message, we are not done yet. We must send a final
+                    // delivery message that includes those results.
+                    if (isChannelTask && messagesSent > 0 && deepToolExecutedSinceLastMessage && currentStep < MAX_STEPS) {
+                        noToolsRetryCount++;
+                        if (noToolsRetryCount < MAX_NO_TOOLS_RETRIES) {
+                            logger.warn(`Agent: Action ${action.id} attempted completion with unsent deep-tool output. Forcing retry ${noToolsRetryCount}/${MAX_NO_TOOLS_RETRIES}...`);
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-unsent-results-blocked`,
+                                type: 'short',
+                                content: `[SYSTEM: BLOCKED PREMATURE COMPLETION. You executed deep tools after your last message (e.g., web_search/browser/run_command) but did NOT send a final results message. Send one concrete answer with findings now.]`,
+                                metadata: { actionId: action.id, step: currentStep, error: 'unsent_results_blocked' }
+                            });
+                            continue;
+                        }
+                    }
+
                     if (isChannelTask && messagesSent === 0 && currentStep < MAX_STEPS) {
                         noToolsRetryCount++;
                         if (noToolsRetryCount < MAX_NO_TOOLS_RETRIES) {
@@ -8051,15 +8491,21 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                 
                 if (maxStepsReview === 'continue') {
                     // Give the agent a few more steps to compile and deliver results
-                    logger.info(`Agent: Review layer says task isn't done. Granting ${Math.min(5, MAX_STEPS)} bonus steps to wrap up.`);
+                    const nonSendCalls = Object.entries(skillCallCounts)
+                        .filter(([skillName]) => !['send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat', 'send_file'].includes(skillName))
+                        .reduce((sum, [, count]) => sum + count, 0);
+                    const adaptiveBonus = messagesSent === 0
+                        ? Math.max(3, Math.min(8, Math.ceil(nonSendCalls / 2)))
+                        : Math.max(2, Math.min(6, Math.ceil(nonSendCalls / 4)));
+                    logger.info(`Agent: Review layer says task isn't done. Granting ${Math.min(adaptiveBonus, Math.max(3, MAX_STEPS))} adaptive bonus steps to wrap up.`);
                     this.memory.saveMemory({
                         id: `${action.id}-step-${currentStep}-max-steps-extension`,
                         type: 'short',
                         content: `[SYSTEM: You have used all ${MAX_STEPS} steps. You are getting a FEW BONUS STEPS to wrap up. IMMEDIATELY compile everything you have gathered and send a FINAL comprehensive message to the user. Do NOT start new research — deliver what you have NOW.]`,
                         metadata: { actionId: action.id, step: currentStep }
                     });
-                    // Grant up to 5 bonus steps for wrapping up
-                    const bonusSteps = Math.min(5, MAX_STEPS);
+                    // Adaptive bonus steps for wrapping up
+                    const bonusSteps = Math.min(adaptiveBonus, Math.max(3, MAX_STEPS));
                     let bonusMessageSent = false;
                     let bonusNoToolsRetryCount = 0;
                     let lastBonusTool = '';
@@ -8201,6 +8647,63 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
             // TASK CONTINUITY CHECK: Detect if the agent acknowledged incomplete prior work
             // but didn't actually resume it (empty promise detection)
             await this.detectAndResumeIncompleteWork(action, sentMessagesInAction, currentStep);
+
+            // PRE-COMPLETION LOG AUDIT: Before marking as completed, inspect this action's
+            // own logs and block completion if unresolved/missed delivery patterns exist.
+            if (goalsMet) {
+                const completionAudit = await this.auditCompletionFromActionLogs(action, {
+                    currentStep,
+                    messagesSent,
+                    substantiveDeliveriesSent,
+                    deepToolExecutedSinceLastMessage,
+                    sentMessagesInAction,
+                    skillCallCounts
+                });
+
+                if (!completionAudit.ok) {
+                    const issueSummary = completionAudit.issues.join(' | ');
+                    const auditCodes = completionAudit.issues.map(issue => {
+                        const normalized = issue.toLowerCase();
+                        if (normalized.includes('no user-visible message')) return 'NO_SEND';
+                        if (normalized.includes('deep tool output exists after the last sent message')) return 'UNSENT_RESULTS';
+                        if (normalized.includes('deep/research tools ran, but no substantive delivery')) return 'NO_SUBSTANTIVE';
+                        if (normalized.includes('only acknowledgement/status-style messages')) return 'ACK_ONLY';
+                        if (normalized.includes('tool errors occurred')) return 'ERROR_UNRESOLVED';
+                        return 'GENERIC';
+                    });
+                    const uniqueCodes = Array.from(new Set(auditCodes));
+                    const auditCode = `AUDIT_BLOCK:${uniqueCodes.join('+')}`;
+                    logger.warn(`Agent: Completion log audit blocked action ${action.id} (${auditCode}): ${issueSummary}`);
+                    this.memory.saveMemory({
+                        id: `${action.id}-completion-audit-blocked`,
+                        type: 'short',
+                        content: `[SYSTEM: COMPLETION AUDIT BLOCKED (${auditCode}). This action attempted to complete with unresolved issues: ${issueSummary}. A recovery task has been queued to ensure final delivery.]`,
+                        metadata: { actionId: action.id, issues: completionAudit.issues, auditCode }
+                    });
+
+                    // Queue a targeted recovery follow-up unless this action is already a recovery run.
+                    if (action.payload?.trigger !== 'completion_audit_recovery') {
+                        const recoveryDesc = `RECOVERY: Review the previous tool outputs and send a concrete final answer to the user. Do not send another acknowledgement. Deliver actual findings/results now.`;
+                        await this.pushTask(
+                            recoveryDesc,
+                            9,
+                            {
+                                source: action.payload?.source,
+                                sourceId: action.payload?.sourceId,
+                                chatId: action.payload?.chatId,
+                                userId: action.payload?.userId,
+                                senderName: action.payload?.senderName,
+                                sessionScopeId: action.payload?.sessionScopeId,
+                                trigger: 'completion_audit_recovery',
+                                originalActionId: action.id
+                            },
+                            action.lane === 'autonomy' ? 'autonomy' : 'user'
+                        );
+                    }
+
+                    goalsMet = false;
+                }
+            }
 
             // Determine final status based on whether goals were actually achieved
             const actionStatus = goalsMet ? 'completed' : 'failed';

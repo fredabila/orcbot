@@ -38,6 +38,11 @@ export class TelegramChannel implements IChannel {
             const chatId = (ctx.chat?.id != null ? ctx.chat.id.toString() : userId);
             const userName = ctx.from.first_name;
             const autoReplyEnabled = this.agent.config.get('telegramAutoReplyEnabled');
+            const sessionScopeId = this.agent.resolveSessionScopeId('telegram', {
+                sourceId: chatId,
+                userId,
+                chatId
+            });
 
             let text = message.text || message.caption || '';
 
@@ -143,6 +148,7 @@ export class TelegramChannel implements IChannel {
                 metadata: { 
                     source: 'telegram', 
                     role: 'user',
+                    sessionScopeId,
                     messageId: message.message_id, 
                     chatId,
                     userId, 
@@ -172,6 +178,7 @@ export class TelegramChannel implements IChannel {
                     source: 'telegram',
                     // Use chatId as sourceId so replies go to the same chat (DM or group).
                     sourceId: chatId,
+                    sessionScopeId,
                     senderName: userName,
                     chatId,
                     userId,
@@ -355,6 +362,13 @@ export class TelegramChannel implements IChannel {
                 logger.warn(`TelegramChannel: Normalized message_id from "${rawId}" to "${numericId}"`);
             } else {
                 numericId = parseInt(rawId, 10);
+                if (isNaN(numericId)) {
+                    const match = rawId.match(/\d{5,}/g);
+                    if (match && match.length > 0) {
+                        numericId = parseInt(match[match.length - 1], 10);
+                        logger.warn(`TelegramChannel: Extracted numeric message_id "${numericId}" from "${rawId}"`);
+                    }
+                }
             }
             if (isNaN(numericId)) {
                 throw new Error(`Invalid message_id format: ${rawId}`);
@@ -368,9 +382,15 @@ export class TelegramChannel implements IChannel {
                 is_big: false
             });
             logger.info(`TelegramChannel: Reacted with ${emoji} to message ${numericId} in ${normalizedChatId}`);
-        } catch (error) {
-            logger.error(`TelegramChannel: Error reacting to message ${messageId} in chat ${chatId}: ${error}`);
-            throw error;
+        } catch (error: any) {
+            const raw = error?.response?.description || error?.description || error?.message || String(error);
+            if (/message to react not found/i.test(raw)) {
+                const msg = `Telegram could not find message_id ${messageId} in chat ${chatId}. The message may be too old, deleted, or from a different chat.`;
+                logger.error(`TelegramChannel: Error reacting to message ${messageId} in chat ${chatId}: ${msg}`);
+                throw new Error(msg);
+            }
+            logger.error(`TelegramChannel: Error reacting to message ${messageId} in chat ${chatId}: ${raw}`);
+            throw new Error(raw);
         }
     }
 }

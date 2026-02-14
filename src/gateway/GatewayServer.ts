@@ -23,6 +23,7 @@ export interface GatewayConfig {
     apiKey?: string;
     corsOrigins?: string[];
     staticDir?: string;
+    rateLimitPerMinute?: number;
 }
 
 export class GatewayServer {
@@ -33,6 +34,7 @@ export class GatewayServer {
     private config: ConfigManager;
     private gatewayConfig: GatewayConfig;
     private clients: Set<WebSocket> = new Set();
+    private requestBuckets: Map<string, { count: number; windowStart: number }> = new Map();
 
     constructor(agent: Agent, config: ConfigManager, gatewayConfig: Partial<GatewayConfig> = {}) {
         this.agent = agent;
@@ -41,6 +43,11 @@ export class GatewayServer {
         let resolvedStaticDir = gatewayConfig.staticDir;
         if (resolvedStaticDir) {
             resolvedStaticDir = path.resolve(process.cwd(), resolvedStaticDir);
+        } else {
+            const defaultDashboardDir = path.resolve(process.cwd(), 'apps', 'dashboard');
+            if (fs.existsSync(defaultDashboardDir)) {
+                resolvedStaticDir = defaultDashboardDir;
+            }
         }
 
         this.gatewayConfig = {
@@ -48,7 +55,8 @@ export class GatewayServer {
             host: gatewayConfig.host || config.get('gatewayHost') || '0.0.0.0',
             apiKey: gatewayConfig.apiKey || config.get('gatewayApiKey'),
             corsOrigins: gatewayConfig.corsOrigins || config.get('gatewayCorsOrigins') || ['*'],
-            staticDir: resolvedStaticDir
+            staticDir: resolvedStaticDir,
+            rateLimitPerMinute: gatewayConfig.rateLimitPerMinute || config.get('gatewayRateLimitPerMinute') || 180
         };
 
         this.app = express();
@@ -163,17 +171,50 @@ export class GatewayServer {
     }
 
     private setupMiddleware() {
+        this.app.disable('x-powered-by');
+
         // CORS
         this.app.use(cors({
             origin: this.gatewayConfig.corsOrigins,
             credentials: true
         }));
 
+        // Basic security headers
+        this.app.use((_req: Request, res: Response, next: NextFunction) => {
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+            res.setHeader('Referrer-Policy', 'no-referrer');
+            res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+            res.setHeader('Cache-Control', 'no-store');
+            next();
+        });
+
         // JSON parsing
         this.app.use((req: Request, res: Response, next: NextFunction) => {
             // Slack Events API needs raw body for signature verification
             if (req.path === '/slack/events') return next();
-            return express.json()(req, res, next);
+            return express.json({ limit: '1mb' })(req, res, next);
+        });
+        this.app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+        // Request id for traceability
+        this.app.use((req: Request, res: Response, next: NextFunction) => {
+            const requestId = req.headers['x-request-id'] || crypto.randomUUID();
+            (req as any).requestId = requestId;
+            res.setHeader('X-Request-Id', String(requestId));
+            next();
+        });
+
+        // API rate limiting
+        this.app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+            const ip = req.ip || req.socket.remoteAddress || 'unknown';
+            if (this.isRateLimited(ip)) {
+                return res.status(429).json({
+                    error: 'Too many requests. Slow down and retry shortly.',
+                    requestId: (req as any).requestId
+                });
+            }
+            next();
         });
 
         // API Key authentication (if configured)
@@ -181,9 +222,14 @@ export class GatewayServer {
             const apiKey = this.gatewayConfig.apiKey;
             if (!apiKey) return next(); // No auth required
 
-            const providedKey = req.headers['x-api-key'] || req.query.apiKey;
+            const authHeader = (req.headers['authorization'] || '').toString();
+            const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+            const providedKey = req.headers['x-api-key'] || req.query.apiKey || bearer;
             if (providedKey !== apiKey) {
-                return res.status(401).json({ error: 'Invalid or missing API key' });
+                return res.status(401).json({
+                    error: 'Invalid or missing API key',
+                    requestId: (req as any).requestId
+                });
             }
             next();
         });
@@ -203,6 +249,49 @@ export class GatewayServer {
                 logger.warn(`Gateway: Static directory not found: ${this.gatewayConfig.staticDir}`);
             }
         }
+    }
+
+    private isRateLimited(ip: string): boolean {
+        const now = Date.now();
+        const windowMs = 60_000;
+        const max = Math.max(30, Number(this.gatewayConfig.rateLimitPerMinute || 180));
+        const bucket = this.requestBuckets.get(ip);
+
+        if (!bucket || now - bucket.windowStart >= windowMs) {
+            this.requestBuckets.set(ip, { count: 1, windowStart: now });
+            return false;
+        }
+
+        bucket.count += 1;
+        this.requestBuckets.set(ip, bucket);
+        return bucket.count > max;
+    }
+
+    private getGatewayCapabilities() {
+        return {
+            auth: {
+                apiKeyRequired: !!this.gatewayConfig.apiKey,
+                acceptedHeaders: ['x-api-key', 'authorization: Bearer <key>']
+            },
+            transport: {
+                restBase: '/api',
+                websocket: '/'
+            },
+            api: {
+                status: ['GET /api/status', 'GET /api/health', 'GET /api/gateway/capabilities', 'GET /api/system/info'],
+                tasks: ['POST /api/tasks', 'GET /api/tasks', 'GET /api/tasks/:id', 'POST /api/tasks/:id/cancel', 'POST /api/tasks/clear', 'GET /api/queue/stats'],
+                chat: ['POST /api/chat/send', 'GET /api/chat/history', 'GET /api/chat/export', 'POST /api/chat/clear'],
+                memory: ['GET /api/memory', 'GET /api/memory/stats', 'GET /api/memory/search'],
+                runtime: ['GET /api/models', 'PUT /api/models', 'GET /api/providers', 'GET /api/tokens', 'GET /api/connections', 'GET /api/tools', 'GET /api/security', 'PUT /api/security'],
+                orchestrator: ['GET /api/orchestrator/agents', 'GET /api/orchestrator/tasks', 'POST /api/orchestrator/tasks/:id/cancel', 'POST /api/orchestrator/agents/:id/terminate'],
+                skills: ['GET /api/skills', 'POST /api/skills/:name/execute', 'GET /api/skills/health']
+            },
+            websocketActions: [
+                'subscribe', 'pushTask', 'executeSkill', 'cancelAction', 'clearActionQueue',
+                'cancelDelegatedTask', 'terminateAgent', 'getStatus', 'setConfig',
+                'sendChatMessage', 'getChatHistory'
+            ]
+        };
     }
 
     private setupRoutes() {
@@ -252,7 +341,30 @@ export class GatewayServer {
         });
 
         router.get('/health', (_req: Request, res: Response) => {
-            res.json({ status: 'ok', timestamp: new Date().toISOString() });
+            res.json({
+                status: 'ok',
+                timestamp: new Date().toISOString(),
+                uptimeSeconds: Math.floor(process.uptime()),
+                wsClients: this.clients.size,
+                memoryUsage: process.memoryUsage()
+            });
+        });
+
+        router.get('/gateway/capabilities', (_req: Request, res: Response) => {
+            res.json(this.getGatewayCapabilities());
+        });
+
+        router.get('/system/info', (_req: Request, res: Response) => {
+            const cpus = require('os').cpus?.() || [];
+            res.json({
+                platform: process.platform,
+                nodeVersion: process.version,
+                pid: process.pid,
+                uptimeSeconds: Math.floor(process.uptime()),
+                cpuCount: cpus.length,
+                cwd: process.cwd(),
+                wsClients: this.clients.size
+            });
         });
 
         // ===== TASK MANAGEMENT =====
@@ -272,6 +384,25 @@ export class GatewayServer {
         router.get('/tasks', (_req: Request, res: Response) => {
             const queue = this.agent.actionQueue?.getQueue() || [];
             res.json({ tasks: queue });
+        });
+
+        router.get('/tasks/:id', (req: Request, res: Response) => {
+            const { id } = req.params;
+            const task = this.agent.actionQueue?.getAction(id);
+            if (!task) return res.status(404).json({ error: 'Task not found' });
+            res.json({ task });
+        });
+
+        router.get('/queue/stats', (_req: Request, res: Response) => {
+            const counts = this.agent.actionQueue?.getCounts?.() || {
+                pending: 0,
+                waiting: 0,
+                'in-progress': 0,
+                completed: 0,
+                failed: 0
+            };
+            const active = this.agent.actionQueue?.getActive?.() || [];
+            res.json({ counts, activeCount: active.length });
         });
 
         router.post('/tasks/:id/cancel', (req: Request, res: Response) => {
@@ -385,10 +516,32 @@ export class GatewayServer {
             let stats = { totalMemories: 0, fileSize: 0 };
             if (fs.existsSync(memoryPath)) {
                 const content = JSON.parse(fs.readFileSync(memoryPath, 'utf8'));
-                stats.totalMemories = content.length || 0;
+                const memories = Array.isArray(content?.memories) ? content.memories : (Array.isArray(content) ? content : []);
+                stats.totalMemories = memories.length || 0;
                 stats.fileSize = fs.statSync(memoryPath).size;
             }
             res.json(stats);
+        });
+
+        router.get('/memory/search', (req: Request, res: Response) => {
+            try {
+                const type = String(req.query.type || 'short') as 'short' | 'episodic' | 'long';
+                const limit = Math.max(1, Math.min(200, parseInt(String(req.query.limit || '25'), 10) || 25));
+                const query = String(req.query.query || '').trim().toLowerCase();
+
+                let items = this.agent.memory.searchMemory(type as any) || [];
+                if (query) {
+                    items = items.filter((m: any) => (m.content || '').toLowerCase().includes(query));
+                }
+                const recent = items
+                    .slice()
+                    .sort((a: any, b: any) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
+                    .slice(0, limit);
+
+                res.json({ type, query: query || null, count: recent.length, memories: recent });
+            } catch (error: any) {
+                res.status(500).json({ error: error.message });
+            }
         });
 
         // ===== CONNECTIONS / CHANNELS =====
@@ -406,6 +559,10 @@ export class GatewayServer {
                 discord: {
                     configured: !!this.config.get('discordToken'),
                     autoReply: this.config.get('discordAutoReplyEnabled') || false
+                },
+                slack: {
+                    configured: !!this.config.get('slackBotToken'),
+                    autoReply: this.config.get('slackAutoReplyEnabled') || false
                 }
             };
             res.json({ connections });
@@ -451,6 +608,14 @@ export class GatewayServer {
             res.json(models);
         });
 
+        router.get('/providers', (_req: Request, res: Response) => {
+            res.json({
+                activeModel: this.config.get('modelName'),
+                providerMode: this.config.get('llmProvider') || 'auto',
+                configuredProviders: this.getConfiguredProviders()
+            });
+        });
+
         router.put('/models', (req: Request, res: Response) => {
             try {
                 const { modelName, provider } = req.body;
@@ -473,6 +638,11 @@ export class GatewayServer {
                 session: tracker.getSessionUsage(),
                 total: tracker.getTotalUsage()
             });
+        });
+
+        router.get('/tools', (_req: Request, res: Response) => {
+            const tools = this.agent.tools.listTools();
+            res.json({ tools });
         });
 
         // ===== AGENT CONTROL =====
@@ -585,6 +755,19 @@ export class GatewayServer {
             }
         });
 
+        router.get('/chat/export', (_req: Request, res: Response) => {
+            try {
+                const messages = this.getChatHistory();
+                res.json({
+                    exportedAt: new Date().toISOString(),
+                    count: messages.length,
+                    messages
+                });
+            } catch (error: any) {
+                res.status(500).json({ error: error.message });
+            }
+        });
+
         router.post('/chat/clear', (_req: Request, res: Response) => {
             try {
                 // Note: This broadcasts a cleared event but doesn't remove messages from memory storage.
@@ -605,6 +788,14 @@ export class GatewayServer {
 
         this.app.use('/api', router);
 
+        // API not found handler
+        this.app.use('/api', (_req: Request, res: Response) => {
+            res.status(404).json({
+                error: 'API route not found',
+                hint: 'Use GET /api/gateway/capabilities to discover available endpoints'
+            });
+        });
+
         // Catch-all for SPA routing (if dashboard is served)
         this.app.get('*', (req: Request, res: Response) => {
             if (this.gatewayConfig.staticDir) {
@@ -615,10 +806,33 @@ export class GatewayServer {
             }
             res.status(404).json({ error: 'Not found' });
         });
+
+        // Global error boundary
+        this.app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
+            logger.error(`Gateway unhandled error: ${err?.stack || err}`);
+            res.status(500).json({
+                error: 'Internal gateway error',
+                requestId: (req as any).requestId
+            });
+        });
     }
 
     private setupWebSocket() {
         this.wss.on('connection', (ws: WebSocket, req) => {
+            if (this.gatewayConfig.apiKey) {
+                try {
+                    const requestUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+                    const wsApiKey = requestUrl.searchParams.get('apiKey') || requestUrl.searchParams.get('key');
+                    if (wsApiKey !== this.gatewayConfig.apiKey) {
+                        ws.close(1008, 'Unauthorized');
+                        return;
+                    }
+                } catch {
+                    ws.close(1008, 'Unauthorized');
+                    return;
+                }
+            }
+
             logger.info(`Gateway: WebSocket client connected from ${req.socket.remoteAddress}`);
             this.clients.add(ws);
 

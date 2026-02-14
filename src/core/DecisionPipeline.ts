@@ -14,6 +14,7 @@ export interface PipelineContext {
     recentMemories?: MemoryEntry[];
     allowedTools?: string[];
     taskDescription?: string;
+    fileIntent?: 'requested' | 'not_requested' | 'unknown';
 }
 
 class LastMessageCache {
@@ -172,7 +173,7 @@ export class DecisionPipeline {
         let lastSendIndex = -1;
         for (let i = actionMemories.length - 1; i >= 0; i--) {
             const tool = actionMemories[i].metadata?.tool;
-            if (tool === 'send_telegram' || tool === 'send_whatsapp' || tool === 'send_discord' || tool === 'send_slack') {
+            if (tool === 'send_telegram' || tool === 'send_whatsapp' || tool === 'send_discord' || tool === 'send_slack' || tool === 'send_gateway_chat') {
                 lastSendIndex = i;
                 break;
             }
@@ -182,12 +183,32 @@ export class DecisionPipeline {
 
         for (let i = lastSendIndex + 1; i < actionMemories.length; i++) {
             const tool = actionMemories[i].metadata?.tool;
-            if (tool && tool !== 'send_telegram' && tool !== 'send_whatsapp' && tool !== 'send_discord' && tool !== 'send_slack') {
+            if (tool && tool !== 'send_telegram' && tool !== 'send_whatsapp' && tool !== 'send_discord' && tool !== 'send_slack' && tool !== 'send_gateway_chat') {
                 return true;
             }
         }
 
         return false;
+    }
+
+    private hasExplicitFileRequest(taskTextLower: string, recentMemories?: MemoryEntry[]): boolean {
+        const fileRequestTerms = [
+            'send file', 'send me the file', 'attach', 'attachment', 'upload', 'download',
+            'screenshot', 'screen shot', 'photo', 'picture', 'image', 'png', 'jpg', 'jpeg',
+            'pdf', 'doc', 'document', 'report', 'csv', 'excel', 'spreadsheet',
+            'audio', 'voice note', 'voice memo', 'recording', 'mp3', 'wav',
+            'share the file', 'deliver the file', 'send it as a file'
+        ];
+
+        if (fileRequestTerms.some(k => taskTextLower.includes(k))) return true;
+
+        // Also inspect the most recent inbound user memories for explicit file request language.
+        const recentText = (recentMemories || [])
+            .slice(-20)
+            .map(m => (m.content || '').toString().toLowerCase())
+            .join('\n');
+
+        return fileRequestTerms.some(k => recentText.includes(k));
     }
 
     public evaluate(proposed: StandardResponse, ctx: PipelineContext): StandardResponse {
@@ -200,12 +221,16 @@ export class DecisionPipeline {
         const dropped: string[] = [];
 
         // Step budget guardrail
-        const maxSteps = this.config.get('maxStepsPerAction') || 0;
+        const configuredMaxSteps = Number(this.config.get('maxStepsPerAction') || 0);
+        const applySafetyFloor = ctx.lane === 'user';
+        const maxSteps = configuredMaxSteps > 0
+            ? (applySafetyFloor ? Math.max(6, configuredMaxSteps) : configuredMaxSteps)
+            : 0;
         if (maxSteps > 0 && ctx.currentStep > maxSteps) {
             result.tools = [];
             result.verification = {
                 goals_met: true,
-                analysis: `Max steps reached (${ctx.currentStep}/${maxSteps}). Pipeline terminated action to prevent loops.`
+                analysis: `Max steps reached (${ctx.currentStep}/${maxSteps}). Pipeline terminated action to prevent loops.${applySafetyFloor && configuredMaxSteps > 0 && configuredMaxSteps < 6 ? ' (Applied minimum safety floor of 6 steps for user lane.)' : ''}`
             };
             notes.push('Terminated due to max step budget');
             this.attachNotes(result, notes, dropped);
@@ -238,6 +263,13 @@ export class DecisionPipeline {
             requirePreferred?: boolean;
         }>;
         const taskText = (ctx.taskDescription || '').toString();
+        const taskTextLower = taskText.toLowerCase();
+        const userExplicitlyAskedForFile =
+            ctx.fileIntent === 'requested'
+                ? true
+                : ctx.fileIntent === 'not_requested'
+                    ? false
+                    : this.hasExplicitFileRequest(taskTextLower, ctx.recentMemories);
         if (taskText && routingRules.length > 0 && (result.tools || []).length > 0) {
             for (const rule of routingRules) {
                 if (!rule?.match) continue;
@@ -312,6 +344,38 @@ export class DecisionPipeline {
         const searchCounts = new Map<string, number>();
         for (const q of recentSearches) searchCounts.set(q, (searchCounts.get(q) || 0) + 1);
 
+        // Guardrail: prevent repeated browser loops on the same action context
+        const recentActionToolMemories = (ctx.recentMemories || [])
+            .filter(m => m.id && m.id.startsWith(actionPrefix) && m.metadata?.tool);
+
+        const browserNavigateCounts = new Map<string, number>();
+        const browserToolCounts = new Map<string, number>();
+        let hasBrowserNavigate = false;
+        let hasBrowserInspect = false;
+        let hasBrowserExtract = false;
+        let hasAnyTextDelivery = false;
+        for (const m of recentActionToolMemories) {
+            const toolName = (m.metadata?.tool || '').toString().toLowerCase();
+            if (!toolName) continue;
+            browserToolCounts.set(toolName, (browserToolCounts.get(toolName) || 0) + 1);
+
+            if (toolName === 'browser_navigate') hasBrowserNavigate = true;
+            if (toolName === 'browser_examine_page' || toolName === 'browser_screenshot' || toolName === 'browser_vision') hasBrowserInspect = true;
+            if (toolName === 'browser_extract_content' || toolName === 'browser_extract_data' || toolName === 'web_search' || toolName === 'http_fetch') hasBrowserExtract = true;
+            if (toolName === 'send_telegram' || toolName === 'send_whatsapp' || toolName === 'send_discord' || toolName === 'send_slack' || toolName === 'send_gateway_chat') {
+                hasAnyTextDelivery = true;
+            }
+
+            if (toolName === 'browser_navigate') {
+                const input = m.metadata?.input || {};
+                const rawUrl = (input.url || input.link || input.site || '').toString().trim().toLowerCase();
+                if (rawUrl) {
+                    const normalizedUrl = rawUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+                    browserNavigateCounts.set(normalizedUrl, (browserNavigateCounts.get(normalizedUrl) || 0) + 1);
+                }
+            }
+        }
+
         // Guardrail: prevent duplicate generate_image calls in the same action
         // If an image was already generated in this action, block subsequent generate_image calls
         const imageAlreadyGenerated = (ctx.recentMemories || []).some(
@@ -331,8 +395,31 @@ export class DecisionPipeline {
         const maxMessages = this.config.get('maxMessagesPerAction') || 0;
         let allowedMessages = 0;
         const filteredTools: ToolCall[] = [];
+
+        // Answer-first guardrail: if classifier says file is NOT requested,
+        // don't allow file-only delivery in place of an actual text answer.
+        const hasAnyTextSend = uniqueTools.some(t => {
+            const n = (t.name || '').toLowerCase().trim();
+            return n === 'send_telegram' || n === 'send_whatsapp' || n === 'send_discord' || n === 'send_slack' || n === 'send_gateway_chat';
+        });
+        const hasAnyFileSend = uniqueTools.some(t => (t.name || '').toLowerCase().trim() === 'send_file');
+        const suppressFileOnlyByIntent = ctx.fileIntent === 'not_requested' && hasAnyFileSend && !hasAnyTextSend;
+
         for (const tool of uniqueTools) {
-            if (tool.name === 'web_search') {
+            const toolName = (tool.name || '').toLowerCase().trim();
+            if (toolName === 'send_file' && suppressFileOnlyByIntent) {
+                dropped.push(`answer-first:${tool.name}`);
+                notes.push('Suppressed send_file: answer-first policy requires text reply when user did not request a file');
+                continue;
+            }
+
+            if (toolName === 'send_file' && !userExplicitlyAskedForFile) {
+                dropped.push(`unsolicited-file:${tool.name}`);
+                notes.push('Suppressed send_file: user did not ask for an attachment/file delivery');
+                continue;
+            }
+
+            if (toolName === 'web_search') {
                 const q = (tool.metadata?.query || tool.metadata?.q || tool.metadata?.text || '').toString().trim().toLowerCase();
                 if (q && (searchCounts.get(q) || 0) >= 2) {
                     dropped.push(`search-loop:${tool.name}`);
@@ -341,10 +428,35 @@ export class DecisionPipeline {
                 }
             }
 
+            if (toolName === 'browser_navigate') {
+                const rawUrl = (tool.metadata?.url || tool.metadata?.link || tool.metadata?.site || '').toString().trim().toLowerCase();
+                const normalizedUrl = rawUrl ? rawUrl.replace(/^https?:\/\//, '').replace(/\/$/, '') : '';
+                if (normalizedUrl && (browserNavigateCounts.get(normalizedUrl) || 0) >= 2) {
+                    dropped.push(`browser-nav-loop:${tool.name}`);
+                    notes.push(`Suppressed browser_navigate: URL already visited multiple times in this action (${normalizedUrl})`);
+                    continue;
+                }
+
+                // Phase guard: once we already navigated+inspected+extracted in this action,
+                // block additional navigate loops and push toward final response.
+                if (hasBrowserNavigate && hasBrowserInspect && hasBrowserExtract && !hasAnyTextDelivery) {
+                    dropped.push(`browser-phase-loop:${tool.name}`);
+                    notes.push('Suppressed browser_navigate: phase guard requires summarizing and replying instead of restarting navigation');
+                    continue;
+                }
+            }
+
+            if ((toolName === 'browser_examine_page' || toolName === 'browser_screenshot' || toolName === 'browser_vision')
+                && (browserToolCounts.get(toolName) || 0) >= 3) {
+                dropped.push(`browser-inspect-loop:${tool.name}`);
+                notes.push(`Suppressed ${tool.name}: repeated browser inspection without progress`);
+                continue;
+            }
+
             // Suppress orchestration tools that have been called too many times (loop prevention)
             const orchestrationLoopTools = ['distribute_tasks', 'orchestrator_status', 'list_agents', 'get_agent_messages'];
-            if (orchestrationLoopTools.includes(tool.name)) {
-                const callCount = orchestrationCallCounts.get(tool.name) || 0;
+            if (orchestrationLoopTools.includes(toolName)) {
+                const callCount = orchestrationCallCounts.get(toolName) || 0;
                 if (callCount >= 2) {
                     dropped.push(`orch-loop:${tool.name}`);
                     notes.push(`Suppressed ${tool.name}: called ${callCount} times already - likely loop`);
@@ -353,13 +465,13 @@ export class DecisionPipeline {
             }
 
             // Suppress duplicate generate_image/send_image calls when an image was already generated in this action
-            if ((tool.name === 'generate_image' || tool.name === 'send_image') && imageAlreadyGenerated) {
+            if ((toolName === 'generate_image' || toolName === 'send_image') && imageAlreadyGenerated) {
                 dropped.push(`image-dedup:${tool.name}`);
                 notes.push(`Suppressed ${tool.name}: image already generated in this action — use send_file to deliver existing image`);
                 continue;
             }
 
-            const isSend = tool.name === 'send_telegram' || tool.name === 'send_whatsapp' || tool.name === 'send_discord' || tool.name === 'send_slack';
+            const isSend = toolName === 'send_telegram' || toolName === 'send_whatsapp' || toolName === 'send_discord' || toolName === 'send_slack' || toolName === 'send_gateway_chat';
             if (!isSend) {
                 filteredTools.push(tool);
                 continue;
@@ -371,14 +483,16 @@ export class DecisionPipeline {
             // This ensures (1) Telegram and WhatsApp can send the same text without suppressing each other,
             // and (2) duplicates are evaluated in the correct channel/thread.
             let destination = '';
-            if (tool.name === 'send_telegram') {
+            if (toolName === 'send_telegram') {
                 destination = (tool.metadata?.chatId || tool.metadata?.chat_id || tool.metadata?.id || ctx.sourceId || '').toString();
-            } else if (tool.name === 'send_whatsapp') {
+            } else if (toolName === 'send_whatsapp') {
                 destination = (tool.metadata?.jid || tool.metadata?.to || tool.metadata?.id || ctx.sourceId || '').toString();
-            } else if (tool.name === 'send_discord') {
+            } else if (toolName === 'send_discord') {
                 destination = (tool.metadata?.channel_id || tool.metadata?.channelId || tool.metadata?.to || tool.metadata?.id || ctx.sourceId || '').toString();
-            } else if (tool.name === 'send_slack') {
+            } else if (toolName === 'send_slack') {
                 destination = (tool.metadata?.channel_id || tool.metadata?.channelId || tool.metadata?.to || tool.metadata?.id || ctx.sourceId || '').toString();
+            } else if (toolName === 'send_gateway_chat') {
+                destination = (tool.metadata?.chatId || tool.metadata?.chat_id || tool.metadata?.id || ctx.sourceId || '').toString();
             }
 
             const channelKey = `${tool.name}:${destination || 'anon'}`;
