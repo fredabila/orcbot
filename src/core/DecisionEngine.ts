@@ -952,6 +952,11 @@ EXECUTION STATE:
 EXECUTION PLAN:
 ${metadata.executionPlan || 'Proceed with standard reasoning.'}
 
+${metadata.robustReasoningMode ? `ROBUST REASONING MODE (ENABLED):
+- Treat the execution plan as a checklist: complete it step-by-step and track what remains.
+- Do NOT set goals_met=true unless user-visible outcomes are delivered (message/file/result).
+- If any unresolved errors, missing results, or pending checklist items remain, keep goals_met=false and continue with tools.` : ''}
+
 ${channelInstructions}
 
 ${this.buildTransparencyNudge(metadata)}
@@ -1060,6 +1065,7 @@ ADDITIONAL REVIEW RULES:
 - CRITICAL: If this task came from a messaging channel (Telegram/WhatsApp/Discord/Slack/Gateway) and messagesSent is 0, the user has received NOTHING. The agent's text reasoning is invisible to the user. You MUST return goals_met=false and include the appropriate send skill (send_telegram, send_whatsapp, send_discord, send_slack, send_gateway_chat) with the response message.
 - Do NOT default to asking questions. Only use request_supporting_data if genuinely missing critical info that cannot be inferred.
 - Prefer ACTION over CLARIFICATION. If the agent can make progress with available context, it should.
+${metadata.robustReasoningMode ? `- ROBUST MODE: if checklist items remain unresolved, if outputs were not delivered to the user, or if the response is only a status update, you MUST return goals_met=false and continue with concrete tools.` : ''}
 
 TASK:
 ${taskDescription}

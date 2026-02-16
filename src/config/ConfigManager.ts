@@ -8,6 +8,7 @@ import { eventBus } from '../core/EventBus';
 export interface AgentConfig {
     agentName: string;
     llmProvider?: 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia' | 'anthropic';
+    providerModelNames?: Record<string, string>; // Per-provider remembered model names
     telegramToken?: string;
     openaiApiKey?: string;
     openrouterApiKey?: string;
@@ -99,6 +100,18 @@ export interface AgentConfig {
     // Session scoping & identity links
     sessionScope?: 'main' | 'per-peer' | 'per-channel-peer'; // Thread scope strategy for inbound context
     identityLinks?: Record<string, string>; // Map channel identities (e.g. telegram:123) to canonical person keys
+    // Adaptive guidance (reduce hardcoded behavior)
+    guidanceMode?: 'strict' | 'balanced' | 'fluid';
+    guidanceAckPatterns?: string[];
+    guidanceLowValuePatterns?: string[];
+    guidanceClarificationKeywords?: string[];
+    guidanceQuestionStopWords?: string[];
+    guidanceRepeatQuestionThreshold?: number;
+    guidanceShortReplyMaxWords?: number;
+    guidanceShortReplyMaxChars?: number;
+    robustReasoningMode?: boolean; // Enable stricter reasoning guardrails and verification
+    reasoningExposeChecklist?: boolean; // Send checklist preview to users for non-trivial tasks
+    reasoningChecklistMaxItems?: number; // Max checklist items to show in preview
     // Operational
     autoExecuteCommands?: boolean;        // Auto-execute commands without confirmation (default false)
     skillRoutingRules?: Array<{
@@ -481,6 +494,14 @@ export class ConfigManager {
             agentName: 'OrcBot',
             llmProvider: undefined,
             modelName: 'gpt-4o',
+            providerModelNames: {
+                openai: 'gpt-4o',
+                google: 'gemini-2.5-flash',
+                openrouter: 'meta-llama/llama-3.3-70b-instruct:free',
+                nvidia: 'nvidia/llama-3.1-nemotron-70b-instruct',
+                anthropic: 'claude-3-5-sonnet-latest',
+                bedrock: 'anthropic.claude-3-5-sonnet-20240620-v1:0'
+            },
             searchProviderOrder: ['serper', 'brave', 'searxng', 'google', 'bing', 'duckduckgo'],
             autonomyEnabled: true,
             autonomyInterval: 15,
@@ -598,6 +619,38 @@ export class ConfigManager {
             worldEventsGlobeArgs: [],
             sessionScope: 'per-channel-peer',
             identityLinks: {},
+            guidanceMode: 'balanced',
+            guidanceAckPatterns: [
+                '^(understood|got it|on it|acknowledged|okay|ok|alright|sure|perfect)\\b',
+                '^thanks?[,.!\\s]',
+                "\\bi\\s*(am|'m)\\s*(ready|working on|going to|about to)\\b",
+                '\\bi\\s*will\\s*now\\b',
+                '\\bworking on it\\b',
+                '\\blet me\\b'
+            ],
+            guidanceLowValuePatterns: [
+                '^(got it|on it|working on it|one moment|hang tight|be right back|still working)[.!]?$',
+                "^i('m| am) (checking|working on|looking into)\\b",
+                '^quick update[:\\-]?\\s*$',
+                '^sorry[,\\s]',
+                '^(understood|acknowledged)[,.!\\s]',
+                "\\bi\\s*(am|'m)\\s*ready\\s*to\\b",
+                '\\bi\\s*will\\s*now\\b'
+            ],
+            guidanceClarificationKeywords: [
+                'clarif', 'question', 'which', 'what', 'prefer', 'preference', 'confirm', 'api', 'details'
+            ],
+            guidanceQuestionStopWords: [
+                'the', 'a', 'an', 'and', 'or', 'to', 'for', 'of', 'in', 'on', 'at', 'is', 'are', 'was', 'were',
+                'be', 'been', 'being', 'do', 'does', 'did', 'can', 'could', 'would', 'should', 'will', 'please',
+                'you', 'your', 'me', 'my', 'we', 'our', 'it', 'this', 'that', 'with', 'about', 'if', 'as', 'by'
+            ],
+            guidanceRepeatQuestionThreshold: 0.65,
+            guidanceShortReplyMaxWords: 7,
+            guidanceShortReplyMaxChars: 48,
+            robustReasoningMode: false,
+            reasoningExposeChecklist: false,
+            reasoningChecklistMaxItems: 5,
             autoExecuteCommands: false,
             bedrockRegion: process.env.BEDROCK_REGION || process.env.AWS_REGION,
             bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
@@ -640,7 +693,36 @@ export class ConfigManager {
 
     public set(key: string, value: any) {
         const oldConfig = { ...this.config };
+
+        // Apply requested change first
         (this.config as any)[key] = value;
+
+        // Keep model/provider relationship coherent across provider switches.
+        const providers = new Set(['openai', 'google', 'openrouter', 'nvidia', 'anthropic', 'bedrock']);
+        const currentProvider = String((this.config as any).llmProvider || '').toLowerCase();
+
+        // Ensure providerModelNames is always an object
+        if (!(this.config as any).providerModelNames || typeof (this.config as any).providerModelNames !== 'object') {
+            (this.config as any).providerModelNames = {};
+        }
+
+        if (key === 'modelName') {
+            // Persist the selected model for the currently selected provider
+            if (providers.has(currentProvider) && typeof value === 'string' && value.trim().length > 0) {
+                (this.config as any).providerModelNames[currentProvider] = value.trim();
+            }
+        }
+
+        if (key === 'llmProvider') {
+            const nextProvider = String(value || '').toLowerCase();
+            if (providers.has(nextProvider)) {
+                const providerModel = (this.config as any).providerModelNames?.[nextProvider];
+                if (providerModel && typeof providerModel === 'string' && providerModel.trim().length > 0) {
+                    (this.config as any).modelName = providerModel.trim();
+                }
+            }
+        }
+
         this.saveConfig();
         this.syncEnvForKey(key, value);
         // Emit event for components to react to config changes

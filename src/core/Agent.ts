@@ -5665,20 +5665,204 @@ REFLECTION: <1-2 sentences>`;
         return false;
     }
 
+    private getGuidanceMode(): 'strict' | 'balanced' | 'fluid' {
+        const mode = String(this.config.get('guidanceMode') || 'balanced').toLowerCase();
+        if (mode === 'strict' || mode === 'balanced' || mode === 'fluid') return mode;
+        return 'balanced';
+    }
+
+    private isRobustReasoningEnabled(): boolean {
+        return !!this.config.get('robustReasoningMode');
+    }
+
+    private shouldExposeChecklistPreview(): boolean {
+        return !!this.config.get('reasoningExposeChecklist') || this.isRobustReasoningEnabled();
+    }
+
+    private extractChecklistItemsFromPlan(plan: string, maxItems: number): string[] {
+        if (!plan || typeof plan !== 'string') return [];
+        const lines = plan
+            .split('\n')
+            .map(line => line.trim())
+            .filter(Boolean)
+            .filter(line => !/^execution\s*plan\s*:?$/i.test(line));
+
+        const items: string[] = [];
+        for (const line of lines) {
+            const numbered = line.match(/^\d+[\.)]\s+(.+)$/);
+            const bullet = line.match(/^[\-*•]\s+(.+)$/);
+            const checked = line.match(/^\[[ xX]\]\s+(.+)$/);
+            const value = (numbered?.[1] || bullet?.[1] || checked?.[1] || '').trim();
+            if (!value) continue;
+            items.push(value.replace(/\s+/g, ' '));
+            if (items.length >= maxItems) break;
+        }
+
+        return items;
+    }
+
+    private buildChecklistPreviewMessage(executionPlan: string): string {
+        const configured = Number(this.config.get('reasoningChecklistMaxItems') ?? 5);
+        const maxItems = Number.isFinite(configured)
+            ? Math.min(8, Math.max(3, Math.floor(configured)))
+            : 5;
+        const items = this.extractChecklistItemsFromPlan(executionPlan, maxItems);
+        if (items.length === 0) {
+            return '';
+        }
+
+        const body = items.map((item, index) => `${index + 1}. ${item}`).join('\n');
+        const robustTag = this.isRobustReasoningEnabled() ? '\n\nMode: robust reasoning (strict completion checks enabled).' : '';
+        return `🧭 Task checklist\n${body}${robustTag}`;
+    }
+
+    private async sendChecklistPreview(action: Action, message: string): Promise<boolean> {
+        if (!message || !action.payload?.source) return false;
+        const source = action.payload.source;
+        const sourceId = action.payload.sourceId;
+
+        if (source !== 'gateway-chat' && !sourceId) return false;
+
+        try {
+            if (source === 'telegram' && this.telegram) {
+                await this.telegram.sendMessage(sourceId, message);
+                return true;
+            }
+            if (source === 'whatsapp' && this.whatsapp) {
+                await this.whatsapp.sendMessage(sourceId, message);
+                return true;
+            }
+            if (source === 'discord' && this.discord) {
+                await this.discord.sendMessage(sourceId, message);
+                return true;
+            }
+            if (source === 'slack' && this.slack) {
+                await this.slack.sendMessage(sourceId, message);
+                return true;
+            }
+            if (source === 'gateway-chat') {
+                eventBus.emit('gateway:chat:response', {
+                    type: 'chat:message',
+                    role: 'assistant',
+                    content: message,
+                    timestamp: new Date().toISOString(),
+                    messageId: `checklist-${Date.now()}`
+                });
+                return true;
+            }
+        } catch (e) {
+            logger.debug(`Failed to send checklist preview: ${e}`);
+        }
+
+        return false;
+    }
+
+    private buildAuditCode(issues: string[]): string {
+        const auditCodes = (issues || []).map(issue => {
+            const normalized = issue.toLowerCase();
+            if (normalized.includes('no user-visible message')) return 'NO_SEND';
+            if (normalized.includes('deep tool output exists after the last sent message')) return 'UNSENT_RESULTS';
+            if (normalized.includes('deep/research tools ran, but no substantive delivery')) return 'NO_SUBSTANTIVE';
+            if (normalized.includes('only acknowledgement/status-style messages')) return 'ACK_ONLY';
+            if (normalized.includes('tool errors occurred')) return 'ERROR_UNRESOLVED';
+            return 'GENERIC';
+        });
+        const uniqueCodes = Array.from(new Set(auditCodes));
+        return `AUDIT_BLOCK:${uniqueCodes.join('+')}`;
+    }
+
+    private getGuidanceRegexList(configKey: string, fallbackPatterns: string[]): RegExp[] {
+        const raw = this.config.get(configKey);
+        const patterns = Array.isArray(raw) && raw.length > 0 ? raw : fallbackPatterns;
+        const compiled: RegExp[] = [];
+        for (const pattern of patterns) {
+            try {
+                compiled.push(new RegExp(String(pattern), 'i'));
+            } catch {
+                // Ignore invalid patterns
+            }
+        }
+        return compiled;
+    }
+
+    private getGuidanceStopWords(): Set<string> {
+        const raw = this.config.get('guidanceQuestionStopWords');
+        const defaults = [
+            'the', 'a', 'an', 'and', 'or', 'to', 'for', 'of', 'in', 'on', 'at', 'is', 'are', 'was', 'were',
+            'be', 'been', 'being', 'do', 'does', 'did', 'can', 'could', 'would', 'should', 'will', 'please',
+            'you', 'your', 'me', 'my', 'we', 'our', 'it', 'this', 'that', 'with', 'about', 'if', 'as', 'by'
+        ];
+        const words = Array.isArray(raw) && raw.length > 0 ? raw : defaults;
+        return new Set(words.map(w => String(w).toLowerCase().trim()).filter(Boolean));
+    }
+
+    private getQuestionSemanticFingerprint(message: string): Set<string> {
+        const normalized = (message || '')
+            .toLowerCase()
+            .replace(/[^a-z0-9\s]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        const stopWords = this.getGuidanceStopWords();
+
+        const tokens = normalized
+            .split(' ')
+            .map(t => t.trim())
+            .filter(t => t.length > 2 && !stopWords.has(t));
+
+        return new Set(tokens);
+    }
+
+    private questionSimilarity(a: string, b: string): number {
+        const setA = this.getQuestionSemanticFingerprint(a);
+        const setB = this.getQuestionSemanticFingerprint(b);
+        if (setA.size === 0 || setB.size === 0) return 0;
+
+        let overlap = 0;
+        for (const token of setA) {
+            if (setB.has(token)) overlap++;
+        }
+
+        return overlap / Math.max(setA.size, setB.size);
+    }
+
+    private isRepeatedClarificationQuestion(currentMessage: string, priorMessages: string[]): boolean {
+        if (!this.messageContainsQuestion(currentMessage)) return false;
+
+        const mode = this.getGuidanceMode();
+        const configuredThreshold = Number(this.config.get('guidanceRepeatQuestionThreshold') ?? 0.65);
+        const baseThreshold = Number.isFinite(configuredThreshold) ? configuredThreshold : 0.65;
+        const similarityThreshold = mode === 'strict'
+            ? Math.max(0.4, baseThreshold - 0.1)
+            : mode === 'fluid'
+                ? Math.min(0.9, baseThreshold + 0.1)
+                : baseThreshold;
+
+        const current = (currentMessage || '').trim();
+        for (const prior of priorMessages.slice(-6)) {
+            if (!this.messageContainsQuestion(prior)) continue;
+            const score = this.questionSimilarity(current, prior);
+            if (score >= similarityThreshold) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private isLikelyAcknowledgementMessage(message: string): boolean {
         const normalized = (message || '').toLowerCase().trim();
         if (!normalized) return false;
 
         if (normalized.length > 220) return false;
 
-        const ackPatterns = [
-            /^(understood|got it|on it|acknowledged|okay|ok|alright|sure|perfect)\b/i,
-            /^thanks?[,.!\s]/i,
-            /\bi\s*(am|'m)\s*(ready|working on|going to|about to)\b/i,
-            /\bi\s*will\s*now\b/i,
-            /\bworking on it\b/i,
-            /\blet me\b/i
-        ];
+        const ackPatterns = this.getGuidanceRegexList('guidanceAckPatterns', [
+            '^(understood|got it|on it|acknowledged|okay|ok|alright|sure|perfect)\\b',
+            '^thanks?[,.!\\s]',
+            "\\bi\\s*(am|'m)\\s*(ready|working on|going to|about to)\\b",
+            '\\bi\\s*will\\s*now\\b',
+            '\\bworking on it\\b',
+            '\\blet me\\b'
+        ]);
 
         const hasEnumeratedList = /\n\s*\d+\.|\b1\.|\b2\.|\b3\.|\b4\.|\b5\./.test(normalized);
         const hasMultipleQuestions = (normalized.match(/\?/g) || []).length >= 2;
@@ -5708,15 +5892,15 @@ REFLECTION: <1-2 sentences>`;
         if (!normalized) return false;
         if (normalized.length < 40) return false;
 
-        const lowValuePatterns = [
-            /^(got it|on it|working on it|one moment|hang tight|be right back|still working)[.!]?$/i,
-            /^i('m| am) (checking|working on|looking into)\b/i,
-            /^quick update[:\-]?\s*$/i,
-            /^sorry[,\s]/i,
-            /^(understood|acknowledged)[,.!\s]/i,
-            /\bi\s*(am|'m)\s*ready\s*to\b/i,
-            /\bi\s*will\s*now\b/i
-        ];
+        const lowValuePatterns = this.getGuidanceRegexList('guidanceLowValuePatterns', [
+            '^(got it|on it|working on it|one moment|hang tight|be right back|still working)[.!]?$',
+            "^i('m| am) (checking|working on|looking into)\\b",
+            '^quick update[:\\-]?\\s*$',
+            '^sorry[,\\s]',
+            '^(understood|acknowledged)[,.!\\s]',
+            "\\bi\\s*(am|'m)\\s*ready\\s*to\\b",
+            '\\bi\\s*will\\s*now\\b'
+        ]);
         if (lowValuePatterns.some(p => p.test(normalized))) return false;
 
         return true;
@@ -6808,6 +6992,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 contextStr,
                 this.skills.getSkillsPrompt()
             );
+            const robustReasoningMode = this.isRobustReasoningEnabled();
 
             const MAX_STEPS = 20; // Reduced from 30 to fail faster on stuck tasks
             let currentStep = 0;
@@ -6832,7 +7017,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     payload: {
                         ...action.payload,
                         currentStep,
-                        executionPlan
+                        executionPlan,
+                        robustReasoningMode
                     }
                 });
 
@@ -7295,14 +7481,42 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     logger.info(`Agent: Cleaned up ${oldStepCount} old step memories for resumed action ${waitingAction.id}`);
                 }
 
-                // Use ONLY the new user message as the description.
-                // The old description caused the LLM to re-execute the original task.
-                // The episodic summary above preserves awareness of prior work.
+                // Resume strategy:
+                // - If the new user message is short (likely an answer to a clarification),
+                //   merge it with the previous task context so the model doesn't lose thread.
+                // - If it's a full new request, use it as the primary description.
+                const previousDescription = (waitingAction.payload?.description || '').toString().trim();
+                const newUserMessage = (description || '').toString().trim();
+                const wordCount = newUserMessage.split(/\s+/).filter(Boolean).length;
+                const mode = this.getGuidanceMode();
+                const configuredWordLimit = Number(this.config.get('guidanceShortReplyMaxWords') ?? 7);
+                const configuredCharLimit = Number(this.config.get('guidanceShortReplyMaxChars') ?? 48);
+                const shortReplyWordLimit = mode === 'fluid'
+                    ? Math.max(configuredWordLimit, 12)
+                    : configuredWordLimit;
+                const shortReplyCharLimit = mode === 'fluid'
+                    ? Math.max(configuredCharLimit, 80)
+                    : configuredCharLimit;
+
+                const clarificationKeywordsRaw = this.config.get('guidanceClarificationKeywords');
+                const clarificationKeywords = Array.isArray(clarificationKeywordsRaw) && clarificationKeywordsRaw.length > 0
+                    ? clarificationKeywordsRaw.map((k: any) => String(k).toLowerCase().trim()).filter(Boolean)
+                    : ['clarif', 'question', 'which', 'what', 'prefer', 'preference', 'confirm', 'api', 'details'];
+
+                const previousDescriptionLower = previousDescription.toLowerCase();
+                const previousLooksLikeClarificationFlow = clarificationKeywords.some((k: string) => previousDescriptionLower.includes(k));
+                const isShortFollowUpAnswer = wordCount > 0 && (wordCount <= shortReplyWordLimit || newUserMessage.length < shortReplyCharLimit);
+
+                const resumedDescription = (isShortFollowUpAnswer && previousDescription && previousLooksLikeClarificationFlow)
+                    ? `RESUMED CLARIFICATION CONTEXT:\nPrevious task context: ${previousDescription}\n\nUser's latest answer: ${newUserMessage}\n\nUse this answer to continue and progress the original task. Do NOT ask for the same information again unless absolutely required for execution.`
+                    : newUserMessage;
+
                 this.actionQueue.updatePayload(waitingAction.id, {
-                    description: description,
-                    previousDescription: waitingAction.payload?.description || undefined,
+                    description: resumedDescription,
+                    previousDescription: previousDescription || undefined,
                     lastUserMessageId: messageId || undefined,
-                    lastUserMessageText: description,
+                    lastUserMessageText: newUserMessage,
+                    resumedWithMergedContext: isShortFollowUpAnswer && previousLooksLikeClarificationFlow,
                     resumedFromWaitingAt: new Date().toISOString()
                 });
                 this.actionQueue.updateStatus(waitingAction.id, 'pending');
@@ -7310,11 +7524,14 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 this.memory.saveMemory({
                     id: `${waitingAction.id}-resume-${messageId || Date.now()}`,
                     type: 'short',
-                    content: `[SYSTEM: User sent a new message. This is now your PRIMARY task: "${description.slice(0, 200)}". Focus on this new request. Any prior steps from the previous task have been cleared.]`,
+                    content: isShortFollowUpAnswer && previousLooksLikeClarificationFlow
+                        ? `[SYSTEM: User provided a likely clarification answer: "${newUserMessage.slice(0, 200)}". Continue the prior task with this answer and avoid asking the same clarification again.]`
+                        : `[SYSTEM: User sent a new message. This is now your PRIMARY task: "${newUserMessage.slice(0, 200)}". Focus on this new request. Any prior steps from the previous task have been cleared.]`,
                     timestamp: new Date().toISOString(),
                     metadata: {
                         actionId: waitingAction.id,
                         resumedFrom: 'waiting',
+                        resumedWithMergedContext: isShortFollowUpAnswer && previousLooksLikeClarificationFlow,
                         source: metadata.source,
                         sourceId: metadata.sourceId,
                         messageId: messageId || undefined
@@ -7466,6 +7683,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         ? this.skills.getCompactSkillsPrompt() 
                         : this.skills.getSkillsPrompt()
                 );
+            const robustReasoningMode = this.isRobustReasoningEnabled();
+            const exposeChecklistPreview = this.shouldExposeChecklistPreview();
 
             // RESEARCH TOOLS — used for skill-repeat ceiling differentiation (browser/search
             // tools legitimately get called many times in a single action).
@@ -7549,6 +7768,19 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 'request_supporting_data'
             ];
 
+            if (!isSimpleTask && action.payload.source && exposeChecklistPreview) {
+                const checklistMessage = this.buildChecklistPreviewMessage(executionPlan);
+                if (checklistMessage) {
+                    const checklistSent = await this.sendChecklistPreview(action, checklistMessage);
+                    if (checklistSent) {
+                        messagesSent++;
+                        stepsSinceLastMessage = 0;
+                        lastMessageContent = checklistMessage;
+                        sentMessagesInAction.push(checklistMessage);
+                    }
+                }
+            }
+
             while (currentStep < MAX_STEPS) {
                 currentStep++;
                 stepsSinceLastMessage++;
@@ -7615,7 +7847,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 currentStep,
                                 stepsSinceLastMessage,
                                 isResearchTask,
-                                executionPlan // Pass plan to DecisionEngine
+                                executionPlan, // Pass plan to DecisionEngine
+                                robustReasoningMode
                             }
                         });
                     }, { maxRetries: 2 });
@@ -7867,6 +8100,26 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 }
 
                                 logger.info(`Agent: Allowing one substantive follow-up message after acknowledgement in step ${currentStep} for action ${action.id}.`);
+                            }
+
+                            // 3.5 Clarification loop guard: avoid asking semantically the same
+                            // question again when we already resumed with user clarification context.
+                            const resumedWithMergedContext = !!action.payload?.resumedWithMergedContext;
+                            if (
+                                resumedWithMergedContext &&
+                                this.messageContainsQuestion(currentMessage) &&
+                                this.isRepeatedClarificationQuestion(currentMessage, sentMessagesInAction) &&
+                                !deepToolExecutedSinceLastMessage
+                            ) {
+                                logger.warn(`Agent: Blocked repeated clarification question in action ${action.id}.`);
+                                this.memory.saveMemory({
+                                    id: `${action.id}-step-${currentStep}-repeated-clarification-blocked`,
+                                    type: 'short',
+                                    content: `[SYSTEM: BLOCKED repeated clarification question. The user already provided clarification in this thread. Do NOT ask the same question again — proceed using the latest user answer and execute the task.]`,
+                                    metadata: { actionId: action.id, step: currentStep, resumedWithMergedContext: true }
+                                });
+                                toolsBlockedByCooldown++;
+                                continue;
                             }
 
                             sentMessagesInAction.push(currentMessage);
@@ -8341,6 +8594,30 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
 
                     // NOW check goals_met AFTER tools have been executed
                     if (decision.verification?.goals_met) {
+                        if (robustReasoningMode) {
+                            const completionAudit = await this.auditCompletionFromActionLogs(action, {
+                                currentStep,
+                                messagesSent,
+                                substantiveDeliveriesSent,
+                                deepToolExecutedSinceLastMessage,
+                                sentMessagesInAction,
+                                skillCallCounts
+                            });
+
+                            if (!completionAudit.ok) {
+                                const issueSummary = completionAudit.issues.join(' | ');
+                                const auditCode = this.buildAuditCode(completionAudit.issues);
+                                logger.warn(`Agent: Robust mode blocked completion in-loop for ${action.id} (${auditCode}): ${issueSummary}`);
+                                this.memory.saveMemory({
+                                    id: `${action.id}-step-${currentStep}-robust-completion-blocked`,
+                                    type: 'short',
+                                    content: `[SYSTEM: COMPLETION BLOCKED (${auditCode}). You attempted goals_met=true before delivering concrete results. Resolve these issues now: ${issueSummary}. Send a substantive final result message, then complete.]`,
+                                    metadata: { actionId: action.id, step: currentStep, issues: completionAudit.issues, auditCode }
+                                });
+                                continue;
+                            }
+                        }
+
                         logger.info(`Agent: Strategic goal satisfied after execution. Terminating action ${action.id}.`);
                         goalsMet = true;
                         break;
@@ -8526,7 +8803,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                         messagesSent,
                                         messagingLocked: true,
                                         currentStep,
-                                        executionPlan
+                                        executionPlan,
+                                        robustReasoningMode
                                     }
                                 });
                             }, { maxRetries: 2, initialDelay: 1000 });
@@ -8662,17 +8940,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
 
                 if (!completionAudit.ok) {
                     const issueSummary = completionAudit.issues.join(' | ');
-                    const auditCodes = completionAudit.issues.map(issue => {
-                        const normalized = issue.toLowerCase();
-                        if (normalized.includes('no user-visible message')) return 'NO_SEND';
-                        if (normalized.includes('deep tool output exists after the last sent message')) return 'UNSENT_RESULTS';
-                        if (normalized.includes('deep/research tools ran, but no substantive delivery')) return 'NO_SUBSTANTIVE';
-                        if (normalized.includes('only acknowledgement/status-style messages')) return 'ACK_ONLY';
-                        if (normalized.includes('tool errors occurred')) return 'ERROR_UNRESOLVED';
-                        return 'GENERIC';
-                    });
-                    const uniqueCodes = Array.from(new Set(auditCodes));
-                    const auditCode = `AUDIT_BLOCK:${uniqueCodes.join('+')}`;
+                    const auditCode = this.buildAuditCode(completionAudit.issues);
                     logger.warn(`Agent: Completion log audit blocked action ${action.id} (${auditCode}): ${issueSummary}`);
                     this.memory.saveMemory({
                         id: `${action.id}-completion-audit-blocked`,
