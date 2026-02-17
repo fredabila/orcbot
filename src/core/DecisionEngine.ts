@@ -952,6 +952,9 @@ EXECUTION STATE:
 EXECUTION PLAN:
 ${metadata.executionPlan || 'Proceed with standard reasoning.'}
 
+${metadata.sessionContinuityHint ? `SESSION CONTINUITY (carry this forward):
+${metadata.sessionContinuityHint}` : ''}
+
 ${metadata.robustReasoningMode ? `ROBUST REASONING MODE (ENABLED):
 - Treat the execution plan as a checklist: complete it step-by-step and track what remains.
 - Do NOT set goals_met=true unless user-visible outcomes are delivered (message/file/result).
@@ -1072,6 +1075,9 @@ ${taskDescription}
 
 EXECUTION PLAN:
 ${metadata.executionPlan || 'No plan provided.'}
+
+${metadata.sessionContinuityHint ? `SESSION CONTINUITY:
+${metadata.sessionContinuityHint}` : ''}
 
 ⚠️ STEP HISTORY FOR THIS ACTION (Action ${actionId}) — READ BEFORE ACTING:
 ${stepHistoryString}

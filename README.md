@@ -9,6 +9,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
 [![Status](https://img.shields.io/badge/Status-Beta-orange.svg)]()
 [![ReAct](https://img.shields.io/badge/Reasoning-ReAct-purple.svg)]()
+[![Open Source Helpers](https://www.codetriage.com/fredabila/orcbot/badges/users.svg)](https://www.codetriage.com/fredabila/orcbot)
 
 **Autonomous. Strategic. Multi-Modal. Self-Healing.**
 

@@ -43,6 +43,7 @@ import os from 'os';
  */
 export const ELEVATED_SKILLS = new Set([
     'run_command',
+    'orcbot_control',
     'write_file', 'write_to_file', 'create_file', 'delete_file', 'read_file',
     'install_npm_dependency',
     'browser_navigate', 'browser_click', 'browser_type', 'browser_snapshot', 'browser_close',
@@ -1783,6 +1784,124 @@ export class Agent {
                 }
 
                 return lastResult;
+            }
+        });
+
+        // Skill: OrcBot App Control (admin-gated)
+        this.skills.registerSkill({
+            name: 'orcbot_control',
+            description: 'Control OrcBot at the application level using a safe, RBAC-gated interface. Supports listing command capabilities, mapping TUI actions to CLI, and running allowlisted `orcbot` CLI commands. High-risk commands are blocked by policy unless explicitly allowed in config.',
+            usage: 'orcbot_control(action, command?, includeExperimental?) where action is one of: help | list_commands | tui_map | run_cli',
+            handler: async (args: any) => {
+                const action = String(args?.action || args?.mode || 'help').toLowerCase().trim();
+
+                const commandCatalog = [
+                    'config get <key>',
+                    'config set <key> <value>',
+                    'models',
+                    'gateway',
+                    'security',
+                    'agentic-user'
+                ];
+
+                const tuiMap = [
+                    'TUI: ⚙️ Agent Configuration -> CLI: orcbot config set|get ...',
+                    'TUI: 🤖 Model & Providers -> CLI: orcbot models',
+                    'TUI: 🌐 Gateway Control -> CLI: orcbot gateway',
+                    'TUI: 🔒 Security & Permissions -> CLI: orcbot security',
+                    'TUI: 🧠 Agentic User -> CLI: orcbot agentic-user'
+                ];
+
+                if (action === 'help' || action === 'list_commands') {
+                    const allow = (this.config.get('orcbotControlCliAllowList') || []) as string[];
+                    const deny = (this.config.get('orcbotControlCliDenyList') || []) as string[];
+                    return [
+                        'ORCBOT APP CONTROL',
+                        'Available actions: help | list_commands | tui_map | run_cli',
+                        '',
+                        'Command awareness (safe defaults):',
+                        ...commandCatalog.map(c => `- ${c}`),
+                        '',
+                        `Policy allow-list: ${allow.length ? allow.join(', ') : '(none configured)'}`,
+                        `Policy deny-list: ${deny.length ? deny.join(', ') : '(none configured)'}`,
+                        '',
+                        'Example:',
+                        'orcbot_control({ action: "run_cli", command: "orcbot config get modelName" })'
+                    ].join('\n');
+                }
+
+                if (action === 'tui_map') {
+                    return ['TUI TO CLI MAP', ...tuiMap].join('\n');
+                }
+
+                if (action !== 'run_cli') {
+                    return 'Error: Unknown action. Use one of: help, list_commands, tui_map, run_cli.';
+                }
+
+                const enabled = this.config.get('orcbotControlEnabled');
+                if (enabled === false) {
+                    return 'Error: orcbot_control is disabled by config (orcbotControlEnabled=false).';
+                }
+
+                let command = String(args?.command || '').trim();
+                if (!command) {
+                    return 'Error: Missing command. Example: "orcbot config get modelName"';
+                }
+
+                command = command.replace(/^orcbot\s+/i, '').trim();
+
+                // Lightweight typo correction for common misspelling
+                if (/^rset(\s|$)/i.test(command)) {
+                    command = command.replace(/^rset/i, 'reset');
+                }
+
+                // Block shell metacharacters and multiline payloads
+                if (/\r|\n/.test(command) || /[;&|><`]/.test(command)) {
+                    return 'Error: Unsafe command format. Provide a single orcbot CLI command without shell chaining/redirection.';
+                }
+
+                const normalized = command.toLowerCase().replace(/\s+/g, ' ').trim();
+                const allowList = ((this.config.get('orcbotControlCliAllowList') || []) as string[])
+                    .map(s => String(s).toLowerCase().trim())
+                    .filter(Boolean);
+                const denyList = ((this.config.get('orcbotControlCliDenyList') || []) as string[])
+                    .map(s => String(s).toLowerCase().trim())
+                    .filter(Boolean);
+
+                const matchesPrefix = (prefixes: string[], value: string) => {
+                    return prefixes.some(prefix => value === prefix || value.startsWith(prefix + ' '));
+                };
+
+                if (matchesPrefix(denyList, normalized)) {
+                    return `Error: Command '${command}' is blocked by orcbotControlCliDenyList.`;
+                }
+
+                if (allowList.length > 0 && !matchesPrefix(allowList, normalized)) {
+                    return `Error: Command '${command}' is not in orcbotControlCliAllowList.`;
+                }
+
+                const timeoutMs = Math.max(5000, Number(this.config.get('orcbotControlTimeoutMs') || 45000));
+                const cliEntry = path.join(process.cwd(), 'dist', 'cli', 'index.js');
+                if (!fs.existsSync(cliEntry)) {
+                    return `Error: CLI entry not found at ${cliEntry}. Build first with 'npm run build'.`;
+                }
+
+                const { exec } = require('child_process');
+                return await new Promise<string>((resolve) => {
+                    const child = exec(`node "${cliEntry}" ${command}`, { cwd: process.cwd(), timeout: timeoutMs }, (error: any, stdout: string, stderr: string) => {
+                        const output = `${stdout || ''}${stderr ? `\n${stderr}` : ''}`.trim();
+                        if (error) {
+                            const msg = output || error.message || String(error);
+                            resolve(`Error running orcbot CLI command '${command}': ${msg.slice(0, 3500)}`);
+                            return;
+                        }
+                        resolve(output ? output.slice(0, 3500) : `Command succeeded: orcbot ${command}`);
+                    });
+
+                    child.on('error', (err: any) => {
+                        resolve(`Error: Failed to start orcbot CLI command '${command}': ${err?.message || err}`);
+                    });
+                });
             }
         });
 
@@ -4929,13 +5048,6 @@ Be thorough and academic.`;
      */
     private async triggerSkillCreationForFailure(taskDescription: string, failingTool?: string, failingContext?: string, originAction?: any) {
         try {
-            // GUARD: Never trigger self-improvement for core built-in skills.
-            // If web_search or browser_navigate is "failing", it's a strategy problem, not a missing skill.
-            if (failingTool && this.isCoreBuiltinSkill(failingTool)) {
-                logger.info(`Agent: Skipping auto skill creation — '${failingTool}' is a core built-in skill. Strategy issue, not missing capability.`);
-                return;
-            }
-
             // Don't spam skill creation - check if we recently tried
             const recentMemories = this.memory.searchMemory('short');
             const recentSkillCreations = recentMemories.filter(m => 
@@ -4961,6 +5073,12 @@ Analyze this failure and decide:
 1. Is this a recurring problem that a dedicated skill could solve?
 2. What would the skill do differently than the current approach?
 3. What APIs, RSS feeds, or alternative methods could work better?
+
+IMPORTANT SELECTIVITY RULES:
+- Do NOT auto-create a new skill for every failure.
+- If this is primarily a parameter misuse, sequencing bug, or prompt-strategy issue, set should_create_skill=false.
+- If the failing tool is core/built-in, only create a skill if there is a clear reusable wrapper/workflow advantage (e.g., orchestrating multiple calls, domain-specific automation, or robust fallback chain).
+- Prefer concise reasons over over-engineering.
 
 Respond in JSON:
 {
@@ -5669,6 +5787,173 @@ REFLECTION: <1-2 sentences>`;
         const mode = String(this.config.get('guidanceMode') || 'balanced').toLowerCase();
         if (mode === 'strict' || mode === 'balanced' || mode === 'fluid') return mode;
         return 'balanced';
+    }
+
+    private extractLikelyPaths(text: string, maxItems: number = 8): string[] {
+        if (!text) return [];
+        const matches: string[] = [];
+
+        const windowsPathRegex = /[A-Za-z]:\\[^\s"'`]+/g;
+        const unixPathRegex = /(?:^|\s)(\/[\w@%./\-]+(?:\.[\w\-]+)?)/g;
+
+        const win = text.match(windowsPathRegex) || [];
+        for (const entry of win) {
+            matches.push(entry.trim());
+            if (matches.length >= maxItems) return Array.from(new Set(matches));
+        }
+
+        let unixMatch: RegExpExecArray | null;
+        while ((unixMatch = unixPathRegex.exec(text)) !== null) {
+            const value = (unixMatch[1] || '').trim();
+            if (!value) continue;
+            matches.push(value);
+            if (matches.length >= maxItems) break;
+        }
+
+        return Array.from(new Set(matches)).slice(0, maxItems);
+    }
+
+    private buildToolSignatureKey(toolName: string, metadata: any): string {
+        const md = metadata || {};
+        const salient = md.command || md.cmd || md.url || md.query || md.path || md.selector || md.text || md.message || JSON.stringify(md);
+        return `${String(toolName || '').toLowerCase()}:${String(salient || '').toLowerCase().slice(0, 280)}`;
+    }
+
+    private buildSessionContinuityHint(payload: any): string {
+        if (!this.config.get('sessionAnchorEnabled')) return '';
+        if (!payload?.source) return '';
+
+        const source = String(payload.source).toLowerCase();
+        const sessionScopeId = payload?.sessionScopeId || (payload?.sourceId ? `${source}:${payload.sourceId}` : undefined);
+        if (!sessionScopeId) return '';
+
+        const maxHintsRaw = Number(this.config.get('sessionAnchorMaxHints') ?? 4);
+        const maxHints = Number.isFinite(maxHintsRaw) ? Math.max(1, Math.min(8, Math.floor(maxHintsRaw))) : 4;
+
+        const shortAll = this.memory.searchMemory('short');
+        const anchors = shortAll
+            .filter(m => {
+                const md: any = (m as any).metadata || {};
+                return md.sessionAnchor === true && String(md.sessionScopeId || '') === String(sessionScopeId);
+            })
+            .sort((a, b) => {
+                const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+                const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+                return tb - ta;
+            })
+            .slice(0, maxHints);
+
+        if (anchors.length === 0) return '';
+
+        const lines = anchors.map(a => {
+            const md: any = (a as any).metadata || {};
+            const path = md.path || this.extractLikelyPaths(String((a as any).content || ''), 1)[0] || '';
+            const tool = md.tool ? ` (${md.tool})` : '';
+            return path ? `- ${path}${tool}` : `- ${String((a as any).content || '').slice(0, 160)}`;
+        });
+
+        return `SESSION CONTINUITY HINTS:\n${lines.join('\n')}`;
+    }
+
+    private saveSessionAnchorFromToolResult(action: Action, step: number, toolName: string, toolMetadata: any, toolResult: any, resultIndicatesError: boolean): void {
+        try {
+            if (!this.config.get('sessionAnchorEnabled')) return;
+            if (resultIndicatesError) return;
+            if (!action?.payload?.source) return;
+
+            const source = String(action.payload.source).toLowerCase();
+            const sessionScopeId = action.payload?.sessionScopeId || (action.payload?.sourceId ? `${source}:${action.payload.sourceId}` : undefined);
+            if (!sessionScopeId) return;
+
+            const resultString = JSON.stringify(toolResult || '');
+            const metadataString = JSON.stringify(toolMetadata || '');
+            const paths = [
+                ...this.extractLikelyPaths(resultString, 8),
+                ...this.extractLikelyPaths(metadataString, 4)
+            ];
+            const uniquePaths = Array.from(new Set(paths)).slice(0, 4);
+            if (uniquePaths.length === 0) return;
+
+            const shortAll = this.memory.searchMemory('short');
+            const recentAnchorForScope = shortAll
+                .filter(m => {
+                    const md: any = (m as any).metadata || {};
+                    return md.sessionAnchor === true && String(md.sessionScopeId || '') === String(sessionScopeId);
+                })
+                .sort((a, b) => {
+                    const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+                    const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+                    return tb - ta;
+                })[0];
+
+            const chosenPath = uniquePaths[0];
+            if (recentAnchorForScope) {
+                const recentPath = String(((recentAnchorForScope as any).metadata || {}).path || '');
+                if (recentPath && recentPath === chosenPath) return;
+            }
+
+            this.memory.saveMemory({
+                id: `${action.id}-step-${step}-session-anchor-${toolName}`,
+                type: 'short',
+                content: `[SESSION_ANCHOR] Active path/context: ${chosenPath}. Reuse this location for follow-up steps in the same session.`,
+                metadata: {
+                    actionId: action.id,
+                    step,
+                    tool: toolName,
+                    sessionAnchor: true,
+                    sessionScopeId,
+                    source,
+                    sourceId: action.payload?.sourceId,
+                    path: chosenPath
+                }
+            });
+        } catch (e) {
+            logger.debug(`Agent: Failed to save session anchor: ${e}`);
+        }
+    }
+
+    private buildContinuationPacket(actionId: string): {
+        artifactPaths: string[];
+        successHighlights: string[];
+        repeatFailureHints: string[];
+    } {
+        const memories = this.memory.getActionMemories(actionId);
+        if (!memories || memories.length === 0) {
+            return { artifactPaths: [], successHighlights: [], repeatFailureHints: [] };
+        }
+
+        const recent = memories.slice(-30);
+        const artifactPaths = new Set<string>();
+        const successHighlights: string[] = [];
+        const repeatFailureHints: string[] = [];
+
+        for (const memoryEntry of recent) {
+            const content = String(memoryEntry.content || '');
+            const md: any = memoryEntry.metadata || {};
+
+            const directPaths = this.extractLikelyPaths(content, 6);
+            directPaths.forEach(p => artifactPaths.add(p));
+
+            if (md?.input?.path && typeof md.input.path === 'string') artifactPaths.add(md.input.path);
+            if (md?.input?.cwd && typeof md.input.cwd === 'string') artifactPaths.add(md.input.cwd);
+            if (md?.result?.path && typeof md.result.path === 'string') artifactPaths.add(md.result.path);
+
+            const isSuccess = content.startsWith('✅ Tool') || content.includes('FILE DELIVERED SUCCESSFULLY');
+            if (isSuccess && successHighlights.length < 5) {
+                successHighlights.push(content.slice(0, 260));
+            }
+
+            const isFailureHint = content.includes('TOOL ERROR') || content.includes('FAILED with params') || content.includes('CRITICAL —');
+            if (isFailureHint && repeatFailureHints.length < 4) {
+                repeatFailureHints.push(content.slice(0, 260));
+            }
+        }
+
+        return {
+            artifactPaths: Array.from(artifactPaths).slice(0, 10),
+            successHighlights,
+            repeatFailureHints
+        };
     }
 
     private isRobustReasoningEnabled(): boolean {
@@ -6987,9 +7272,10 @@ Respond with a single actionable task description (one sentence). Be specific ab
             // Run simulation and decision loop for this single action
             const recentHist = this.memory.getRecentContext();
             const contextStr = recentHist.map(c => `[${c.type}] ${c.content}`).join('\n');
+            const sessionContinuityHint = this.buildSessionContinuityHint(action.payload);
             const executionPlan = await this.simulationEngine.simulate(
                 action.payload.description,
-                contextStr,
+                `${contextStr}${sessionContinuityHint ? `\n\n${sessionContinuityHint}` : ''}`,
                 this.skills.getSkillsPrompt()
             );
             const robustReasoningMode = this.isRobustReasoningEnabled();
@@ -7018,7 +7304,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         ...action.payload,
                         currentStep,
                         executionPlan,
-                        robustReasoningMode
+                        robustReasoningMode,
+                        sessionContinuityHint
                     }
                 });
 
@@ -7457,6 +7744,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
             if (waitingAction) {
                 logger.info(`Agent: Resuming waiting action ${waitingAction.id} due to new inbound message${messageId ? ` ${messageId}` : ''}`);
 
+                const continuationPacket = this.buildContinuationPacket(waitingAction.id);
+
                 // --- Step history contamination fix ---
                 // The old action accumulated step memories (e.g. {id}-step-1-web_search, etc.)
                 // that will pollute the DecisionEngine's context when the action resumes.
@@ -7507,8 +7796,21 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 const previousLooksLikeClarificationFlow = clarificationKeywords.some((k: string) => previousDescriptionLower.includes(k));
                 const isShortFollowUpAnswer = wordCount > 0 && (wordCount <= shortReplyWordLimit || newUserMessage.length < shortReplyCharLimit);
 
+                const packetLines: string[] = [];
+                if (continuationPacket.artifactPaths.length > 0) {
+                    packetLines.push(`Known artifact/workspace paths:\n- ${continuationPacket.artifactPaths.join('\n- ')}`);
+                }
+                if (continuationPacket.successHighlights.length > 0) {
+                    packetLines.push(`Recent successful progress:\n- ${continuationPacket.successHighlights.join('\n- ')}`);
+                }
+                if (continuationPacket.repeatFailureHints.length > 0) {
+                    packetLines.push(`Avoid repeating these failed patterns:\n- ${continuationPacket.repeatFailureHints.join('\n- ')}`);
+                }
+
+                const continuationContext = packetLines.join('\n\n');
+
                 const resumedDescription = (isShortFollowUpAnswer && previousDescription && previousLooksLikeClarificationFlow)
-                    ? `RESUMED CLARIFICATION CONTEXT:\nPrevious task context: ${previousDescription}\n\nUser's latest answer: ${newUserMessage}\n\nUse this answer to continue and progress the original task. Do NOT ask for the same information again unless absolutely required for execution.`
+                    ? `RESUMED CLARIFICATION CONTEXT:\nPrevious task context: ${previousDescription}\n\nUser's latest answer: ${newUserMessage}${continuationContext ? `\n\nCONTINUITY PACKET:\n${continuationContext}` : ''}\n\nUse this answer to continue and progress the original task. Do NOT ask for the same information again unless absolutely required for execution. Reuse existing artifact paths/workspace when available.`
                     : newUserMessage;
 
                 this.actionQueue.updatePayload(waitingAction.id, {
@@ -7517,6 +7819,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     lastUserMessageId: messageId || undefined,
                     lastUserMessageText: newUserMessage,
                     resumedWithMergedContext: isShortFollowUpAnswer && previousLooksLikeClarificationFlow,
+                    continuityPacket: continuationContext || undefined,
+                    continuityArtifactPaths: continuationPacket.artifactPaths,
                     resumedFromWaitingAt: new Date().toISOString()
                 });
                 this.actionQueue.updateStatus(waitingAction.id, 'pending');
@@ -7525,7 +7829,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     id: `${waitingAction.id}-resume-${messageId || Date.now()}`,
                     type: 'short',
                     content: isShortFollowUpAnswer && previousLooksLikeClarificationFlow
-                        ? `[SYSTEM: User provided a likely clarification answer: "${newUserMessage.slice(0, 200)}". Continue the prior task with this answer and avoid asking the same clarification again.]`
+                        ? `[SYSTEM: User provided a likely clarification answer: "${newUserMessage.slice(0, 200)}". Continue the prior task with this answer and avoid asking the same clarification again.${continuationContext ? ` Reuse continuity packet context (artifact paths/progress/failure hints).` : ''}]`
                         : `[SYSTEM: User sent a new message. This is now your PRIMARY task: "${newUserMessage.slice(0, 200)}". Focus on this new request. Any prior steps from the previous task have been cleared.]`,
                     timestamp: new Date().toISOString(),
                     metadata: {
@@ -7655,6 +7959,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             // Run a quick mental simulation to plan the steps (executed once per action start)
             const recentHist = this.memory.getRecentContext();
             const contextStr = recentHist.map(c => `[${c.type}] ${c.content}`).join('\n');
+            const sessionContinuityHint = this.buildSessionContinuityHint(action.payload);
 
             // LLM-based task complexity classification — replaces brittle regex heuristics.
             // For resumed actions, classify the LATEST user message (not the original trigger).
@@ -7678,7 +7983,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 ? 'Simple task: Respond directly and terminate. No multi-step planning needed.'
                 : await this.simulationEngine.simulate(
                     action.payload.description,
-                    contextStr.slice(-1000), // Limit context for simulation to save tokens
+                    `${contextStr.slice(-1000)}${sessionContinuityHint ? `\n\n${sessionContinuityHint}` : ''}`, // Limit context for simulation to save tokens
                     this.config.get('compactSkillsPrompt') 
                         ? this.skills.getCompactSkillsPrompt() 
                         : this.skills.getSkillsPrompt()
@@ -7734,10 +8039,12 @@ Respond with a single actionable task description (one sentence). Be specific ab
             let noToolsRetryCount = 0; // Track retries for no-tools error state
             let deepToolExecutedSinceLastMessage = true; // Start true to allow Step 1 message
             let stepsSinceLastMessage = 0;
+            let lastProgressFeedbackStep = 0;
             let consecutiveNonDeepTurns = 0;
             let waitingForClarification = false; // Track if we're paused for user input
             const sentMessagesInAction: string[] = [];
             let substantiveDeliveriesSent = 0;
+            const blockedFailedSignatures = new Set<string>();
             const skillCallCounts: Record<string, number> = {}; // Track how many times each skill is called
             const skillFailCounts: Record<string, number> = {}; // Track consecutive failures per skill
             const recentSkillNames: string[] = []; // Track skill name sequence for pattern detection
@@ -7768,6 +8075,12 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 'request_supporting_data'
             ];
 
+            const configuredProgressInterval = Number(this.config.get('progressFeedbackStepInterval') ?? 4);
+            const progressIntervalSteps = Number.isFinite(configuredProgressInterval)
+                ? Math.max(2, Math.floor(configuredProgressInterval))
+                : 4;
+            const forceInitialProgress = this.config.get('progressFeedbackForceInitial') !== false;
+
             if (!isSimpleTask && action.payload.source && exposeChecklistPreview) {
                 const checklistMessage = this.buildChecklistPreviewMessage(executionPlan);
                 if (checklistMessage) {
@@ -7796,11 +8109,12 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 // PERIODIC PROGRESS FEEDBACK: For long-running tasks, send the user
                 // periodic "still working" feedback so they know we haven't stalled.
                 // Fires once after 8 consecutive silent steps (stepsSinceLastMessage resets on send).
-                if (!isSimpleTask && currentStep > 1 && stepsSinceLastMessage === 8 && action.payload.source) {
+                if (!isSimpleTask && currentStep > 1 && stepsSinceLastMessage >= progressIntervalSteps && action.payload.source) {
                     await this.sendProgressFeedback(action, 'working', `Still working on your request (step ${currentStep})...`);
                     // Progress message was just sent; reset silent-step counter and count toward message budget.
                     stepsSinceLastMessage = 0;
                     messagesSent++;
+                    lastProgressFeedbackStep = currentStep;
                 }
 
                 if (messagesSent >= MAX_MESSAGES) {
@@ -7848,7 +8162,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 stepsSinceLastMessage,
                                 isResearchTask,
                                 executionPlan, // Pass plan to DecisionEngine
-                                robustReasoningMode
+                                robustReasoningMode,
+                                sessionContinuityHint
                             }
                         });
                     }, { maxRetries: 2 });
@@ -7873,6 +8188,29 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                 if (decision.verification) {
                     logger.info(`Verification: [Goals Met: ${decision.verification.goals_met}] ${decision.verification.analysis}`);
+                }
+
+                // PROACTIVE PRE-TOOL UPDATE: avoid long silent stretches before deep/slow tool execution.
+                if (action.payload.source && decision.tools && decision.tools.length > 0) {
+                    const hasChannelSendTool = decision.tools.some((t: any) => {
+                        const name = String(t?.name || '').toLowerCase();
+                        return name === 'send_telegram' || name === 'send_whatsapp' || name === 'send_discord' || name === 'send_slack' || name === 'send_gateway_chat';
+                    });
+
+                    const hasDeepTool = decision.tools.some((t: any) => !nonDeepSkills.includes(String(t?.name || '')));
+                    const eligibleByCadence = currentStep - lastProgressFeedbackStep >= progressIntervalSteps;
+                    const shouldForceInitial = forceInitialProgress && messagesSent === 0;
+                    const shouldSendProactive = hasDeepTool && !hasChannelSendTool && (shouldForceInitial || (stepsSinceLastMessage >= progressIntervalSteps && eligibleByCadence));
+
+                    if (shouldSendProactive) {
+                        const details = shouldForceInitial
+                            ? 'Started your task and working through it now...'
+                            : `Still working and making progress (step ${currentStep})...`;
+                        await this.sendProgressFeedback(action, 'working', details);
+                        messagesSent++;
+                        stepsSinceLastMessage = 0;
+                        lastProgressFeedbackStep = currentStep;
+                    }
                 }
 
                 // IMPORTANT: Execute tools FIRST, then check goals_met
@@ -7918,14 +8256,13 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             // PROGRESS FEEDBACK: Let user know we got stuck
                             await this.sendProgressFeedback(action, 'recovering', 'Got stuck in a loop. Learning from this to improve...');
                             
-                            // SELF-IMPROVEMENT: Only trigger for non-core tools (core tools looping = strategy issue, not missing skill)
+                            // SELF-IMPROVEMENT: Trigger selective analysis. The analyzer decides
+                            // whether to create a skill or skip (strategy/parameter issue).
                             const failingTool = decision.tools[0]?.name;
-                            if (failingTool && !this.isCoreBuiltinSkill(failingTool) && !RESEARCH_TOOLS.has(failingTool)) {
+                            if (failingTool) {
                                 const failingContext = JSON.stringify(decision.tools[0]?.metadata || {}).slice(0, 200);
                                 const taskDescription = typeof action.payload === 'string' ? action.payload : JSON.stringify(action.payload);
                                 await this.triggerSkillCreationForFailure(taskDescription, failingTool, failingContext, action);
-                            } else {
-                                logger.info(`Agent: Loop on core/research tool '${failingTool}' — not triggering self-improvement (strategy issue, not missing skill).`);
                             }
                             
                             break;
@@ -7985,8 +8322,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             // Review layer confirms we should stop
                             await this.sendProgressFeedback(action, 'recovering', `Got stuck repeating '${skillName}'. Wrapping up with what I have...`);
                             
-                            // Only trigger self-improvement for NON-core, non-research skills
-                            if (!isResearchTool && !this.isCoreBuiltinSkill(skillName)) {
+                            // Trigger selective self-improvement analysis for all tool classes.
+                            // The analyzer can still choose not to create a skill.
+                            if (skillName) {
                                 if (skillExists && failCount > 0) {
                                     logger.info(`Agent: Skill '${skillName}' exists but keeps failing (${failCount} errors). Not creating a new skill — this is a parameter issue.`);
                                     this.memory.saveMemory({
@@ -8003,8 +8341,6 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                         action
                                     );
                                 }
-                            } else {
-                                logger.info(`Agent: '${skillName}' is a core/research tool — skipping self-improvement trigger (not a missing capability).`);
                             }
                             break;
                         }
@@ -8043,6 +8379,18 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     let totalSendToolsInStep = 0;
 
                     for (const toolCall of decision.tools) {
+                        const toolSignature = this.buildToolSignatureKey(toolCall.name, toolCall.metadata || {});
+                        if (blockedFailedSignatures.has(toolSignature)) {
+                            logger.warn(`Agent: Blocked repeated failed signature for ${toolCall.name} in action ${action.id}`);
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-${toolCall.name}-signature-blocked`,
+                                type: 'short',
+                                content: `[SYSTEM: BLOCKED REPEATED FAILURE — '${toolCall.name}' with the same parameters already failed in this action. Do NOT retry this exact call. Choose different parameters or a different approach.]`,
+                                metadata: { actionId: action.id, step: currentStep, skill: toolCall.name, signatureBlocked: true }
+                            });
+                            continue;
+                        }
+
                         // Reset cooldown if a deep tool (search, command, browser interaction) is used
                         if (!nonDeepSkills.includes(toolCall.name)) {
                             deepToolExecutedSinceLastMessage = true;
@@ -8307,6 +8655,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             // Reset failure counter for this skill on success
                             skillFailCounts[toolCall.name] = 0;
                         } else if (resultIndicatesError) {
+                            blockedFailedSignatures.add(toolSignature);
                             // Track ALL tool failures that return error results (not just thrown exceptions)
                             skillFailCounts[toolCall.name] = (skillFailCounts[toolCall.name] || 0) + 1;
                             
@@ -8439,6 +8788,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             content: observation,
                             metadata: { tool: toolCall.name, result: toolResult, input: toolCall.metadata }
                         });
+
+                        this.saveSessionAnchorFromToolResult(action, currentStep, toolCall.name, toolCall.metadata || {}, toolResult, resultIndicatesError);
 
                         // HARD BREAK after scheduling to prevent loops
                         if (toolCall.name === 'schedule_task') {

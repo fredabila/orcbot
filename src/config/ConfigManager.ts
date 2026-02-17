@@ -112,6 +112,10 @@ export interface AgentConfig {
     robustReasoningMode?: boolean; // Enable stricter reasoning guardrails and verification
     reasoningExposeChecklist?: boolean; // Send checklist preview to users for non-trivial tasks
     reasoningChecklistMaxItems?: number; // Max checklist items to show in preview
+    orcbotControlEnabled?: boolean; // Enable admin-gated app-level control skill
+    orcbotControlCliAllowList?: string[]; // Allowed `orcbot` CLI command prefixes for app control
+    orcbotControlCliDenyList?: string[]; // Denied `orcbot` CLI command prefixes for app control
+    orcbotControlTimeoutMs?: number; // Timeout for app-control CLI execution
     // Operational
     autoExecuteCommands?: boolean;        // Auto-execute commands without confirmation (default false)
     skillRoutingRules?: Array<{
@@ -124,6 +128,10 @@ export interface AgentConfig {
     autopilotNoQuestionsAllow?: string[];
     autopilotNoQuestionsDeny?: string[];
     progressFeedbackEnabled?: boolean;
+    progressFeedbackStepInterval?: number; // Silent-step threshold before automatic status update
+    progressFeedbackForceInitial?: boolean; // Force an initial status update before deep tool work
+    sessionAnchorEnabled?: boolean; // Persist and reuse workspace/artifact anchors per session scope
+    sessionAnchorMaxHints?: number; // Maximum session continuity hints to inject into reasoning context
     // Memory limits
     memoryContextLimit?: number;          // Recent memories in context (default 20)
     memoryEpisodicLimit?: number;         // Episodic summaries to include (default 5)
@@ -651,6 +659,10 @@ export class ConfigManager {
             robustReasoningMode: false,
             reasoningExposeChecklist: false,
             reasoningChecklistMaxItems: 5,
+            orcbotControlEnabled: true,
+            orcbotControlCliAllowList: ['config get', 'config set', 'models', 'gateway', 'security', 'agentic-user'],
+            orcbotControlCliDenyList: ['reset', 'ui', 'setup', 'builder', 'daemon stop'],
+            orcbotControlTimeoutMs: 45000,
             autoExecuteCommands: false,
             bedrockRegion: process.env.BEDROCK_REGION || process.env.AWS_REGION,
             bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
@@ -664,6 +676,10 @@ export class ConfigManager {
             autopilotNoQuestionsAllow: [],
             autopilotNoQuestionsDeny: [],
             progressFeedbackEnabled: true,
+            progressFeedbackStepInterval: 4,
+            progressFeedbackForceInitial: true,
+            sessionAnchorEnabled: true,
+            sessionAnchorMaxHints: 4,
             memoryContextLimit: 20,
             memoryEpisodicLimit: 5,
             memoryConsolidationThreshold: 30,

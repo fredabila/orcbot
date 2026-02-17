@@ -55,6 +55,8 @@ ERROR SELF-DIAGNOSIS & RECOVERY (CRITICAL):
 
 ENVIRONMENT ADAPTATION:
 - **Shell awareness**: Commands execute in different shells depending on OS (PowerShell on Windows, bash/sh on Linux/Mac). Always consider the shell when writing commands.
+- **OrcBot app-level control**: For OrcBot CLI/TUI/app operations (config changes, model/provider menus, gateway/security controls), prefer \
+  \`orcbot_control\` over raw \`run_command\`. It is policy-aware, RBAC-gated, and supports safe command allow/deny rules.
 - **CLI tool interactivity**: When running CLI tools via run_command:
   - Some tools need flags for non-interactive mode (e.g., \`-y\` for auto-yes, \`--no-input\`, \`--batch\`).
   - If a command seems to hang or timeout, it might be waiting for input. Retry with non-interactive flags.
