@@ -476,6 +476,32 @@ export class Agent {
         return `scope:channel-peer:${cleanSource}:${peer}`;
     }
 
+    private getBuildWorkspacePath(): string {
+        const configured = String(this.config.get('buildWorkspacePath') || '').trim();
+        const fallback = path.join(this.config.getDataHome(), 'workspace');
+        const target = configured || fallback;
+        const resolved = path.resolve(target);
+        try {
+            if (!fs.existsSync(resolved)) {
+                fs.mkdirSync(resolved, { recursive: true });
+            }
+        } catch (e) {
+            logger.debug(`Agent: Failed to ensure build workspace path "${resolved}": ${e}`);
+        }
+        return resolved;
+    }
+
+    private resolveAgentWorkspacePath(targetPath: string): string {
+        const raw = String(targetPath || '').trim();
+        if (!raw) {
+            return this.getBuildWorkspacePath();
+        }
+        if (path.isAbsolute(raw)) {
+            return path.resolve(raw);
+        }
+        return path.resolve(this.getBuildWorkspacePath(), raw);
+    }
+
     private registerInternalSkills() {
         // ═══════════════════════════════════════════
         // Channel Messaging & Reaction Skills
@@ -1026,7 +1052,7 @@ export class Agent {
                 if (!filePath) return 'Error: Missing file path.';
 
                 try {
-                    const resolvedPath = path.resolve(filePath);
+                    const resolvedPath = this.resolveAgentWorkspacePath(String(filePath));
                     const dir = path.dirname(resolvedPath);
                     
                     // Create parent directories if needed
@@ -1058,7 +1084,7 @@ export class Agent {
                 if (!dirPath) return 'Error: Missing directory path.';
 
                 try {
-                    const resolvedPath = path.resolve(dirPath);
+                    const resolvedPath = this.resolveAgentWorkspacePath(String(dirPath));
                     
                     if (fs.existsSync(resolvedPath)) {
                         return `Directory already exists: ${resolvedPath}`;
@@ -1083,7 +1109,7 @@ export class Agent {
                 if (!filePath) return 'Error: Missing file path.';
 
                 try {
-                    const resolvedPath = path.resolve(filePath);
+                    const resolvedPath = this.resolveAgentWorkspacePath(String(filePath));
                     
                     if (!fs.existsSync(resolvedPath)) {
                         return `Error: File not found: ${resolvedPath}`;
@@ -1105,10 +1131,10 @@ export class Agent {
             description: 'List files and subdirectories in a directory.',
             usage: 'list_directory(path)',
             handler: async (args: any) => {
-                const dirPath = args.path || args.dir || args.directory || '.';
+                const dirPath = args.path || args.dir || args.directory || this.getBuildWorkspacePath();
 
                 try {
-                    const resolvedPath = path.resolve(dirPath);
+                    const resolvedPath = this.resolveAgentWorkspacePath(String(dirPath));
                     
                     if (!fs.existsSync(resolvedPath)) {
                         return `Error: Directory not found: ${resolvedPath}`;
@@ -1685,7 +1711,11 @@ export class Agent {
                 // Extract the directory and convert to use cwd parameter instead
                 // Note: Only handles cd at the start of command. Multi-command chains like
                 // "git status && cd /path && git pull" are not supported.
-                let workingDir = args.cwd || this.config.get('commandWorkingDir') || process.cwd();
+                let workingDir = args.cwd
+                    ? this.resolveAgentWorkspacePath(String(args.cwd))
+                    : this.config.get('commandWorkingDir')
+                        ? this.resolveAgentWorkspacePath(String(this.config.get('commandWorkingDir')))
+                        : this.getBuildWorkspacePath();
                 let actualCommand = command;
                 
                 // Only attempt pattern extraction if explicit cwd is not already provided
@@ -1708,7 +1738,7 @@ export class Agent {
                         
                         // Basic path validation to prevent directory traversal attacks
                         // Resolve to absolute path and check for suspicious patterns
-                        const resolvedPath = path.resolve(targetDir);
+                        const resolvedPath = path.resolve(workingDir, targetDir);
                         
                         // Warn if path contains excessive parent directory references
                         // Note: This is a heuristic check; the command will still execute
@@ -3424,6 +3454,7 @@ export const ${name} = {
             return \`Error in ${name}: \${e?.message || e}\`;
         }
     }
+
 };
 
 export default ${name};

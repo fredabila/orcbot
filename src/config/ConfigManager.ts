@@ -57,6 +57,7 @@ export interface AgentConfig {
     commandTimeoutMs?: number;
     commandRetries?: number;
     commandWorkingDir?: string;
+    buildWorkspacePath?: string;
     commandAllowList?: string[];
     commandDenyList?: string[];
     safeMode?: boolean;
@@ -446,6 +447,7 @@ export class ConfigManager {
             'learningPath',
             'pluginsPath',
             'toolsPath',
+            'buildWorkspacePath',
             'whatsappSessionPath',
             'browserProfileDir',
             'tokenUsagePath',
@@ -541,6 +543,7 @@ export class ConfigManager {
             commandTimeoutMs: 120000,
             commandRetries: 1,
             commandWorkingDir: undefined,
+            buildWorkspacePath: path.join(this.dataHome, 'workspace'),
             commandAllowList: [
                 'npm',
                 'node',
