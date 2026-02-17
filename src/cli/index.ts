@@ -892,6 +892,16 @@ program
     });
 
 program
+    .command('metrics')
+    .description('Show internal guardrail metrics (non-user-facing telemetry)')
+    .option('--limit <n>', 'How many recent metric events to show', '10')
+    .action((opts) => {
+        const limitRaw = Number(opts.limit ?? 10);
+        const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, Math.floor(limitRaw))) : 10;
+        showGuardrailMetrics(limit);
+    });
+
+program
     .command('tokens')
     .description('Show token usage summary')
     .argument('[action]', 'Action: recount (rebuild summary from raw log)')
@@ -2136,6 +2146,7 @@ async function showMainMenu() {
                 { name: `${c.brightYellow || c.yellow}🤖${c.reset} Agentic User (HITL Proxy)`, value: 'agentic_user' },
                 { name: `${c.red}🔒${c.reset} Security & Permissions`, value: 'security' },
                 { name: `${c.green}📈${c.reset} Token Usage`, value: 'tokens' },
+                { name: `${c.cyan}🧪${c.reset} Guardrail Metrics`, value: 'metrics' },
                 { name: `${c.brightBlue}🌍${c.reset} World Events Live`, value: 'world_events' },
                 { name: `${c.brightCyan}⏱️${c.reset}  Latency Benchmark`, value: 'latency' },
                 new inquirer.Separator(cyan(' ─── System ') + gray('─'.repeat(27))),
@@ -2192,6 +2203,11 @@ async function showMainMenu() {
             break;
         case 'tokens':
             showTokenUsage();
+            await waitKeyPress();
+            await showMainMenu();
+            break;
+        case 'metrics':
+            showGuardrailMetrics();
             await waitKeyPress();
             await showMainMenu();
             break;
@@ -5311,6 +5327,86 @@ function showStatus() {
     }
     box(queueLines, { title: '📋 ACTION QUEUE', width: 52, color: c.yellow });
 
+    console.log('');
+}
+
+function showGuardrailMetrics(limit: number = 10) {
+    console.clear();
+    banner();
+    sectionHeader('🧪', 'Guardrail Metrics');
+
+    const episodic = agent.memory.searchMemory('episodic') as any[];
+    const metricEntries = episodic
+        .filter((m: any) => {
+            const metricKey = String(m?.metadata?.metric || '').toLowerCase();
+            const content = String(m?.content || '').toLowerCase();
+            return metricKey === 'max_step_fallback' || content.includes('[metric] max_step_fallback');
+        })
+        .sort((a: any, b: any) => {
+            const at = a?.timestamp ? new Date(a.timestamp).getTime() : 0;
+            const bt = b?.timestamp ? new Date(b.timestamp).getTime() : 0;
+            return bt - at;
+        });
+
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const total = metricEntries.length;
+    const last24h = metricEntries.filter((m: any) => {
+        const t = m?.timestamp ? new Date(m.timestamp).getTime() : 0;
+        return t > 0 && now - t <= dayMs;
+    }).length;
+    const last7d = metricEntries.filter((m: any) => {
+        const t = m?.timestamp ? new Date(m.timestamp).getTime() : 0;
+        return t > 0 && now - t <= dayMs * 7;
+    }).length;
+
+    const sourceCounts = new Map<string, number>();
+    for (const entry of metricEntries) {
+        const content = String(entry?.content || '');
+        const sourceFromContent = content.match(/source=([^\s]+)/i)?.[1];
+        const source = String(entry?.metadata?.channelSource || sourceFromContent || 'unknown').toLowerCase();
+        sourceCounts.set(source, (sourceCounts.get(source) || 0) + 1);
+    }
+    const topSources = Array.from(sourceCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([source, count]) => `${source}:${count}`)
+        .join('  ') || 'none';
+
+    console.log('');
+    box([
+        `${dim('Metric')}        ${bold('max_step_fallback')}`,
+        `${dim('Total')}         ${total > 0 ? yellow(bold(String(total))) : gray('0')}`,
+        `${dim('Last 24 hours')} ${last24h > 0 ? yellow(bold(String(last24h))) : gray('0')}`,
+        `${dim('Last 7 days')}   ${last7d > 0 ? cyan(bold(String(last7d))) : gray('0')}`,
+        `${dim('Top sources')}   ${topSources}`,
+    ], { title: '📉 FALLBACK SUMMARY', width: 64, color: c.yellow });
+
+    const recent = metricEntries.slice(0, Math.max(1, limit));
+    if (recent.length === 0) {
+        console.log('');
+        box([dim('No max-step fallback events recorded yet.')], { title: '🕘 RECENT EVENTS', width: 64, color: c.gray });
+        console.log('');
+        return;
+    }
+
+    const rows: string[][] = [[bold('Time'), bold('Action'), bold('Source'), bold('Msgs'), bold('Substantive')]];
+    for (const event of recent) {
+        const ts = event?.timestamp ? new Date(event.timestamp) : null;
+        const timeStr = ts && !isNaN(ts.getTime())
+            ? ts.toLocaleString('en-US', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+            : 'n/a';
+        const actionId = String(event?.metadata?.actionId || 'unknown').slice(0, 8);
+        const content = String(event?.content || '');
+        const sourceFromContent = content.match(/source=([^\s]+)/i)?.[1] || 'unknown';
+        const msgs = event?.metadata?.messagesSent ?? (content.match(/messagesSent=(\d+)/i)?.[1] ?? '-');
+        const subs = event?.metadata?.substantiveDeliveriesSent ?? (content.match(/substantiveDeliveries=(\d+)/i)?.[1] ?? '-');
+        rows.push([timeStr, actionId, String(sourceFromContent), String(msgs), String(subs)]);
+    }
+
+    console.log('');
+    box([`${dim('Recent')} ${recent.length} ${dim('event(s)')}`], { title: '🕘 RECENT EVENTS', width: 64, color: c.cyan });
+    table(rows, { indent: '  ', separator: '   ', headerColor: brightCyan });
     console.log('');
 }
 

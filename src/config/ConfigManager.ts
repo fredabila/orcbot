@@ -30,6 +30,7 @@ export interface AgentConfig {
     bedrockSessionToken?: string;
     autonomyEnabled?: boolean;
     autonomyInterval?: number; // In minutes, default 0 (disabled)
+    autonomyPostUserCooldownSeconds?: number; // Delay heartbeat after inbound user activity (default 90)
     autonomyBacklogLimit?: number;
     maxActionRunMinutes?: number;
     maxStaleActionMinutes?: number;
@@ -513,6 +514,7 @@ export class ConfigManager {
             searchProviderOrder: ['serper', 'brave', 'searxng', 'google', 'bing', 'duckduckgo'],
             autonomyEnabled: true,
             autonomyInterval: 15,
+            autonomyPostUserCooldownSeconds: 90,
             autonomyBacklogLimit: 3,
             maxActionRunMinutes: 10,
             maxStaleActionMinutes: 30,

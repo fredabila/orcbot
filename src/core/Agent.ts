@@ -96,6 +96,8 @@ export class Agent {
     private lastHeartbeatProductive: boolean = true;
     private heartbeatRunning: boolean = false;
     private lastHeartbeatPushAt: number = 0;
+    private lastUserActivityAt: number = 0;
+    private maxStepFallbackCount: number = 0;
     private lastWorldEventsRefreshAt: number = 0;
     private lastWorldEventsMemoryWriteAt: number = 0;
     private worldEventsRefreshRunning: boolean = false;
@@ -5961,7 +5963,8 @@ REFLECTION: <1-2 sentences>`;
     }
 
     private shouldExposeChecklistPreview(): boolean {
-        return !!this.config.get('reasoningExposeChecklist') || this.isRobustReasoningEnabled();
+        // Checklist previews are opt-in only; robust mode should not auto-send them.
+        return !!this.config.get('reasoningExposeChecklist');
     }
 
     private extractChecklistItemsFromPlan(plan: string, maxItems: number): string[] {
@@ -6005,6 +6008,13 @@ REFLECTION: <1-2 sentences>`;
         if (!message || !action.payload?.source) return false;
         const source = action.payload.source;
         const sourceId = action.payload.sourceId;
+
+        // Never send internal execution checklists to end-user channels.
+        const userFacingSources = new Set(['telegram', 'whatsapp', 'discord', 'slack', 'gateway-chat']);
+        if (userFacingSources.has(String(source).toLowerCase())) {
+            logger.debug(`Checklist preview suppressed for user-facing source: ${source}`);
+            return false;
+        }
 
         if (source !== 'gateway-chat' && !sourceId) return false;
 
@@ -6397,6 +6407,16 @@ REFLECTION: <1-2 sentences>`;
         const autonomyEnabled = this.config.get('autonomyEnabled');
         const intervalMinutes = this.config.get('autonomyInterval') || 0;
         if (!autonomyEnabled || intervalMinutes <= 0) return;
+
+        // Avoid heartbeat collisions immediately after fresh inbound user activity.
+        const postUserCooldownMs = Math.max(0, Number(this.config.get('autonomyPostUserCooldownSeconds') ?? 90)) * 1000;
+        if (postUserCooldownMs > 0 && this.lastUserActivityAt > 0) {
+            const elapsedSinceUserActivity = Date.now() - this.lastUserActivityAt;
+            if (elapsedSinceUserActivity < postUserCooldownMs) {
+                logger.debug(`Agent: Heartbeat skipped - recent user activity ${Math.floor(elapsedSinceUserActivity / 1000)}s ago`);
+                return;
+            }
+        }
 
         // Cooldown: skip if any heartbeat (including cron-scheduled) pushed a task very recently
         const heartbeatCooldownMs = 60_000;
@@ -6953,6 +6973,15 @@ Respond with a single actionable task description (one sentence). Be specific ab
             if (this.isBusy) {
                 logger.debug(`Heartbeat Schedule ${id}: Skipped - agent is busy`);
                 return;
+            }
+            // Avoid heartbeat collisions immediately after fresh inbound user activity.
+            const postUserCooldownMs = Math.max(0, Number(this.config.get('autonomyPostUserCooldownSeconds') ?? 90)) * 1000;
+            if (postUserCooldownMs > 0 && this.lastUserActivityAt > 0) {
+                const elapsedSinceUserActivity = Date.now() - this.lastUserActivityAt;
+                if (elapsedSinceUserActivity < postUserCooldownMs) {
+                    logger.debug(`Heartbeat Schedule ${id}: Skipped - recent user activity ${Math.floor(elapsedSinceUserActivity / 1000)}s ago`);
+                    return;
+                }
             }
             // Cooldown: don't fire if any heartbeat pushed a task in the last 60 seconds
             const heartbeatCooldownMs = 60_000;
@@ -7716,6 +7745,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
         // Emit user:activity event so AgenticUser suppresses interventions while user is present
         // Only for real user messages (not scheduler, heartbeat, or autonomy tasks)
         if (lane === 'user' && metadata?.source && metadata?.sourceId && !metadata?.isHeartbeat) {
+            this.lastUserActivityAt = Date.now();
             eventBus.emit('user:activity', {
                 source: metadata.source,
                 sourceId: metadata.sourceId,
@@ -7955,6 +7985,23 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 metadata: { actionId: action.id, source: action.payload.source }
             });
 
+            if (action.payload?.source && !action.payload?.isHeartbeat) {
+                const sessionScopeId = action.payload?.sessionScopeId || `${action.payload.source}:${action.payload.sourceId || action.payload.userId || 'unknown'}`;
+                this.memory.saveMemory({
+                    id: `${action.id}-objective-active`,
+                    type: 'short',
+                    content: `[OBJECTIVE] ACTIVE: ${String(action.payload.description || '').slice(0, 320)}`,
+                    metadata: {
+                        actionId: action.id,
+                        source: action.payload.source,
+                        sourceId: action.payload.sourceId,
+                        sessionScopeId,
+                        objectiveStatus: 'active',
+                        objectiveId: action.id
+                    }
+                });
+            }
+
             // SIMULATION LAYER (New)
             // Run a quick mental simulation to plan the steps (executed once per action start)
             const recentHist = this.memory.getRecentContext();
@@ -8045,6 +8092,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             const sentMessagesInAction: string[] = [];
             let substantiveDeliveriesSent = 0;
             const blockedFailedSignatures = new Set<string>();
+            const blockedFailedTools = new Set<string>();
             const skillCallCounts: Record<string, number> = {}; // Track how many times each skill is called
             const skillFailCounts: Record<string, number> = {}; // Track consecutive failures per skill
             const recentSkillNames: string[] = []; // Track skill name sequence for pattern detection
@@ -8379,6 +8427,17 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     let totalSendToolsInStep = 0;
 
                     for (const toolCall of decision.tools) {
+                        if (blockedFailedTools.has(toolCall.name)) {
+                            logger.warn(`Agent: Blocked tool '${toolCall.name}' after repeated failures in action ${action.id}`);
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-${toolCall.name}-tool-blocked`,
+                                type: 'short',
+                                content: `[SYSTEM: TOOL BLOCKED — '${toolCall.name}' already failed repeatedly in this action. Do NOT call it again unless strategy changed fundamentally. Use a different tool/workflow now.]`,
+                                metadata: { actionId: action.id, step: currentStep, skill: toolCall.name, toolBlocked: true }
+                            });
+                            continue;
+                        }
+
                         const toolSignature = this.buildToolSignatureKey(toolCall.name, toolCall.metadata || {});
                         if (blockedFailedSignatures.has(toolSignature)) {
                             logger.warn(`Agent: Blocked repeated failed signature for ${toolCall.name} in action ${action.id}`);
@@ -8731,6 +8790,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             
                             if (skillFailCounts[toolCall.name] >= MAX_CONSECUTIVE_FAILURES) {
                                 logger.warn(`Agent: '${toolCall.name}' returned errors ${MAX_CONSECUTIVE_FAILURES} times in action ${action.id}. Injecting hard stop notice.`);
+                                blockedFailedTools.add(toolCall.name);
                                 this.memory.saveMemory({
                                     id: `${action.id}-step-${currentStep}-${toolCall.name}-failure-limit`,
                                     type: 'short',
@@ -9155,7 +9215,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                         messagingLocked: true,
                                         currentStep,
                                         executionPlan,
-                                        robustReasoningMode
+                                        robustReasoningMode,
+                                        sessionContinuityHint
                                     }
                                 });
                             }, { maxRetries: 2, initialDelay: 1000 });
@@ -9258,7 +9319,23 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         }
                     }
                 } else {
-                    await this.sendProgressFeedback(action, 'recovering', `Reached the step limit (${MAX_STEPS}). I couldn't complete this task — it may need a different approach or manual help.`);
+                    // Keep max-step fallback internal. User-facing delivery should come from
+                    // normal tool outputs/recovery actions, not this generic guardrail notice.
+                    this.maxStepFallbackCount++;
+                    logger.info(`Agent: Max-step fallback kept internal for action ${action.id} (messagesSent=${messagesSent}, substantiveDeliveries=${substantiveDeliveriesSent}, totalFallbacks=${this.maxStepFallbackCount})`);
+                    this.memory.saveMemory({
+                        id: `metric-max-step-fallback-${action.id}-${Date.now()}`,
+                        type: 'episodic',
+                        content: `[METRIC] max_step_fallback action=${action.id} source=${action.payload?.source || 'unknown'} messagesSent=${messagesSent} substantiveDeliveries=${substantiveDeliveriesSent} runtimeTotal=${this.maxStepFallbackCount}`,
+                        metadata: {
+                            source: 'guardrail-metric',
+                            metric: 'max_step_fallback',
+                            actionId: action.id,
+                            messagesSent,
+                            substantiveDeliveriesSent: substantiveDeliveriesSent,
+                            runtimeTotal: this.maxStepFallbackCount
+                        }
+                    });
                 }
             }
 
@@ -9326,6 +9403,23 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
 
             // Determine final status based on whether goals were actually achieved
             const actionStatus = goalsMet ? 'completed' : 'failed';
+
+            if (action.payload?.source && !action.payload?.isHeartbeat) {
+                const sessionScopeId = action.payload?.sessionScopeId || `${action.payload.source}:${action.payload.sourceId || action.payload.userId || 'unknown'}`;
+                this.memory.saveMemory({
+                    id: `${action.id}-objective-${goalsMet ? 'completed' : 'failed'}`,
+                    type: 'short',
+                    content: `[OBJECTIVE] ${goalsMet ? 'COMPLETED' : 'FAILED'}: ${String(action.payload.description || '').slice(0, 320)}`,
+                    metadata: {
+                        actionId: action.id,
+                        source: action.payload.source,
+                        sourceId: action.payload.sourceId,
+                        sessionScopeId,
+                        objectiveStatus: goalsMet ? 'completed' : 'failed',
+                        objectiveId: action.id
+                    }
+                });
+            }
 
             if (!goalsMet) {
                 logger.warn(`Agent: Action ${action.id} terminated without achieving goals (guard rail or exhaustion). Marked as failed.`);

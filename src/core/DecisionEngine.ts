@@ -566,6 +566,7 @@ If the user asks for an opinion, explanation, summary, or normal chat response, 
         const telegramUserId = metadata?.userId;
 
         let threadContextString = '';
+        let objectiveContextString = '';
         if (!isHeartbeat) {
         try {
             const stopwords = new Set([
@@ -706,6 +707,45 @@ If the user asks for an opinion, explanation, summary, or normal chat response, 
                         return `[${ts}]${role ? ` (${role})` : ''} ${clipped}`;
                     })
                     .join('\n');
+            }
+
+            try {
+                const objectiveCandidates = candidates
+                    .filter(m => {
+                        const md: any = (m as any).metadata || {};
+                        return md.objectiveStatus === 'active' || md.objectiveStatus === 'completed' || md.objectiveStatus === 'failed';
+                    })
+                    .sort((a, b) => {
+                        const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+                        const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+                        return tb - ta;
+                    })
+                    .slice(0, 8);
+
+                const latestByObjective = new Map<string, any>();
+                for (const m of objectiveCandidates) {
+                    const md: any = (m as any).metadata || {};
+                    const objectiveId = String(md.objectiveId || md.actionId || m.id || '');
+                    if (!objectiveId || latestByObjective.has(objectiveId)) continue;
+                    latestByObjective.set(objectiveId, m);
+                }
+
+                const activeObjectives = Array.from(latestByObjective.values())
+                    .filter(m => String(((m as any).metadata || {}).objectiveStatus || '').toLowerCase() === 'active')
+                    .slice(0, 3);
+
+                if (activeObjectives.length > 0) {
+                    objectiveContextString = activeObjectives
+                        .map(m => {
+                            const md: any = (m as any).metadata || {};
+                            const ts = (m as any).timestamp || '';
+                            const text = String((m as any).content || '').slice(0, 260);
+                            return `[${ts}] (objective:${md.objectiveId || md.actionId || 'n/a'}) ${text}`;
+                        })
+                        .join('\n');
+                }
+            } catch {
+                // Non-blocking objective context enrichment
             }
         } catch {
             // Best-effort only
@@ -972,6 +1012,8 @@ ${safeJournal ? `Agent Journal (Recent Reflections):\n${safeJournal}` : ''}
 ${safeLearning ? `Agent Learning Base (Knowledge):\n${safeLearning}` : ''}
 
 ${threadContextString ? `THREAD CONTEXT (Same Chat):\n${threadContextString}` : ''}
+
+${objectiveContextString ? `ACTIVE OBJECTIVES (Same Session):\n${objectiveContextString}` : ''}
 
 ${safeEpisodic ? `EPISODIC MEMORY (Task-Relevant Summaries — past actions, outcomes, and learnings):\n${safeEpisodic}` : ''}
 
