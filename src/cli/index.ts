@@ -2150,6 +2150,7 @@ async function showMainMenu() {
                 { name: `${c.brightBlue}🌍${c.reset} World Events Live`, value: 'world_events' },
                 { name: `${c.brightCyan}⏱️${c.reset}  Latency Benchmark`, value: 'latency' },
                 new inquirer.Separator(cyan(' ─── System ') + gray('─'.repeat(27))),
+                { name: `${c.gray}📂 ${c.reset} Open Build Workspace`, value: 'open_build_workspace' },
                 { name: `${c.gray}⚙️ ${c.reset} Configure Agent`, value: 'config' },
                 { name: `${c.gray}⬆️ ${c.reset} Update OrcBot`, value: 'update' },
                 { name: dim('   Exit'), value: 'exit' },
@@ -2218,6 +2219,11 @@ async function showMainMenu() {
             await runLatencyBenchmark({ includeLLM: false, interactive: true });
             await showMainMenu();
             break;
+        case 'open_build_workspace':
+            await openBuildWorkspaceFolder();
+            await waitKeyPress();
+            await showMainMenu();
+            break;
         case 'config':
             await showConfigMenu();
             break;
@@ -2227,6 +2233,42 @@ async function showMainMenu() {
             break;
         case 'exit':
             process.exit(0);
+    }
+}
+
+async function openBuildWorkspaceFolder() {
+    const configured = String(agent.config.get('buildWorkspacePath') || '').trim();
+    const fallback = path.join(agent.config.getDataHome(), 'workspace');
+    const workspacePath = path.resolve(configured || fallback);
+
+    try {
+        if (!fs.existsSync(workspacePath)) {
+            fs.mkdirSync(workspacePath, { recursive: true });
+            console.log(`\n✅ Created build workspace: ${workspacePath}`);
+        } else {
+            console.log(`\n📁 Build workspace: ${workspacePath}`);
+        }
+
+        let opened = false;
+        if (process.platform === 'win32') {
+            const result = spawnSync('explorer', [workspacePath], { stdio: 'ignore' });
+            opened = !result.error;
+        } else if (process.platform === 'darwin') {
+            const result = spawnSync('open', [workspacePath], { stdio: 'ignore' });
+            opened = !result.error;
+        } else {
+            const result = spawnSync('xdg-open', [workspacePath], { stdio: 'ignore' });
+            opened = !result.error;
+        }
+
+        if (opened) {
+            console.log('✅ Opened build workspace in file explorer.');
+        } else {
+            console.log('⚠️ Could not open file explorer automatically.');
+            console.log(`   Open manually: ${workspacePath}`);
+        }
+    } catch (error: any) {
+        console.log(`\n❌ Failed to open build workspace: ${error?.message || error}`);
     }
 }
 
