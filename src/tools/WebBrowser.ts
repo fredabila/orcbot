@@ -840,17 +840,28 @@ export class WebBrowser {
         try {
             tempBrowser = await chromium.launch({
                 headless: true,
-                args: ['--disable-blink-features=AutomationControlled']
+                args: [
+                    '--disable-blink-features=AutomationControlled',
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--ignore-certificate-errors',
+                ],
+                ignoreDefaultArgs: ['--enable-automation'],
             });
 
             const context = await tempBrowser.newContext({
-                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
                 viewport: { width: 1280, height: 720 },
                 deviceScaleFactor: 1,
             });
 
             await context.addInitScript(() => {
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                if (!(window as any).chrome) (window as any).chrome = { runtime: {} };
+                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
             });
 
             const page = await context.newPage();
@@ -2178,7 +2189,7 @@ export class WebBrowser {
         const normalized = query.trim().toLowerCase();
         const cached = this.searchCache.get(normalized);
         if (cached && Date.now() - cached.ts < 5 * 60 * 1000) {
-            return `${cached.result}\n\n[cache]`; 
+            return cached.result;
         }
 
         // Check if any API keys are configured
@@ -2323,6 +2334,7 @@ export class WebBrowser {
 
     private async searchGoogle(query: string): Promise<string> {
         const url = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+        const savedUrl = this.lastNavigatedUrl; // preserve so search doesn't stomp browse context
         try {
             await this.ensureBrowser();
             await this.page!.goto(url, { waitUntil: 'load' });
@@ -2377,11 +2389,15 @@ export class WebBrowser {
             return `Search Results (via Google):\n\n${formatted}`;
         } catch (e) {
             return `Google Search Error: ${e}`;
+        } finally {
+            // Restore so browser context stays on the page the agent was working on
+            if (savedUrl) this.lastNavigatedUrl = savedUrl;
         }
     }
 
     private async searchBing(query: string): Promise<string> {
         const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
+        const savedUrl = this.lastNavigatedUrl;
         try {
             await this.ensureBrowser();
             await this.page!.goto(url, { waitUntil: 'load' });
@@ -2427,6 +2443,8 @@ export class WebBrowser {
             return `Search Results (via Bing):\n\n${formatted}`;
         } catch (e) {
             return `Bing Search Error: ${e}`;
+        } finally {
+            if (savedUrl) this.lastNavigatedUrl = savedUrl;
         }
     }
 
@@ -2437,6 +2455,7 @@ export class WebBrowser {
             `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`
         ];
         
+        const savedUrl = this.lastNavigatedUrl;
         for (const url of urls) {
             try {
                 await this.ensureBrowser();
@@ -2496,6 +2515,7 @@ export class WebBrowser {
 
                 if (results && results.length > 0) {
                     const formatted = results.map((r: any) => `[${r.title}](${r.link})\n${r.snippet}`).join('\n\n');
+                    if (savedUrl) this.lastNavigatedUrl = savedUrl;
                     return `Search Results (via DuckDuckGo):\n\n${formatted}`;
                 }
             } catch (e) {
@@ -2503,7 +2523,8 @@ export class WebBrowser {
                 continue;
             }
         }
-        
+
+        if (savedUrl) this.lastNavigatedUrl = savedUrl;
         return 'Error: No results found on DuckDuckGo.';
     }
 

@@ -346,7 +346,6 @@ If the user asks for an opinion, explanation, summary, or normal chat response, 
         }
 
         return result.composedPrompt + agentSkillsSection + toolsSection;
-        return result.composedPrompt + agentSkillsSection;
     }
 
     /**
@@ -543,11 +542,11 @@ If the user asks for an opinion, explanation, summary, or normal chat response, 
             }
         }
 
-        // Load Journal and Learning - keep meaningful context
+        // Load Journal and Learning - configurable context window sizes
         // Skip for heartbeats — the heartbeat prompt already includes journal/learning tails
         const isFirstStep = (metadata.currentStep || 1) === 1;
-        const journalLimit = 1500;  // Recent reflections
-        const learningLimit = 1500; // Knowledge base
+        const journalLimit  = Number(this.config?.get('journalContextLimit')  ?? 1500);
+        const learningLimit = Number(this.config?.get('learningContextLimit') ?? 1500);
         
         let journalContent = '';
         let learningContent = '';
@@ -567,10 +566,8 @@ If the user asks for an opinion, explanation, summary, or normal chat response, 
         // Filter context to only include memories for THIS action (step observations)
         const actionPrefix = `${actionId}-step-`;
         const actionMemories = recentContext.filter(c => c.id && c.id.startsWith(actionPrefix));
-        // Other memories for background awareness — but EXCLUDE step-injection [SYSTEM:]
-        // memories from other actions. These contain action-specific guidance (error feedback,
-        // pivot suggestions, "DO NOT call X again") that is MISLEADING in a new action context.
-        // Without this filter, old error warnings from prior actions override current step results.
+        // Include limited other context for background awareness (configurable)
+        const otherContextN = Number(this.config?.get('threadContextOtherMemoriesN') ?? 5);
         const otherMemories = recentContext
             .filter(c => !c.id || !c.id.startsWith(actionPrefix))
             .filter(c => {
@@ -583,7 +580,7 @@ If the user asks for an opinion, explanation, summary, or normal chat response, 
                 }
                 return true;
             })
-            .slice(0, 5);
+            .slice(0, otherContextN);
 
         // Thread context: last N user/assistant messages from the same source+thread.
         // This is the main mechanism for grounding follow-ups (e.g., pronouns like "he") across actions.
@@ -671,9 +668,9 @@ If the user asks for an opinion, explanation, summary, or normal chat response, 
                     return tb - ta;
                 });
 
-            const RECENT_N = 8;
-            const RELEVANT_N = 8;
-            const MAX_LINE_LEN = 420;
+            const RECENT_N = Number(this.config?.get('threadContextRecentN')   ?? 8);
+            const RELEVANT_N = Number(this.config?.get('threadContextRelevantN') ?? 8);
+            const MAX_LINE_LEN = Number(this.config?.get('threadContextMaxLineLen') ?? 420);
 
             const recent = candidates.slice(0, RECENT_N);
 
@@ -780,23 +777,24 @@ If the user asks for an opinion, explanation, summary, or normal chat response, 
         }
         } // end !isHeartbeat guard for thread context
         
-        // Build step history specific to this action
         // Apply PROACTIVE COMPACTION when step history is large to prevent context overflow.
-        // Strategy: always preserve first 2 steps (task orientation) and last 5 steps (recent context).
-        // Middle steps get compressed: consecutive same-tool calls are merged, system injections summarized.
+        // All thresholds are config-driven.
+        const compactionThreshold = Number(this.config?.get('stepCompactionThreshold')   ?? 10);
+        const preserveFirst      = Number(this.config?.get('stepCompactionPreserveFirst') ?? 2);
+        const preserveLast       = Number(this.config?.get('stepCompactionPreserveLast')  ?? 5);
         let stepHistoryString: string;
         if (actionMemories.length === 0) {
             stepHistoryString = 'No previous steps taken yet.';
-        } else if (actionMemories.length <= 10) {
+        } else if (actionMemories.length <= compactionThreshold) {
             // Small enough — include everything
             stepHistoryString = actionMemories
                 .map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${c.content}`)
                 .join('\n');
         } else {
-            // COMPACTION: preserve first 2 + last 5, summarize middle
-            const first = actionMemories.slice(0, 2);
-            const last = actionMemories.slice(-5);
-            const middle = actionMemories.slice(2, -5);
+            // COMPACTION: preserve first N + last M, summarize middle
+            const first = actionMemories.slice(0, preserveFirst);
+            const last = actionMemories.slice(-preserveLast);
+            const middle = actionMemories.slice(preserveFirst, -preserveLast);
 
             // Compress middle: group by tool, count successes/failures
             const middleSummary: string[] = [];
@@ -1002,8 +1000,9 @@ Respond conversationally. If the user asks you to do something that requires ele
         // Strip sensitive owner context for non-admin users — they should not see
         // the owner's profile, journal, learning notes, or cross-channel memories.
         const userContextStr = userContext.raw || '';
-        const trimmedUserContext = isHeartbeat ? '' : (!isAdmin ? '' : (userContextStr.length > 2000 
-            ? userContextStr.slice(0, 2000) + '...[truncated]' 
+        const userContextLimit = Number(this.config?.get('userContextLimit') ?? 2000);
+        const trimmedUserContext = isHeartbeat ? '' : (!isAdmin ? '' : (userContextStr.length > userContextLimit
+            ? userContextStr.slice(0, userContextLimit) + '...[truncated]'
             : userContextStr));
 
         // Full prompt for all steps - don't risk losing context

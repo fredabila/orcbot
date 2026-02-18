@@ -11,5 +11,5 @@ export interface IChannel {
      * @param messageId - The ID of the message to react to
      * @param emoji - The emoji to react with (e.g. '👍', '❤️', '😂')
      */
-    react?(chatId: string, messageId: string, emoji: string): Promise<void>;
+    react?(chatId: string, messageId: string, emoji: string): Promise<{ method: 'reaction' | 'reply' } | void>;
 }

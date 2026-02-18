@@ -133,6 +133,27 @@ export interface AgentConfig {
     progressFeedbackStepInterval?: number; // Silent-step threshold before automatic status update
     progressFeedbackForceInitial?: boolean; // Force an initial status update before deep tool work
     onboardingQuestionnaireEnabled?: boolean; // Send first-contact preference questionnaire to new users
+    reconnectBriefingEnabled?: boolean;           // Send a wake-up context briefing when a known user returns after absence
+    reconnectBriefingThresholdDays?: number;      // Days of absence before triggering reconnect briefing (default 3)
+    reconnectBriefingMaxCompletions?: number;     // Max completed tasks to surface in briefing (default 5)
+    reconnectBriefingMaxPending?: number;         // Max pending tasks to surface in briefing (default 3)
+    recoveryDedupWindowHours?: number;            // Hours window for deduplicating recovery tasks (default 6)
+    // Memory content limits
+    memoryContentMaxLength?: number;             // Hard truncation limit for stored memory content (default 500)
+    memoryFlushSoftThreshold?: number;           // Short memories count before triggering pre-consolidation flush (default 25)
+    memoryFlushCooldownMinutes?: number;         // Minimum minutes between memory flushes (default 30)
+    memoryExtendedContextLimit?: number;         // Max chars of long-term memory to include in extended context (default 2000)
+    // DecisionEngine context sizing
+    threadContextRecentN?: number;               // Recent thread messages to always include (default 8)
+    threadContextRelevantN?: number;             // Additional semantically relevant thread messages (default 8)
+    threadContextMaxLineLen?: number;            // Max chars per thread context line before clipping (default 420)
+    threadContextOtherMemoriesN?: number;        // Background memories from other actions (default 5)
+    journalContextLimit?: number;                // Max chars of journal to inject per step (default 1500)
+    learningContextLimit?: number;               // Max chars of learning notes to inject per step (default 1500)
+    userContextLimit?: number;                   // Max chars of USER.md to inject per step (default 2000)
+    stepCompactionThreshold?: number;            // Step count above which middle steps get compacted (default 10)
+    stepCompactionPreserveFirst?: number;        // Steps at start to always preserve verbatim (default 2)
+    stepCompactionPreserveLast?: number;         // Steps at end to always preserve verbatim (default 5)
     timeSignalHighRiskNoMessageSeconds?: number; // High delay risk threshold when no message has been sent yet
     timeSignalMediumRiskSilentSteps?: number; // Medium delay risk threshold for silent steps
     timeSignalMediumRiskSinceDeliverySeconds?: number; // Medium delay risk threshold since last user-visible delivery
@@ -688,6 +709,25 @@ export class ConfigManager {
             progressFeedbackStepInterval: 4,
             progressFeedbackForceInitial: true,
             onboardingQuestionnaireEnabled: true,
+            reconnectBriefingEnabled: true,
+            reconnectBriefingThresholdDays: 3,
+            reconnectBriefingMaxCompletions: 5,
+            reconnectBriefingMaxPending: 3,
+            recoveryDedupWindowHours: 6,
+            memoryContentMaxLength: 500,
+            memoryFlushSoftThreshold: 25,
+            memoryFlushCooldownMinutes: 30,
+            memoryExtendedContextLimit: 2000,
+            threadContextRecentN: 8,
+            threadContextRelevantN: 8,
+            threadContextMaxLineLen: 420,
+            threadContextOtherMemoriesN: 5,
+            journalContextLimit: 1500,
+            learningContextLimit: 1500,
+            userContextLimit: 2000,
+            stepCompactionThreshold: 10,
+            stepCompactionPreserveFirst: 2,
+            stepCompactionPreserveLast: 5,
             timeSignalHighRiskNoMessageSeconds: 25,
             timeSignalMediumRiskSilentSteps: 4,
             timeSignalMediumRiskSinceDeliverySeconds: 45,

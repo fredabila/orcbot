@@ -153,7 +153,11 @@ export class Agent {
             contextLimit: this.config.get('memoryContextLimit'),
             episodicLimit: this.config.get('memoryEpisodicLimit'),
             consolidationThreshold: this.config.get('memoryConsolidationThreshold'),
-            consolidationBatch: this.config.get('memoryConsolidationBatch')
+            consolidationBatch: this.config.get('memoryConsolidationBatch'),
+            memoryFlushSoftThreshold: this.config.get('memoryFlushSoftThreshold'),
+            memoryFlushCooldownMinutes: this.config.get('memoryFlushCooldownMinutes'),
+            memoryContentMaxLength: this.config.get('memoryContentMaxLength'),
+            memoryExtendedContextLimit: this.config.get('memoryExtendedContextLimit')
         });
 
         // Initialize vector memory for semantic search (gracefully disabled if no API key)
@@ -545,6 +549,158 @@ export class Agent {
                         }
                     });
                     return `Message sent to ${chat_id}`;
+                }
+                return 'Telegram channel not available';
+            }
+        });
+
+        // Skill: Telegram — send message with inline buttons
+        this.skills.registerSkill({
+            name: 'telegram_send_buttons',
+            description: 'Send a Telegram message with inline keyboard buttons. Use this to ask the user to choose an option, confirm an action, or provide navigation. buttons is a 2-D array of rows; each cell has text and an optional callback_data (payload sent back when pressed) or url.',
+            usage: 'telegram_send_buttons(chatId, message, buttons)',
+            handler: async (args: any) => {
+                let chat_id = args.chat_id || args.chatId || args.id;
+                const message = args.message || args.content || args.text;
+                const buttons = args.buttons;
+
+                if (!chat_id) return 'Error: Missing chatId.';
+                if (!message) return 'Error: Missing message content.';
+                if (!Array.isArray(buttons) || buttons.length === 0) return 'Error: buttons must be a non-empty 2-D array, e.g. [[{text:"Yes",callback_data:"yes"},{text:"No",callback_data:"no"}]]';
+
+                const resolved = this.resolveTelegramChatId(String(chat_id));
+                if (!resolved) return `Error: "${chat_id}" is not a valid Telegram chat ID.`;
+                chat_id = resolved.id;
+
+                if (this.telegram) {
+                    const messageId = await this.telegram.sendWithButtons(chat_id, message, buttons);
+                    this.memory.saveMemory({
+                        id: `tg-btn-${Date.now()}`,
+                        type: 'short',
+                        content: `Assistant sent Telegram inline-buttons message to ${chat_id} (message_id=${messageId}): ${message}`,
+                        timestamp: new Date().toISOString(),
+                        metadata: { source: 'telegram', role: 'assistant', chatId: chat_id, messageId }
+                    });
+                    return `Message with buttons sent to ${chat_id} (message_id=${messageId})`;
+                }
+                return 'Telegram channel not available';
+            }
+        });
+
+        // Skill: Telegram — edit a sent message in-place
+        this.skills.registerSkill({
+            name: 'telegram_edit_message',
+            description: 'Edit the text of a previously-sent Telegram message in-place. Ideal for live progress updates (e.g. "Searching… → Found 5 results") without spamming new messages. Requires the message_id returned by send_telegram or telegram_send_buttons.',
+            usage: 'telegram_edit_message(chatId, messageId, newText)',
+            handler: async (args: any) => {
+                let chat_id = args.chat_id || args.chatId;
+                const messageId = parseInt(String(args.message_id || args.messageId || args.id), 10);
+                const newText = args.new_text || args.newText || args.text || args.message || args.content;
+
+                if (!chat_id) return 'Error: Missing chatId.';
+                if (isNaN(messageId)) return 'Error: Missing or invalid messageId (must be a number).';
+                if (!newText) return 'Error: Missing newText.';
+
+                const resolved = this.resolveTelegramChatId(String(chat_id));
+                if (!resolved) return `Error: "${chat_id}" is not a valid Telegram chat ID.`;
+                chat_id = resolved.id;
+
+                if (this.telegram) {
+                    await this.telegram.editMessage(chat_id, messageId, newText);
+                    return `Message ${messageId} in chat ${chat_id} updated`;
+                }
+                return 'Telegram channel not available';
+            }
+        });
+
+        // Skill: Telegram — create a native poll
+        this.skills.registerSkill({
+            name: 'telegram_send_poll',
+            description: 'Create a native Telegram poll in a chat. Great for gathering structured user input. options is an array of 2–10 strings.',
+            usage: 'telegram_send_poll(chatId, question, options, isAnonymous?)',
+            handler: async (args: any) => {
+                let chat_id = args.chat_id || args.chatId || args.id;
+                const question = args.question;
+                const options = args.options;
+                const isAnonymous = args.is_anonymous ?? args.isAnonymous ?? true;
+                const allowsMultiple = args.allows_multiple_answers ?? args.allowsMultipleAnswers ?? false;
+
+                if (!chat_id) return 'Error: Missing chatId.';
+                if (!question) return 'Error: Missing question.';
+                if (!Array.isArray(options) || options.length < 2) return 'Error: options must be an array of at least 2 strings.';
+                if (options.length > 10) return 'Error: Telegram polls support at most 10 options.';
+
+                const resolved = this.resolveTelegramChatId(String(chat_id));
+                if (!resolved) return `Error: "${chat_id}" is not a valid Telegram chat ID.`;
+                chat_id = resolved.id;
+
+                if (this.telegram) {
+                    const messageId = await this.telegram.sendPoll(chat_id, question, options, isAnonymous, allowsMultiple);
+                    this.memory.saveMemory({
+                        id: `tg-poll-${Date.now()}`,
+                        type: 'short',
+                        content: `Assistant sent Telegram poll to ${chat_id}: "${question}" [${options.join(', ')}]`,
+                        timestamp: new Date().toISOString(),
+                        metadata: { source: 'telegram', role: 'assistant', chatId: chat_id, messageId }
+                    });
+                    return `Poll sent to ${chat_id} (message_id=${messageId})`;
+                }
+                return 'Telegram channel not available';
+            }
+        });
+
+        // Skill: Telegram — react to a message with an emoji
+        this.skills.registerSkill({
+            name: 'telegram_react',
+            description: 'React to a Telegram message with an emoji. NOTE: Telegram restricts bots from setting native reactions in most chat types (private chats, groups). In those cases the bot automatically falls back to *replying* to the target message with the emoji — this is normal and expected, not an error. Native reactions only work in channels where the bot is an admin. Common emojis: 👍 👎 ❤ 🔥 🎉 🤔 👏 😁 🙏 ✅ ❌. messageId must be the numeric ID of the message to react to.',
+            usage: 'telegram_react(chatId, messageId, emoji)',
+            handler: async (args: any) => {
+                let chat_id = args.chat_id || args.chatId || args.id;
+                const messageId = String(args.message_id || args.messageId);
+                const emoji = args.emoji || args.reaction || '👍';
+
+                if (!chat_id) return { success: false, error: 'Missing chatId.' };
+                if (!messageId || messageId === 'undefined') return { success: false, error: 'Missing messageId.' };
+
+                const resolved = this.resolveTelegramChatId(String(chat_id));
+                if (!resolved) return { success: false, error: `"${chat_id}" is not a valid Telegram chat ID.` };
+                chat_id = resolved.id;
+
+                if (this.telegram) {
+                    try {
+                        const result = await this.telegram.react(chat_id, messageId, emoji);
+                        const method = result.method === 'reply'
+                            ? 'reply (native reaction unavailable for bots in this chat type)'
+                            : 'native reaction';
+                        return { success: true, method, emoji, message: `Reacted with ${emoji} via ${method}` };
+                    } catch (err: any) {
+                        return { success: false, error: String(err?.message || err) };
+                    }
+                }
+                return { success: false, error: 'Telegram channel not available' };
+            }
+        });
+
+        // Skill: Telegram — pin a message
+        this.skills.registerSkill({
+            name: 'telegram_pin_message',
+            description: 'Pin a message in a Telegram chat (bot must be admin in groups/channels). The pinned message appears at the top of the chat for all members.',
+            usage: 'telegram_pin_message(chatId, messageId, silent?)',
+            handler: async (args: any) => {
+                let chat_id = args.chat_id || args.chatId || args.id;
+                const messageId = parseInt(String(args.message_id || args.messageId), 10);
+                const silent = args.silent ?? true;
+
+                if (!chat_id) return 'Error: Missing chatId.';
+                if (isNaN(messageId)) return 'Error: Missing or invalid messageId.';
+
+                const resolved = this.resolveTelegramChatId(String(chat_id));
+                if (!resolved) return `Error: "${chat_id}" is not a valid Telegram chat ID.`;
+                chat_id = resolved.id;
+
+                if (this.telegram) {
+                    await this.telegram.pinMessage(chat_id, messageId, silent);
+                    return `Message ${messageId} pinned in chat ${chat_id}`;
                 }
                 return 'Telegram channel not available';
             }
@@ -992,21 +1148,77 @@ export class Agent {
                 const url = args.url;
                 if (!url) return 'Error: Missing url.';
 
+                // Max 50 MB download cap to prevent runaway memory allocation
+                const MAX_BYTES = 50 * 1024 * 1024;
+                const TIMEOUT_MS = 60_000;
+
+                // Content-Type → default extension map
+                const MIME_EXT: Record<string, string> = {
+                    'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif',
+                    'image/webp': '.webp', 'image/svg+xml': '.svg',
+                    'audio/mpeg': '.mp3', 'audio/ogg': '.ogg', 'audio/wav': '.wav',
+                    'video/mp4': '.mp4', 'video/webm': '.webm',
+                    'application/pdf': '.pdf', 'application/zip': '.zip',
+                    'application/json': '.json', 'text/plain': '.txt',
+                    'text/html': '.html', 'text/csv': '.csv',
+                };
+
                 try {
-                    let filename = args.filename || path.basename(new URL(url).pathname) || `file_${Date.now()}`;
-                    const downloadsDir = path.join(path.dirname(this.config.get('memoryPath')), 'downloads');
+                    const controller = new AbortController();
+                    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+                    const response = await fetch(url, { signal: controller.signal });
+                    clearTimeout(timer);
+
+                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+                    // Enforce size cap via Content-Length if provided
+                    const contentLength = parseInt(response.headers.get('content-length') || '0', 10);
+                    if (contentLength > MAX_BYTES) {
+                        throw new Error(`File too large: ${(contentLength / 1024 / 1024).toFixed(1)} MB (max 50 MB)`);
+                    }
+
+                    // Stream into a buffer and enforce byte cap
+                    const chunks: Uint8Array[] = [];
+                    let totalBytes = 0;
+                    const reader = response.body?.getReader();
+                    if (!reader) {
+                        const buf = await response.arrayBuffer();
+                        if (buf.byteLength > MAX_BYTES) throw new Error(`File too large (> 50 MB)`);
+                        chunks.push(new Uint8Array(buf));
+                        totalBytes = buf.byteLength;
+                    } else {
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+                            totalBytes += value.byteLength;
+                            if (totalBytes > MAX_BYTES) throw new Error(`File exceeds 50 MB limit, aborting download`);
+                            chunks.push(value);
+                        }
+                    }
+
+                    // Determine filename: explicit arg > URL path > content-type ext
+                    const contentType = (response.headers.get('content-type') || '').split(';')[0].trim();
+                    const urlBasename = path.basename(new URL(url).pathname);
+                    const mimeExt = MIME_EXT[contentType] || '';
+                    let filename = args.filename
+                        || (urlBasename && urlBasename !== '/' ? urlBasename : '')
+                        || `file_${Date.now()}${mimeExt}`;
+
+                    // If the detected basename has no extension but we know one, append it
+                    if (!path.extname(filename) && mimeExt) filename += mimeExt;
+
+                    const downloadsDir = path.join(this.config.getDataHome(), 'downloads');
                     if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
 
                     const filePath = path.join(downloadsDir, filename);
-                    const response = await fetch(url);
-                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                    const combined = Buffer.concat(chunks.map(c => Buffer.from(c)));
+                    fs.writeFileSync(filePath, combined);
 
-                    const buffer = await response.arrayBuffer();
-                    fs.writeFileSync(filePath, Buffer.from(buffer));
-
-                    return `File downloaded successfully to: ${filePath}`;
-                } catch (e) {
-                    return `Error downloading file: ${e}`;
+                    return `File downloaded successfully to: ${filePath} (${(totalBytes / 1024).toFixed(1)} KB)`;
+                } catch (e: any) {
+                    if (e.name === 'AbortError') return `Error: Download timed out after ${TIMEOUT_MS / 1000}s`;
+                    return `Error downloading file: ${e.message || e}`;
                 }
             }
         });
@@ -1014,26 +1226,45 @@ export class Agent {
         // Skill: Send File
         this.skills.registerSkill({
             name: 'send_file',
-            description: 'Send a file (image, document, audio) to a Telegram or WhatsApp contact.',
-            usage: 'send_file(jid, path, caption?)',
+            description: 'Send a file (image, document, audio) to a contact. Supports WhatsApp, Telegram, and Discord. Set "channel" to "discord", "telegram", or "whatsapp" to override auto-detection.',
+            usage: 'send_file(jid, path, caption?, channel?)',
             handler: async (args: any) => {
                 const jid = args.jid || args.to;
                 const filePath = args.path || args.file_path;
                 const caption = args.caption || '';
+                const explicitChannel = args.channel || args.via;
 
                 if (!jid) return 'Error: Missing jid.';
                 if (!filePath) return 'Error: Missing file path.';
 
                 try {
-                    const isWhatsApp = jid.includes('@s.whatsapp.net') || jid.includes('@g.us');
+                    // Resolve channel: explicit arg > action source > JID pattern
+                    const currentAction = this.actionQueue.getQueue().find(a => a.id === this.currentActionId);
+                    const actionSource = currentAction?.payload?.source;
+                    const channelHint = explicitChannel || actionSource;
+                    const isWhatsApp = channelHint === 'whatsapp' || jid.includes('@s.whatsapp.net') || jid.includes('@g.us');
+                    const isDiscord = channelHint === 'discord' || (!isWhatsApp && /^\d{15,20}$/.test(String(jid)));
+                    const isTelegram = channelHint === 'telegram' || (!isWhatsApp && !isDiscord);
+
                     if (isWhatsApp && this.whatsapp) {
                         await this.whatsapp.sendFile(jid, filePath, caption);
                         return `File ${path.basename(filePath)} sent via WhatsApp to ${jid}`;
-                    } else if (this.telegram && !isWhatsApp) {
+                    } else if (isDiscord && this.discord) {
+                        await this.discord.sendFile(jid, filePath, caption);
+                        return `File ${path.basename(filePath)} sent via Discord to ${jid}`;
+                    } else if (isTelegram && this.telegram) {
                         await this.telegram.sendFile(jid, filePath, caption);
                         return `File ${path.basename(filePath)} sent via Telegram to ${jid}`;
                     }
-                    return 'Appropriate channel not available or JID type not recognized.';
+                    // Last-resort fallback: try any available channel
+                    if (this.discord) {
+                        await this.discord.sendFile(jid, filePath, caption);
+                        return `File ${path.basename(filePath)} sent via Discord to ${jid}`;
+                    } else if (this.telegram) {
+                        await this.telegram.sendFile(jid, filePath, caption);
+                        return `File ${path.basename(filePath)} sent via Telegram to ${jid}`;
+                    }
+                    return 'No channel available to send file. Is WhatsApp/Telegram/Discord connected?';
                 } catch (e) {
                     return `Error sending file: ${e}`;
                 }
@@ -1051,6 +1282,12 @@ export class Agent {
                 const append = args.append === true || args.append === 'true';
 
                 if (!filePath) return 'Error: Missing file path.';
+
+                // Prevent accidentally writing enormous blobs into context-sized chunks
+                const MAX_WRITE_BYTES = 10 * 1024 * 1024; // 10 MB
+                if (Buffer.byteLength(String(content), 'utf8') > MAX_WRITE_BYTES) {
+                    return `Error: Content too large (> 10 MB). Split the write into smaller chunks.`;
+                }
 
                 try {
                     const resolvedPath = this.resolveAgentWorkspacePath(String(filePath));
@@ -1102,8 +1339,8 @@ export class Agent {
         // Skill: Read File
         this.skills.registerSkill({
             name: 'read_file',
-            description: 'Read the contents of a file.',
-            usage: 'read_file(path)',
+            description: 'Read the contents of a file. Supports optional line range (start_line, end_line) for large files. Returns up to 20 000 chars; use start_line/end_line to page through bigger files.',
+            usage: 'read_file(path, start_line?, end_line?)',
             handler: async (args: any) => {
                 const filePath = args.path || args.file_path || args.file;
 
@@ -1117,9 +1354,27 @@ export class Agent {
                     }
                     
                     const content = fs.readFileSync(resolvedPath, 'utf8');
-                    return content.length > 10000 
-                        ? content.substring(0, 10000) + '\n\n[... truncated, file too large ...]'
-                        : content;
+
+                    // Line-range slicing (1-based, inclusive)
+                    const startLine = args.start_line ? Math.max(1, parseInt(args.start_line, 10)) : undefined;
+                    const endLine   = args.end_line   ? Math.max(1, parseInt(args.end_line,   10)) : undefined;
+
+                    let result = content;
+                    let rangeNote = '';
+                    if (startLine !== undefined || endLine !== undefined) {
+                        const lines = content.split('\n');
+                        const from = (startLine ?? 1) - 1;
+                        const to   = endLine ?? lines.length;
+                        result = lines.slice(from, to).join('\n');
+                        rangeNote = ` (lines ${from + 1}–${Math.min(to, lines.length)} of ${lines.length})`;
+                    }
+
+                    const MAX_CHARS = 20_000;
+                    if (result.length > MAX_CHARS) {
+                        const totalLines = result.split('\n').length;
+                        return result.substring(0, MAX_CHARS) + `\n\n[...truncated${rangeNote}. ${result.length} chars total. Use start_line/end_line to read specific sections.]`;
+                    }
+                    return rangeNote ? `[${resolvedPath}${rangeNote}]\n${result}` : result;
                 } catch (e) {
                     return `Error reading file: ${e}`;
                 }
@@ -1222,15 +1477,27 @@ export class Agent {
                     await this.llm.textToSpeech(text, audioPath, voice);
 
                     // Send as voice note through the appropriate channel
-                    const isWhatsApp = jid.includes('@s.whatsapp.net') || jid.includes('@g.us');
+                    // Resolve channel: explicit arg > action source > JID pattern
+                    const currentAction = this.actionQueue.getQueue().find(a => a.id === this.currentActionId);
+                    const actionSource = currentAction?.payload?.source;
+                    const explicitChannel = args.channel || args.via;
+                    const channelHint = explicitChannel || actionSource;
+                    const isWhatsApp = channelHint === 'whatsapp' || jid.includes('@s.whatsapp.net') || jid.includes('@g.us');
+                    const isDiscord = channelHint === 'discord' || (!isWhatsApp && /^\d{15,20}$/.test(String(jid)));
+                    const isTelegram = channelHint === 'telegram' || (!isWhatsApp && !isDiscord);
+
                     if (isWhatsApp && this.whatsapp) {
                         await this.whatsapp.sendVoiceNote(jid, audioPath);
                         return `Voice note sent via WhatsApp to ${jid} (voice: ${voice}, ${text.length} chars)`;
-                    } else if (this.telegram && !isWhatsApp) {
+                    } else if (isDiscord && this.discord) {
+                        // Discord has no native voice-note concept; send as audio file attachment
+                        await this.discord.sendFile(jid, audioPath, `🎙️ Voice message (${text.length} chars)`);
+                        return `Voice note sent via Discord to ${jid} as audio file (voice: ${voice}, ${text.length} chars)`;
+                    } else if (isTelegram && this.telegram) {
                         await this.telegram.sendVoiceNote(jid, audioPath);
                         return `Voice note sent via Telegram to ${jid} (voice: ${voice}, ${text.length} chars)`;
                     }
-                    return 'Appropriate channel not available or JID type not recognized.';
+                    return 'No channel available to send voice note. Is WhatsApp/Telegram/Discord connected?';
                 } catch (e) {
                     return `Error sending voice note: ${e}`;
                 }
@@ -1783,24 +2050,46 @@ export class Agent {
                 const { exec } = require('child_process');
 
                 const runOnce = () => new Promise<string>((resolve) => {
-                    const execOptions: any = { timeout: timeoutMs, cwd: workingDir };
-                    // On Windows, use PowerShell as the shell so PowerShell cmdlets work
+                    const execOptions: any = { cwd: workingDir };
+                    // On Windows, use PowerShell as the shell so PowerShell cmdlets work.
+                    // Do NOT pass the `timeout` option here on Windows — it relies on SIGKILL
+                    // which doesn't work cross-platform.  We handle timeout manually below.
                     if (process.platform === 'win32') {
                         execOptions.shell = 'powershell.exe';
                     }
                     const child = exec(actualCommand, execOptions, (error: any, stdout: string, stderr: string) => {
+                        clearTimeout(killTimer);
                         if (error) {
-                            if (error.killed) {
+                            if (error.killed || timedOut) {
                                 resolve(`Error: Command timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
                                 return;
                             }
                             resolve(`Error: ${error.message}\nStderr: ${stderr}`);
                             return;
                         }
-                        resolve(stdout || stderr || "Command executed successfully (no output)");
+                        let out = stdout || stderr || 'Command executed successfully (no output)';
+                        // Cap output to prevent context flooding
+                        const MAX_OUT = 8_000;
+                        if (out.length > MAX_OUT) {
+                            out = out.substring(0, MAX_OUT) + `\n\n[...truncated — ${out.length} chars total. Pipe to a file or use tail/head to get a smaller slice.]`;
+                        }
+                        resolve(out);
                     });
 
+                    let timedOut = false;
+                    const killTimer = setTimeout(() => {
+                        timedOut = true;
+                        if (process.platform === 'win32' && child.pid) {
+                            // On Windows exec() with PowerShell doesn't propagate SIGKILL to the
+                            // child tree.  Use taskkill /F /T to forcefully kill the whole tree.
+                            require('child_process').exec(`taskkill /PID ${child.pid} /T /F`, () => {});
+                        } else {
+                            child.kill('SIGKILL');
+                        }
+                    }, timeoutMs);
+
                     child.on('error', (err: any) => {
+                        clearTimeout(killTimer);
                         resolve(`Error: Failed to start command: ${err?.message || err}`);
                     });
                 });
@@ -2560,8 +2849,18 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 const extracted = await this.browser.extractContent();
                 const extractedOk = !(extracted.startsWith('Error') || extracted.startsWith('Failed'));
 
+                // Detect blank page even on the fast path so the guard counter stays accurate
+                const extractedLooksBlank = !extractedOk ||
+                    extracted.includes('Extracted: 0 chars') ||
+                    (extracted.match(/Extracted: (\d+) chars/) &&
+                        parseInt((extracted.match(/Extracted: (\d+) chars/) || ['', '0'])[1]) < 100);
+
                 if (extractedOk && !includeSnapshot) {
-                    this._blankPageCount = 0;
+                    if (extractedLooksBlank) {
+                        this._blankPageCount = (this._blankPageCount || 0) + 1;
+                    } else {
+                        this._blankPageCount = 0;
+                    }
                     return `${res}\n\n--- QUICK READ ---\n${extracted}`;
                 }
 
@@ -3668,24 +3967,35 @@ export default ${name};
                 try {
                     let html = '';
                     if (url) {
-                        const { chromium } = require('playwright');
-                        const browser = await chromium.launch({ headless: true });
-                        const page = await browser.newPage();
-                        await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
-                        html = await page.content();
-                        await browser.close();
+                        // Reuse the shared browser instance — do NOT spawn a new Playwright process
+                        const navResult = await this.browser.navigate(url);
+                        if (navResult.startsWith('Error')) return navResult;
+                        if (!this.browser.page) return 'Error: Browser page unavailable after navigation.';
+                        html = await this.browser.page.content();
                     } else {
                         // Extract from current active session
-                        if (!this.browser.page) return "Error: No active browser page to extract from. Provide a URL.";
+                        if (!this.browser.page) return 'Error: No active browser page to extract from. Provide a URL.';
                         html = await this.browser.page.content();
                     }
 
-                    const doc = new DOMParser().parseFromString(html, 'text/html');
-                    const reader = new Readability(doc as any);
-                    const article = reader.parse();
+                    // Try Readability (best quality for news/articles)
+                    try {
+                        const doc = new DOMParser().parseFromString(html, 'text/html');
+                        const reader = new Readability(doc as any);
+                        const article = reader.parse();
+                        if (article && article.textContent && article.textContent.trim().length > 100) {
+                            return `Title: ${article.title}\n\nContent:\n${article.textContent.substring(0, 5000)}`;
+                        }
+                    } catch (readErr) {
+                        logger.debug(`extract_article: Readability failed (${readErr}), falling back to extractContent()`);
+                    }
 
-                    if (!article) return "Failed to extract article content.";
-                    return `Title: ${article.title}\n\nContent:\n${article.textContent.substring(0, 5000)}`;
+                    // Fallback: built-in content extractor
+                    const extracted = await this.browser.extractContent();
+                    if (extracted.startsWith('Error') || extracted.startsWith('Failed')) {
+                        return 'Failed to extract article content: page may be paywalled, JavaScript-heavy, or empty.';
+                    }
+                    return extracted;
                 } catch (e) {
                     return `Error extracting article: ${e}`;
                 }
@@ -3765,12 +4075,13 @@ export default ${name};
 
                     // Truncate very large responses
                     const maxLen = 8000;
-                    const truncated = body.length > maxLen;
+                    const originalLen = body.length;
+                    const truncated = originalLen > maxLen;
                     if (truncated) {
                         body = body.substring(0, maxLen);
                     }
 
-                    return `HTTP ${status} ${statusText}\nContent-Type: ${contentType}\n\n${body}${truncated ? '\n\n[...truncated, response was ' + body.length + '+ chars]' : ''}`;
+                    return `HTTP ${status} ${statusText}\nContent-Type: ${contentType}\n\n${body}${truncated ? '\n\n[...truncated, response was ' + originalLen + '+ chars]' : ''}`;
                 } catch (e: any) {
                     if (e.name === 'AbortError') {
                         return `Error: Request timed out after ${timeoutMs}ms`;
@@ -4106,10 +4417,10 @@ Be thorough and academic.`;
                         const searchResult = await this.browser.search(`${topic} latest developments 2024 2025`);
                         
                         if (searchResult && searchResult.length > 100) {
-                            // Extract key facts using LLM
-                            const extractPrompt = `Extract 5-10 key facts/insights from this search result about "${topic}". Format as bullet points with clear, factual statements:\n\n${searchResult.slice(0, 4000)}`;
+                            // Extract key facts using LLM — cap input to avoid huge prompts
+                            const extractPrompt = `Extract 5-10 key facts/insights from this search result about "${topic}". Format as bullet points with clear, factual statements:\n\n${searchResult.slice(0, 3000)}`;
                             const extracted = await this.llm.call(extractPrompt, 'Extract key learnings');
-                            knowledge_content = extracted || searchResult.slice(0, 2000);
+                            knowledge_content = extracted || searchResult.slice(0, 1500);
                         } else {
                             return `Could not find sufficient information about "${topic}" to learn from.`;
                         }
@@ -4118,13 +4429,21 @@ Be thorough and academic.`;
                     }
                 }
 
+                // Cap manually-provided content to 3000 chars to keep LEARNING.md readable
+                const MAX_LEARNING_CHARS = 3000;
+                let storedContent = String(knowledge_content);
+                const wasTruncated = storedContent.length > MAX_LEARNING_CHARS;
+                if (wasTruncated) {
+                    storedContent = storedContent.substring(0, MAX_LEARNING_CHARS) + '\n\n[...truncated]';
+                }
+
                 const learningPath = this.config.get('learningPath');
                 try {
-                    const entry = `\n\n## ${topic}\n**Date**: ${new Date().toISOString().split('T')[0]}\n\n${knowledge_content}\n\n---`;
+                    const entry = `\n\n## ${topic}\n**Date**: ${new Date().toISOString().split('T')[0]}\n\n${storedContent}\n\n---`;
                     fs.appendFileSync(learningPath, entry);
                     this.lastHeartbeatProductive = true; // Mark as productive
                     logger.info(`Learning: Saved knowledge about "${topic}" to ${learningPath}`);
-                    return `Successfully researched and saved knowledge about "${topic}" to LEARNING.md`;
+                    return `Successfully researched and saved knowledge about "${topic}" to LEARNING.md${wasTruncated ? ' (content was truncated to 3000 chars)' : ''}`;
                 } catch (e) {
                     return `Failed to update learning base at ${learningPath}: ${e}`;
                 }
@@ -4134,14 +4453,33 @@ Be thorough and academic.`;
         // Skill: Request Supporting Data
         this.skills.registerSkill({
             name: 'request_supporting_data',
-            description: 'Pause execution and ask the user for missing information, credentials, or clarification.',
+            description: 'Pause execution and ask the user for missing information, credentials, or clarification. Sends the question through the active channel before pausing.',
             usage: 'request_supporting_data(question)',
             handler: async (args: any) => {
                 const question = args.question || args.text || args.info;
                 if (!question) return 'Error: Missing question.';
 
-                // We'll rely on the Agent loop to handle the "pause" by detecting this tool call.
-                // But we should actually send the message here if we can.
+                // Best-effort: send the question through the channel that originated this action
+                try {
+                    const currentAction = this.actionQueue.getQueue().find(a => a.id === this.currentActionId);
+                    const source = currentAction?.payload?.source;
+                    const chatId = currentAction?.payload?.chatId || currentAction?.payload?.sourceId;
+                    if (chatId) {
+                        if (source === 'telegram' && this.telegram) {
+                            await this.telegram.sendMessage(chatId, `❓ ${question}`);
+                        } else if (source === 'discord' && this.discord) {
+                            await this.discord.sendMessage(chatId, `❓ ${question}`);
+                        } else if (source === 'whatsapp' && this.whatsapp) {
+                            await this.whatsapp.sendMessage(chatId, `❓ ${question}`);
+                        } else if (this.telegram) {
+                            await this.telegram.sendMessage(chatId, `❓ ${question}`);
+                        }
+                    }
+                } catch (e) {
+                    logger.warn(`request_supporting_data: failed to send question: ${e}`);
+                }
+
+                // The agent loop detects this sentinel and pauses the action
                 return `CLARIFICATION_REQUESTED: ${question}`;
             }
         });
@@ -5374,6 +5712,7 @@ Respond with ONLY valid JSON:
             'extract_article', 'http_fetch', 'download_file', 'read_file', 'write_to_file',
             'write_file', 'create_file', 'delete_file', 'run_command',
             'send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat',
+            'telegram_send_buttons', 'telegram_edit_message', 'telegram_send_poll', 'telegram_react', 'telegram_pin_message',
             'send_voice_note', 'text_to_speech', 'analyze_media',
             'generate_image', 'send_image',
             'update_journal', 'update_learning', 'update_user_profile',
@@ -5394,6 +5733,37 @@ Respond with ONLY valid JSON:
      * but then sets goals_met=true and stops, the user is left hanging. This method
      * detects that pattern and auto-pushes a continuation task.
      */
+    private hasExistingRecoveryTask(
+        trigger: 'completion_audit_recovery' | 'empty_promise_recovery',
+        originalActionId: string,
+        source?: string,
+        sourceId?: string
+    ): boolean {
+        const now = Date.now();
+        const dedupWindowHours = Number(this.config?.get('recoveryDedupWindowHours') ?? 6);
+        const recentWindowMs = dedupWindowHours * 60 * 60 * 1000;
+
+        return this.actionQueue.getQueue().some(a => {
+            const aTrigger = String(a.payload?.trigger || '');
+            const aOriginal = String(a.payload?.originalActionId || '');
+            if (aTrigger !== trigger || aOriginal !== originalActionId) return false;
+
+            if (a.status === 'pending' || a.status === 'waiting' || a.status === 'in-progress') {
+                return true;
+            }
+
+            if (a.status === 'completed') {
+                const sameSource = !source || String(a.payload?.source || '') === String(source || '');
+                const sameThread = !sourceId || String(a.payload?.sourceId || '') === String(sourceId || '');
+                const updatedAt = a.updatedAt ? Date.parse(a.updatedAt) : 0;
+                const finishedRecently = updatedAt > 0 && (now - updatedAt) <= recentWindowMs;
+                return sameSource && sameThread && finishedRecently;
+            }
+
+            return false;
+        });
+    }
+
     private async detectAndResumeIncompleteWork(
         action: Action,
         sentMessages: string[],
@@ -5465,6 +5835,16 @@ Respond with ONLY valid JSON:
             const contextHint = taskContextMemories.map(m => m.content?.slice(0, 100)).join(' | ');
             
             const continuationDesc = `CONTINUATION: Resume the incomplete task that the user asked about. The user asked "${action.payload?.description?.slice(0, 100)}" and I acknowledged the work is not done. I MUST now actually complete it. ${contextHint ? `Previous progress context: ${contextHint}` : 'Check episodic memory for the original task details.'}. Compile all available results and deliver a comprehensive response to the user.`;
+
+            if (this.hasExistingRecoveryTask(
+                'empty_promise_recovery',
+                action.id,
+                action.payload?.source,
+                action.payload?.sourceId
+            )) {
+                logger.info(`Agent: Skipping duplicate empty_promise_recovery for ${action.id}; recovery already exists or was recently completed.`);
+                return;
+            }
 
             await this.pushTask(
                 continuationDesc,
@@ -6384,14 +6764,22 @@ REFLECTION: <1-2 sentences>`;
                     oldConfig.memoryContextLimit !== newConfig.memoryContextLimit ||
                     oldConfig.memoryEpisodicLimit !== newConfig.memoryEpisodicLimit ||
                     oldConfig.memoryConsolidationThreshold !== newConfig.memoryConsolidationThreshold ||
-                    oldConfig.memoryConsolidationBatch !== newConfig.memoryConsolidationBatch;
+                    oldConfig.memoryConsolidationBatch !== newConfig.memoryConsolidationBatch ||
+                    oldConfig.memoryFlushSoftThreshold !== newConfig.memoryFlushSoftThreshold ||
+                    oldConfig.memoryFlushCooldownMinutes !== newConfig.memoryFlushCooldownMinutes ||
+                    oldConfig.memoryContentMaxLength !== newConfig.memoryContentMaxLength ||
+                    oldConfig.memoryExtendedContextLimit !== newConfig.memoryExtendedContextLimit;
                 
                 if (memoryChanged) {
                     this.memory.setLimits({
                         contextLimit: newConfig.memoryContextLimit,
                         episodicLimit: newConfig.memoryEpisodicLimit,
                         consolidationThreshold: newConfig.memoryConsolidationThreshold,
-                        consolidationBatch: newConfig.memoryConsolidationBatch
+                        consolidationBatch: newConfig.memoryConsolidationBatch,
+                        memoryFlushSoftThreshold: newConfig.memoryFlushSoftThreshold,
+                        memoryFlushCooldownMinutes: newConfig.memoryFlushCooldownMinutes,
+                        memoryContentMaxLength: newConfig.memoryContentMaxLength,
+                        memoryExtendedContextLimit: newConfig.memoryExtendedContextLimit
                     });
                     logger.info('Agent: Memory limits reloaded');
                 }
@@ -8044,6 +8432,167 @@ Respond with a single actionable task description (one sentence). Be specific ab
         }
     }
 
+    // ---------------------------------------------------------------------------
+    // Reconnect Briefing — wake-up context for returning users after absence
+    // ---------------------------------------------------------------------------
+
+    private hasReconnectBriefingSentThisReturn(profileKey: string, lastSeenBefore: Date): boolean {
+        try {
+            const profileRaw = this.memory.getContactProfile(profileKey);
+            if (!profileRaw) return false;
+            const parsed = JSON.parse(profileRaw);
+            const sentAt = parsed?.reconnectBriefingSentAt;
+            if (!sentAt) return false;
+            // If we already sent a briefing AFTER the user's last-seen date, don't resend.
+            return new Date(sentAt) > lastSeenBefore;
+        } catch {
+            return false;
+        }
+    }
+
+    private markReconnectBriefingSent(profileKey: string): void {
+        try {
+            const profileRaw = this.memory.getContactProfile(profileKey);
+            const profile = profileRaw ? JSON.parse(profileRaw) : {};
+            profile.reconnectBriefingSentAt = new Date().toISOString();
+            this.memory.saveContactProfile(profileKey, JSON.stringify(profile));
+        } catch (e) {
+            logger.debug(`Agent: Failed to mark reconnect briefing sent for ${profileKey}: ${e}`);
+        }
+    }
+
+    private buildReconnectBriefingMessage(opts: {
+        agentName: string;
+        daysSince: number;
+        hoursSince: number;
+        recentCompletions: string[];
+        pendingTasks: string[];
+    }): string {
+        const { agentName, daysSince, hoursSince, recentCompletions, pendingTasks } = opts;
+
+        // Format elapsed time naturally
+        let elapsed: string;
+        if (daysSince >= 1) {
+            elapsed = daysSince === 1 ? '1 day' : `${daysSince} days`;
+        } else {
+            elapsed = hoursSince <= 1 ? 'a while' : `${hoursSince} hours`;
+        }
+
+        const lines: string[] = [];
+        lines.push(`👋 Welcome back. It's been ${elapsed} since we last talked.`);
+        lines.push('');
+        lines.push('Updates since you were away:');
+
+        if (recentCompletions.length > 0) {
+            recentCompletions.forEach(c => lines.push(`• ✅ ${c}`));
+        } else {
+            lines.push('• No autonomous tasks ran while you were out.');
+        }
+
+        if (pendingTasks.length > 0) {
+            lines.push('');
+            lines.push('Pending / incomplete:');
+            pendingTasks.forEach(t => lines.push(`• ⏳ ${t}`));
+        }
+
+        lines.push('');
+        lines.push(`${agentName} is online. What are we working on? ⚡`);
+
+        return lines.join('\n');
+    }
+
+    private async maybeReconnectBriefing(metadata: any): Promise<void> {
+        if (this.config.get('reconnectBriefingEnabled') === false) return;
+        const source = String(metadata?.source || '').toLowerCase();
+        if (!source) return;
+
+        const profileKey = this.getOnboardingProfileKey(metadata);
+        if (!profileKey) return;
+
+        // Only trigger for known users (onboarding must have completed)
+        if (!this.hasOnboardingQuestionnaireBeenSent(profileKey)) return;
+
+        // Get last seen from known users registry
+        const userId = String(metadata?.userId || metadata?.sourceId || '').trim();
+        if (!userId) return;
+        const knownUserKey = `${source}:${userId}`;
+        const knownUser = this.knownUsers.get(knownUserKey);
+        if (!knownUser?.lastSeen) return;
+
+        const lastSeenDate = new Date(knownUser.lastSeen);
+        const now = new Date();
+        const msAway = now.getTime() - lastSeenDate.getTime();
+        const daysSince = Math.floor(msAway / (1000 * 60 * 60 * 24));
+        const hoursSince = Math.floor(msAway / (1000 * 60 * 60));
+
+        const thresholdDays = Number(this.config.get('reconnectBriefingThresholdDays') ?? 3);
+        if (daysSince < thresholdDays) return;
+
+        // Deduplicate — don't resend if we already briefed for this return
+        if (this.hasReconnectBriefingSentThisReturn(profileKey, lastSeenDate)) return;
+
+        // Build content — scan completed/failed tasks since lastSeen
+        const queue = this.actionQueue.getQueue();
+        const recentCompletions: string[] = [];
+        const pendingTasks: string[] = [];
+
+        for (const a of queue) {
+            const ts = new Date(a.updatedAt || a.timestamp || 0).getTime();
+            if (ts < lastSeenDate.getTime()) continue; // before the absence
+            const desc = String(a.payload?.description || a.payload?.task || '').slice(0, 80);
+            if (!desc) continue;
+            if (a.status === 'completed') {
+                recentCompletions.push(desc);
+            } else if (a.status === 'pending' || a.status === 'in-progress' || a.status === 'failed') {
+                pendingTasks.push(desc);
+            }
+        }
+
+        const agentName = String(this.config.get('agentName') || 'OrcBot');
+        const maxCompletions = Number(this.config.get('reconnectBriefingMaxCompletions') ?? 5);
+        const maxPending = Number(this.config.get('reconnectBriefingMaxPending') ?? 3);
+        const msg = this.buildReconnectBriefingMessage({
+            agentName,
+            daysSince,
+            hoursSince,
+            recentCompletions: recentCompletions.slice(0, maxCompletions),
+            pendingTasks: pendingTasks.slice(0, maxPending)
+        });
+
+        try {
+            if (source === 'telegram' && this.telegram && metadata?.sourceId) {
+                await this.telegram.sendMessage(String(metadata.sourceId), msg);
+            } else if (source === 'whatsapp' && this.whatsapp && metadata?.sourceId) {
+                await this.whatsapp.sendMessage(String(metadata.sourceId), msg);
+            } else if (source === 'discord' && this.discord && metadata?.sourceId) {
+                await this.discord.sendMessage(String(metadata.sourceId), msg);
+            } else if (source === 'slack' && this.slack && metadata?.sourceId) {
+                await this.slack.sendMessage(String(metadata.sourceId), msg);
+            } else if (source === 'gateway-chat') {
+                eventBus.emit('gateway:chat:response', {
+                    type: 'chat:message',
+                    role: 'assistant',
+                    content: msg,
+                    timestamp: new Date().toISOString(),
+                    messageId: `reconnect-${Date.now()}`
+                });
+            } else {
+                return;
+            }
+
+            this.markReconnectBriefingSent(profileKey);
+            this.memory.saveMemory({
+                id: `reconnect-brief-${profileKey}-${Date.now()}`,
+                type: 'short',
+                content: `[SYSTEM: Sent reconnect briefing to ${profileKey} after ${daysSince}d away. ${recentCompletions.length} completions, ${pendingTasks.length} pending items surfaced.]`,
+                metadata: { source, reconnectBriefing: true, profileKey, daysSince }
+            });
+            logger.info(`Agent: Reconnect briefing sent to ${profileKey} (${daysSince}d absence)`);
+        } catch (e) {
+            logger.debug(`Agent: Failed to send reconnect briefing to ${profileKey}: ${e}`);
+        }
+    }
+
     /**
      * Get all known users, optionally filtered by channel.
      */
@@ -8176,6 +8725,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
         if (lane === 'user' && metadata?.source && !metadata?.isHeartbeat) {
             await this.sendOnboardingQuestionnaireIfNeeded(metadata);
+            await this.maybeReconnectBriefing(metadata);
             const onboardingCapture = await this.maybeCaptureOnboardingQuestionnaireResponse(description, metadata);
             if (onboardingCapture.captured && onboardingCapture.onboardingOnly) {
                 logger.info('Agent: Onboarding-only response captured; skipping task enqueue.');
@@ -8455,8 +9005,14 @@ Respond with a single actionable task description (one sentence). Be specific ab
             const classificationTarget = action.payload.lastUserMessageText
                 ? `message: "${action.payload.lastUserMessageText}"`
                 : (action.payload.description || '');
-            const taskComplexity = isHeartbeatTask ? 'trivial' as const
+            let taskComplexity = isHeartbeatTask ? 'trivial' as const
                 : await this.classifyTaskComplexity(classificationTarget);
+
+            const descForComplexity = String(action.payload.description || '').toLowerCase();
+            const isPreferenceMemoryTask = /(remember that|remember this|note that|store this|my favorite|i hate friday releases|preference)/i.test(descForComplexity);
+            if (isPreferenceMemoryTask) {
+                taskComplexity = 'trivial';
+            }
             logger.info(`Agent: Task complexity="${taskComplexity}" for action ${action.id}`);
 
             const isSimpleTask = taskComplexity === 'trivial' || taskComplexity === 'simple' || isHeartbeatTask;
@@ -8578,6 +9134,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
             const SIDE_EFFECT_TOOLS = new Set([
                 'send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat',
+                'telegram_send_buttons', 'telegram_edit_message', 'telegram_send_poll', 'telegram_react', 'telegram_pin_message',
                 'send_file', 'send_image', 'send_discord_file', 'send_slack_file'
             ]);
             const buildSideEffectKey = (toolName: string, metadata: any): string => {
@@ -8733,7 +9290,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 if (action.payload.source && decision.tools && decision.tools.length > 0) {
                     const hasChannelSendTool = decision.tools.some((t: any) => {
                         const name = String(t?.name || '').toLowerCase();
-                        return name === 'send_telegram' || name === 'send_whatsapp' || name === 'send_discord' || name === 'send_slack' || name === 'send_gateway_chat';
+                        return name === 'send_telegram' || name === 'send_whatsapp' || name === 'send_discord' || name === 'send_slack' || name === 'send_gateway_chat' ||
+                               name === 'telegram_send_buttons' || name === 'telegram_edit_message' || name === 'telegram_send_poll' || name === 'telegram_react' || name === 'telegram_pin_message';
                     });
 
                     const hasDeepTool = decision.tools.some((t: any) => !nonDeepSkills.includes(String(t?.name || '')));
@@ -8964,8 +9522,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             deepToolExecutedSinceLastMessage = true;
                         }
 
-                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_discord' || toolCall.name === 'send_slack' || toolCall.name === 'send_gateway_chat') {
-                            const currentMessage = (toolCall.metadata?.message || '').trim();
+                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_discord' || toolCall.name === 'send_slack' || toolCall.name === 'send_gateway_chat' ||
+                            toolCall.name === 'telegram_send_buttons' || toolCall.name === 'telegram_send_poll') {
+                            const currentMessage = (toolCall.metadata?.message || toolCall.metadata?.text || toolCall.metadata?.question || '').trim();
                             totalSendToolsInStep++;
 
                             // 0. HALLUCINATION / TEMPLATE PLACEHOLDER GUARD
@@ -9334,9 +9893,10 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         } else {
                             observation = `Observation: Tool ${toolCall.name} returned: ${resultString.slice(0, 500)}`;
                         }
-                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_gateway_chat' || toolCall.name === 'send_discord' || toolCall.name === 'send_slack') {
+                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_gateway_chat' || toolCall.name === 'send_discord' || toolCall.name === 'send_slack' ||
+                            toolCall.name === 'telegram_send_buttons' || toolCall.name === 'telegram_send_poll') {
                             messagesSent++;
-                            const sentMessage = (toolCall.metadata?.message || '').toString();
+                            const sentMessage = (toolCall.metadata?.message || toolCall.metadata?.text || toolCall.metadata?.question || '').toString();
                             if (!resultIndicatesError && this.isSubstantiveDeliveryMessage(sentMessage)) {
                                 substantiveDeliveriesSent++;
                             }
@@ -9478,14 +10038,22 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
 
                         // HARD BREAK after successful channel message send for "respond to" tasks
                         // This prevents duplicate messages when the LLM doesn't set goals_met correctly
-                        const isChannelSend = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat'].includes(toolCall.name);
+                        const isChannelSend = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat', 'telegram_send_buttons', 'telegram_send_poll'].includes(toolCall.name);
                         const isFileDelivery = toolCall.name === 'send_file' || toolCall.name === 'send_image';
                         const isResponseTask = action.payload?.description?.toLowerCase().includes('respond to') ||
                                                action.payload?.requiresResponse === true;
+                        const isRecoveryDeliveryTask = action.payload?.trigger === 'completion_audit_recovery';
                         const wasSuccessful = toolResult && !JSON.stringify(toolResult).toLowerCase().includes('error');
                         
                         if (isChannelSend && isResponseTask && wasSuccessful) {
                             logger.info(`Agent: Channel message sent for response task ${action.id}. Terminating to prevent duplicates.`);
+                            goalsMet = true;
+                            forceBreak = true;
+                            break;
+                        }
+
+                        if (isChannelSend && isRecoveryDeliveryTask && wasSuccessful) {
+                            logger.info(`Agent: Channel message sent for recovery task ${action.id}. Terminating immediately to prevent duplicate recovery sends.`);
                             goalsMet = true;
                             forceBreak = true;
                             break;
@@ -9703,8 +10271,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                 }
             }
 
-            // If we exhausted all steps, review before giving up
-            if (currentStep >= MAX_STEPS) {
+            // If we exhausted all steps without completing, review before giving up
+            if (currentStep >= MAX_STEPS && !goalsMet) {
                 logger.warn(`Agent: Reached max steps (${MAX_STEPS}) for action ${action.id}. Reviewing if task is truly done...`);
                 
                 const maxStepsReview = await this.reviewForcedTermination(
@@ -9715,7 +10283,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                 if (maxStepsReview === 'continue') {
                     // Give the agent a few more steps to compile and deliver results
                     const nonSendCalls = Object.entries(skillCallCounts)
-                        .filter(([skillName]) => !['send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat', 'send_file'].includes(skillName))
+                        .filter(([skillName]) => !['send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat', 'telegram_send_buttons', 'telegram_send_poll', 'send_file'].includes(skillName))
                         .reduce((sum, [, count]) => sum + count, 0);
                     const adaptiveBonus = messagesSent === 0
                         ? Math.max(3, Math.min(8, Math.ceil(nonSendCalls / 2)))
@@ -9788,7 +10356,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             
                             let bonusMsgSentThisStep = false;
                             for (const toolCall of bonusDecision.tools) {
-                                const isSendTool = toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_discord' || toolCall.name === 'send_slack' || toolCall.name === 'send_gateway_chat';
+                                const isSendTool = toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_discord' || toolCall.name === 'send_slack' || toolCall.name === 'send_gateway_chat' ||
+                                   toolCall.name === 'telegram_send_buttons' || toolCall.name === 'telegram_send_poll';
                                 
                                 // Apply message guards to bonus steps too
                                 if (isSendTool) {
@@ -9918,6 +10487,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
 
             // PRE-COMPLETION LOG AUDIT: Before marking as completed, inspect this action's
             // own logs and block completion if unresolved/missed delivery patterns exist.
+            let handedOffToRecovery = false;
             if (goalsMet) {
                 const completionAudit = await this.auditCompletionFromActionLogs(action, {
                     currentStep,
@@ -9941,6 +10511,15 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
 
                     // Queue a targeted recovery follow-up unless this action is already a recovery run.
                     if (action.payload?.trigger !== 'completion_audit_recovery') {
+                        if (this.hasExistingRecoveryTask(
+                            'completion_audit_recovery',
+                            action.id,
+                            action.payload?.source,
+                            action.payload?.sourceId
+                        )) {
+                            logger.info(`Agent: Skipping duplicate completion_audit_recovery for ${action.id}; recovery already exists or was recently completed.`);
+                            handedOffToRecovery = true;
+                        } else {
                         const recoveryDesc = `RECOVERY: Review the previous tool outputs and send a concrete final answer to the user. Do not send another acknowledgement. Deliver actual findings/results now.`;
                         await this.pushTask(
                             recoveryDesc,
@@ -9957,6 +10536,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             },
                             action.lane === 'autonomy' ? 'autonomy' : 'user'
                         );
+                        handedOffToRecovery = true;
+                        }
                     }
 
                     goalsMet = false;
@@ -9964,7 +10545,16 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
             }
 
             // Determine final status based on whether goals were actually achieved
-            const actionStatus = goalsMet ? 'completed' : 'failed';
+            const actionStatus = (goalsMet || handedOffToRecovery) ? 'completed' : 'failed';
+
+            if (handedOffToRecovery) {
+                this.memory.saveMemory({
+                    id: `${action.id}-recovery-handoff-complete`,
+                    type: 'short',
+                    content: `[SYSTEM: Recovery handoff queued for unresolved completion audit issues. Marking original action complete to prevent duplicate auto-retry.]`,
+                    metadata: { actionId: action.id, handedOffToRecovery: true }
+                });
+            }
 
             if (action.payload?.source && !action.payload?.isHeartbeat) {
                 const sessionScopeId = action.payload?.sessionScopeId || `${action.payload.source}:${action.payload.sourceId || action.payload.userId || 'unknown'}`;

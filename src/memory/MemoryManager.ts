@@ -32,7 +32,10 @@ export class MemoryManager {
     private episodicLimit: number = 5;
     private consolidationThreshold: number = 30;
     private consolidationBatch: number = 20;
-    private memoryFlushSoftThreshold: number = 25; // Trigger flush at this many memories
+    private memoryFlushSoftThreshold: number = 25;  // Trigger flush at this many memories
+    private memoryFlushCooldownMinutes: number = 30; // Min minutes between flushes
+    private memoryContentMaxLength: number = 500;    // Hard truncation for stored content
+    private memoryExtendedContextLimit: number = 2000; // Max chars of long-term memory in extended context
 
     constructor(dbPath: string = './memory.json', userPath: string = './USER.md') {
         this.storage = new JSONAdapter(dbPath);
@@ -61,6 +64,9 @@ export class MemoryManager {
         consolidationBatch?: number;
         memoryFlushSoftThreshold?: number;
         memoryFlushEnabled?: boolean;
+        memoryFlushCooldownMinutes?: number;
+        memoryContentMaxLength?: number;
+        memoryExtendedContextLimit?: number;
     }) {
         if (typeof options.contextLimit === 'number') this.contextLimit = options.contextLimit;
         if (typeof options.episodicLimit === 'number') this.episodicLimit = options.episodicLimit;
@@ -68,7 +74,10 @@ export class MemoryManager {
         if (typeof options.consolidationBatch === 'number') this.consolidationBatch = options.consolidationBatch;
         if (typeof options.memoryFlushSoftThreshold === 'number') this.memoryFlushSoftThreshold = options.memoryFlushSoftThreshold;
         if (typeof options.memoryFlushEnabled === 'boolean') this.memoryFlushEnabled = options.memoryFlushEnabled;
-        logger.info(`MemoryManager limits: context=${this.contextLimit}, episodic=${this.episodicLimit}, consolidationThreshold=${this.consolidationThreshold}, consolidationBatch=${this.consolidationBatch}, memoryFlush=${this.memoryFlushEnabled}`);
+        if (typeof options.memoryFlushCooldownMinutes === 'number') this.memoryFlushCooldownMinutes = options.memoryFlushCooldownMinutes;
+        if (typeof options.memoryContentMaxLength === 'number') this.memoryContentMaxLength = options.memoryContentMaxLength;
+        if (typeof options.memoryExtendedContextLimit === 'number') this.memoryExtendedContextLimit = options.memoryExtendedContextLimit;
+        logger.info(`MemoryManager limits: context=${this.contextLimit}, episodic=${this.episodicLimit}, consolidationThreshold=${this.consolidationThreshold}, consolidationBatch=${this.consolidationBatch}, memoryFlush=${this.memoryFlushEnabled}, flushCooldown=${this.memoryFlushCooldownMinutes}m, contentMax=${this.memoryContentMaxLength}`);
     }
 
     /**
@@ -112,7 +121,7 @@ export class MemoryManager {
     public saveMemory(entry: MemoryEntry) {
         const memories = this.storage.get('memories') || [];
         const ts = new Date().toISOString();
-        const maxContentLength = 500;
+        const maxContentLength = this.memoryContentMaxLength;
         const rawContent = (entry.content || '').toString();
         const content = rawContent.length > maxContentLength
             ? `${rawContent.slice(0, maxContentLength)}...[truncated]`
@@ -171,9 +180,9 @@ export class MemoryManager {
             return false;
         }
 
-        // Prevent frequent flushes (at most once per 30 minutes)
+        // Prevent frequent flushes (cooldown is configurable)
         const now = Date.now();
-        if (now - this.lastMemoryFlushAt < 30 * 60 * 1000) {
+        if (now - this.lastMemoryFlushAt < this.memoryFlushCooldownMinutes * 60 * 1000) {
             return false;
         }
 
@@ -581,7 +590,7 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
         // Add long-term memory
         const longTerm = this.dailyMemory.readLongTerm();
         if (longTerm) {
-            parts.push('## Long-Term Memory\n\n' + longTerm.substring(0, 2000)); // Limit size
+            parts.push('## Long-Term Memory\n\n' + longTerm.substring(0, this.memoryExtendedContextLimit));
         }
 
         return parts.length > 0 ? parts.join('\n\n---\n\n') : '';

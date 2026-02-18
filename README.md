@@ -1,9 +1,9 @@
 <div align="center">
 <img src="assets/orcbot.jpeg" width="420" alt="OrcBot Hero Banner">
 
-# OrcBot v2.0
+# OrcBot v2.1
 ### The Production-Ready Strategic AI Agent
-#### High-Power Intelligence with Web, Shell, and Strategic Simulation
+#### High-Power Intelligence with Web, Shell, Multi-Channel Delivery, and Strategic Simulation
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
@@ -19,18 +19,18 @@
 
 ---
 
-## 🚀 Why OrcBot v2.0?
+## 🚀 Why OrcBot v2.1?
 
-OrcBot is a next-generation **autonomous reasoning agent**. In v2.0, we've moved beyond simple ReAct loops to a **Strategic Simulation Architecture**. Before executing a task, OrcBot simulates the outcome, identifies potential pitfalls, and generates a robust execution plan with built-in fallbacks.
+OrcBot is a next-generation **autonomous reasoning agent**. Beyond the v2.0 Strategic Simulation Architecture, v2.1 brings hardened skill infrastructure, richer Telegram interactions, a RAG knowledge store, and battle-tested multi-channel delivery.
 
 ### Key Capabilities
 
 *   🧠 **Strategic Simulation Layer**: Pre-task planning that anticipates errors (like CAPTCHAs or search failures) before they happen.
 *   🛡️ **Autonomous Immune System**: Automatically detects broken plugin code and uses its `self_repair_skill` to fix itself.
 *   ⚙️ **Agent-Driven Config Management**: Intelligent configuration system where agents can safely optimize settings for different tasks while security-critical configs remain protected.
-*   📸 **Multi-Modal Intelligence**: Native capability to analyze images, audio, and documents via Telegram and WhatsApp.
-*   🌐 **Context-Aware Browsing**: Strategic web navigation that handles dynamic content and bypasses anti-bot measures.
-*   🐚 **Shell Execution**: Full system access to run commands, manage files, and install dependencies.
+*   📸 **Multi-Modal Intelligence**: Native capability to analyze images, audio, and documents via Telegram, WhatsApp, and Discord.
+*   🌐 **Context-Aware Browsing**: Strategic web navigation with stealth anti-bot parity across all browser modes, blank-page guards, and search URL save/restore.
+*   🐚 **Shell Execution**: Full system access to run commands, manage files, and install dependencies — with reliable Windows process-tree kill and stdout capping.
 *   💓 **Smart Heartbeat**: Context-aware autonomy with exponential backoff, productivity tracking, and action-oriented tasks.
 *   🤖 **Multi-Agent Orchestration**: Spawn worker processes to handle parallel tasks with real-time coordination.
 *   🔄 **Termination Review**: Built-in safety layer that reviews proposed actions to prevent premature task termination.
@@ -44,7 +44,10 @@ OrcBot is a next-generation **autonomous reasoning agent**. In v2.0, we've moved
 *   🔄 **Circuit Breaker Pattern**: Intelligent loop prevention in browser operations to avoid getting stuck.
 *   📚 **Self-Updating Identity**: Agent can evolve its personality, values, and operating instructions through bootstrap files.
 *   ⏱️ **Event-Driven Polling**: Efficient condition monitoring without busy-waiting loops.
-*   🎨 **Image Generation**: Built-in skill for generating and delivering images in supported channels.
+*   🎨 **Image Generation**: Built-in skill for generating and delivering images across WhatsApp, Telegram, and Discord.
+*   🗃️ **RAG Knowledge Store**: Ingest documents, URLs, and files into a semantic vector search index for durable recall.
+*   💬 **Rich Telegram UX**: Inline buttons, polls, message editing, emoji reactions (with reply fallback), and message pinning.
+*   🔁 **Clarification Delivery**: `request_supporting_data` now actively sends questions through the active channel before pausing.
 
 ---
 
@@ -56,27 +59,115 @@ OrcBot is built around **strategic autonomy**: it plans, executes, and repairs i
 
 ## Architecture
 
-The system is designed to run locally while integrating with external channels and providers. This diagram shows the core infrastructure flow:
+The system is designed to run locally while integrating with external channels and providers. This diagram covers the full v2.1 infrastructure — from inbound channels through the decision stack, memory layers, skills, and external providers.
 
 ```mermaid
-flowchart LR
-	User((User)) -->|Telegram / WhatsApp / CLI| Channels
-	Channels --> Agent[Agent Core]
-	Agent --> Decision[DecisionEngine]
-	Agent --> Simulation[SimulationEngine]
-	Agent --> Skills[SkillsManager]
-	Agent --> Memory[(Memory + Profiles)]
-	Agent --> Scheduler[Smart Heartbeat]
-	Agent --> Orchestrator[AgentOrchestrator]
-	Orchestrator -->|fork| Workers[Worker Processes]
-	Workers --> Agent
-	Skills --> Web[WebBrowser + Search Providers]
-	Skills --> Plugins[Dynamic Plugins]
-	Web -->|API or Browser Fallback| SearchAPIs[(Search: Serper / Brave / DDG / Bing / Google)]
-	Decision --> LLM[MultiLLM]
-	LLM --> Providers[(OpenAI / Gemini / Bedrock / OpenRouter)]
-	Scheduler --> Queue[(Action Queue)]
-	Queue --> Agent
+flowchart TB
+    %% ── Inbound ──────────────────────────────────────────────
+    subgraph Channels["📡 Channels"]
+        TG[Telegram\nTelegraf]
+        WA[WhatsApp\nBaileys]
+        DC[Discord\ndiscord.js]
+        GW[Gateway\nExpress + WS]
+    end
+
+    User((👤 User)) -->|message / command| Channels
+    CLI[CLI / TUI\norcbot ui] -->|push task| Queue
+
+    %% ── Action Queue ─────────────────────────────────────────
+    Channels -->|inbound → short memory\n+ push action| Queue[(🗂️ Action Queue\npriority · retry · TTL\ndependsOn · chaining)]
+
+    %% ── Agent Core ───────────────────────────────────────────
+    Queue --> Agent
+
+    subgraph AgentCore["🤖 Agent Core  (Agent.ts)"]
+        Agent[Agent\naction loop]
+        Sim[SimulationEngine\npre-task plan]
+        DE[DecisionEngine\nprompt assembly\n+ LLM call]
+        PR[PromptRouter\n8 modular helpers]
+        PL[DecisionPipeline\nguardrails · dedup\nloop detection]
+        Parser[ParserLayer\n3-tier JSON fallback]
+        CC[ContextCompactor\ntruncation + summarise]
+        RT[RuntimeTuner\nauto-adjust limits]
+        TT[TokenTracker\nper-model cost]
+    end
+
+    Agent --> Sim
+    Sim --> DE
+    DE --> PR
+    PR --> DE
+    DE --> PL
+    PL --> Parser
+    Parser --> Agent
+    DE <--> CC
+    DE --> TT
+    Agent --> RT
+
+    %% ── LLM ──────────────────────────────────────────────────
+    DE -->|call| LLM[MultiLLM\nrouting + fallback]
+    subgraph LLMProviders["🧠 LLM Providers"]
+        OAI[OpenAI\ngpt-4o / o1]
+        GEM[Google Gemini]
+        BED[AWS Bedrock]
+        NV[NVIDIA NIM]
+        OR[OpenRouter\n200+ models]
+    end
+    LLM --> OAI & GEM & BED & NV & OR
+
+    %% ── Memory ───────────────────────────────────────────────
+    subgraph MemorySystem["🧠 Memory System"]
+        MM[MemoryManager]
+        SM[short memory\nstep observations]
+        EP[episodic memory\nLLM summaries]
+        VM[VectorMemory\nembedding index\ntext-embedding-3-small]
+        DM[DailyMemory\nappend-only .md logs]
+        LM[long memory\nMEMORY.md · LEARNING.md\nUSER.md · JOURNAL.md]
+    end
+    Agent <--> MM
+    MM --> SM & EP & VM & DM & LM
+    DE -->|getRecentContext\nsemanticSearch| MM
+
+    %% ── Storage ──────────────────────────────────────────────
+    subgraph Storage["💾 Storage"]
+        JSON[JSONAdapter\natomic write · .bak · cache]
+        SQLite[SQLiteAdapter]
+    end
+    MM --> JSON
+    MM -.-> SQLite
+
+    %% ── Skills ───────────────────────────────────────────────
+    Agent -->|execute tools| Skills
+
+    subgraph SkillLayer["⚙️ Skills"]
+        SM2[SkillsManager\nregistry · intent routing]
+        CoreSkills["Core Skills\nweb_search · browser_navigate\nhttp_fetch · extract_article\ndownload_file · read_file · write_file\nsend_file · send_voice_note · send_image\ntelegram_send_buttons · telegram_send_poll\ntelegram_react · telegram_edit/pin\nschedule_task · heartbeat_schedule\nrun_command · deep_reason\nrecall_memory · update_user_profile\nupdate_learning · request_supporting_data\nrag_ingest/search/list/delete\nspawn_agent · delegate_task\nmanage_config · system_check\nself_repair_skill · create_custom_skill"]
+        Plugins[Dynamic Plugins\n~/.orcbot/plugins/\nhot-loaded · self-repair]
+    end
+    Skills --> SM2
+    SM2 --> CoreSkills & Plugins
+
+    %% ── Browser + Search ─────────────────────────────────────
+    CoreSkills --> Browser[WebBrowser\nPlaywright stealth\nblank-page guard\n2Captcha]
+    Browser -->|search fallback chain| Search[(Serper → Google\n→ Bing → DDG)]
+
+    %% ── Config ───────────────────────────────────────────────
+    subgraph Config["⚙️ Config"]
+        CM[ConfigManager\nYAML hot-reload\nfeature toggles]
+        CP[ConfigPolicy\nSAFE / APPROVAL / LOCKED]
+    end
+    Agent --> CM
+    CM --> CP
+
+    %% ── Scheduler / Orchestrator ─────────────────────────────
+    Sched[Scheduler\ncroner · EventBus ticks] -->|scheduler:tick| Queue
+    Agent --> Sched
+
+    Orch[AgentOrchestrator] -->|fork| Workers[Worker Processes\nisolated · IPC]
+    Workers -->|results| Agent
+    Agent --> Orch
+
+    %% ── Outbound delivery ────────────────────────────────────
+    CoreSkills -->|3-tier channel detection\nWhatsApp → Discord → Telegram| Channels
 ```
 
 ---
@@ -179,14 +270,40 @@ OrcBot comes out of the box with "God Mode" capabilities:
 
 | Skill | Description | Usage Example |
 |-------|-------------|---------------|
-| `run_command` | Execute any shell command | `run_command("npm test")` |
+| `run_command` | Execute shell commands (PowerShell on Windows). Stdout capped at 8 KB; process tree forcefully killed on timeout. | `run_command("npm test")` |
 | `web_search` | Search with API + browser fallback | `web_search("latest AI news")` |
-| `browser_navigate`| Visit a URL and extract text | `browser_navigate("https://google.com")` |
-| `manage_skills` | Install/Update agent skills | `manage_skills("New Skill Definition...")` |
-| `deep_reason` | 01-style intensive analysis | `deep_reason("Ethics of AGI")` |
-| `update_user_profile`| Permanently learn about user | `update_user_profile("User likes coffee")` |
-| `spawn_worker` | Create a worker agent for parallel tasks | `spawn_worker("Research competitor pricing")` |
-| `list_workers` | View active worker processes | `list_workers()` |
+| `browser_navigate` | Visit a URL and extract text | `browser_navigate("https://google.com")` |
+| `http_fetch` | Lightweight HTTP GET/POST/PUT without browser | `http_fetch("https://api.example.com/data")` |
+| `extract_article` | Extract clean article text via Readability | `extract_article("https://news.example.com/article")` |
+| `download_file` | Download file with 60 s timeout, 50 MB cap, MIME→extension inference | `download_file("https://example.com/report.pdf")` |
+| `read_file` | Read file with optional line range (start_line/end_line), 20 KB cap | `read_file("/path/to/file.md", 1, 100)` |
+| `write_file` | Write/append to file, 10 MB size guard | `write_file("/path/output.md", "content")` |
+| `send_file` | Send file via WhatsApp, Telegram, or Discord (auto-detected) | `send_file("123456", "/path/img.png", channel="discord")` |
+| `send_voice_note` | TTS → voice note. Discord fallback: audio file attachment | `send_voice_note("user@s.whatsapp.net", "Hello!")` |
+| `send_image` | Generate AI image and send in one step | `send_image("user_id", "a futuristic city", channel="telegram")` |
+| `text_to_speech` | Convert text to .ogg audio file | `text_to_speech("Hello world", voice="nova")` |
+| `manage_skills` | Append skill definition to SKILLS.md | `manage_skills("New Skill Definition...")` |
+| `create_skill` | Create a knowledge-based SKILL.md skill | `create_skill("pdf-processor", "Parse PDFs")` |
+| `create_custom_skill` | Create an executable TypeScript plugin skill | `create_custom_skill("stripe-charge", "Charge via Stripe")` |
+| `deep_reason` | Intensive chain-of-thought analysis | `deep_reason("Ethics of AGI")` |
+| `update_user_profile` | Permanently persist user preferences and facts | `update_user_profile("User prefers concise answers")` |
+| `update_learning` | Research topic and save findings to LEARNING.md | `update_learning("WebAssembly 2025")` |
+| `recall_memory` | Semantic search across all memory types | `recall_memory("last deployment discussion")` |
+| `rag_ingest` | Ingest document into RAG vector knowledge store | `rag_ingest(content, "report.md")` |
+| `rag_search` | Semantic search across ingested knowledge | `rag_search("deployment checklist")` |
+| `rag_ingest_url` | Fetch URL and ingest into knowledge store | `rag_ingest_url("https://docs.example.com")` |
+| `schedule_task` | One-off task scheduling (relative or cron) | `schedule_task("in 2 hours", "Send daily report")` |
+| `heartbeat_schedule` | Recurring cron-based autonomous tasks | `heartbeat_schedule("0 9 * * 1-5", "Morning brief")` |
+| `spawn_agent` | Create a named sub-agent for parallel work | `spawn_agent("researcher", "worker")` |
+| `delegate_task` | Create and assign task to agent or orchestrator | `delegate_task("Scrape pricing page", 5)` |
+| `request_supporting_data` | Send a question to user through active channel and pause | `request_supporting_data("Which region?")` |
+| `telegram_send_buttons` | Send Telegram message with inline keyboard buttons | `telegram_send_buttons(chatId, "Choose:", [["A", "B"]])` |
+| `telegram_send_poll` | Send a Telegram poll | `telegram_send_poll(chatId, "Preference?", ["Yes","No"])` |
+| `telegram_react` | React with emoji; falls back to reply if native reactions blocked | `telegram_react(chatId, msgId, "👍")` |
+| `telegram_edit_message` | Edit a previously sent Telegram message | `telegram_edit_message(chatId, msgId, "Updated text")` |
+| `telegram_pin_message` | Pin a message in a Telegram chat | `telegram_pin_message(chatId, msgId)` |
+| `get_system_info` | Get platform, OS, Node version, shell, and command guidance | `get_system_info()` |
+| `system_check` | Verify commands, shared libraries, and file paths exist | `system_check(["node","git"], [], ["/etc/hosts"])` |
 
 ---
 
@@ -477,6 +594,38 @@ OrcBot supports hot-loadable skills via TypeScript or JavaScript plugins in `~/.
 - **Safe Mode**: disable command execution and skill creation via `safeMode: true`
 - **Plugin allow/deny**: control which plugins can load with `pluginAllowList` and `pluginDenyList`
 - **Admin-only Skills**: elevated capabilities are gated to configured admins
+
+---
+
+## What's New in v2.1
+
+### Skill Infrastructure Hardening
+- **`download_file`**: 60 s timeout, 50 MB streaming cap, MIME → file extension inference, uses `dataHome` directory.
+- **`send_file` / `send_voice_note`**: Full 3-tier channel detection (WhatsApp → Discord → Telegram) using action source metadata and JID snowflake pattern. Discord voice notes send as audio file attachments.
+- **`read_file`**: `start_line` / `end_line` parameters for pagination; limit raised from 10 KB to 20 KB.
+- **`write_file`**: 10 MB content guard prevents accidental large writes.
+- **`run_command`**: Reliable Windows process-tree kill via `taskkill /PID … /T /F`; stdout capped at 8 KB with tail-hint.
+- **`request_supporting_data`**: Now actively sends the question through the originating channel before returning the pause sentinel.
+- **`update_learning`**: LLM extraction input capped at 3 000 chars; per-entry storage capped at 3 000 chars to prevent LEARNING.md bloat.
+
+### Telegram Rich UX
+- Inline keyboard buttons (`telegram_send_buttons`)
+- Native polls (`telegram_send_poll`)
+- Emoji reactions with graceful reply fallback (`telegram_react`)
+- Message editing (`telegram_edit_message`)
+- Message pinning (`telegram_pin_message`)
+
+### Browser Infrastructure
+- `navigateEphemeral` now has full anti-bot stealth parity with main browser.
+- `searchGoogle` / `searchBing` / `searchDuckDuckGo` save/restore `lastNavigatedUrl` so browser context is not clobbered by background searches.
+- `extract_article` reuses the shared Playwright browser instead of spawning a new process.
+- Blank-page counter now tracked on the fast `extractContent` path.
+- Search cache hits no longer append `[cache]` suffix into LLM output.
+
+### RAG Knowledge Store
+- `rag_ingest`, `rag_ingest_file`, `rag_ingest_url`, `rag_search`, `rag_list`, `rag_delete`
+- Chunk-based embedding storage with collection namespacing and tag filtering.
+- Automatic HTML→Readability extraction in `rag_ingest_url`.
 
 ---
 
