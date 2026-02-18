@@ -195,7 +195,12 @@ export class Agent {
             bedrockAccessKeyId: this.config.get('bedrockAccessKeyId'),
             bedrockSecretAccessKey: this.config.get('bedrockSecretAccessKey'),
             bedrockSessionToken: this.config.get('bedrockSessionToken'),
-            tokenTracker
+            tokenTracker,
+            usePiAI: this.config.get('usePiAI'),
+            groqApiKey: this.config.get('groqApiKey'),
+            mistralApiKey: this.config.get('mistralApiKey'),
+            cerebrasApiKey: this.config.get('cerebrasApiKey'),
+            xaiApiKey: this.config.get('xaiApiKey'),
         });
 
         // Configure fast model for internal reasoning (reviews, reflections, classification)
@@ -7074,6 +7079,30 @@ REFLECTION: <1-2 sentences>`;
     private buildSmartHeartbeatPrompt(idleTimeMs: number, workerCount: number, availableWorkers: number): string {
         const now = Date.now();
 
+        // ── 0. Heartbeat state — per-check cadence tracking ──────────────────
+        // heartbeat-state.json tracks when each class of proactive check last ran.
+        // The LLM reads this to avoid redundant rechecks and updates it via write_file.
+        const heartbeatStatePath = path.join(path.dirname(this.config.get('actionQueuePath')), 'heartbeat-state.json');
+        let heartbeatState: Record<string, number> = {};
+        try {
+            if (fs.existsSync(heartbeatStatePath)) {
+                heartbeatState = JSON.parse(fs.readFileSync(heartbeatStatePath, 'utf-8'));
+            }
+        } catch { /* use empty state */ }
+
+        const formatCheckAge = (ts: number | undefined): string => {
+            if (!ts) return 'never';
+            const ageMin = Math.floor((now - ts) / 60000);
+            return ageMin < 60 ? `${ageMin}m ago` : `${Math.floor(ageMin / 60)}h ago`;
+        };
+        const checkStateSummary = [
+            `email: ${formatCheckAge(heartbeatState.email)}`,
+            `calendar: ${formatCheckAge(heartbeatState.calendar)}`,
+            `social: ${formatCheckAge(heartbeatState.social)}`,
+            `weather: ${formatCheckAge(heartbeatState.weather)}`,
+            `news: ${formatCheckAge(heartbeatState.news)}`,
+        ].join(' | ');
+
         // ── 1. Recent memories (short + episodic) with relative timestamps ──
         const recentMemories = this.memory.getRecentContext(20);
         const recentContext = recentMemories
@@ -7211,6 +7240,7 @@ Current Time: ${nowDate.toLocaleString()} (${dayOfWeek} ${timeOfDay})${isWeekend
 Autonomy Level: ${autonomyLevel} (${autonomyLevel === 'high' ? 'long idle — creative initiative encouraged' : autonomyLevel === 'moderate' ? 'moderate idle — balanced initiative' : 'short idle — prefer context-reactive actions'})
 Workers: ${availableWorkers} available / ${workerCount} total
 Active Channels: ${channelStatus} (${channelSkillNote})
+Last Checks: ${checkStateSummary}
 ${semanticHighlights ? `Memory: ${semanticHighlights}` : ''}
 
 ═══════════════════════════════════════════
@@ -7278,6 +7308,8 @@ You don't need to wait for instructions. Think independently about what would be
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DECISION FRAMEWORK
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Update heartbeat state:** After completing any proactive check (email/calendar/social/weather/news), use write_file on \`${heartbeatStatePath}\` with updated timestamps so future heartbeats skip redundant rechecks. Example JSON: {"email": ${now}, "news": ${now}}
 
 **Priority Order:**
 1. REACTIVE items from the last few hours (unfinished work, failed retries, pending follow-ups)
@@ -7701,7 +7733,40 @@ Respond with a single actionable task description (one sentence). Be specific ab
         if (opts.memory) {
             if (fs.existsSync(memoryPath)) fs.writeFileSync(memoryPath, JSON.stringify({}, null, 2));
             if (fs.existsSync(actionPath)) fs.writeFileSync(actionPath, JSON.stringify([], null, 2));
-            logger.info('Agent: Cleared memory.json and actions.json');
+
+            // Clear vector memory (embeddings)
+            const vectorMemoryPath = path.join(dataHome, 'vector_memory.json');
+            if (fs.existsSync(vectorMemoryPath)) {
+                fs.writeFileSync(vectorMemoryPath, JSON.stringify({ entries: [] }, null, 2));
+                const bakPath = vectorMemoryPath + '.bak';
+                if (fs.existsSync(bakPath)) fs.unlinkSync(bakPath);
+            }
+
+            // Clear daily memory markdown logs
+            const dailyMemoryDir = path.join(dataHome, 'memory');
+            if (fs.existsSync(dailyMemoryDir)) {
+                try {
+                    const files = fs.readdirSync(dailyMemoryDir);
+                    let count = 0;
+                    for (const file of files) {
+                        if (file.endsWith('.md')) {
+                            fs.unlinkSync(path.join(dailyMemoryDir, file));
+                            count++;
+                        }
+                    }
+                    if (count > 0) logger.info(`Agent: Cleared ${count} daily memory log(s)`);
+                } catch (e) {
+                    logger.error(`Agent: Failed to clear daily memory logs: ${e}`);
+                }
+            }
+
+            // Reset in-memory runtime state so the agent starts fresh
+            this.lastHeartbeatAt = Date.now();
+            this.lastActionTime = Date.now();
+            this.consecutiveIdleHeartbeats = 0;
+            this.lastHeartbeatProductive = true;
+
+            logger.info('Agent: Cleared memory.json, actions.json, vector_memory.json, and daily logs');
         }
 
         // ── Identity Files ──
@@ -7803,6 +7868,12 @@ Respond with a single actionable task description (one sentence). Be specific ab
             }
             if (fs.existsSync(heartbeatSchedulesPath)) {
                 fs.writeFileSync(heartbeatSchedulesPath, '[]', 'utf8');
+            }
+
+            // Clear heartbeat check-cadence state
+            const heartbeatStatePath = path.join(heartbeatDir, 'heartbeat-state.json');
+            if (fs.existsSync(heartbeatStatePath)) {
+                fs.unlinkSync(heartbeatStatePath);
             }
 
             // Stop and clear all running heartbeat jobs

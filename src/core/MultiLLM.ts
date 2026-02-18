@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { TokenTracker } from './TokenTracker';
+import { piAiCall, piAiCallWithTools, type PiAIAdapterOptions } from './PiAIAdapter';
 
 export type LLMProvider = 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia' | 'anthropic';
 
@@ -54,10 +55,16 @@ export class MultiLLM {
     private bedrockAccessKeyId?: string;
     private bedrockSecretAccessKey?: string;
     private bedrockSessionToken?: string;
+    private groqKey?: string;
+    private mistralKey?: string;
+    private cerebrasKey?: string;
+    private xaiKey?: string;
     private tokenTracker?: TokenTracker;
     private preferredProvider?: LLMProvider;
+    /** When true, route call() and callWithTools() through @mariozechner/pi-ai */
+    private usePiAI: boolean = false;
 
-    constructor(config?: { apiKey?: string, googleApiKey?: string, nvidiaApiKey?: string, anthropicApiKey?: string, modelName?: string, bedrockRegion?: string, bedrockAccessKeyId?: string, bedrockSecretAccessKey?: string, bedrockSessionToken?: string, tokenTracker?: TokenTracker, openrouterApiKey?: string, openrouterBaseUrl?: string, openrouterReferer?: string, openrouterAppName?: string, llmProvider?: LLMProvider }) {
+    constructor(config?: { apiKey?: string, googleApiKey?: string, nvidiaApiKey?: string, anthropicApiKey?: string, modelName?: string, bedrockRegion?: string, bedrockAccessKeyId?: string, bedrockSecretAccessKey?: string, bedrockSessionToken?: string, tokenTracker?: TokenTracker, openrouterApiKey?: string, openrouterBaseUrl?: string, openrouterReferer?: string, openrouterAppName?: string, llmProvider?: LLMProvider, usePiAI?: boolean, groqApiKey?: string, mistralApiKey?: string, cerebrasApiKey?: string, xaiApiKey?: string }) {
         this.openaiKey = config?.apiKey || process.env.OPENAI_API_KEY;
         this.openrouterKey = config?.openrouterApiKey || process.env.OPENROUTER_API_KEY;
         this.openrouterBaseUrl = config?.openrouterBaseUrl || process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
@@ -71,9 +78,15 @@ export class MultiLLM {
         this.bedrockAccessKeyId = config?.bedrockAccessKeyId || process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID;
         this.bedrockSecretAccessKey = config?.bedrockSecretAccessKey || process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY;
         this.bedrockSessionToken = config?.bedrockSessionToken || process.env.BEDROCK_SESSION_TOKEN || process.env.AWS_SESSION_TOKEN;
+        this.groqKey = config?.groqApiKey || process.env.GROQ_API_KEY;
+        this.mistralKey = config?.mistralApiKey || process.env.MISTRAL_API_KEY;
+        this.cerebrasKey = config?.cerebrasApiKey || process.env.CEREBRAS_API_KEY;
+        this.xaiKey = config?.xaiApiKey || process.env.XAI_API_KEY;
         this.tokenTracker = config?.tokenTracker;
         this.preferredProvider = config?.llmProvider;
+        this.usePiAI = config?.usePiAI ?? false;
 
+        if (this.usePiAI) logger.info('MultiLLM: pi-ai backend enabled');
         logger.info(`MultiLLM: Initialized with model ${this.modelName}`);
     }
 
@@ -143,6 +156,13 @@ export class MultiLLM {
     }
 
     public async call(prompt: string, systemMessage?: string, provider?: LLMProvider, modelOverride?: string): Promise<string> {
+        if (this.usePiAI) {
+            try {
+                return await piAiCall(prompt, systemMessage, this.getPiAIOptions(modelOverride, provider));
+            } catch (e) {
+                logger.warn(`MultiLLM: pi-ai call failed, falling back to legacy — ${(e as Error).message}`);
+            }
+        }
         const primaryProvider = provider || this.preferredProvider || this.inferProvider(modelOverride || this.modelName);
         
         // Build fallback chain: try all available providers
@@ -188,6 +208,13 @@ export class MultiLLM {
         provider?: LLMProvider,
         modelOverride?: string
     ): Promise<LLMToolResponse> {
+        if (this.usePiAI) {
+            try {
+                return await piAiCallWithTools(prompt, systemMessage, tools, this.getPiAIOptions(modelOverride, provider));
+            } catch (e) {
+                logger.warn(`MultiLLM: pi-ai callWithTools failed, falling back to legacy — ${(e as Error).message}`);
+            }
+        }
         const primaryProvider = provider || this.preferredProvider || this.inferProvider(modelOverride || this.modelName);
         const model = modelOverride || this.modelName;
 
@@ -931,6 +958,33 @@ export class MultiLLM {
             if (text.length > 20000) break; // guardrail
         }
         return text;
+    }
+
+    /** Build PiAIAdapterOptions from current state. */
+    private getPiAIOptions(modelOverride?: string, providerOverride?: LLMProvider): PiAIAdapterOptions {
+        const model = modelOverride || this.modelName;
+        return {
+            // Do NOT pass this.preferredProvider here — it's a legacy routing hint that can
+            // misdirect pi-ai (e.g. stored 'google' but model is 'llama-3.3-70b-versatile').
+            // Only pass an explicit per-call override; toPiProvider() infers from model name.
+            provider: providerOverride ?? 'auto',
+            model,
+            apiKeys: {
+                openai: this.openaiKey,
+                google: this.googleKey,
+                anthropic: this.anthropicKey,
+                openrouter: this.openrouterKey,
+                nvidia: this.nvidiaKey,
+                bedrockAccessKeyId: this.bedrockAccessKeyId,
+                bedrockSecretAccessKey: this.bedrockSecretAccessKey,
+                bedrockRegion: this.bedrockRegion,
+                bedrockSessionToken: this.bedrockSessionToken,
+                groq: this.groqKey,
+                mistral: this.mistralKey,
+                cerebras: this.cerebrasKey,
+                xai: this.xaiKey,
+            },
+        };
     }
 
     private inferProvider(modelName: string): LLMProvider {

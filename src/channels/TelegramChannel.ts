@@ -36,6 +36,8 @@ export class TelegramChannel implements IChannel {
             const message = ctx.message as any;
             const userId = ctx.from.id.toString();
             const chatId = (ctx.chat?.id != null ? ctx.chat.id.toString() : userId);
+            const chatType = ctx.chat?.type || 'private';
+            const isGroupChat = chatType === 'group' || chatType === 'supergroup' || (chatType as string) === 'channel';
             const userName = ctx.from.first_name;
             const autoReplyEnabled = this.agent.config.get('telegramAutoReplyEnabled');
             const sessionScopeId = this.agent.resolveSessionScopeId('telegram', {
@@ -185,7 +187,9 @@ export class TelegramChannel implements IChannel {
                     messageId: message.message_id,  // For deduplication
                     mediaPath,
                     replyToMessageId,
-                    replyContext: replyContext || undefined
+                    replyContext: replyContext || undefined,
+                    isGroupChat,
+                    chatType
                 }
             );
 

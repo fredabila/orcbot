@@ -1005,8 +1005,19 @@ Respond conversationally. If the user asks you to do something that requires ele
             ? userContextStr.slice(0, userContextLimit) + '...[truncated]'
             : userContextStr));
 
+        // Compact one-line runtime orientation — gives the LLM immediate context without burying it
+        const runtimeLine = `RUNTIME: channel=${source || 'internal'} | step=${metadata.currentStep || 1}/${this.config?.get('maxSteps') || 30} | mem=${recentContext.length} | model=${this.config?.get('modelName') || 'auto'} | isGroup=${!!(metadata as any).isGroupChat}`;
+
+        // Quick user profile — first 4 significant lines of USER.md as a single-line orientator
+        const quickUserProfile = (isAdmin && !isHeartbeat && trimmedUserContext)
+            ? trimmedUserContext.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#')).slice(0, 4).join(' | ').slice(0, 200)
+            : '';
+
         // Full prompt for all steps - don't risk losing context
         const systemPrompt = `
+${runtimeLine}
+${quickUserProfile ? `USER: ${quickUserProfile}` : ''}
+
 ${coreInstructions}
 
 EXECUTION STATE:

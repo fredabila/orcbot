@@ -37,6 +37,8 @@
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.980.0",
     "@jitsi/robotjs": "^0.6.21",
+    "@mariozechner/pi-ai": "^0.53.0",
+    "@mariozechner/pi-tui": "^0.53.0",
     "@mozilla/readability": "^0.6.0",
     "@slack/socket-mode": "^2.0.5",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",

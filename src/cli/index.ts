@@ -16,6 +16,7 @@ import { WorkerProfileManager } from '../core/WorkerProfile';
 import { DaemonManager } from '../utils/daemon';
 import { TokenTracker } from '../core/TokenTracker';
 import { aggregateWorldEvents, fetchWorldEvents, summarizeWorldEvents, WorldEvent, WorldEventSource, getRootCodeLabel } from '../tools/WorldEvents';
+import { piBox, isPiTuiAvailable } from '../core/PiTuiRenderer';
 
 dotenv.config(); // Local .env
 dotenv.config({ path: path.join(os.homedir(), '.orcbot', '.env') }); // Global .env
@@ -77,31 +78,16 @@ const brightWhite = (text: string) => clr(c.brightWhite, text);
 
 // ── Visual rendering helpers ───────────────────────────────────────────
 
-/** Render a box with double-line borders and optional title */
+/** Render a box with double-line borders and optional title.
+ *  Delegates to @mariozechner/pi-tui Box component when available,
+ *  falling back to the classic hand-rolled renderer. */
 function box(lines: string[], opts: { title?: string; width?: number; color?: string; padding?: number } = {}) {
-    const color = opts.color || c.cyan;
-    const pad = opts.padding ?? 1;
-    // Strip ANSI for measuring
-    const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
-    const contentWidth = opts.width || Math.max(
-        opts.title ? stripAnsi(opts.title).length + 4 : 0,
-        ...lines.map(l => stripAnsi(l).length + pad * 2)
-    );
-    const w = Math.max(contentWidth, 40);
-
-    // Title uses the border color + bold white so it stays readable on any background
-    const top = opts.title
-        ? `${color}╔═ ${c.reset}${c.bold}${c.brightWhite}${opts.title}${c.reset}${color} ${'═'.repeat(Math.max(0, w - stripAnsi(opts.title).length - 3))}╗${c.reset}`
-        : `${color}╔${'═'.repeat(w)}╗${c.reset}`;
-    const bot = `${color}╚${'═'.repeat(w)}╝${c.reset}`;
-
-    console.log(top);
-    for (const line of lines) {
-        const visible = stripAnsi(line).length;
-        const rightPad = Math.max(0, w - visible - pad);
-        console.log(`${color}║${c.reset}${' '.repeat(pad)}${line}${' '.repeat(rightPad)}${color}║${c.reset}`);
-    }
-    console.log(bot);
+    piBox(lines, {
+        title: opts.title,
+        width: opts.width,
+        paddingX: opts.padding,
+        borderColor: opts.color,
+    });
 }
 
 async function showToolsManagerMenu() {
@@ -2757,11 +2743,15 @@ async function showModelsMenu() {
     const hasNvidia = !!agent.config.get('nvidiaApiKey');
     const hasAnthropic = !!agent.config.get('anthropicApiKey');
     const hasBedrock = !!agent.config.get('bedrockAccessKeyId');
+    const piAiEnabled = agent.config.get('usePiAI') !== false; // true by default
 
     console.log('');
+    const piTuiStatus = isPiTuiAvailable() ? green('installed') : gray('not installed');
     const modelLines = [
         `${dim('Provider')}  ${brightCyan(bold(currentProvider.toUpperCase()))}`,
         `${dim('Model')}     ${bold(currentModel)}`,
+        `${dim('pi-ai')}     ${piAiEnabled ? green('enabled (primary)') : gray('disabled (legacy mode)')}`,
+        `${dim('pi-tui')}    ${piTuiStatus}`,
     ];
     box(modelLines, { title: '⭐ ACTIVE MODEL', width: 52, color: c.brightCyan });
 
@@ -2784,7 +2774,8 @@ async function showModelsMenu() {
             message: cyan('Select provider to configure:'),
             choices: [
                 { name: `  ⭐ ${bold('Set Primary Provider')} ${dim(`(current: ${currentProvider})`)}`, value: 'set_primary' },
-                new inquirer.Separator(gradient('  ─── Provider Config ──────────────', [c.green, c.gray])),
+                { name: `  🔄 ${bold('pi-ai Model Browser')} ${dim(`(${piAiEnabled ? 'active · 15+ providers' : 'disabled'})`)}`, value: 'pi_ai' },
+                new inquirer.Separator(gradient('  ─── Per-Provider Config ──────────', [c.green, c.gray])),
                 { name: `  ${statusDot(hasOpenAI, '')} OpenAI ${dim('(GPT-4, etc.)')}`, value: 'openai' },
                 { name: `  ${statusDot(hasOpenRouter, '')} OpenRouter ${dim('(multi-model gateway)')}`, value: 'openrouter' },
                 { name: `  ${statusDot(hasGoogle, '')} Google ${dim('(Gemini Pro/Flash)')}`, value: 'google' },
@@ -2801,6 +2792,8 @@ async function showModelsMenu() {
 
     if (provider === 'set_primary') {
         await showSetPrimaryProvider();
+    } else if (provider === 'pi_ai') {
+        await showPiAIConfig();
     } else if (provider === 'openai') {
         await showOpenAIConfig();
     } else if (provider === 'openrouter') {
@@ -2814,6 +2807,263 @@ async function showModelsMenu() {
     } else if (provider === 'bedrock') {
         await showBedrockConfig();
     }
+}
+
+// ── Curated pi-ai model catalogue ───────────────────────────────────────────
+// Kept inline to avoid external fetches; mirrors pi-ai's supported providers.
+const PI_AI_CATALOGUE: Record<string, { label: string; models: { id: string; note: string }[] }> = {
+    openai: {
+        label: 'OpenAI',
+        models: [
+            { id: 'gpt-4o',             note: 'Best overall, vision + tools' },
+            { id: 'gpt-4o-mini',        note: 'Fast & cheap, great for tasks' },
+            { id: 'gpt-4.1',            note: 'Latest GPT-4.1 flagship' },
+            { id: 'gpt-4.1-mini',       note: 'GPT-4.1 mini — balanced' },
+            { id: 'o4-mini',            note: 'Reasoning model, fast' },
+            { id: 'o3',                 note: 'Advanced reasoning' },
+        ],
+    },
+    google: {
+        label: 'Google Gemini',
+        models: [
+            { id: 'gemini-2.5-pro',        note: 'Most capable Gemini' },
+            { id: 'gemini-2.5-flash',       note: 'Fast multimodal' },
+            { id: 'gemini-2.0-flash',       note: 'Previous gen flash' },
+            { id: 'gemini-2.0-flash-lite',  note: 'Lightest Gemini' },
+        ],
+    },
+    anthropic: {
+        label: 'Anthropic (Claude)',
+        models: [
+            { id: 'claude-opus-4-5',      note: 'Most intelligent Claude' },
+            { id: 'claude-sonnet-4-5',    note: 'Best balance' },
+            { id: 'claude-haiku-4-5',     note: 'Fastest Claude' },
+            { id: 'claude-3-5-sonnet-latest', note: 'Previous gen workhorse' },
+        ],
+    },
+    openrouter: {
+        label: 'OpenRouter (Multi-model gateway)',
+        models: [
+            { id: 'meta-llama/llama-3.3-70b-instruct:free', note: 'Llama 3.3 70B — free tier' },
+            { id: 'deepseek/deepseek-r1:free',              note: 'DeepSeek R1 — free tier' },
+            { id: 'mistralai/mistral-7b-instruct:free',     note: 'Mistral 7B — free tier' },
+            { id: 'qwen/qwen-2.5-72b-instruct',             note: 'Qwen 2.5 72B' },
+            { id: 'x-ai/grok-3-beta',                       note: 'Grok-3 via xAI' },
+        ],
+    },
+    'amazon-bedrock': {
+        label: 'AWS Bedrock',
+        models: [
+            { id: 'anthropic.claude-3-5-sonnet-20241022-v2:0', note: 'Claude 3.5 Sonnet on Bedrock' },
+            { id: 'amazon.nova-pro-v1:0',                      note: 'Amazon Nova Pro' },
+            { id: 'amazon.nova-lite-v1:0',                     note: 'Amazon Nova Lite — fast' },
+            { id: 'meta.llama3-3-70b-instruct-v1:0',           note: 'Llama 3.3 70B on Bedrock' },
+        ],
+    },
+    groq: {
+        label: 'Groq (Ultra-fast inference)',
+        models: [
+            { id: 'llama-3.3-70b-versatile', note: 'Best quality on Groq' },
+            { id: 'llama-3.1-8b-instant',    note: 'Fastest Groq option' },
+            { id: 'mixtral-8x7b-32768',      note: 'Mixtral 8x7B' },
+            { id: 'gemma2-9b-it',            note: 'Gemma 2 9B' },
+        ],
+    },
+    mistral: {
+        label: 'Mistral AI',
+        models: [
+            { id: 'mistral-large-latest',   note: 'Most capable Mistral' },
+            { id: 'mistral-small-latest',   note: 'Fast & affordable' },
+            { id: 'codestral-latest',       note: 'Code-optimised' },
+            { id: 'open-mistral-nemo',      note: 'Nemo — compact open model' },
+        ],
+    },
+    cerebras: {
+        label: 'Cerebras (Wafer-scale speed)',
+        models: [
+            { id: 'llama3.3-70b',   note: 'Llama 3.3 70B — extremely fast' },
+            { id: 'llama3.1-8b',    note: 'Llama 3.1 8B — ultra-low latency' },
+        ],
+    },
+    xai: {
+        label: 'xAI (Grok)',
+        models: [
+            { id: 'grok-3',        note: 'Flagship Grok-3' },
+            { id: 'grok-3-mini',   note: 'Grok-3 Mini — efficient' },
+            { id: 'grok-2-latest', note: 'Grok-2 stable' },
+        ],
+    },
+};
+
+// Maps pi-ai catalogue provider keys → legacy llmProvider enum values
+// Providers not in the legacy enum (groq, mistral, cerebras, xai) are set to undefined
+// so the Active Model box shows 'AUTO' and model-name inference handles routing
+const PI_CAT_TO_LEGACY_PROVIDER: Record<string, string | undefined> = {
+    openai:          'openai',
+    google:          'google',
+    anthropic:       'anthropic',
+    openrouter:      'openrouter',
+    'amazon-bedrock':'bedrock',
+    groq:            undefined,
+    mistral:         undefined,
+    cerebras:        undefined,
+    xai:             undefined,
+};
+
+async function showPiAIConfig() {
+    console.clear();
+    banner();
+    sectionHeader('🔄', 'pi-ai Model Browser');
+
+    const piAiEnabled = agent.config.get('usePiAI') !== false;
+    const currentModel = agent.config.get('modelName') || 'gpt-4o';
+
+    // Key lookup per catalogue provider
+    const piKeyMap: Record<string, () => string | undefined> = {
+        openai:          () => agent.config.get('openaiApiKey'),
+        google:          () => agent.config.get('googleApiKey'),
+        anthropic:       () => agent.config.get('anthropicApiKey'),
+        openrouter:      () => agent.config.get('openrouterApiKey'),
+        'amazon-bedrock':() => agent.config.get('bedrockAccessKeyId'),
+        groq:            () => agent.config.get('groqApiKey'),
+        mistral:         () => agent.config.get('mistralApiKey'),
+        cerebras:        () => agent.config.get('cerebrasApiKey'),
+        xai:             () => agent.config.get('xaiApiKey'),
+    };
+    // Config key to store when the user enters a key for a pi-ai provider
+    const piConfigKey: Record<string, string> = {
+        openai: 'openaiApiKey', google: 'googleApiKey', anthropic: 'anthropicApiKey',
+        openrouter: 'openrouterApiKey', 'amazon-bedrock': 'bedrockAccessKeyId',
+        groq: 'groqApiKey', mistral: 'mistralApiKey', cerebras: 'cerebrasApiKey', xai: 'xaiApiKey',
+    };
+
+    console.log('');
+    box([
+        `${dim('Status')}   ${piAiEnabled ? green('Enabled (primary transport)') : yellow('Disabled (legacy mode)')}`,
+        `${dim('Model')}    ${bold(currentModel)}`,
+        `${dim('Fallback')} ${dim('Legacy per-provider code runs automatically if pi-ai fails')}`,
+    ], { title: '🔄 pi-ai STATUS', width: 58, color: piAiEnabled ? c.green : c.yellow });
+    console.log('');
+
+    const topChoices: any[] = [
+        { name: `  ${piAiEnabled ? '✅ Disable pi-ai' : '🔄 Enable pi-ai'} ${dim('(toggle)')}`, value: 'toggle' },
+        new inquirer.Separator(gradient('  ─── Browse & Select Model ────────────', [c.brightCyan, c.gray])),
+        ...Object.entries(PI_AI_CATALOGUE).map(([key, cat]) => {
+            const hasKey = !!(piKeyMap[key] ? piKeyMap[key]() : undefined);
+            return {
+                name: `  ${statusDot(hasKey, '')} ${bold(cat.label.padEnd(32))} ${hasKey ? green('key set') : yellow('no key')}  ${dim(`${cat.models.length} models`)}`,
+                value: `cat:${key}`,
+            };
+        }),
+        new inquirer.Separator(gradient('  ────────────────────────────────────', [c.brightCyan, c.gray])),
+        { name: dim('  ← Back'), value: 'back' },
+    ];
+
+    const { choice } = await inquirer.prompt([{
+        type: 'list', name: 'choice',
+        message: cyan('pi-ai options:'),
+        choices: topChoices,
+    }]);
+
+    if (choice === 'back') return showModelsMenu();
+
+    if (choice === 'toggle') {
+        const newVal = !piAiEnabled;
+        agent.config.set('usePiAI', newVal);
+        console.log(newVal ? green('pi-ai enabled — it will be tried first on every LLM call') : yellow('pi-ai disabled — using legacy provider code directly'));
+        await waitKeyPress();
+        return showPiAIConfig();
+    }
+
+    if ((choice as string).startsWith('cat:')) {
+        const catKey = (choice as string).slice(4);
+        const cat = PI_AI_CATALOGUE[catKey];
+        const hasKey = !!(piKeyMap[catKey] ? piKeyMap[catKey]() : undefined);
+
+        const modelChoices = cat.models.map(m => ({
+            name: `  ${bold(m.id.padEnd(46))} ${dim(m.note)}`,
+            value: m.id,
+        }));
+        modelChoices.push({ name: dim('  ✏️  Enter custom model ID...'), value: '__custom__' } as any);
+        if (!hasKey) {
+            modelChoices.push({ name: yellow(`  🔑 Set ${cat.label} API key first`), value: '__setkey__' } as any);
+        }
+        modelChoices.push({ name: dim('  ← Back'), value: '__back__' } as any);
+
+        const { selectedModel } = await inquirer.prompt([{
+            type: 'list', name: 'selectedModel',
+            message: cyan(`${cat.label}${hasKey ? '' : yellow(' ⚠ no key set')} — select model:`),
+            choices: modelChoices,
+        }]);
+
+        if (selectedModel === '__back__') return showPiAIConfig();
+
+        if (selectedModel === '__setkey__') {
+            const cfgKey = piConfigKey[catKey];
+            if (cfgKey) {
+                const { keyVal } = await inquirer.prompt([{
+                    type: 'input', name: 'keyVal',
+                    message: `Enter ${cat.label} API key:`,
+                }]);
+                if (keyVal?.trim()) {
+                    agent.config.set(cfgKey, keyVal.trim());
+                    console.log(green(`${cat.label} API key saved.`));
+                }
+            }
+            await waitKeyPress();
+            return showPiAIConfig();
+        }
+
+        let finalModel = selectedModel;
+        if (selectedModel === '__custom__') {
+            const { custom } = await inquirer.prompt([{
+                type: 'input', name: 'custom',
+                message: `Enter ${cat.label} model ID:`,
+                default: currentModel,
+            }]);
+            finalModel = custom;
+        }
+
+        agent.config.set('modelName', finalModel);
+        // Sync llmProvider so the Active Model box reflects the real provider
+        const legacyProvider = PI_CAT_TO_LEGACY_PROVIDER[catKey];
+        if (legacyProvider !== undefined) {
+            agent.config.set('llmProvider', legacyProvider);
+        } else {
+            // Groq/Mistral/Cerebras/xAI — clear the legacy hint so display shows AUTO
+            // and toPiProvider() infers correctly from model name
+            agent.config.set('llmProvider', undefined);
+        }
+        if (!piAiEnabled) agent.config.set('usePiAI', true);
+
+        // If no key is set for this provider, ask now
+        const keyAfterSelect = piKeyMap[catKey] ? piKeyMap[catKey]() : undefined;
+        if (!keyAfterSelect && piConfigKey[catKey]) {
+            console.log('');
+            console.log(yellow(`⚠  No API key configured for ${cat.label}.`));
+            const { setNow } = await inquirer.prompt([{
+                type: 'confirm', name: 'setNow',
+                message: `Set ${cat.label} API key now?`,
+                default: true,
+            }]);
+            if (setNow) {
+                const { keyVal } = await inquirer.prompt([{
+                    type: 'input', name: 'keyVal',
+                    message: `Enter ${cat.label} API key:`,
+                }]);
+                if (keyVal?.trim()) {
+                    agent.config.set(piConfigKey[catKey], keyVal.trim());
+                    console.log(green(`${cat.label} API key saved.`));
+                }
+            }
+        }
+
+        console.log(green(`Model set to: ${finalModel}`));
+        await waitKeyPress();
+        return showPiAIConfig();
+    }
+
+    return showPiAIConfig();
 }
 
 async function showSetPrimaryProvider() {
@@ -5259,6 +5509,20 @@ async function performUpdate() {
             // Install dependencies
             console.log('\n📦 Installing dependencies...');
             execSync('npm install', { cwd: orcbotDir, stdio: 'inherit' });
+            // Ensure @mariozechner/pi-ai is present (may be absent on older installs)
+            try {
+                require.resolve('@mariozechner/pi-ai');
+            } catch {
+                console.log('🔄 Installing @mariozechner/pi-ai (new dependency)...');
+                execSync('npm install @mariozechner/pi-ai --legacy-peer-deps', { cwd: orcbotDir, stdio: 'inherit' });
+            }
+            // Ensure @mariozechner/pi-tui is present (TUI renderer)
+            try {
+                require.resolve('@mariozechner/pi-tui');
+            } catch {
+                console.log('🎨 Installing @mariozechner/pi-tui (new dependency)...');
+                execSync('npm install @mariozechner/pi-tui --legacy-peer-deps', { cwd: orcbotDir, stdio: 'inherit' });
+            }
             
             // Install dependencies for subdirectories (apps/www, apps/dashboard)
             const appsDir = path.join(orcbotDir, 'apps');

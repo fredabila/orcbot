@@ -195,6 +195,13 @@ export interface AgentConfig {
     actionQueueMaintenanceIntervalMs?: number;     // Queue maintenance interval in ms (default: 60000; server default: 180000)
     vectorMemoryMaxEntries?: number;               // Max vector memory entries (default: 5000; server default: 1500)
     processedMessagesCacheSize?: number;           // Max size of deduplicated message id cache (default: 1000; server default: 300)
+    // pi-ai integration
+    usePiAI?: boolean;                             // Route LLM calls through @mariozechner/pi-ai first, fall back to legacy on error (default true)
+    // pi-ai extra provider keys (Groq, Mistral, Cerebras, xAI — not in legacy code)
+    groqApiKey?: string;
+    mistralApiKey?: string;
+    cerebrasApiKey?: string;
+    xaiApiKey?: string;
     // User Permissions
     adminUsers?: {
         telegram?: string[];   // Telegram numeric user IDs (e.g., ["123456789"])
@@ -318,6 +325,10 @@ export class ConfigManager {
             bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
             bedrockSecretAccessKey: process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY,
             bedrockSessionToken: process.env.BEDROCK_SESSION_TOKEN || process.env.AWS_SESSION_TOKEN,
+            groqApiKey: process.env.GROQ_API_KEY,
+            mistralApiKey: process.env.MISTRAL_API_KEY,
+            cerebrasApiKey: process.env.CEREBRAS_API_KEY,
+            xaiApiKey: process.env.XAI_API_KEY,
             // @ts-ignore - Dynamic key support
             MOLTBOOK_API_KEY: process.env.MOLTBOOK_API_KEY
         };
@@ -773,7 +784,9 @@ export class ConfigManager {
             actionQueueFlushIntervalMs: 5000,                 // 5s
             actionQueueMaintenanceIntervalMs: 60000,          // 60s
             vectorMemoryMaxEntries: 5000,
-            processedMessagesCacheSize: 1000
+            processedMessagesCacheSize: 1000,
+            // pi-ai (on by default — old per-provider code is automatic fallback)
+            usePiAI: true,
         };
     }
 

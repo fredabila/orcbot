@@ -59,7 +59,11 @@ export async function runSetup() {
                 { name: 'OpenRouter', value: 'openrouter' },
                 { name: 'NVIDIA', value: 'nvidia' },
                 { name: 'Anthropic (Claude)', value: 'anthropic' },
-                { name: 'AWS Bedrock', value: 'bedrock' }
+                { name: 'AWS Bedrock', value: 'bedrock' },
+                { name: 'Groq (ultra-fast inference)', value: 'groq' },
+                { name: 'Mistral AI', value: 'mistral' },
+                { name: 'Cerebras', value: 'cerebras' },
+                { name: 'xAI (Grok)', value: 'xai' }
             ],
             default: currentConfig.llmProvider || ''
         },
@@ -131,6 +135,34 @@ export async function runSetup() {
             name: 'serperApiKey',
             message: `Serper.dev API Key (web search) ${maskHint('SERPER_API_KEY')}:`,
             mask: '*'
+        },
+        {
+            type: 'input',
+            name: 'groqApiKey',
+            message: `Groq API Key ${maskHint('GROQ_API_KEY')}:`,
+            mask: '*',
+            when: () => identityAnswers.llmProvider === 'groq' || !identityAnswers.llmProvider
+        },
+        {
+            type: 'input',
+            name: 'mistralApiKey',
+            message: `Mistral AI API Key ${maskHint('MISTRAL_API_KEY')}:`,
+            mask: '*',
+            when: () => identityAnswers.llmProvider === 'mistral' || !identityAnswers.llmProvider
+        },
+        {
+            type: 'input',
+            name: 'cerebrasApiKey',
+            message: `Cerebras API Key ${maskHint('CEREBRAS_API_KEY')}:`,
+            mask: '*',
+            when: () => identityAnswers.llmProvider === 'cerebras'
+        },
+        {
+            type: 'input',
+            name: 'xaiApiKey',
+            message: `xAI (Grok) API Key ${maskHint('XAI_API_KEY')}:`,
+            mask: '*',
+            when: () => identityAnswers.llmProvider === 'xai'
         }
     ]);
 
@@ -293,6 +325,10 @@ export async function runSetup() {
         bedrockAccessKeyId: 'BEDROCK_ACCESS_KEY_ID',
         bedrockSecretAccessKey: 'BEDROCK_SECRET_ACCESS_KEY',
         serperApiKey: 'SERPER_API_KEY',
+        groqApiKey: 'GROQ_API_KEY',
+        mistralApiKey: 'MISTRAL_API_KEY',
+        cerebrasApiKey: 'CEREBRAS_API_KEY',
+        xaiApiKey: 'XAI_API_KEY',
         telegramToken: 'TELEGRAM_TOKEN',
         discordToken: 'DISCORD_TOKEN',
         slackBotToken: 'SLACK_BOT_TOKEN',
