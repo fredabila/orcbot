@@ -4839,7 +4839,7 @@ async function showConfigMenu() {
 
     const config = agent.config.getAll();
     // Ensure we show explicit keys relative to core config
-    const keys = ['agentName', 'llmProvider', 'modelName', 'openaiApiKey', 'anthropicApiKey', 'openrouterApiKey', 'openrouterBaseUrl', 'openrouterReferer', 'openrouterAppName', 'googleApiKey', 'nvidiaApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl', 'searchProviderOrder', 'captchaApiKey', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'slackBotToken', 'slackAutoReplyEnabled', 'whatsappAutoReplyEnabled', 'progressFeedbackEnabled', 'progressFeedbackStepInterval', 'progressFeedbackForceInitial', 'memoryContextLimit', 'memoryEpisodicLimit', 'memoryConsolidationThreshold', 'memoryConsolidationBatch', 'maxStepsPerAction', 'maxMessagesPerAction', 'memoryPath', 'buildWorkspacePath', 'commandWorkingDir', 'commandAllowList', 'commandDenyList', 'safeMode', 'sudoMode', 'pluginAllowList', 'pluginDenyList', 'browserProfileDir', 'browserProfileName', 'sessionScope', 'guidanceMode', 'guidanceRepeatQuestionThreshold', 'guidanceShortReplyMaxWords', 'guidanceShortReplyMaxChars', 'guidanceAckPatterns', 'guidanceLowValuePatterns', 'guidanceClarificationKeywords', 'guidanceQuestionStopWords', 'robustReasoningMode', 'reasoningExposeChecklist', 'reasoningChecklistMaxItems', 'orcbotControlEnabled', 'orcbotControlCliAllowList', 'orcbotControlCliDenyList', 'orcbotControlTimeoutMs'] as const;
+    const keys = ['agentName', 'llmProvider', 'modelName', 'openaiApiKey', 'anthropicApiKey', 'openrouterApiKey', 'openrouterBaseUrl', 'openrouterReferer', 'openrouterAppName', 'googleApiKey', 'nvidiaApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl', 'searchProviderOrder', 'captchaApiKey', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'slackBotToken', 'slackAutoReplyEnabled', 'whatsappAutoReplyEnabled', 'progressFeedbackEnabled', 'progressFeedbackStepInterval', 'progressFeedbackForceInitial', 'onboardingQuestionnaireEnabled', 'timeSignalHighRiskNoMessageSeconds', 'timeSignalMediumRiskSilentSteps', 'timeSignalMediumRiskSinceDeliverySeconds', 'memoryContextLimit', 'memoryEpisodicLimit', 'memoryConsolidationThreshold', 'memoryConsolidationBatch', 'maxStepsPerAction', 'maxMessagesPerAction', 'memoryPath', 'buildWorkspacePath', 'commandWorkingDir', 'commandAllowList', 'commandDenyList', 'safeMode', 'sudoMode', 'pluginAllowList', 'pluginDenyList', 'browserProfileDir', 'browserProfileName', 'sessionScope', 'guidanceMode', 'guidanceRepeatQuestionThreshold', 'guidanceShortReplyMaxWords', 'guidanceShortReplyMaxChars', 'guidanceAckPatterns', 'guidanceLowValuePatterns', 'guidanceClarificationKeywords', 'guidanceQuestionStopWords', 'robustReasoningMode', 'reasoningExposeChecklist', 'reasoningChecklistMaxItems', 'orcbotControlEnabled', 'orcbotControlCliAllowList', 'orcbotControlCliDenyList', 'orcbotControlTimeoutMs'] as const;
 
     const choices: { name: string, value: string }[] = keys.map(key => ({
         name: `${key}: ${config[key as keyof typeof config] || '(empty)'}`,
@@ -4880,7 +4880,7 @@ async function showConfigMenu() {
     if (key === 'searchProviderOrder' || key === 'commandAllowList' || key === 'commandDenyList' || key === 'pluginAllowList' || key === 'pluginDenyList' || key === 'guidanceAckPatterns' || key === 'guidanceLowValuePatterns' || key === 'guidanceClarificationKeywords' || key === 'guidanceQuestionStopWords' || key === 'orcbotControlCliAllowList' || key === 'orcbotControlCliDenyList') {
         const parsed = (value || '').split(',').map((s: string) => s.trim()).filter(Boolean);
         agent.config.set(key as any, parsed);
-    } else if (key === 'safeMode' || key === 'sudoMode' || key === 'progressFeedbackEnabled' || key === 'progressFeedbackForceInitial' || key === 'whatsappEnabled' || key === 'slackAutoReplyEnabled' || key === 'whatsappAutoReplyEnabled' || key === 'robustReasoningMode' || key === 'reasoningExposeChecklist' || key === 'orcbotControlEnabled') {
+    } else if (key === 'safeMode' || key === 'sudoMode' || key === 'progressFeedbackEnabled' || key === 'progressFeedbackForceInitial' || key === 'onboardingQuestionnaireEnabled' || key === 'whatsappEnabled' || key === 'slackAutoReplyEnabled' || key === 'whatsappAutoReplyEnabled' || key === 'robustReasoningMode' || key === 'reasoningExposeChecklist' || key === 'orcbotControlEnabled') {
         const normalized = String(value).trim().toLowerCase();
         agent.config.set(key as any, normalized === 'true' || normalized === '1' || normalized === 'yes');
     } else if (key === 'guidanceRepeatQuestionThreshold') {
@@ -4892,7 +4892,7 @@ async function showConfigMenu() {
             await waitKeyPress();
             return showConfigMenu();
         }
-    } else if (key === 'memoryContextLimit' || key === 'memoryEpisodicLimit' || key === 'memoryConsolidationThreshold' || key === 'memoryConsolidationBatch' || key === 'maxStepsPerAction' || key === 'maxMessagesPerAction' || key === 'autonomyInterval' || key === 'guidanceShortReplyMaxWords' || key === 'guidanceShortReplyMaxChars' || key === 'reasoningChecklistMaxItems' || key === 'orcbotControlTimeoutMs' || key === 'progressFeedbackStepInterval') {
+    } else if (key === 'memoryContextLimit' || key === 'memoryEpisodicLimit' || key === 'memoryConsolidationThreshold' || key === 'memoryConsolidationBatch' || key === 'maxStepsPerAction' || key === 'maxMessagesPerAction' || key === 'autonomyInterval' || key === 'guidanceShortReplyMaxWords' || key === 'guidanceShortReplyMaxChars' || key === 'reasoningChecklistMaxItems' || key === 'orcbotControlTimeoutMs' || key === 'progressFeedbackStepInterval' || key === 'timeSignalHighRiskNoMessageSeconds' || key === 'timeSignalMediumRiskSilentSteps' || key === 'timeSignalMediumRiskSinceDeliverySeconds') {
         const num = parseInt(value, 10);
         if (!isNaN(num) && num > 0) {
             agent.config.set(key as any, num);
@@ -5378,11 +5378,14 @@ function showGuardrailMetrics(limit: number = 10) {
     sectionHeader('🧪', 'Guardrail Metrics');
 
     const episodic = agent.memory.searchMemory('episodic') as any[];
+    const supportedMetrics = new Set(['max_step_fallback', 'delay_risk_high']);
     const metricEntries = episodic
         .filter((m: any) => {
             const metricKey = String(m?.metadata?.metric || '').toLowerCase();
             const content = String(m?.content || '').toLowerCase();
-            return metricKey === 'max_step_fallback' || content.includes('[metric] max_step_fallback');
+            return supportedMetrics.has(metricKey) ||
+                content.includes('[metric] max_step_fallback') ||
+                content.includes('[metric] delay_risk_high');
         })
         .sort((a: any, b: any) => {
             const at = a?.timestamp ? new Date(a.timestamp).getTime() : 0;
@@ -5403,12 +5406,19 @@ function showGuardrailMetrics(limit: number = 10) {
     }).length;
 
     const sourceCounts = new Map<string, number>();
+    const metricTypeCounts = new Map<string, number>();
     for (const entry of metricEntries) {
+        const metricType = String(entry?.metadata?.metric || '').toLowerCase() || 'unknown';
+        metricTypeCounts.set(metricType, (metricTypeCounts.get(metricType) || 0) + 1);
         const content = String(entry?.content || '');
         const sourceFromContent = content.match(/source=([^\s]+)/i)?.[1];
         const source = String(entry?.metadata?.channelSource || sourceFromContent || 'unknown').toLowerCase();
         sourceCounts.set(source, (sourceCounts.get(source) || 0) + 1);
     }
+    const typeSummary = Array.from(metricTypeCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .map(([metric, count]) => `${metric}:${count}`)
+        .join('  ') || 'none';
     const topSources = Array.from(sourceCounts.entries())
         .sort((a, b) => b[1] - a[1])
         .slice(0, 5)
@@ -5417,33 +5427,35 @@ function showGuardrailMetrics(limit: number = 10) {
 
     console.log('');
     box([
-        `${dim('Metric')}        ${bold('max_step_fallback')}`,
+        `${dim('Metrics')}       ${bold('max_step_fallback, delay_risk_high')}`,
         `${dim('Total')}         ${total > 0 ? yellow(bold(String(total))) : gray('0')}`,
         `${dim('Last 24 hours')} ${last24h > 0 ? yellow(bold(String(last24h))) : gray('0')}`,
         `${dim('Last 7 days')}   ${last7d > 0 ? cyan(bold(String(last7d))) : gray('0')}`,
+        `${dim('By type')}       ${typeSummary}`,
         `${dim('Top sources')}   ${topSources}`,
     ], { title: '📉 FALLBACK SUMMARY', width: 64, color: c.yellow });
 
     const recent = metricEntries.slice(0, Math.max(1, limit));
     if (recent.length === 0) {
         console.log('');
-        box([dim('No max-step fallback events recorded yet.')], { title: '🕘 RECENT EVENTS', width: 64, color: c.gray });
+        box([dim('No guardrail metric events recorded yet.')], { title: '🕘 RECENT EVENTS', width: 64, color: c.gray });
         console.log('');
         return;
     }
 
-    const rows: string[][] = [[bold('Time'), bold('Action'), bold('Source'), bold('Msgs'), bold('Substantive')]];
+    const rows: string[][] = [[bold('Time'), bold('Metric'), bold('Action'), bold('Source'), bold('Msgs'), bold('Substantive')]];
     for (const event of recent) {
         const ts = event?.timestamp ? new Date(event.timestamp) : null;
         const timeStr = ts && !isNaN(ts.getTime())
             ? ts.toLocaleString('en-US', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
             : 'n/a';
+        const metric = String(event?.metadata?.metric || 'unknown').toLowerCase();
         const actionId = String(event?.metadata?.actionId || 'unknown').slice(0, 8);
         const content = String(event?.content || '');
         const sourceFromContent = content.match(/source=([^\s]+)/i)?.[1] || 'unknown';
         const msgs = event?.metadata?.messagesSent ?? (content.match(/messagesSent=(\d+)/i)?.[1] ?? '-');
         const subs = event?.metadata?.substantiveDeliveriesSent ?? (content.match(/substantiveDeliveries=(\d+)/i)?.[1] ?? '-');
-        rows.push([timeStr, actionId, String(sourceFromContent), String(msgs), String(subs)]);
+        rows.push([timeStr, metric, actionId, String(sourceFromContent), String(msgs), String(subs)]);
     }
 
     console.log('');

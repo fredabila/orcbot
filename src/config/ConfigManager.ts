@@ -132,6 +132,10 @@ export interface AgentConfig {
     progressFeedbackEnabled?: boolean;
     progressFeedbackStepInterval?: number; // Silent-step threshold before automatic status update
     progressFeedbackForceInitial?: boolean; // Force an initial status update before deep tool work
+    onboardingQuestionnaireEnabled?: boolean; // Send first-contact preference questionnaire to new users
+    timeSignalHighRiskNoMessageSeconds?: number; // High delay risk threshold when no message has been sent yet
+    timeSignalMediumRiskSilentSteps?: number; // Medium delay risk threshold for silent steps
+    timeSignalMediumRiskSinceDeliverySeconds?: number; // Medium delay risk threshold since last user-visible delivery
     sessionAnchorEnabled?: boolean; // Persist and reuse workspace/artifact anchors per session scope
     sessionAnchorMaxHints?: number; // Maximum session continuity hints to inject into reasoning context
     // Memory limits
@@ -683,6 +687,10 @@ export class ConfigManager {
             progressFeedbackEnabled: true,
             progressFeedbackStepInterval: 4,
             progressFeedbackForceInitial: true,
+            onboardingQuestionnaireEnabled: true,
+            timeSignalHighRiskNoMessageSeconds: 25,
+            timeSignalMediumRiskSilentSteps: 4,
+            timeSignalMediumRiskSinceDeliverySeconds: 45,
             sessionAnchorEnabled: true,
             sessionAnchorMaxHints: 4,
             memoryContextLimit: 20,

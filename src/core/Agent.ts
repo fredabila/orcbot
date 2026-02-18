@@ -98,6 +98,7 @@ export class Agent {
     private lastHeartbeatPushAt: number = 0;
     private lastUserActivityAt: number = 0;
     private maxStepFallbackCount: number = 0;
+    private delayRiskHighCount: number = 0;
     private lastWorldEventsRefreshAt: number = 0;
     private lastWorldEventsMemoryWriteAt: number = 0;
     private worldEventsRefreshRunning: boolean = false;
@@ -6097,6 +6098,73 @@ REFLECTION: <1-2 sentences>`;
         return `AUDIT_BLOCK:${uniqueCodes.join('+')}`;
     }
 
+    private buildActionTimeSignals(
+        action: Action,
+        context: {
+            actionStartedAtMs: number;
+            currentStep: number;
+            messagesSent: number;
+            stepsSinceLastMessage: number;
+            lastUserDeliveryAtMs: number;
+            isResearchTask: boolean;
+        }
+    ): {
+        nowIso: string;
+        queueAgeSec: number;
+        actionRuntimeSec: number;
+        sinceLastDeliverySec: number;
+        avgSecPerStep: number;
+        currentStep: number;
+        messagesSent: number;
+        stepsSinceLastMessage: number;
+        taskIntent: string;
+        delayRisk: 'low' | 'medium' | 'high';
+    } {
+        const now = Date.now();
+        const queuedAtMs = action.timestamp ? new Date(action.timestamp).getTime() : context.actionStartedAtMs;
+        const queueAgeSec = Math.max(0, Math.floor((context.actionStartedAtMs - queuedAtMs) / 1000));
+        const actionRuntimeSec = Math.max(0, Math.floor((now - context.actionStartedAtMs) / 1000));
+        const sinceLastDeliverySec = Math.max(0, Math.floor((now - context.lastUserDeliveryAtMs) / 1000));
+        const avgSecPerStep = context.currentStep > 0
+            ? Number((actionRuntimeSec / context.currentStep).toFixed(1))
+            : 0;
+
+        const isUserFacing = ['telegram', 'whatsapp', 'discord', 'slack', 'gateway-chat'].includes(String(action.payload?.source || '').toLowerCase());
+        const taskIntent = action.payload?.isHeartbeat
+            ? 'heartbeat'
+            : action.payload?.requiresResponse === true
+                ? 'user_response'
+                : context.isResearchTask
+                    ? 'research_execution'
+                    : 'task_execution';
+
+        const highRiskNoMessageSeconds = Math.max(5, Number(this.config.get('timeSignalHighRiskNoMessageSeconds') ?? 25));
+        const mediumRiskSilentSteps = Math.max(1, Number(this.config.get('timeSignalMediumRiskSilentSteps') ?? 4));
+        const mediumRiskSinceDeliverySeconds = Math.max(10, Number(this.config.get('timeSignalMediumRiskSinceDeliverySeconds') ?? 45));
+
+        let delayRisk: 'low' | 'medium' | 'high' = 'low';
+        if (isUserFacing) {
+            if (context.messagesSent === 0 && actionRuntimeSec >= highRiskNoMessageSeconds) {
+                delayRisk = 'high';
+            } else if (context.stepsSinceLastMessage >= mediumRiskSilentSteps || sinceLastDeliverySec >= mediumRiskSinceDeliverySeconds) {
+                delayRisk = 'medium';
+            }
+        }
+
+        return {
+            nowIso: new Date(now).toISOString(),
+            queueAgeSec,
+            actionRuntimeSec,
+            sinceLastDeliverySec,
+            avgSecPerStep,
+            currentStep: context.currentStep,
+            messagesSent: context.messagesSent,
+            stepsSinceLastMessage: context.stepsSinceLastMessage,
+            taskIntent,
+            delayRisk
+        };
+    }
+
     private getGuidanceRegexList(configKey: string, fallbackPatterns: string[]): RegExp[] {
         const raw = this.config.get(configKey);
         const patterns = Array.isArray(raw) && raw.length > 0 ? raw : fallbackPatterns;
@@ -6150,6 +6218,51 @@ REFLECTION: <1-2 sentences>`;
         }
 
         return overlap / Math.max(setA.size, setB.size);
+    }
+
+    private getOutboundMessageFingerprint(message: string): Set<string> {
+        const normalized = (message || '')
+            .toLowerCase()
+            .replace(/[^a-z0-9\s]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        const stopWords = this.getGuidanceStopWords();
+        const tokens = normalized
+            .split(' ')
+            .map(t => t.trim())
+            .filter(t => t.length > 2 && !stopWords.has(t));
+
+        return new Set(tokens);
+    }
+
+    private outboundMessageSimilarity(a: string, b: string): number {
+        const setA = this.getOutboundMessageFingerprint(a);
+        const setB = this.getOutboundMessageFingerprint(b);
+        if (setA.size === 0 || setB.size === 0) return 0;
+
+        let overlap = 0;
+        for (const token of setA) {
+            if (setB.has(token)) overlap++;
+        }
+        return overlap / Math.max(setA.size, setB.size);
+    }
+
+    private isSemanticallyDuplicateOutboundMessage(currentMessage: string, priorMessages: string[]): boolean {
+        const current = (currentMessage || '').trim();
+        if (!current || priorMessages.length === 0) return false;
+
+        // Keep this conservative to avoid blocking legitimate incremental updates.
+        if (current.length < 16) return false;
+        if (this.isSubstantiveFollowUpMessage(current)) return false;
+
+        for (const prior of priorMessages.slice(-8)) {
+            const candidate = (prior || '').trim();
+            if (!candidate) continue;
+            const score = this.outboundMessageSimilarity(current, candidate);
+            if (score >= 0.88) return true;
+        }
+        return false;
     }
 
     private isRepeatedClarificationQuestion(currentMessage: string, priorMessages: string[]): boolean {
@@ -7643,6 +7756,294 @@ Respond with a single actionable task description (one sentence). Be specific ab
         }
     }
 
+    private getOnboardingProfileKey(metadata: any): string | null {
+        const source = String(metadata?.source || '').toLowerCase();
+        if (!source) return null;
+
+        let identifier = '';
+        if (source === 'telegram') {
+            identifier = String(metadata?.userId || metadata?.sourceId || metadata?.chatId || '').trim();
+        } else if (source === 'discord' || source === 'slack') {
+            identifier = String(metadata?.userId || metadata?.sourceId || '').trim();
+        } else if (source === 'whatsapp') {
+            identifier = String(metadata?.sourceId || '').trim();
+        } else if (source === 'gateway-chat') {
+            identifier = String(metadata?.sourceId || metadata?.chatId || '').trim();
+        } else {
+            identifier = String(metadata?.sourceId || '').trim();
+        }
+
+        if (!identifier) return null;
+        return `${source}:${identifier}`;
+    }
+
+    private buildOnboardingQuestionnaireMessage(agentName: string): string {
+        return `👋 Welcome to ${agentName}!\n\nQuick setup so I can personalize how I work for you:\n\n1) Detail level: short / medium / deep\n2) Progress updates: frequent / normal / minimal\n3) Tone: casual / balanced / formal\n4) Initiative: ask-first / balanced / autonomous\n5) How you want me to behave (saved to SOUL.md):\n   soul: <your preferred agent style/boundaries>\n6) About you (saved to USER.md):\n   user: <who you are, your goals, your working style>\n\nReply in one message, e.g.\n"prefs: detail=deep, updates=normal, tone=casual, initiative=balanced\nsoul: be direct, challenge weak assumptions, avoid fluff\nuser: I run product + engineering, prefer concise decisions with tradeoffs"\n\nYou can update these anytime.`;
+    }
+
+    private hasOnboardingQuestionnaireBeenSent(profileKey: string): boolean {
+        try {
+            const profileRaw = this.memory.getContactProfile(profileKey);
+            if (!profileRaw) return false;
+            const parsed = JSON.parse(profileRaw);
+            return !!parsed?.onboardingQuestionnaireSentAt;
+        } catch {
+            return false;
+        }
+    }
+
+    private parseOnboardingQuestionnaireResponse(text: string): {
+        detail?: string;
+        updates?: string;
+        tone?: string;
+        initiative?: string;
+        soul?: string;
+        user?: string;
+        onboardingOnly: boolean;
+    } | null {
+        const raw = String(text || '').trim();
+        if (!raw) return null;
+
+        const normalized = raw.toLowerCase();
+        const extractValue = (key: string): string | undefined => {
+            const m = raw.match(new RegExp(`${key}\\s*=\\s*([^,\\n]+)`, 'i'));
+            return m?.[1]?.trim();
+        };
+        const extractLineValue = (key: string): string | undefined => {
+            const m = raw.match(new RegExp(`(?:^|\\n)\\s*${key}\\s*:\\s*([^\\n]+)`, 'i'));
+            return m?.[1]?.trim();
+        };
+
+        const detail = extractValue('detail');
+        const updates = extractValue('updates');
+        const tone = extractValue('tone');
+        const initiative = extractValue('initiative');
+        const soul = extractLineValue('soul');
+        const user = extractLineValue('user');
+
+        const hasPrefs = !!(detail || updates || tone || initiative);
+        const hasProfileText = !!(soul || user);
+        if (!hasPrefs && !hasProfileText) return null;
+
+        const onboardingOnly =
+            normalized.startsWith('prefs:') ||
+            normalized.startsWith('soul:') ||
+            normalized.startsWith('user:');
+
+        return {
+            detail,
+            updates,
+            tone,
+            initiative,
+            soul,
+            user,
+            onboardingOnly
+        };
+    }
+
+    private appendSectionToMarkdownFile(filePath: string, heading: string, content: string): void {
+        const safeContent = String(content || '').trim();
+        if (!safeContent) return;
+
+        const timestamp = new Date().toISOString();
+        const section = `\n\n## ${heading}\n- Updated: ${timestamp}\n- Notes: ${safeContent}\n`;
+        const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf-8') : '';
+        fs.writeFileSync(filePath, `${existing}${section}`.trimStart());
+    }
+
+    private applyOnboardingToBootstrapFiles(profileKey: string, parsed: {
+        detail?: string;
+        updates?: string;
+        tone?: string;
+        initiative?: string;
+        soul?: string;
+        user?: string;
+    }): void {
+        const preferenceBits = [
+            parsed.detail ? `detail=${parsed.detail}` : '',
+            parsed.updates ? `updates=${parsed.updates}` : '',
+            parsed.tone ? `tone=${parsed.tone}` : '',
+            parsed.initiative ? `initiative=${parsed.initiative}` : ''
+        ].filter(Boolean).join(', ');
+
+        if (parsed.soul || preferenceBits) {
+            const soulPath = path.join(this.config.getDataHome(), 'SOUL.md');
+            const soulNote = [
+                parsed.soul ? `Style request: ${parsed.soul}` : '',
+                preferenceBits ? `Preference signals: ${preferenceBits}` : '',
+                `Source profile: ${profileKey}`
+            ].filter(Boolean).join(' | ');
+            this.appendSectionToMarkdownFile(soulPath, 'User Persona Preference', soulNote);
+            if (this.bootstrap) {
+                const latest = fs.readFileSync(soulPath, 'utf-8');
+                this.bootstrap.updateFile('SOUL.md', latest);
+            }
+        }
+
+        if (parsed.user || preferenceBits) {
+            const userPath = this.config.get('userProfilePath') || path.join(this.config.getDataHome(), 'USER.md');
+            const userNote = [
+                parsed.user ? `User description: ${parsed.user}` : '',
+                preferenceBits ? `Communication preferences: ${preferenceBits}` : '',
+                `Source profile: ${profileKey}`
+            ].filter(Boolean).join(' | ');
+            this.appendSectionToMarkdownFile(userPath, 'Onboarding Profile', userNote);
+            this.memory.refreshUserContext(userPath);
+            if (this.bootstrap) {
+                const latest = fs.readFileSync(userPath, 'utf-8');
+                this.bootstrap.updateFile('USER.md', latest);
+            }
+        }
+    }
+
+    private async sendOnboardingCaptureAcknowledgement(metadata: any): Promise<void> {
+        const source = String(metadata?.source || '').toLowerCase();
+        const sourceId = String(metadata?.sourceId || '').trim();
+        const msg = '✅ Saved your onboarding preferences. I will use these for response style, persona behavior, and user context going forward.';
+
+        try {
+            if (source === 'telegram' && this.telegram && sourceId) {
+                await this.telegram.sendMessage(sourceId, msg);
+            } else if (source === 'whatsapp' && this.whatsapp && sourceId) {
+                await this.whatsapp.sendMessage(sourceId, msg);
+            } else if (source === 'discord' && this.discord && sourceId) {
+                await this.discord.sendMessage(sourceId, msg);
+            } else if (source === 'slack' && this.slack && sourceId) {
+                await this.slack.sendMessage(sourceId, msg);
+            } else if (source === 'gateway-chat') {
+                eventBus.emit('gateway:chat:response', {
+                    type: 'chat:message',
+                    role: 'assistant',
+                    content: msg,
+                    timestamp: new Date().toISOString(),
+                    messageId: `onboarding-ack-${Date.now()}`
+                });
+            }
+        } catch (e) {
+            logger.debug(`Agent: Failed to send onboarding acknowledgement: ${e}`);
+        }
+    }
+
+    private async maybeCaptureOnboardingQuestionnaireResponse(description: string, metadata: any): Promise<{ captured: boolean; onboardingOnly: boolean }> {
+        const profileKey = this.getOnboardingProfileKey(metadata);
+        if (!profileKey) return { captured: false, onboardingOnly: false };
+
+        const profileRaw = this.memory.getContactProfile(profileKey);
+        if (!profileRaw) return { captured: false, onboardingOnly: false };
+
+        let profile: any = {};
+        try {
+            profile = JSON.parse(profileRaw);
+        } catch {
+            return { captured: false, onboardingOnly: false };
+        }
+
+        if (!profile?.onboardingQuestionnaireSentAt || profile?.onboardingQuestionnaireAnsweredAt) {
+            return { captured: false, onboardingOnly: false };
+        }
+
+        const parsed = this.parseOnboardingQuestionnaireResponse(description);
+        if (!parsed) return { captured: false, onboardingOnly: false };
+
+        profile.preferences = {
+            ...(profile.preferences || {}),
+            ...(parsed.detail ? { detail: parsed.detail } : {}),
+            ...(parsed.updates ? { updates: parsed.updates } : {}),
+            ...(parsed.tone ? { tone: parsed.tone } : {}),
+            ...(parsed.initiative ? { initiative: parsed.initiative } : {})
+        };
+        if (parsed.soul) profile.soulPreference = parsed.soul;
+        if (parsed.user) profile.userDescription = parsed.user;
+        profile.onboardingQuestionnaireAnsweredAt = new Date().toISOString();
+
+        this.memory.saveContactProfile(profileKey, JSON.stringify(profile));
+        this.applyOnboardingToBootstrapFiles(profileKey, parsed);
+        await this.sendOnboardingCaptureAcknowledgement(metadata);
+
+        this.memory.saveMemory({
+            id: `onboarding-captured-${profileKey}-${Date.now()}`,
+            type: 'short',
+            content: `[SYSTEM: Captured onboarding preferences for ${profileKey}. Applied to SOUL.md/USER.md where provided.]`,
+            metadata: { source: metadata?.source, onboarding: true, profileKey, captured: true }
+        });
+
+        return { captured: true, onboardingOnly: parsed.onboardingOnly };
+    }
+
+    private markOnboardingQuestionnaireSent(profileKey: string, metadata: any): void {
+        try {
+            const existingRaw = this.memory.getContactProfile(profileKey);
+            let profile: any = {};
+            if (existingRaw) {
+                try {
+                    profile = JSON.parse(existingRaw);
+                } catch {
+                    profile = { notes: String(existingRaw) };
+                }
+            }
+
+            profile.channel = metadata?.source || profile.channel;
+            profile.senderName = metadata?.senderName || profile.senderName;
+            profile.onboardingQuestionnaireSentAt = new Date().toISOString();
+            profile.preferences = profile.preferences || {
+                detail: 'unknown',
+                updates: 'unknown',
+                tone: 'unknown',
+                initiative: 'unknown'
+            };
+
+            this.memory.saveContactProfile(profileKey, JSON.stringify(profile));
+        } catch (e) {
+            logger.debug(`Agent: Failed to mark onboarding questionnaire sent for ${profileKey}: ${e}`);
+        }
+    }
+
+    private async sendOnboardingQuestionnaireIfNeeded(metadata: any): Promise<void> {
+        if (this.config.get('onboardingQuestionnaireEnabled') === false) return;
+        const source = String(metadata?.source || '').toLowerCase();
+        if (!source) return;
+
+        const profileKey = this.getOnboardingProfileKey(metadata);
+        if (!profileKey) return;
+        if (this.hasOnboardingQuestionnaireBeenSent(profileKey)) return;
+
+        const agentName = String(this.config.get('agentName') || 'OrcBot');
+        const msg = this.buildOnboardingQuestionnaireMessage(agentName);
+
+        try {
+            if (source === 'telegram' && this.telegram && metadata?.sourceId) {
+                await this.telegram.sendMessage(String(metadata.sourceId), msg);
+            } else if (source === 'whatsapp' && this.whatsapp && metadata?.sourceId) {
+                await this.whatsapp.sendMessage(String(metadata.sourceId), msg);
+            } else if (source === 'discord' && this.discord && metadata?.sourceId) {
+                await this.discord.sendMessage(String(metadata.sourceId), msg);
+            } else if (source === 'slack' && this.slack && metadata?.sourceId) {
+                await this.slack.sendMessage(String(metadata.sourceId), msg);
+            } else if (source === 'gateway-chat') {
+                eventBus.emit('gateway:chat:response', {
+                    type: 'chat:message',
+                    role: 'assistant',
+                    content: msg,
+                    timestamp: new Date().toISOString(),
+                    messageId: `onboarding-${Date.now()}`
+                });
+            } else {
+                return;
+            }
+
+            this.markOnboardingQuestionnaireSent(profileKey, metadata);
+            this.memory.saveMemory({
+                id: `onboarding-sent-${profileKey}-${Date.now()}`,
+                type: 'short',
+                content: `[SYSTEM: Sent onboarding questionnaire to ${profileKey}. Awaiting user preferences for response detail/update cadence/tone/initiative.]`,
+                metadata: { source: source, onboarding: true, profileKey }
+            });
+            logger.info(`Agent: Onboarding questionnaire sent to ${profileKey}`);
+        } catch (e) {
+            logger.debug(`Agent: Failed to send onboarding questionnaire for ${profileKey}: ${e}`);
+        }
+    }
+
     /**
      * Get all known users, optionally filtered by channel.
      */
@@ -7772,6 +8173,15 @@ Respond with a single actionable task description (one sentence). Be specific ab
         // Track this user in the known users registry — must happen before early returns
         // (dedup and waiting-action resume both return before the end of pushTask)
         this.trackKnownUser(metadata);
+
+        if (lane === 'user' && metadata?.source && !metadata?.isHeartbeat) {
+            await this.sendOnboardingQuestionnaireIfNeeded(metadata);
+            const onboardingCapture = await this.maybeCaptureOnboardingQuestionnaireResponse(description, metadata);
+            if (onboardingCapture.captured && onboardingCapture.onboardingOnly) {
+                logger.info('Agent: Onboarding-only response captured; skipping task enqueue.');
+                return;
+            }
+        }
 
         // Emit user:activity event so AgenticUser suppresses interventions while user is present
         // Only for real user messages (not scheduler, heartbeat, or autonomy tasks)
@@ -8050,11 +8460,14 @@ Respond with a single actionable task description (one sentence). Be specific ab
             logger.info(`Agent: Task complexity="${taskComplexity}" for action ${action.id}`);
 
             const isSimpleTask = taskComplexity === 'trivial' || taskComplexity === 'simple' || isHeartbeatTask;
+            const actionStartedAtMs = Date.now();
+            let lastUserDeliveryAtMs = actionStartedAtMs;
             
             // PROGRESS FEEDBACK: Let user know we're working on non-trivial tasks
             // Skip for heartbeats — no user initiated this task
             if (!isSimpleTask && action.payload.source) {
                 await this.sendProgressFeedback(action, 'start');
+                lastUserDeliveryAtMs = Date.now();
             }
             
             const executionPlan = isSimpleTask
@@ -8122,8 +8535,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
             let waitingForClarification = false; // Track if we're paused for user input
             const sentMessagesInAction: string[] = [];
             let substantiveDeliveriesSent = 0;
+            let anyUserDeliverySuccess = false;
+            let highDelayMetricLogged = false;
             const blockedFailedSignatures = new Set<string>();
             const blockedFailedTools = new Set<string>();
+            const successfulSideEffectKeys = new Set<string>();
             const skillCallCounts: Record<string, number> = {}; // Track how many times each skill is called
             const skillFailCounts: Record<string, number> = {}; // Track consecutive failures per skill
             const recentSkillNames: string[] = []; // Track skill name sequence for pattern detection
@@ -8160,6 +8576,21 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 : 4;
             const forceInitialProgress = this.config.get('progressFeedbackForceInitial') !== false;
 
+            const SIDE_EFFECT_TOOLS = new Set([
+                'send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat',
+                'send_file', 'send_image', 'send_discord_file', 'send_slack_file'
+            ]);
+            const buildSideEffectKey = (toolName: string, metadata: any): string => {
+                const md = metadata || {};
+                const name = String(toolName || '').toLowerCase();
+                const target = String(
+                    md.chatId || md.channel_id || md.channelId || md.jid || md.to || md.sourceId || ''
+                ).trim().toLowerCase();
+                const message = String(md.message || md.text || md.caption || '').trim().replace(/\s+/g, ' ').toLowerCase();
+                const payload = String(md.path || md.file_path || md.filePath || md.prompt || '').trim().toLowerCase();
+                return `${name}|${target}|${message.slice(0, 240)}|${payload.slice(0, 240)}`;
+            };
+
             if (!isSimpleTask && action.payload.source && exposeChecklistPreview) {
                 const checklistMessage = this.buildChecklistPreviewMessage(executionPlan);
                 if (checklistMessage) {
@@ -8190,6 +8621,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 // Fires once after 8 consecutive silent steps (stepsSinceLastMessage resets on send).
                 if (!isSimpleTask && currentStep > 1 && stepsSinceLastMessage >= progressIntervalSteps && action.payload.source) {
                     await this.sendProgressFeedback(action, 'working', `Still working on your request (step ${currentStep})...`);
+                    lastUserDeliveryAtMs = Date.now();
                     // Progress message was just sent; reset silent-step counter and count toward message budget.
                     stepsSinceLastMessage = 0;
                     messagesSent++;
@@ -8230,6 +8662,33 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                 let decision;
                 try {
+                    const timeSignals = this.buildActionTimeSignals(action, {
+                        actionStartedAtMs,
+                        currentStep,
+                        messagesSent,
+                        stepsSinceLastMessage,
+                        lastUserDeliveryAtMs,
+                        isResearchTask
+                    });
+                    if (!highDelayMetricLogged && timeSignals.delayRisk === 'high') {
+                        highDelayMetricLogged = true;
+                        this.delayRiskHighCount++;
+                        this.memory.saveMemory({
+                            id: `metric-delay-risk-high-${action.id}-${Date.now()}`,
+                            type: 'episodic',
+                            content: `[METRIC] delay_risk_high action=${action.id} source=${action.payload?.source || 'unknown'} runtimeSec=${timeSignals.actionRuntimeSec} queueAgeSec=${timeSignals.queueAgeSec} sinceLastDeliverySec=${timeSignals.sinceLastDeliverySec} runtimeTotal=${this.delayRiskHighCount}`,
+                            metadata: {
+                                source: 'guardrail-metric',
+                                metric: 'delay_risk_high',
+                                actionId: action.id,
+                                channelSource: action.payload?.source || 'unknown',
+                                actionRuntimeSec: timeSignals.actionRuntimeSec,
+                                queueAgeSec: timeSignals.queueAgeSec,
+                                sinceLastDeliverySec: timeSignals.sinceLastDeliverySec,
+                                runtimeTotal: this.delayRiskHighCount
+                            }
+                        });
+                    }
                     decision = await ErrorHandler.withRetry(async () => {
                         return await this.decisionEngine.decide({
                             ...action,
@@ -8242,7 +8701,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 isResearchTask,
                                 executionPlan, // Pass plan to DecisionEngine
                                 robustReasoningMode,
-                                sessionContinuityHint
+                                sessionContinuityHint,
+                                timeSignals
                             }
                         });
                     }, { maxRetries: 2 });
@@ -8286,6 +8746,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             ? 'Started your task and working through it now...'
                             : `Still working and making progress (step ${currentStep})...`;
                         await this.sendProgressFeedback(action, 'working', details);
+                        lastUserDeliveryAtMs = Date.now();
                         messagesSent++;
                         stepsSinceLastMessage = 0;
                         lastProgressFeedbackStep = currentStep;
@@ -8334,6 +8795,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             
                             // PROGRESS FEEDBACK: Let user know we got stuck
                             await this.sendProgressFeedback(action, 'recovering', 'Got stuck in a loop. Learning from this to improve...');
+                            lastUserDeliveryAtMs = Date.now();
                             
                             // SELF-IMPROVEMENT: Trigger selective analysis. The analyzer decides
                             // whether to create a skill or skip (strategy/parameter issue).
@@ -8400,6 +8862,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         } else {
                             // Review layer confirms we should stop
                             await this.sendProgressFeedback(action, 'recovering', `Got stuck repeating '${skillName}'. Wrapping up with what I have...`);
+                            lastUserDeliveryAtMs = Date.now();
                             
                             // Trigger selective self-improvement analysis for all tool classes.
                             // The analyzer can still choose not to create a skill.
@@ -8443,6 +8906,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 // Same skills with same arguments 3x = genuine loop
                                 logger.warn(`Agent: Detected repeating skill+args pattern [${namePattern2}] x3 in action ${action.id}. Breaking loop.`);
                                 await this.sendProgressFeedback(action, 'recovering', 'Detected repeating pattern. Trying a different approach...');
+                                lastUserDeliveryAtMs = Date.now();
                                 break;
                             } else {
                                 // Same skill names but different arguments — not a loop, just sequential work
@@ -8458,6 +8922,20 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     let totalSendToolsInStep = 0;
 
                     for (const toolCall of decision.tools) {
+                        if (SIDE_EFFECT_TOOLS.has(toolCall.name)) {
+                            const sideEffectKey = buildSideEffectKey(toolCall.name, toolCall.metadata || {});
+                            if (successfulSideEffectKeys.has(sideEffectKey)) {
+                                logger.warn(`Agent: Blocked duplicate side-effect call '${toolCall.name}' with equivalent intent in action ${action.id}`);
+                                this.memory.saveMemory({
+                                    id: `${action.id}-step-${currentStep}-${toolCall.name}-sideeffect-duplicate-blocked`,
+                                    type: 'short',
+                                    content: `[SYSTEM: BLOCKED duplicate side-effect call for '${toolCall.name}'. Equivalent target/payload already succeeded in this action. Do NOT resend. Continue with next unfinished step or complete.]`,
+                                    metadata: { actionId: action.id, step: currentStep, skill: toolCall.name, duplicateSideEffect: true }
+                                });
+                                continue;
+                            }
+                        }
+
                         if (blockedFailedTools.has(toolCall.name)) {
                             logger.warn(`Agent: Blocked tool '${toolCall.name}' after repeated failures in action ${action.id}`);
                             this.memory.saveMemory({
@@ -8508,6 +8986,19 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             // 1. Block exact duplicates across any step in this action
                             if (sentMessagesInAction.includes(currentMessage)) {
                                 logger.warn(`Agent: Blocked redundant message in action ${action.id} (Action-wide duplicate).`);
+                                toolsBlockedByCooldown++;
+                                continue;
+                            }
+
+                            // 1.5 Block semantic near-duplicates (same intent/wording drift)
+                            if (this.isSemanticallyDuplicateOutboundMessage(currentMessage, sentMessagesInAction)) {
+                                logger.warn(`Agent: Blocked semantically duplicate message in action ${action.id}.`);
+                                this.memory.saveMemory({
+                                    id: `${action.id}-step-${currentStep}-blocked-semantic-duplicate`,
+                                    type: 'short',
+                                    content: `[SYSTEM: BLOCKED semantic duplicate message. Your outbound message is too similar to one already sent in this action. Send only NEW information or conclude the task.]`,
+                                    metadata: { actionId: action.id, step: currentStep, semanticDuplicateBlocked: true }
+                                });
                                 toolsBlockedByCooldown++;
                                 continue;
                             }
@@ -8681,6 +9172,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             
                             // PROGRESS FEEDBACK: Let user know we hit an error but are recovering
                             await this.sendProgressFeedback(action, 'error', `${toolCall.name} failed`);
+                            lastUserDeliveryAtMs = Date.now();
                         }
 
                         // CLARIFICATION HANDLING: Break sequence if agent is asking for info
@@ -8848,6 +9340,10 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             if (!resultIndicatesError && this.isSubstantiveDeliveryMessage(sentMessage)) {
                                 substantiveDeliveriesSent++;
                             }
+                            if (!resultIndicatesError) {
+                                anyUserDeliverySuccess = true;
+                                lastUserDeliveryAtMs = Date.now();
+                            }
                             
                             // QUESTION PAUSE: If this message asked a question, pause and wait for response
                             
@@ -8879,6 +9375,14 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             content: observation,
                             metadata: { tool: toolCall.name, result: toolResult, input: toolCall.metadata }
                         });
+
+                        if (SIDE_EFFECT_TOOLS.has(toolCall.name) && !resultIndicatesError) {
+                            const sideEffectKey = buildSideEffectKey(toolCall.name, toolCall.metadata || {});
+                            successfulSideEffectKeys.add(sideEffectKey);
+                            if (toolCall.name === 'send_file' || toolCall.name === 'send_image' || toolCall.name === 'send_discord_file' || toolCall.name === 'send_slack_file') {
+                                anyUserDeliverySuccess = true;
+                            }
+                        }
 
                         this.saveSessionAnchorFromToolResult(action, currentStep, toolCall.name, toolCall.metadata || {}, toolResult, resultIndicatesError);
 
@@ -9237,6 +9741,14 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         logger.info(`Agent: Bonus step ${bonus + 1}/${bonusSteps} for action ${action.id}`);
                         
                         try {
+                            const bonusTimeSignals = this.buildActionTimeSignals(action, {
+                                actionStartedAtMs,
+                                currentStep,
+                                messagesSent,
+                                stepsSinceLastMessage,
+                                lastUserDeliveryAtMs,
+                                isResearchTask
+                            });
                             const bonusDecision = await ErrorHandler.withRetry(async () => {
                                 return await this.decisionEngine.decide({
                                     ...action,
@@ -9247,7 +9759,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                         currentStep,
                                         executionPlan,
                                         robustReasoningMode,
-                                        sessionContinuityHint
+                                        sessionContinuityHint,
+                                        timeSignals: bonusTimeSignals
                                     }
                                 });
                             }, { maxRetries: 2, initialDelay: 1000 });
@@ -9285,6 +9798,10 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                         logger.warn(`Agent: Blocked duplicate message in bonus step (action ${action.id}).`);
                                         continue;
                                     }
+                                    if (this.isSemanticallyDuplicateOutboundMessage(bonusMsg, sentMessagesInAction)) {
+                                        logger.warn(`Agent: Blocked semantic duplicate message in bonus step (action ${action.id}).`);
+                                        continue;
+                                    }
                                     // Block double-message in same bonus step
                                     if (bonusMsgSentThisStep) {
                                         logger.warn(`Agent: Blocked double-message in bonus step (action ${action.id}).`);
@@ -9305,6 +9822,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                         bonusMsgSentThisStep = true;
                                         bonusMessageSent = true;
                                         sentMessagesInAction.push((toolCall.metadata?.message || '').trim());
+                                        lastUserDeliveryAtMs = Date.now();
                                     }
                                     this.memory.saveMemory({
                                         id: `${action.id}-bonus-${bonus}-${toolCall.name}`,
@@ -9368,6 +9886,19 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         }
                     });
                 }
+            }
+
+            const isUserFacingAction = action.payload?.source === 'telegram' || action.payload?.source === 'whatsapp' ||
+                action.payload?.source === 'discord' || action.payload?.source === 'slack' || action.payload?.source === 'gateway-chat';
+            if (!goalsMet && isUserFacingAction && anyUserDeliverySuccess) {
+                logger.warn(`Agent: Reconciled final status to completed for ${action.id} because user delivery succeeded.`);
+                this.memory.saveMemory({
+                    id: `${action.id}-delivery-reconciled` ,
+                    type: 'short',
+                    content: `[SYSTEM: Final-state reconciliation: delivery/send succeeded in this action. Marking task completed to avoid false failure due to guardrail exhaustion.]`,
+                    metadata: { actionId: action.id, deliveryReconciled: true, messagesSent, substantiveDeliveriesSent }
+                });
+                goalsMet = true;
             }
 
             const finalStatus = this.actionQueue.getQueue().find(a => a.id === action.id)?.status;

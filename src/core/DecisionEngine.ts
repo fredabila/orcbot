@@ -109,6 +109,34 @@ The user appreciates knowing what's happening, especially during complex tasks. 
         return '';
     }
 
+    private buildTimeSignalsNudge(metadata: any): string {
+        const timeSignals = metadata?.timeSignals;
+        if (!timeSignals || typeof timeSignals !== 'object') return '';
+
+        const queueAgeSec = Number(timeSignals.queueAgeSec ?? 0);
+        const actionRuntimeSec = Number(timeSignals.actionRuntimeSec ?? 0);
+        const sinceLastDeliverySec = Number(timeSignals.sinceLastDeliverySec ?? 0);
+        const avgSecPerStep = Number(timeSignals.avgSecPerStep ?? 0);
+        const taskIntent = String(timeSignals.taskIntent || 'task_execution');
+        const delayRisk = String(timeSignals.delayRisk || 'low').toLowerCase();
+
+        const riskGuidance = delayRisk === 'high'
+            ? `
+⚠️ TIME RISK HIGH: You are delaying user-visible delivery. Prioritize immediate progress communication and concrete output.`
+            : delayRisk === 'medium'
+                ? `
+⏱️ TIME RISK MEDIUM: Avoid silent drift. Prefer concise progress/result messaging if meaningful work was done.`
+                : '';
+
+        return `TIME SIGNALS (real runtime telemetry):
+- Queue Age: ${queueAgeSec}s
+- Action Runtime: ${actionRuntimeSec}s
+- Time Since Last User-Visible Delivery: ${sinceLastDeliverySec}s
+- Average Pace: ${avgSecPerStep}s/step
+- Task Intent: ${taskIntent}
+- Delay Risk: ${delayRisk.toUpperCase()}${riskGuidance}`;
+    }
+
     private buildSystemContext(): string {
         const isWindows = process.platform === 'win32';
         const isMac = process.platform === 'darwin';
@@ -988,6 +1016,8 @@ EXECUTION STATE:
 - Sequence Step: ${metadata.currentStep || '1'}
 - Steps Since Last Message: ${metadata.stepsSinceLastMessage ?? 0}
 - Task Type: ${metadata.isResearchTask ? 'Research/Deep Work' : 'Standard'}
+
+${this.buildTimeSignalsNudge(metadata)}
 
 EXECUTION PLAN:
 ${metadata.executionPlan || 'Proceed with standard reasoning.'}
