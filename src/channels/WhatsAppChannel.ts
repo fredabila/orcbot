@@ -441,6 +441,31 @@ export class WhatsAppChannel implements IChannel {
     }
 
     /**
+     * Send composing presence WITHOUT the auto-paused side effect.
+     * Used by the persistent typing indicator interval so rapid re-fires don't
+     * race with each other's scheduled 'paused' timeouts.
+     */
+    public async sendPresenceComposing(to: string): Promise<void> {
+        try {
+            await this.sock.sendPresenceUpdate('composing', to);
+        } catch {
+            // non-critical
+        }
+    }
+
+    /**
+     * Explicitly stop the typing indicator (send 'paused' presence).
+     * Called when the persistent interval is stopped after action completion.
+     */
+    public async stopTypingIndicator(to: string): Promise<void> {
+        try {
+            await this.sock.sendPresenceUpdate('paused', to);
+        } catch {
+            // non-critical
+        }
+    }
+
+    /**
      * Post a status update (text only for now)
      */
     public async postStatus(text: string): Promise<void> {

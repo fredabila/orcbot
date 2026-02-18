@@ -187,6 +187,14 @@ export interface AgentConfig {
     agenticUserCheckInterval?: number;         // Check interval in seconds (default 30)
     agenticUserMaxInterventions?: number;      // Max interventions per action (default 3)
     agenticUserNotifyUser?: boolean;              // Send notification to user on intervention (default true)
+    // Server mode optimizations
+    serverMode?: boolean;                          // Apply conservative memory/perf defaults for server deployments (default false)
+    actionQueueCompletedTTL?: number;              // Ms to keep completed actions (default: 24h; server default: 2h)
+    actionQueueFailedTTL?: number;                 // Ms to keep failed actions (default: 72h; server default: 12h)
+    actionQueueFlushIntervalMs?: number;           // Queue flush interval in ms (default: 5000; server default: 15000)
+    actionQueueMaintenanceIntervalMs?: number;     // Queue maintenance interval in ms (default: 60000; server default: 180000)
+    vectorMemoryMaxEntries?: number;               // Max vector memory entries (default: 5000; server default: 1500)
+    processedMessagesCacheSize?: number;           // Max size of deduplicated message id cache (default: 1000; server default: 300)
     // User Permissions
     adminUsers?: {
         telegram?: string[];   // Telegram numeric user IDs (e.g., ["123456789"])
@@ -339,7 +347,12 @@ export class ConfigManager {
 
         const normalized = this.normalizePlatformPaths(mergedConfig, silent);
         const typed = this.coerceConfigTypes(normalized, defaults);
-        return this.repairWorkerCorruption(typed, silent);
+        const repaired = this.repairWorkerCorruption(typed, silent);
+        // Apply server-mode conservative defaults AFTER user overrides are merged in
+        if (repaired.serverMode) {
+            return this.applyServerModeDefaults(repaired);
+        }
+        return repaired;
     }
 
     /**
@@ -752,8 +765,63 @@ export class ConfigManager {
             agenticUserProactiveStepThreshold: 8,
             agenticUserCheckInterval: 30,
             agenticUserMaxInterventions: 3,
-            agenticUserNotifyUser: true
+            agenticUserNotifyUser: true,
+            // Server mode
+            serverMode: false,
+            actionQueueCompletedTTL: 24 * 60 * 60 * 1000,   // 24h
+            actionQueueFailedTTL: 72 * 60 * 60 * 1000,       // 72h
+            actionQueueFlushIntervalMs: 5000,                 // 5s
+            actionQueueMaintenanceIntervalMs: 60000,          // 60s
+            vectorMemoryMaxEntries: 5000,
+            processedMessagesCacheSize: 1000
         };
+    }
+
+    /**
+     * Override config values with conservative defaults for server/headless deployments.
+     * Called automatically from loadConfig() when serverMode is true.
+     */
+    private applyServerModeDefaults(cfg: AgentConfig): AgentConfig {
+        const serverDefaults: Partial<AgentConfig> = {
+            // Action queue — shorter retention, less frequent flushes
+            actionQueueCompletedTTL: 2 * 60 * 60 * 1000,    // 2h (vs 24h)
+            actionQueueFailedTTL: 12 * 60 * 60 * 1000,       // 12h (vs 72h)
+            actionQueueFlushIntervalMs: 15000,                // 15s (vs 5s)
+            actionQueueMaintenanceIntervalMs: 180000,         // 3min (vs 1min)
+            // Vector memory — smaller cap
+            vectorMemoryMaxEntries: 1500,                     // vs 5000
+            // In-memory de-dup cache
+            processedMessagesCacheSize: 300,                  // vs 1000
+            // Memory consolidation — consolidate more aggressively
+            memoryConsolidationThreshold: 20,                 // vs 30
+            memoryConsolidationBatch: 15,                     // vs 20
+            memoryFlushSoftThreshold: 18,                     // vs 25
+            memoryFlushCooldownMinutes: 20,                   // vs 30
+            // Per-step context sizing — smaller windows
+            threadContextRecentN: 6,                          // vs 8
+            threadContextRelevantN: 5,                        // vs 8
+            journalContextLimit: 800,                         // vs 1500
+            learningContextLimit: 800,                        // vs 1500
+            userContextLimit: 1200,                           // vs 2000
+            memoryExtendedContextLimit: 1000,                 // vs 2000
+            memoryContextLimit: 15,                           // vs 20
+            // Token optimization
+            skipSimulationForSimpleTasks: true,
+            compactSkillsPrompt: true,                        // Use short skill descriptions
+        };
+
+        // Only apply server defaults for keys the user has NOT explicitly set in YAML.
+        // Comparison: if value still equals the original default → override with server value.
+        const originalDefaults = this.getStringDefaultConfig();
+        for (const [k, serverVal] of Object.entries(serverDefaults) as [keyof AgentConfig, any][]) {
+            const currentVal = (cfg as any)[k];
+            const originalDefault = (originalDefaults as any)[k];
+            // If the user explicitly overrode this key away from the base default, respect their choice
+            if (currentVal === originalDefault || currentVal === undefined) {
+                (cfg as any)[k] = serverVal;
+            }
+        }
+        return cfg;
     }
 
     public get(key: string): any {

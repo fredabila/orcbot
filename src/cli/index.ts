@@ -51,6 +51,7 @@ const c = {
     bgYellow: '\x1b[43m',
     bgRed: '\x1b[41m',
     bgGray: '\x1b[100m',
+    bgBlack: '\x1b[40m',
     bgWhite: '\x1b[47m',
 };
 const clr = (color: string, text: string) => `${color}${text}${c.reset}`;
@@ -63,10 +64,16 @@ const yellow = (text: string) => clr(c.yellow, text);
 const red = (text: string) => clr(c.red, text);
 const magenta = (text: string) => clr(c.magenta, text);
 const blue = (text: string) => clr(c.blue, text);
+// white() used for high-contrast labels on badge backgrounds
+const white = (text: string) => clr(c.white, text);
 const gray = (text: string) => clr(c.gray, text);
 const brightCyan = (text: string) => clr(c.brightCyan, text);
 const brightGreen = (text: string) => clr(c.brightGreen, text);
+const brightYellow = (text: string) => clr(c.brightYellow, text);
+const brightRed = (text: string) => clr(c.brightRed, text);
 const brightMagenta = (text: string) => clr(c.brightMagenta, text);
+const brightBlue = (text: string) => clr(c.brightBlue, text);
+const brightWhite = (text: string) => clr(c.brightWhite, text);
 
 // ── Visual rendering helpers ───────────────────────────────────────────
 
@@ -81,12 +88,13 @@ function box(lines: string[], opts: { title?: string; width?: number; color?: st
         ...lines.map(l => stripAnsi(l).length + pad * 2)
     );
     const w = Math.max(contentWidth, 40);
-    
+
+    // Title uses the border color + bold white so it stays readable on any background
     const top = opts.title
-        ? `${color}╔═${ bold(` ${opts.title} `)}${color}${'═'.repeat(Math.max(0, w - stripAnsi(opts.title).length - 3))}╗${c.reset}`
+        ? `${color}╔═ ${c.reset}${c.bold}${c.brightWhite}${opts.title}${c.reset}${color} ${'═'.repeat(Math.max(0, w - stripAnsi(opts.title).length - 3))}╗${c.reset}`
         : `${color}╔${'═'.repeat(w)}╗${c.reset}`;
     const bot = `${color}╚${'═'.repeat(w)}╝${c.reset}`;
-    
+
     console.log(top);
     for (const line of lines) {
         const visible = stripAnsi(line).length;
@@ -107,9 +115,9 @@ async function showToolsManagerMenu() {
 
     console.log('');
     const summaryLines = [
-        `${dim('Installed')}   ${brightCyan(bold(String(tools.length)))}`,
-        `${dim('Active')}      ${activeCount > 0 ? green(bold(String(activeCount))) : gray('0')}`,
-        `${dim('Approved')}    ${approvedCount > 0 ? green(bold(String(approvedCount))) : gray('0')}`,
+        `${c.white}Installed${c.reset}   ${brightCyan(bold(String(tools.length)))}`,
+        `${c.white}Active${c.reset}      ${activeCount > 0 ? `${c.brightGreen}${c.bold}${String(activeCount)}${c.reset}` : `${c.gray}0${c.reset}`}`,
+        `${c.white}Approved${c.reset}    ${approvedCount > 0 ? `${c.brightGreen}${c.bold}${String(approvedCount)}${c.reset}` : `${c.gray}0${c.reset}`}`,
     ];
     box(summaryLines, { title: '🧰 TOOL INVENTORY', width: 40, color: c.magenta });
     console.log('');
@@ -256,13 +264,22 @@ async function showToolsManagerMenu() {
 }
 
 /** Render a horizontal bar (progress/usage visualization) */
-function progressBar(value: number, max: number, width = 20, opts: { filled?: string; empty?: string; colorFn?: (s: string) => string } = {}): string {
+function progressBar(value: number, max: number, width = 20, opts: { filled?: string; empty?: string; colorFn?: (s: string) => string; invert?: boolean } = {}): string {
     const ratio = Math.min(1, Math.max(0, max > 0 ? value / max : 0));
     const filledLen = Math.round(ratio * width);
     const emptyLen = width - filledLen;
     const filled = (opts.filled || '█').repeat(filledLen);
     const empty = (opts.empty || '░').repeat(emptyLen);
-    const colorFn = opts.colorFn || (ratio > 0.7 ? green : ratio > 0.3 ? yellow : red);
+    // Default: green=low, yellow=mid, red=high (capacity usage semantics).
+    // Pass invert:true for metrics where high is good (e.g. accuracy %).
+    let colorFn: (s: string) => string;
+    if (opts.colorFn) {
+        colorFn = opts.colorFn;
+    } else if (opts.invert) {
+        colorFn = ratio > 0.7 ? brightGreen : ratio > 0.4 ? yellow : red;
+    } else {
+        colorFn = ratio > 0.8 ? red : ratio > 0.5 ? yellow : brightGreen;
+    }
     return colorFn(filled) + dim(empty);
 }
 
@@ -305,7 +322,7 @@ function sparkline(values: number[]): string {
 }
 
 /** Gradient text effect (cycles through colors) */
-function gradient(text: string, colors: string[] = [c.cyan, c.brightCyan, c.blue, c.brightMagenta, c.magenta]): string {
+function gradient(text: string, colors: string[] = [c.brightCyan, c.cyan, c.brightMagenta, c.magenta, c.brightBlue]): string {
     let result = '';
     for (let i = 0; i < text.length; i++) {
         const color = colors[i % colors.length];
@@ -324,19 +341,22 @@ function renderLogo() {
         ' ╚██████╔╝██║  ██║╚██████╗██████╔╝╚██████╔╝   ██║   ',
         '  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝╚═════╝  ╚═════╝    ╚═╝   ',
     ];
-    const gradientColors = [c.cyan, c.brightCyan, c.brightCyan, c.brightMagenta, c.magenta, c.blue];
+    // Bright top-half, slightly dimmer bottom-half — readable on dark and light terminals
+    const gradientColors = [c.brightCyan, c.brightCyan, c.cyan, c.cyan, c.brightMagenta, c.magenta];
     for (let i = 0; i < logoLines.length; i++) {
-        console.log(`  ${gradientColors[i % gradientColors.length]}${logoLines[i]}${c.reset}`);
+        console.log(`  ${gradientColors[i]}${logoLines[i]}${c.reset}`);
     }
 }
 
 function banner() {
     console.log('');
     renderLogo();
-    console.log(gray('  ') + dim('  Autonomous AI Agent Framework') + gray('  │  ') + dim('v1.0.0'));
-    console.log(gray('  ') + dim('  by ') + brightCyan('Frederick Abila') + dim('  │  ') + cyan('frederick.buzzchat.site'));
-    console.log(gray('  ') + dim('  ') + gray('github.com/') + bold('fredabila/orcbot'));
-    console.log(gray('  ' + '─'.repeat(54)));
+    // Use white for the tagline so it's clearly legible (not dim)
+    const pkg = (() => { try { return JSON.parse(fs.readFileSync(path.join(__dirname, '../../package.json'), 'utf8')); } catch { return { version: '2.1.0' }; } })();
+    const ver = pkg.version || '2.1.0';
+    console.log(`  ${c.white}Autonomous AI Agent Framework${c.reset}  ${c.gray}│${c.reset}  ${c.brightCyan}v${ver}${c.reset}`);
+    console.log(`  ${c.white}by${c.reset} ${c.brightCyan}${c.bold}Frederick Abila${c.reset}  ${c.gray}│${c.reset}  ${c.cyan}github.com/fredabila/orcbot${c.reset}`);
+    console.log(`  ${c.gray}${'─'.repeat(54)}${c.reset}`);
     console.log('');
 }
 
@@ -345,23 +365,28 @@ function sectionHeader(emoji: string, title: string) {
     const titleText = `${emoji}  ${title}`;
     const w = Math.max(48, stripAnsi(titleText).length + 4);
     console.log('');
-    console.log(`  ${c.cyan}┌${'─'.repeat(w)}┐${c.reset}`);
-    console.log(`  ${c.cyan}│${c.reset} ${bold(titleText)}${' '.repeat(Math.max(0, w - stripAnsi(titleText).length - 1))}${c.cyan}│${c.reset}`);
-    console.log(`  ${c.cyan}└${'─'.repeat(w)}┘${c.reset}`);
+    // Filled background strip: accent color border + bold white text for maximum legibility
+    console.log(`  ${c.brightCyan}╔${'═'.repeat(w)}╗${c.reset}`);
+    console.log(`  ${c.brightCyan}║${c.reset} ${c.bold}${c.brightWhite}${titleText}${c.reset}${' '.repeat(Math.max(0, w - stripAnsi(titleText).length - 1))}${c.brightCyan}║${c.reset}`);
+    console.log(`  ${c.brightCyan}╚${'═'.repeat(w)}╝${c.reset}`);
 }
 
 function kvLine(key: string, value: string, indent = '  ') {
-    console.log(`${indent}  ${c.gray}${key}${c.reset} ${value}`);
+    // Use white for the key label so it's clearly visible (gray was too dark)
+    console.log(`${indent}  ${c.white}${c.bold}${key}${c.reset}  ${value}`);
 }
 
 function statusBadge(ok: boolean, onLabel = 'ON', offLabel = 'OFF'): string {
-    return ok ? `${c.green}${c.bold}● ${onLabel}${c.reset}` : `${c.gray}○ ${offLabel}${c.reset}`;
+    return ok
+        ? `${c.bgGreen}${c.bold}${c.white} ${onLabel} ${c.reset}`
+        : `${c.bgGray}${c.bold}${c.white} ${offLabel} ${c.reset}`;
 }
 
 /** Status dot with label */
 function statusDot(ok: boolean, label?: string): string {
-    if (ok) return `${c.green}●${c.reset}${label ? ` ${label}` : ''}`;
-    return `${c.gray}○${c.reset}${label ? ` ${dim(label)}` : ''}`;
+    if (ok) return `${c.brightGreen}●${c.reset}${label ? ` ${c.white}${label}${c.reset}` : ''}`;
+    // Off-state: gray dot + white label so the label text remains readable
+    return `${c.gray}○${c.reset}${label ? ` ${c.white}${label}${c.reset}` : ''}`;
 }
 
 process.on('unhandledRejection', (reason) => {
@@ -2112,14 +2137,15 @@ async function showMainMenu() {
     const auActive = agent.agenticUser?.isActive();
     const auEnabled = !!agent.config.get('agenticUserEnabled');
 
+    // Use white for key labels so they're legible; reserve dim only for secondary info
     box([
-        `${dim('Agent')}    ${bold(agentName)}${sudoMode ? `  ${c.bgRed}${c.white}${c.bold} SUDO ${c.reset}` : ''}${agent.config.get('overrideMode') ? `  ${c.bgRed}${c.white}${c.bold} OVERRIDE ${c.reset}` : ''}`,
-        `${dim('Model')}    ${brightCyan(model)} ${dim('via')} ${cyan(provider)}`,
-        `${dim('Channels')} ${channelDots}  ${dim(`(${channelCount}/4 active)`)}`,
-        `${dim('HITL')}     ${auActive ? green(bold('● Active')) : auEnabled ? yellow('● Standby') : gray('○ Off')}`,
-        '',
-        `${dim('Queue')}    ${pendingCount > 0 ? yellow(bold(String(pendingCount))) + dim(' active') : green('idle')}${queueLen > pendingCount ? dim(` │ ${queueLen - pendingCount} completed`) : ''}`,
-        `${dim('Memory')}   ${cyan(String(shortMem))} ${dim('short-term entries')} ${progressBar(shortMem, 100, 12)}`,
+        `${c.white}Agent${c.reset}    ${c.bold}${c.brightWhite}${agentName}${c.reset}${sudoMode ? `  ${c.bgRed}${c.bold}${c.white} SUDO ${c.reset}` : ''}${agent.config.get('overrideMode') ? `  ${c.bgRed}${c.bold}${c.white} OVERRIDE ${c.reset}` : ''}`,
+        `${c.white}Model${c.reset}    ${brightCyan(bold(model))} ${dim('via')} ${c.white}${provider}${c.reset}`,
+        `${c.white}Channels${c.reset} ${channelDots}  ${dim(`(${channelCount}/4 active)`)}`,
+        `${c.white}HITL${c.reset}     ${auActive ? `${c.brightGreen}${c.bold}● Active${c.reset}` : auEnabled ? `${c.yellow}● Standby${c.reset}` : `${c.gray}○ Off${c.reset}`}`,
+        `${c.gray}${'─'.repeat(52)}${c.reset}`,
+        `${c.white}Queue${c.reset}    ${pendingCount > 0 ? `${c.yellow}${c.bold}${String(pendingCount)}${c.reset} ${c.white}active${c.reset}` : `${c.brightGreen}● idle${c.reset}`}${queueLen > pendingCount ? `  ${dim(`${queueLen - pendingCount} completed`)}` : ''}`,
+        `${c.white}Memory${c.reset}   ${c.brightCyan}${String(shortMem)}${c.reset} ${c.white}short-term${c.reset} ${progressBar(shortMem, 100, 12)}`,
     ], { title: 'DASHBOARD', width: 56 });
     console.log('');
 
@@ -2127,33 +2153,33 @@ async function showMainMenu() {
         {
             type: 'list',
             name: 'action',
-            message: bold('What would you like to do?'),
+            message: `${c.bold}${c.brightWhite}What would you like to do?${c.reset}`,
             choices: [
-                new inquirer.Separator(cyan(' ─── Run ') + gray('─'.repeat(30))),
-                { name: `${c.green}▶${c.reset}  Start Agent Loop`, value: 'start' },
-                { name: `${c.yellow}📋${c.reset} Push Task`, value: 'push' },
-                { name: `${c.cyan}📊${c.reset} View Status`, value: 'status' },
-                new inquirer.Separator(cyan(' ─── Configure ') + gray('─'.repeat(24))),
-                { name: `${c.magenta}🧠${c.reset} Manage AI Models`, value: 'models' },
-                { name: `${c.blue}🔌${c.reset} Manage Connections`, value: 'connections' },
-                { name: `${c.brightCyan}⚡${c.reset} Manage Skills ${dim(`(${agent.skills.getAgentSkills().length} installed)`)}`, value: 'skills' },
-                { name: `${c.brightMagenta}🧰${c.reset} Manage Tools ${dim(`(${agent.tools.listTools().length} installed)`)}`, value: 'tools' },
-                { name: `${c.yellow}🔧${c.reset} Tooling & APIs`, value: 'tooling' },
-                new inquirer.Separator(cyan(' ─── Advanced ') + gray('─'.repeat(25))),
-                { name: `${c.brightGreen}🌐${c.reset} Web Gateway`, value: 'gateway' },
-                { name: `${c.brightMagenta}🪪${c.reset}  Worker Profile`, value: 'worker' },
-                { name: `${c.brightCyan}🐙${c.reset} Multi-Agent Orchestration`, value: 'orchestration' },
-                { name: `${c.brightYellow || c.yellow}🤖${c.reset} Agentic User (HITL Proxy)`, value: 'agentic_user' },
-                { name: `${c.red}🔒${c.reset} Security & Permissions`, value: 'security' },
-                { name: `${c.green}📈${c.reset} Token Usage`, value: 'tokens' },
-                { name: `${c.cyan}🧪${c.reset} Guardrail Metrics`, value: 'metrics' },
-                { name: `${c.brightBlue}🌍${c.reset} World Events Live`, value: 'world_events' },
-                { name: `${c.brightCyan}⏱️${c.reset}  Latency Benchmark`, value: 'latency' },
-                new inquirer.Separator(cyan(' ─── System ') + gray('─'.repeat(27))),
-                { name: `${c.gray}📂 ${c.reset} Open Build Workspace`, value: 'open_build_workspace' },
-                { name: `${c.gray}⚙️ ${c.reset} Configure Agent`, value: 'config' },
-                { name: `${c.gray}⬆️ ${c.reset} Update OrcBot`, value: 'update' },
-                { name: dim('   Exit'), value: 'exit' },
+                new inquirer.Separator(`${c.brightCyan} ── RUN ${'─'.repeat(35)}${c.reset}`),
+                { name: `  ${c.brightGreen}▶${c.reset}  ${c.bold}Start Agent Loop${c.reset}`, value: 'start' },
+                { name: `  ${c.yellow}📋${c.reset}  Push Task`, value: 'push' },
+                { name: `  ${c.cyan}📊${c.reset}  View Status`, value: 'status' },
+                new inquirer.Separator(`${c.brightCyan} ── CONFIGURE ${'─'.repeat(29)}${c.reset}`),
+                { name: `  ${c.magenta}🧠${c.reset}  Manage AI Models`, value: 'models' },
+                { name: `  ${c.brightBlue}🔌${c.reset}  Manage Connections`, value: 'connections' },
+                { name: `  ${c.brightCyan}⚡${c.reset}  Manage Skills  ${c.gray}(${agent.skills.getAgentSkills().length} installed)${c.reset}`, value: 'skills' },
+                { name: `  ${c.brightMagenta}🧰${c.reset}  Manage Tools   ${c.gray}(${agent.tools.listTools().length} installed)${c.reset}`, value: 'tools' },
+                { name: `  ${c.yellow}🔧${c.reset}  Tooling & APIs`, value: 'tooling' },
+                new inquirer.Separator(`${c.brightCyan} ── ADVANCED ${'─'.repeat(30)}${c.reset}`),
+                { name: `  ${c.brightGreen}🌐${c.reset}  Web Gateway`, value: 'gateway' },
+                { name: `  ${c.brightMagenta}🪪${c.reset}   Worker Profile`, value: 'worker' },
+                { name: `  ${c.brightCyan}🐙${c.reset}  Multi-Agent Orchestration`, value: 'orchestration' },
+                { name: `  ${c.brightYellow}🤖${c.reset}  Agentic User ${c.gray}(HITL Proxy)${c.reset}`, value: 'agentic_user' },
+                { name: `  ${c.brightRed}🔒${c.reset}  Security & Permissions`, value: 'security' },
+                { name: `  ${c.brightGreen}📈${c.reset}  Token Usage`, value: 'tokens' },
+                { name: `  ${c.cyan}🧪${c.reset}  Guardrail Metrics`, value: 'metrics' },
+                { name: `  ${c.brightBlue}🌍${c.reset}  World Events Live`, value: 'world_events' },
+                { name: `  ${c.brightCyan}⏱️${c.reset}   Latency Benchmark`, value: 'latency' },
+                new inquirer.Separator(`${c.brightCyan} ── SYSTEM ${'─'.repeat(32)}${c.reset}`),
+                { name: `  ${c.white}📂${c.reset}  Open Build Workspace`, value: 'open_build_workspace' },
+                { name: `  ${c.white}⚙️${c.reset}   Configure Agent`, value: 'config' },
+                { name: `  ${c.white}⬆️${c.reset}   Update OrcBot`, value: 'update' },
+                { name: `  ${c.gray}← Exit${c.reset}`, value: 'exit' },
             ],
             pageSize: 24
         },
@@ -5323,28 +5349,31 @@ function showStatus() {
     // AI Model Panel
     console.log('');
     box([
-        `${dim('Model')}      ${brightCyan(bold(model))}`,
-        `${dim('Provider')}   ${cyan(provider)}`,
-        `${dim('Agent')}      ${bold(agentName)}`,
-        `${dim('Mode')}       ${sudoMode ? `${c.bgRed}${c.white}${c.bold} SUDO ${c.reset} ${dim('(unrestricted)')}` : safeMode ? `${c.bgYellow}${c.white}${c.bold} SAFE ${c.reset} ${dim('(commands blocked)')}` : `${c.bgGreen}${c.white}${c.bold} NORMAL ${c.reset}`}`,
+        `${c.white}Model${c.reset}      ${brightCyan(bold(model))}`,
+        `${c.white}Provider${c.reset}   ${c.brightWhite}${provider}${c.reset}`,
+        `${c.white}Agent${c.reset}      ${c.bold}${c.brightWhite}${agentName}${c.reset}`,
+        `${c.white}Mode${c.reset}       ${sudoMode ? `${c.bgRed}${c.bold}${c.white} SUDO ${c.reset} ${c.gray}(unrestricted)${c.reset}` : safeMode ? `${c.bgYellow}${c.bold}${c.white} SAFE ${c.reset} ${c.gray}(commands blocked)${c.reset}` : `${c.bgGreen}${c.bold}${c.white} NORMAL ${c.reset}`}`,
     ], { title: '🤖 AI ENGINE', width: 52, color: c.brightCyan });
 
     // Memory Panel
     const memTotal = shortMem + episodicMem;
     console.log('');
     box([
-        `${dim('Short-term')} ${yellow(bold(String(shortMem).padStart(4)))} entries  ${progressBar(shortMem, 200, 16)}`,
-        `${dim('Episodic')}   ${cyan(bold(String(episodicMem).padStart(4)))} entries  ${progressBar(episodicMem, 50, 16, { colorFn: cyan })}`,
-        `${dim('Total')}      ${bold(String(memTotal).padStart(4))} entries`,
+        `${c.white}Short-term${c.reset}  ${c.yellow}${c.bold}${String(shortMem).padStart(4)}${c.reset} entries  ${progressBar(shortMem, 200, 16)}`,
+        `${c.white}Episodic${c.reset}    ${c.cyan}${c.bold}${String(episodicMem).padStart(4)}${c.reset} entries  ${progressBar(episodicMem, 50, 16, { colorFn: cyan })}`,
+        `${c.white}Total${c.reset}       ${c.bold}${c.brightWhite}${String(memTotal).padStart(4)}${c.reset} entries`,
     ], { title: '🧠 MEMORY', width: 52, color: c.magenta });
 
-    // Channels Panel
+    // Channels Panel — fixed-width label column for clean alignment
     console.log('');
+    const chLine = (ok: boolean, color: string, label: string) =>
+        `${ok ? `${c.brightGreen}●${c.reset}` : `${c.gray}○${c.reset}`} ${color}${label}${c.reset}${' '.repeat(Math.max(0, 12 - label.length))}${ok ? `${c.brightGreen}Connected${c.reset}` : `${c.gray}Not configured${c.reset}`}`;
     box([
-        `${statusDot(hasTelegram, hasTelegram ? brightCyan('Telegram') : 'Telegram')}${' '.repeat(12)}${hasTelegram ? green('Connected') : dim('Not configured')}`,
-        `${statusDot(hasWhatsapp, hasWhatsapp ? brightGreen('WhatsApp') : 'WhatsApp')}${' '.repeat(12)}${hasWhatsapp ? green('Connected') : dim('Not configured')}`,
-        `${statusDot(hasDiscord, hasDiscord ? brightMagenta('Discord') : 'Discord')}${' '.repeat(13)}${hasDiscord ? green('Connected') : dim('Not configured')}`,
-    ], { title: '🔌 CHANNELS', width: 52, color: c.blue });
+        chLine(hasTelegram, c.brightCyan, 'Telegram'),
+        chLine(hasWhatsapp, c.brightGreen, 'WhatsApp'),
+        chLine(hasDiscord, c.brightMagenta, 'Discord'),
+        chLine(hasSlack, c.brightYellow, 'Slack'),
+    ], { title: '🔌 CHANNELS', width: 52, color: c.brightBlue });
 
     // Action Queue Panel
     const completed = queueItems.filter((a: any) => a.status === 'completed').length;
@@ -5354,17 +5383,17 @@ function showStatus() {
     const waiting = queueItems.filter((a: any) => a.status === 'waiting').length;
     console.log('');
     const queueLines: string[] = [
-        `${green('●')} Completed ${green(bold(String(completed).padStart(3)))}  ${yellow('●')} Pending ${yellow(bold(String(pending).padStart(3)))}  ${cyan('●')} Active ${cyan(bold(String(inProgress).padStart(3)))}`,
-        `${red('●')} Failed    ${red(bold(String(failed).padStart(3)))}  ${magenta('●')} Waiting ${magenta(bold(String(waiting).padStart(3)))}  ${dim('Total')}  ${bold(String(queueLen).padStart(3))}`,
+        `${c.brightGreen}● Completed${c.reset} ${c.bold}${c.brightWhite}${String(completed).padStart(3)}${c.reset}   ${c.yellow}● Pending${c.reset} ${c.bold}${c.brightWhite}${String(pending).padStart(3)}${c.reset}   ${c.cyan}● Active${c.reset} ${c.bold}${c.brightWhite}${String(inProgress).padStart(3)}${c.reset}`,
+        `${c.red}● Failed${c.reset}    ${c.bold}${c.brightWhite}${String(failed).padStart(3)}${c.reset}   ${c.magenta}● Waiting${c.reset} ${c.bold}${c.brightWhite}${String(waiting).padStart(3)}${c.reset}   ${c.white}Total${c.reset}    ${c.bold}${c.brightWhite}${String(queueLen).padStart(3)}${c.reset}`,
     ];
     if (queueLen > 0) {
         queueLines.push('');
-        queueLines.push(dim('Recent:'));
+        queueLines.push(`${c.white}${c.bold}Recent:${c.reset}`);
         const recentActions = queueItems.slice(-3).reverse();
         for (const a of recentActions) {
-            const statusIcon = a.status === 'completed' ? green('✓') : a.status === 'failed' ? red('✗') : a.status === 'in-progress' ? cyan('▶') : a.status === 'waiting' ? magenta('⏸') : yellow('…');
+            const statusIcon = a.status === 'completed' ? `${c.brightGreen}✓${c.reset}` : a.status === 'failed' ? `${c.red}✗${c.reset}` : a.status === 'in-progress' ? `${c.cyan}▶${c.reset}` : a.status === 'waiting' ? `${c.magenta}⏸${c.reset}` : `${c.yellow}…${c.reset}`;
             const desc = ((a as any).payload?.description || 'Unknown').slice(0, 38);
-            queueLines.push(`  ${statusIcon} ${dim(a.id.slice(0, 6))} ${desc}`);
+            queueLines.push(`  ${statusIcon} ${c.gray}${a.id.slice(0, 6)}${c.reset} ${c.white}${desc}${c.reset}`);
         }
     }
     box(queueLines, { title: '📋 ACTION QUEUE', width: 52, color: c.yellow });
@@ -5427,12 +5456,12 @@ function showGuardrailMetrics(limit: number = 10) {
 
     console.log('');
     box([
-        `${dim('Metrics')}       ${bold('max_step_fallback, delay_risk_high')}`,
-        `${dim('Total')}         ${total > 0 ? yellow(bold(String(total))) : gray('0')}`,
-        `${dim('Last 24 hours')} ${last24h > 0 ? yellow(bold(String(last24h))) : gray('0')}`,
-        `${dim('Last 7 days')}   ${last7d > 0 ? cyan(bold(String(last7d))) : gray('0')}`,
-        `${dim('By type')}       ${typeSummary}`,
-        `${dim('Top sources')}   ${topSources}`,
+        `${c.white}Metrics${c.reset}        ${c.brightWhite}max_step_fallback, delay_risk_high${c.reset}`,
+        `${c.white}Total${c.reset}          ${total > 0 ? `${c.yellow}${c.bold}${String(total)}${c.reset}` : `${c.gray}0${c.reset}`}`,
+        `${c.white}Last 24 hours${c.reset}  ${last24h > 0 ? `${c.yellow}${c.bold}${String(last24h)}${c.reset}` : `${c.gray}0${c.reset}`}`,
+        `${c.white}Last 7 days${c.reset}    ${last7d > 0 ? `${c.cyan}${c.bold}${String(last7d)}${c.reset}` : `${c.gray}0${c.reset}`}`,
+        `${c.white}By type${c.reset}        ${c.brightWhite}${typeSummary}${c.reset}`,
+        `${c.white}Top sources${c.reset}    ${c.brightWhite}${topSources}${c.reset}`,
     ], { title: '📉 FALLBACK SUMMARY', width: 64, color: c.yellow });
 
     const recent = metricEntries.slice(0, Math.max(1, limit));
@@ -5480,15 +5509,15 @@ function showTokenUsage() {
     console.log('');
     const realPct = accuracy.realPct;
     const estPct = accuracy.estimatedPct;
-    const accuracyColor = realPct >= 80 ? c.green : realPct >= 50 ? c.yellow : c.red;
+    const accuracyColor = realPct >= 80 ? c.brightGreen : realPct >= 50 ? c.yellow : c.brightRed;
     const accuracyLabel = realPct >= 80 ? '✓ High' : realPct >= 50 ? '~ Medium' : '⚠ Low';
     box([
-        `${dim('Data source accuracy:')} ${accuracyColor}${bold(`${accuracyLabel} (${realPct}% API-reported)`)}${c.reset}`,
-        `${dim('API-reported calls:')}   ${bold(accuracy.realCalls.toLocaleString().padStart(8))}  ${dim('│')} ${green(summary.realTotals?.totalTokens?.toLocaleString().padStart(12) || '0')} tokens`,
-        `${dim('Estimated calls:')}      ${bold(accuracy.estimatedCalls.toLocaleString().padStart(8))}  ${dim('│')} ${c.yellow}${(summary.estimatedTotals?.totalTokens?.toLocaleString().padStart(12) || '0')}${c.reset} tokens`,
-        `${dim('─'.repeat(52))}`,
-        `${dim('If numbers seem high, estimated calls use a heuristic')}`,
-        `${dim('that can over-count. Run')} ${bold('orcbot tokens recount')} ${dim('to rebuild.')}`,
+        `${c.white}Data accuracy:${c.reset}         ${accuracyColor}${c.bold}${accuracyLabel} (${realPct}% API-reported)${c.reset}`,
+        `${c.white}API-reported calls:${c.reset}    ${c.bold}${c.brightWhite}${accuracy.realCalls.toLocaleString().padStart(8)}${c.reset}  ${c.gray}│${c.reset}  ${c.brightGreen}${(summary.realTotals?.totalTokens?.toLocaleString() || '0').padStart(12)}${c.reset} tokens`,
+        `${c.white}Estimated calls:${c.reset}       ${c.bold}${c.brightWhite}${accuracy.estimatedCalls.toLocaleString().padStart(8)}${c.reset}  ${c.gray}│${c.reset}  ${c.yellow}${(summary.estimatedTotals?.totalTokens?.toLocaleString() || '0').padStart(12)}${c.reset} tokens`,
+        `${c.gray}${'─'.repeat(52)}${c.reset}`,
+        `${c.white}If numbers seem high, estimated calls use a heuristic${c.reset}`,
+        `${c.white}that can over-count. Run${c.reset} ${c.bold}${c.brightCyan}orcbot tokens recount${c.reset} ${c.white}to rebuild.${c.reset}`,
     ], { title: '🎯 DATA ACCURACY', width: 58, color: accuracyColor });
 
     // Totals Panel — now with real vs estimated breakdown
@@ -5497,12 +5526,12 @@ function showTokenUsage() {
     const realTotal = summary.realTotals?.totalTokens || 0;
     const estTotal = summary.estimatedTotals?.totalTokens || 0;
     box([
-        `${dim('Prompt')}      ${bold(summary.totals.promptTokens.toLocaleString().padStart(12))} tokens`,
-        `${dim('Completion')}  ${bold(summary.totals.completionTokens.toLocaleString().padStart(12))} tokens`,
-        `${dim('─'.repeat(34))}`,
-        `${dim('Total')}       ${brightCyan(bold(totalTokens.toLocaleString().padStart(12)))} tokens`,
-        `  ${dim('├ API-reported:')} ${green(realTotal.toLocaleString().padStart(10))}`,
-        `  ${dim('└ Estimated:')}    ${c.yellow}${estTotal.toLocaleString().padStart(10)}${c.reset}  ${estTotal > 0 ? dim('(~30-60% inflated)') : ''}`,
+        `${c.white}Prompt${c.reset}       ${c.bold}${c.brightWhite}${summary.totals.promptTokens.toLocaleString().padStart(12)}${c.reset} tokens`,
+        `${c.white}Completion${c.reset}   ${c.bold}${c.brightWhite}${summary.totals.completionTokens.toLocaleString().padStart(12)}${c.reset} tokens`,
+        `${c.gray}${'─'.repeat(34)}${c.reset}`,
+        `${c.white}Total${c.reset}        ${c.brightCyan}${c.bold}${totalTokens.toLocaleString().padStart(12)}${c.reset} tokens`,
+        `  ${c.gray}├ API-reported:${c.reset} ${c.brightGreen}${realTotal.toLocaleString().padStart(10)}${c.reset}`,
+        `  ${c.gray}└ Estimated:${c.reset}    ${c.yellow}${estTotal.toLocaleString().padStart(10)}${c.reset}  ${estTotal > 0 ? `${c.gray}(~30-60% inflated)${c.reset}` : ''}`,
     ], { title: '🔢 TOKEN TOTALS', width: 48, color: c.brightCyan });
 
     // Provider breakdown
@@ -5547,7 +5576,8 @@ function showTokenUsage() {
 }
 
 async function waitKeyPress() {
-    await inquirer.prompt([{ type: 'input', name: 'continue', message: gray('Press Enter to continue...') }]);
+    // White text so the prompt is clearly visible (gray was nearly invisible on dark terminals)
+    await inquirer.prompt([{ type: 'input', name: 'continue', message: `${c.brightCyan}›${c.reset} ${c.white}Press Enter to continue...${c.reset}` }]);
 }
 
 program.parse(process.argv);

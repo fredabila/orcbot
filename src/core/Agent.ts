@@ -111,6 +111,7 @@ export class Agent {
     private currentActionId: string | null = null;
     private currentActionStartAt: number | null = null;
     private cancelledActions: Set<string> = new Set();
+    private persistentTypingTimer: NodeJS.Timeout | null = null;
     private instanceLockPath: string | null = null;
     private instanceLockAcquired: boolean = false;
     private heartbeatJobs: Map<string, Cron> = new Map();
@@ -160,11 +161,18 @@ export class Agent {
             memoryExtendedContextLimit: this.config.get('memoryExtendedContextLimit')
         });
 
+        // Wire processed-messages cache size from config (supports serverMode override)
+        const cacheSizeCfg = this.config.get('processedMessagesCacheSize');
+        if (typeof cacheSizeCfg === 'number' && cacheSizeCfg > 0) {
+            this.processedMessagesMaxSize = cacheSizeCfg;
+        }
+
         // Initialize vector memory for semantic search (gracefully disabled if no API key)
         this.memory.initVectorMemory({
             openaiApiKey: this.config.get('openaiApiKey'),
             googleApiKey: this.config.get('googleApiKey'),
-            preferredProvider: this.config.get('llmProvider')
+            preferredProvider: this.config.get('llmProvider'),
+            maxEntries: this.config.get('vectorMemoryMaxEntries'),
         });
         
         const tokenTracker = new TokenTracker(
@@ -224,7 +232,12 @@ export class Agent {
         );
         this.decisionEngine.setKnowledgeStore(this.knowledgeStore);
         this.simulationEngine = new SimulationEngine(this.llm);
-        this.actionQueue = new ActionQueue(this.config.get('actionQueuePath') || './actions.json');
+        this.actionQueue = new ActionQueue(this.config.get('actionQueuePath') || './actions.json', {
+            completedTTL: this.config.get('actionQueueCompletedTTL'),
+            failedTTL: this.config.get('actionQueueFailedTTL'),
+            flushInterval: this.config.get('actionQueueFlushIntervalMs'),
+            maintenanceInterval: this.config.get('actionQueueMaintenanceIntervalMs'),
+        });
         this.scheduler = new Scheduler();
         this.pollingManager = new PollingManager();
         
@@ -5650,10 +5663,23 @@ The plugin handles all logic internally. See the plugin source for implementatio
         action: Action,
         reason: 'message_budget' | 'skill_frequency' | 'max_steps',
         currentStep: number,
-        details: string
+        details: string,
+        deliveryContext?: { messagesSent: number; anyUserDeliverySuccess: boolean; substantiveDeliveriesSent: number }
     ): Promise<'continue' | 'terminate'> {
         try {
             const taskDescription = action.payload?.description || 'Unknown task';
+
+            // Fast-path: if a message was already successfully delivered and this is a
+            // simple/trivial channel response, don't waste an LLM call — just terminate.
+            if (
+                deliveryContext?.anyUserDeliverySuccess &&
+                reason === 'max_steps' &&
+                deliveryContext.messagesSent > 0
+            ) {
+                logger.info(`Agent: Forced termination review (${reason}): terminate — message already delivered, fast-path exit.`);
+                return 'terminate';
+            }
+
             const recentContext = this.memory.getRecentContext();
             const stepHistory = recentContext
                 .filter(m => m.content?.includes(action.id) || m.metadata?.actionId === action.id)
@@ -5661,16 +5687,22 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 .join('\n')
                 .slice(-2000); // Last 2000 chars of step history for this action
 
+            const deliverySummary = deliveryContext
+                ? `Messages sent: ${deliveryContext.messagesSent}, Successful delivery: ${deliveryContext.anyUserDeliverySuccess}, Substantive deliveries: ${deliveryContext.substantiveDeliveriesSent}`
+                : 'Delivery status: unknown';
+
             const reviewPrompt = `You are a task completion reviewer. A hard safety guardrail is about to TERMINATE a task. Your job is to decide if the task is truly done or if it should continue.
 
 TASK: "${taskDescription}"
 TERMINATION REASON: ${reason} — ${details}
 CURRENT STEP: ${currentStep}
+DELIVERY STATUS: ${deliverySummary}
 
 RECENT STEP HISTORY:
 ${stepHistory || 'No step history available.'}
 
 RULES:
+- If a message has already been SUCCESSFULLY DELIVERED to the user (Delivery Status shows Successful delivery: true), return "terminate" — the task is done.
 - If the task was a RESEARCH or DEEP WORK task (gathering info, writing reports, building something) and meaningful progress has been made but it's not done yet, return "continue".
 - If the agent is truly stuck in a loop making NO progress at all (same exact calls with same results), return "terminate".
 - If the agent has already gathered enough information to deliver a useful response to the user, return "terminate" (it should compile and send what it has).
@@ -5879,12 +5911,26 @@ Respond with ONLY valid JSON:
             deepToolExecutedSinceLastMessage: boolean;
             sentMessagesInAction: string[];
             skillCallCounts: Record<string, number>;
+            taskComplexity?: string;
+            anyUserDeliverySuccess?: boolean;
         }
     ): Promise<{ ok: boolean; issues: string[] }> {
         try {
             const source = action.payload?.source;
             const isChannelTask = source === 'telegram' || source === 'whatsapp' || source === 'discord' || source === 'slack' || source === 'gateway-chat';
             if (!isChannelTask) {
+                return { ok: true, issues: [] };
+            }
+
+            // Trivial tasks (simple greetings, confirmations, quick replies) that already
+            // successfully delivered a message are done — skip the full audit.
+            // The "substantiveDeliveriesSent === 0" check is too strict for short-form
+            // replies like "Hello! How can I help you?" (< 40 chars).
+            if (
+                context.taskComplexity === 'trivial' &&
+                context.anyUserDeliverySuccess === true &&
+                context.messagesSent > 0
+            ) {
                 return { ok: true, issues: [] };
             }
 
@@ -5915,15 +5961,18 @@ Respond with ONLY valid JSON:
                 issues.push('Deep tool output exists after the last sent message (results likely not delivered).');
             }
 
+            // Only flag ack-only messages as an issue when deep/research tools also ran.
+            // Pure conversational tasks (greetings, short confirmations) legitimately produce
+            // short replies that look like acks — don't penalise them.
             if (context.substantiveDeliveriesSent === 0 && hadResearchOrDeepOutput) {
                 issues.push('Deep/research tools ran, but no substantive delivery message was sent.');
             }
 
-            if (context.substantiveDeliveriesSent === 0 && hadAckOnlyMessages) {
-                issues.push('Only acknowledgement/status-style messages were sent.');
+            if (context.substantiveDeliveriesSent === 0 && hadAckOnlyMessages && hadResearchOrDeepOutput) {
+                issues.push('Only acknowledgement/status-style messages were sent despite running research tools.');
             }
 
-            if (hadToolErrors && context.substantiveDeliveriesSent === 0) {
+            if (hadToolErrors && context.substantiveDeliveriesSent === 0 && hadResearchOrDeepOutput) {
                 issues.push('Tool errors occurred and no substantive user-facing recovery/result message was delivered.');
             }
 
@@ -7789,9 +7838,15 @@ Respond with a single actionable task description (one sentence). Be specific ab
             this.memory.initVectorMemory({
                 openaiApiKey: this.config.get('openaiApiKey'),
                 googleApiKey: this.config.get('googleApiKey'),
-                preferredProvider: this.config.get('llmProvider')
+                preferredProvider: this.config.get('llmProvider'),
+                maxEntries: this.config.get('vectorMemoryMaxEntries'),
             });
-            this.actionQueue = new ActionQueue(actionPath);
+            this.actionQueue = new ActionQueue(actionPath, {
+                completedTTL: this.config.get('actionQueueCompletedTTL'),
+                failedTTL: this.config.get('actionQueueFailedTTL'),
+                flushInterval: this.config.get('actionQueueFlushIntervalMs'),
+                maintenanceInterval: this.config.get('actionQueueMaintenanceIntervalMs'),
+            });
             this.decisionEngine = new DecisionEngine(
                 this.memory,
                 this.llm,
@@ -8712,10 +8767,13 @@ Respond with a single actionable task description (one sentence). Be specific ab
             // Mark as processed
             this.processedMessages.add(dedupKey);
             
-            // Prevent unbounded growth
+            // Prevent unbounded growth — evict oldest 100 entries via iterator (O(1) per delete, no full copy)
             if (this.processedMessages.size > this.processedMessagesMaxSize) {
-                const entries = Array.from(this.processedMessages);
-                entries.slice(0, 100).forEach(e => this.processedMessages.delete(e));
+                let evicted = 0;
+                for (const entry of this.processedMessages) {
+                    this.processedMessages.delete(entry);
+                    if (++evicted >= 100) break;
+                }
             }
         }
 
@@ -8935,6 +8993,49 @@ Respond with a single actionable task description (one sentence). Be specific ab
         };
     }
 
+    /**
+     * Starts a persistent typing indicator that re-fires every 4 seconds for the
+     * duration of the entire action, keeping the indicator alive across LLM calls,
+     * web searches, file ops, and any other long-running work.
+     * Only fires for real channel-sourced actions (not heartbeats / autonomous tasks).
+     */
+    private startPersistentTypingIndicator(action: any): void {
+        if (this.persistentTypingTimer) return; // already running
+        const source = action.payload?.source;
+        const to = action.payload?.sourceId;
+        if (!source || !to || action.payload?.isHeartbeat) return;
+        // Only fire for real inbound-message channels
+        const channelSources = ['telegram', 'whatsapp', 'discord', 'slack', 'gateway-chat'];
+        if (!channelSources.includes(source)) return;
+
+        const fire = async () => {
+            try {
+                if (source === 'telegram' && this.telegram) {
+                    await this.telegram.sendTypingIndicator(to);
+                } else if (source === 'whatsapp' && this.whatsapp) {
+                    await (this.whatsapp as any).sendPresenceComposing(to);
+                } else if (source === 'discord' && this.discord) {
+                    await this.discord.sendTypingIndicator(to);
+                } else if (source === 'slack' && this.slack) {
+                    await this.slack.sendTypingIndicator(to);
+                }
+                // gateway-chat has no typing concept; skip silently
+            } catch {
+                /* typing indicators are non-critical — swallow all errors */
+            }
+        };
+
+        fire(); // immediate first fire — don't wait for the first interval tick
+        this.persistentTypingTimer = setInterval(fire, 4000);
+    }
+
+    /** Stops the persistent typing indicator interval. */
+    private stopPersistentTypingIndicator(): void {
+        if (this.persistentTypingTimer) {
+            clearInterval(this.persistentTypingTimer);
+            this.persistentTypingTimer = null;
+        }
+    }
     private async processNextAction() {
         if (this.isBusy) return;
 
@@ -8944,6 +9045,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
         this.isBusy = true;
         this.currentActionId = action.id;
         this.currentActionStartAt = Date.now();
+        this.startPersistentTypingIndicator(action);
         try {
             this.updateLastActionTime();
             this.actionQueue.updateStatus(action.id, 'in-progress');
@@ -9191,7 +9293,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     // REVIEW GATE: Don't blindly kill — ask the review layer if task is actually done
                     const budgetReviewResult = await this.reviewForcedTermination(
                         action, 'message_budget', currentStep,
-                        `Message budget reached (${messagesSent}/${MAX_MESSAGES}). Agent has been sending status updates while working.`
+                        `Message budget reached (${messagesSent}/${MAX_MESSAGES}). Agent has been sending status updates while working.`,
+                        { messagesSent, anyUserDeliverySuccess, substantiveDeliveriesSent }
                     );
                     
                     if (budgetReviewResult === 'continue') {
@@ -9211,11 +9314,6 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     }
                 }
 
-                if (this.telegram && action.payload.source === 'telegram') {
-                    await this.telegram.sendTypingIndicator(action.payload.sourceId);
-                } else if (this.slack && action.payload.source === 'slack') {
-                    await this.slack.sendTypingIndicator(action.payload.sourceId);
-                }
 
                 let decision;
                 try {
@@ -10115,7 +10213,9 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 substantiveDeliveriesSent,
                                 deepToolExecutedSinceLastMessage,
                                 sentMessagesInAction,
-                                skillCallCounts
+                                skillCallCounts,
+                                taskComplexity,
+                                anyUserDeliverySuccess
                             });
 
                             if (!completionAudit.ok) {
@@ -10277,7 +10377,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                 
                 const maxStepsReview = await this.reviewForcedTermination(
                     action, 'max_steps', currentStep,
-                    `Reached max steps (${MAX_STEPS}). The agent may have made progress but not delivered results yet.`
+                    `Reached max steps (${MAX_STEPS}). The agent may have made progress but not delivered results yet.`,
+                    { messagesSent, anyUserDeliverySuccess, substantiveDeliveriesSent }
                 );
                 
                 if (maxStepsReview === 'continue') {
@@ -10495,7 +10596,9 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                     substantiveDeliveriesSent,
                     deepToolExecutedSinceLastMessage,
                     sentMessagesInAction,
-                    skillCallCounts
+                    skillCallCounts,
+                    taskComplexity,
+                    anyUserDeliverySuccess
                 });
 
                 if (!completionAudit.ok) {
@@ -10520,7 +10623,10 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             logger.info(`Agent: Skipping duplicate completion_audit_recovery for ${action.id}; recovery already exists or was recently completed.`);
                             handedOffToRecovery = true;
                         } else {
-                        const recoveryDesc = `RECOVERY: Review the previous tool outputs and send a concrete final answer to the user. Do not send another acknowledgement. Deliver actual findings/results now.`;
+                        // Include the original task description so the recovery agent has clear
+                        // context and doesn't confuse it with unrelated older tasks in memory.
+                        const originalDesc = (action.payload?.description || 'unknown task').slice(0, 300);
+                        const recoveryDesc = `RECOVERY for action ${action.id}: The previous attempt at "${originalDesc}" gathered results but did not deliver a concrete final answer to the user. Review ONLY the step logs for action ${action.id} and send a specific answer now. Do not rehash or resend content from unrelated prior tasks.`;
                         await this.pushTask(
                             recoveryDesc,
                             9,
@@ -10625,6 +10731,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                 await this.slack.sendMessage(action.payload.sourceId, sosMessage);
             }
         } finally {
+            this.stopPersistentTypingIndicator();
             this.isBusy = false;
             this.currentActionId = null;
             this.currentActionStartAt = null;
