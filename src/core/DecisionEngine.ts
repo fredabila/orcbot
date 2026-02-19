@@ -932,7 +932,8 @@ ACTIVE CHANNEL CONTEXT:
             channelInstructions = `
 ACTIVE CHANNEL CONTEXT:
 - Channel: Gateway Chat (Web Interface)
-- Rule: To respond to this user, you MUST use the "send_gateway_chat" skill.
+- Rule: To respond with text, use the "send_gateway_chat" skill.
+- Rule: To send an image or file, use send_image("gateway-web", prompt, "gateway-chat") or send_file("gateway-web", filePath, caption, "gateway-chat"). The dashboard will render images inline.
 `;
         }
         } // end !isHeartbeat guard for channel instructions

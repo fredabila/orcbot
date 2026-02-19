@@ -668,6 +668,157 @@ export class SkillsManager {
     }
 
     /**
+     * Install a skill from an npm package that follows the agentskills.io spec.
+     *
+     * Accepts the same shorthand formats as `npx skills add`:
+     *   firecrawl/cli        → resolves to @firecrawl/cli or firecrawl-cli
+     *   anthropic/pdf-split  → resolves to @anthropic/pdf-split or anthropic-pdf-split
+     *   npm:cheerio-skill    → resolves to cheerio-skill
+     *   @my-org/my-skill     → scoped package, used as-is
+     *
+     * Resolution order:
+     *   1. Try the exact ref as an npm package name
+     *   2. If it's vendor/name, try @vendor/name then vendor-name
+     * Then uses `npm pack` to download the tarball, extracts it, and looks for
+     * any subdirectory containing a SKILL.md — installing each one found.
+     *
+     * This is a self-contained fallback that works without the `skills` CLI being
+     * globally installed.
+     */
+    public async installSkillFromNpm(packageRef: string): Promise<{ success: boolean; message: string; skillName?: string; skillNames?: string[] }> {
+        if (!this.pluginsDir) return { success: false, message: 'No plugins directory configured' };
+        const skillsDir = path.join(this.pluginsDir, 'skills');
+        if (!fs.existsSync(skillsDir)) fs.mkdirSync(skillsDir, { recursive: true });
+
+        // ── 1. Resolve the npm package name ────────────────────────────────
+        let npmPkg = packageRef;
+        if (packageRef.startsWith('npm:')) {
+            npmPkg = packageRef.slice(4);
+        }
+
+        // vendor/name → try @vendor/name first, then vendor-name as fallback
+        const slashMatch = npmPkg.match(/^([a-z0-9-]+)\/([a-z0-9-]+)$/i);
+        const candidates: string[] = [npmPkg];
+        if (slashMatch && !npmPkg.startsWith('@')) {
+            candidates.unshift(`@${slashMatch[1]}/${slashMatch[2]}`);
+            candidates.push(`${slashMatch[1]}-${slashMatch[2]}`);
+        }
+
+        const { execSync } = require('child_process');
+        const tempDir = path.join(skillsDir, `_npm_${Date.now()}`);
+
+        let resolvedPkg: string | null = null;
+        let packError = '';
+
+        for (const candidate of candidates) {
+            try {
+                fs.mkdirSync(tempDir, { recursive: true });
+                // npm pack downloads the tarball into tempDir; quiet suppresses progress noise
+                execSync(`npm pack ${candidate} --quiet`, {
+                    cwd: tempDir,
+                    timeout: 60000,
+                    stdio: ['ignore', 'pipe', 'pipe'],
+                });
+                resolvedPkg = candidate;
+                break;
+            } catch (e: any) {
+                packError = e?.stderr?.toString() || e?.message || String(e);
+                // Clean up failed attempt
+                try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
+            }
+        }
+
+        if (!resolvedPkg) {
+            return {
+                success: false,
+                message: `Could not find npm package for "${packageRef}". Tried: ${candidates.join(', ')}.\nError: ${packError.slice(0, 300)}`,
+            };
+        }
+
+        try {
+            // ── 2. Extract the tarball ───────────────────────────────────────
+            const tarballs = fs.readdirSync(tempDir).filter(f => f.endsWith('.tgz') || f.endsWith('.tar.gz'));
+            if (tarballs.length === 0) {
+                fs.rmSync(tempDir, { recursive: true, force: true });
+                return { success: false, message: `npm pack succeeded but no tarball found in ${tempDir}` };
+            }
+
+            const tarball = path.join(tempDir, tarballs[0]);
+            const extractDir = path.join(tempDir, 'extract');
+            fs.mkdirSync(extractDir, { recursive: true });
+
+            if (process.platform === 'win32') {
+                execSync(`tar -xzf "${tarball}" -C "${extractDir}"`, { timeout: 30000 });
+            } else {
+                execSync(`tar -xzf "${tarball}" -C "${extractDir}"`, { timeout: 30000 });
+            }
+
+            // npm packs to a `package/` directory by default
+            const extractedRoot = path.join(extractDir, 'package');
+            const searchRoot = fs.existsSync(extractedRoot) ? extractedRoot : extractDir;
+
+            // ── 3. Find SKILL.md files up to 3 levels deep ──────────────────
+            const skillMdFiles = this.findSkillMdRecursive(searchRoot, 3);
+            if (skillMdFiles.length === 0) {
+                // Check for a top-level `skills/` directory with subdirectories
+                const skillsSubDir = path.join(searchRoot, 'skills');
+                if (fs.existsSync(skillsSubDir)) {
+                    const subDirs = fs.readdirSync(skillsSubDir, { withFileTypes: true })
+                        .filter(e => e.isDirectory())
+                        .map(e => path.join(skillsSubDir, e.name));
+                    for (const sd of subDirs) {
+                        skillMdFiles.push(...this.findSkillMdRecursive(sd, 1));
+                    }
+                }
+            }
+
+            if (skillMdFiles.length === 0) {
+                fs.rmSync(tempDir, { recursive: true, force: true });
+                return {
+                    success: false,
+                    message: `Package "${resolvedPkg}" installed but no SKILL.md found inside it. ` +
+                        `This package may not follow the agentskills.io spec. ` +
+                        `You can still use it as a regular npm package via install_npm_dependency("${resolvedPkg}") ` +
+                        `and write a plugin skill that calls it.`,
+                };
+            }
+
+            // ── 4. Install each found skill ──────────────────────────────────
+            const installed: string[] = [];
+            const errors: string[] = [];
+
+            for (const skillMdFile of skillMdFiles) {
+                const skillDir = path.dirname(skillMdFile);
+                const result = await this.installSkillFromPath(skillDir);
+                if (result.success && result.skillName) {
+                    installed.push(result.skillName);
+                } else {
+                    errors.push(result.message);
+                }
+            }
+
+            fs.rmSync(tempDir, { recursive: true, force: true });
+
+            if (installed.length === 0) {
+                return { success: false, message: `Found SKILL.md files but failed to install: ${errors.join('; ')}` };
+            }
+
+            const firstSkill = installed[0];
+            const plural = installed.length > 1 ? `s: ${installed.join(', ')}` : `: ${firstSkill}`;
+            return {
+                success: true,
+                message: `Installed ${installed.length} skill${plural} from "${resolvedPkg}"` +
+                    (errors.length > 0 ? `. ${errors.length} failed: ${errors.join('; ')}` : ''),
+                skillName: firstSkill,
+                skillNames: installed,
+            };
+        } catch (e: any) {
+            try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
+            return { success: false, message: `Failed to extract/install from npm: ${e.message}` };
+        }
+    }
+
+    /**
      * Install a skill from a local directory or .skill (zip) file.
      */
     public async installSkillFromPath(sourcePath: string): Promise<{ success: boolean; message: string; skillName?: string }> {
@@ -998,10 +1149,21 @@ main().catch(console.error);
     public getAllSkills(): Skill[] {
         return Array.from(this.skills.values());
     }
-    
+
     /**
-     * Get any load errors from the last loadPlugins() call
+     * Unregister a plugin skill by name. Only removes plugin-backed skills (with pluginPath).
+     * Returns true if the skill was found and removed, false if not found or is a built-in.
      */
+    public unregisterSkill(name: string): boolean {
+        const skill = this.skills.get(name);
+        if (!skill) return false;
+        if (!skill.pluginPath) return false; // refuse to remove built-ins
+        this.skills.delete(name);
+        logger.info(`SkillsManager: unregistered plugin skill '${name}'`);
+        return true;
+    }
+
+
     public getLoadError(skillName: string): string | undefined {
         return this.lastLoadErrors.get(skillName);
     }

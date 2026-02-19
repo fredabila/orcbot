@@ -359,7 +359,7 @@ export class Agent {
             if (!fs.existsSync(filePath)) {
                 let defaultContent = '';
                 if (key === 'agentIdentity') defaultContent = '# .AI.md\nName: OrcBot\nType: Strategic AI Agent\nPersonality: proactive, concise, professional, adaptive\nAutonomyLevel: high\nVersion: 2.0\nDefaultBehavior: \n  - prioritize tasks based on user goals\n  - act proactively when deadlines are near\n  - consult SKILLS.md tools to accomplish actions\n  - think strategically and simulate before complex actions\n  - learn from interactions and adapt approach\n';
-                if (key === 'userProfile') defaultContent = '# User Profile\n\nThis file contains information about the user.\n\n## Core Identity\n- Name: Frederick\n- Preferences: None known yet\n';
+                if (key === 'userProfile') defaultContent = '# User Profile\n\nThis file contains information about the user.\n\n## Core Identity\n- Name: Unknown\n- Preferences: None known yet\n';
                 if (key === 'journal') defaultContent = '# Agent Journal\nThis file contains self-reflections and activity logs.\n';
                 if (key === 'learning') defaultContent = '# Agent Learning Base\nThis file contains structured knowledge on various topics.\n';
                 if (key === 'actionQueue') defaultContent = '[]';
@@ -580,26 +580,43 @@ export class Agent {
             handler: async (args: any) => {
                 let chat_id = args.chat_id || args.chatId || args.id;
                 const message = args.message || args.content || args.text;
-                const buttons = args.buttons;
+                let buttons = args.buttons;
 
                 if (!chat_id) return 'Error: Missing chatId.';
                 if (!message) return 'Error: Missing message content.';
                 if (!Array.isArray(buttons) || buttons.length === 0) return 'Error: buttons must be a non-empty 2-D array, e.g. [[{text:"Yes",callback_data:"yes"},{text:"No",callback_data:"no"}]]';
+
+                // Auto-coerce: if the LLM passed a flat 1-D array of button objects,
+                // wrap each object into its own row so the call still works.
+                // e.g. [{text:"A"},{text:"B"}] → [[{text:"A"},{text:"B"}]]
+                // e.g. [{text:"A",callback_data:"a"}] → [[{text:"A",callback_data:"a"}]]
+                if (buttons.every((item: any) => item && typeof item === 'object' && !Array.isArray(item))) {
+                    buttons = [buttons];
+                }
 
                 const resolved = this.resolveTelegramChatId(String(chat_id));
                 if (!resolved) return `Error: "${chat_id}" is not a valid Telegram chat ID.`;
                 chat_id = resolved.id;
 
                 if (this.telegram) {
-                    const messageId = await this.telegram.sendWithButtons(chat_id, message, buttons);
-                    this.memory.saveMemory({
-                        id: `tg-btn-${Date.now()}`,
-                        type: 'short',
-                        content: `Assistant sent Telegram inline-buttons message to ${chat_id} (message_id=${messageId}): ${message}`,
-                        timestamp: new Date().toISOString(),
-                        metadata: { source: 'telegram', role: 'assistant', chatId: chat_id, messageId }
-                    });
-                    return `Message with buttons sent to ${chat_id} (message_id=${messageId})`;
+                    try {
+                        const messageId = await this.telegram.sendWithButtons(chat_id, message, buttons);
+                        this.memory.saveMemory({
+                            id: `tg-btn-${Date.now()}`,
+                            type: 'short',
+                            content: `Assistant sent Telegram inline-buttons message to ${chat_id} (message_id=${messageId}): ${message}`,
+                            timestamp: new Date().toISOString(),
+                            metadata: { source: 'telegram', role: 'assistant', chatId: chat_id, messageId }
+                        });
+                        return `Message with buttons sent to ${chat_id} (message_id=${messageId})`;
+                    } catch (err: any) {
+                        const errMsg = String(err?.response?.description || err?.message || err);
+                        // Provide specific guidance: if it's a button/markup issue, tell the LLM to simplify.
+                        if (/button|keyboard|markup|inline/i.test(errMsg)) {
+                            return `Telegram rejected the inline keyboard: ${errMsg}. Try simplifying the buttons — use only {text, callback_data} fields and keep text short (max 40 chars).`;
+                        }
+                        return `Telegram API error sending buttons to ${chat_id}: ${errMsg}. Try send_telegram instead if buttons are not required.`;
+                    }
                 }
                 return 'Telegram channel not available';
             }
@@ -1244,7 +1261,7 @@ export class Agent {
         // Skill: Send File
         this.skills.registerSkill({
             name: 'send_file',
-            description: 'Send a file (image, document, audio) to a contact. Supports WhatsApp, Telegram, and Discord. Set "channel" to "discord", "telegram", or "whatsapp" to override auto-detection.',
+            description: 'Send a file (image, document, audio) to a contact. Supports WhatsApp, Telegram, Discord, and Gateway Chat. Set "channel" to "discord", "telegram", "whatsapp", or "gateway-chat" to override auto-detection. For gateway-chat, jid can be any value (e.g. "gateway-web").',
             usage: 'send_file(jid, path, caption?, channel?)',
             handler: async (args: any) => {
                 const jid = args.jid || args.to;
@@ -1260,6 +1277,37 @@ export class Agent {
                     const currentAction = this.actionQueue.getQueue().find(a => a.id === this.currentActionId);
                     const actionSource = currentAction?.payload?.source;
                     const channelHint = explicitChannel || actionSource;
+
+                    // Gateway Chat: encode file as base64 and broadcast via event bus
+                    if (channelHint === 'gateway-chat') {
+                        const resolvedPath = path.isAbsolute(filePath) ? filePath : path.resolve(filePath);
+                        if (!fs.existsSync(resolvedPath)) return `Error: File not found: ${resolvedPath}`;
+                        const fileBuffer = fs.readFileSync(resolvedPath);
+                        const base64Data = fileBuffer.toString('base64');
+                        const ext = path.extname(resolvedPath).toLowerCase().replace('.', '');
+                        const mimeMap: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', pdf: 'application/pdf', mp4: 'video/mp4', mp3: 'audio/mpeg' };
+                        const mimeType = mimeMap[ext] || 'application/octet-stream';
+                        const messageId = `gateway-file-${Date.now()}`;
+                        this.memory.saveMemory({
+                            id: messageId,
+                            type: 'short',
+                            content: caption ? `[Image sent: ${path.basename(resolvedPath)}] ${caption}` : `[Image sent: ${path.basename(resolvedPath)}]`,
+                            timestamp: new Date().toISOString(),
+                            metadata: { source: 'gateway-chat', role: 'assistant', fileType: mimeType }
+                        });
+                        eventBus.emit('gateway:chat:file', {
+                            type: 'chat:file',
+                            role: 'assistant',
+                            fileName: path.basename(resolvedPath),
+                            fileType: mimeType,
+                            data: base64Data,
+                            caption,
+                            timestamp: new Date().toISOString(),
+                            messageId
+                        });
+                        return `File ${path.basename(resolvedPath)} sent to Gateway Chat`;
+                    }
+
                     const isWhatsApp = channelHint === 'whatsapp' || jid.includes('@s.whatsapp.net') || jid.includes('@g.us');
                     const isDiscord = channelHint === 'discord' || (!isWhatsApp && /^\d{15,20}$/.test(String(jid)));
                     const isTelegram = channelHint === 'telegram' || (!isWhatsApp && !isDiscord);
@@ -1569,7 +1617,7 @@ export class Agent {
         // Skill: Send Image (compound: generate + send in one step — preferred over generate_image)
         this.skills.registerSkill({
             name: 'send_image',
-            description: 'Generate an AI image from a text prompt and immediately send it to a contact. This is the PREFERRED way to deliver generated images — it generates and sends in one step, preventing duplicates. Use this instead of generate_image + send_file. IMPORTANT: set "channel" to the correct platform (discord/telegram/whatsapp/slack).',
+            description: 'Generate an AI image from a text prompt and immediately send it to a contact. This is the PREFERRED way to deliver generated images — it generates and sends in one step, preventing duplicates. Use this instead of generate_image + send_file. IMPORTANT: set "channel" to the correct platform (discord/telegram/whatsapp/slack/gateway-chat). For gateway-chat, set jid to "gateway-web".',
             usage: 'send_image(jid, prompt, channel?, size?, quality?, caption?)',
             handler: async (args: any) => {
                 const jid = args.jid || args.to;
@@ -1614,6 +1662,31 @@ export class Agent {
                     // Discord snowflake IDs: purely numeric, 17-20 digits
                     const isDiscord = channelHint === 'discord' || (!isWhatsApp && /^\d{15,20}$/.test(String(jid)));
                     const isTelegram = channelHint === 'telegram' || (!isWhatsApp && !isDiscord);
+
+                    // Gateway Chat: encode and broadcast via event bus
+                    if (channelHint === 'gateway-chat') {
+                        const fileBuffer = fs.readFileSync(result.filePath);
+                        const base64Data = fileBuffer.toString('base64');
+                        const messageId = `gateway-file-${Date.now()}`;
+                        this.memory.saveMemory({
+                            id: messageId,
+                            type: 'short',
+                            content: imgCaption ? `[Image sent: ${path.basename(result.filePath)}] ${imgCaption}` : `[Image sent: ${path.basename(result.filePath)}]`,
+                            timestamp: new Date().toISOString(),
+                            metadata: { source: 'gateway-chat', role: 'assistant', fileType: 'image/png' }
+                        });
+                        eventBus.emit('gateway:chat:file', {
+                            type: 'chat:file',
+                            role: 'assistant',
+                            fileName: path.basename(result.filePath),
+                            fileType: 'image/png',
+                            data: base64Data,
+                            caption: imgCaption,
+                            timestamp: new Date().toISOString(),
+                            messageId
+                        });
+                        return `Image generated and sent to Gateway Chat (${path.basename(result.filePath)})`;
+                    }
 
                     if (isWhatsApp && this.whatsapp) {
                         await this.whatsapp.sendFile(jid, result.filePath, imgCaption);
@@ -2438,6 +2511,100 @@ Output the fixed code:
             }
         });
 
+        // Skill: Tweak (patch) any skill — core or plugin — by generating a replacement wrapper plugin
+        this.skills.registerSkill({
+            name: 'tweak_skill',
+            description: 'Patch any built-in or plugin skill that keeps failing by generating a replacement wrapper plugin. The patch is saved to the plugins directory and takes effect immediately. Use this when a skill (e.g. telegram_send_buttons, run_command) repeatedly returns errors that you know how to fix.',
+            usage: 'tweak_skill(skillName, issue, fix?)',
+            handler: async (args: any) => {
+                const { skillName, issue, fix } = args;
+                if (!skillName || !issue) return 'Error: skillName and issue are required.';
+
+                const skillsList = this.skills.getAllSkills();
+                const targetSkill = skillsList.find(s => s.name === skillName);
+
+                if (!targetSkill) {
+                    return `Error: Skill "${skillName}" not found. Check the skill name and try again.`;
+                }
+
+                const pluginsDir = this.config.get('pluginsPath') || './plugins';
+
+                try {
+                    // Get handler source for context (best-effort)
+                    let handlerSource = '';
+                    if (targetSkill.pluginPath && fs.existsSync(targetSkill.pluginPath)) {
+                        handlerSource = fs.readFileSync(targetSkill.pluginPath, 'utf8').slice(0, 2000);
+                    } else {
+                        try { handlerSource = targetSkill.handler.toString().slice(0, 1500); } catch { handlerSource = '(source not available)'; }
+                    }
+
+                    const patchPrompt = `You are an OrcBot skill-patching engine. Generate a patched CommonJS plugin that REPLACES the "${skillName}" skill.
+
+SKILL TO PATCH: "${skillName}"
+DESCRIPTION: "${targetSkill.description}"
+USAGE: "${targetSkill.usage}"
+CURRENT HANDLER SOURCE:
+${handlerSource}
+
+PROBLEM: "${issue}"
+${fix ? `\nSUGGESTED FIX:\n"${fix}"\n` : ''}
+
+Generate a fixed CommonJS plugin for this skill.
+
+REQUIREMENTS:
+1. Output ONLY raw CommonJS code — NO markdown, NO code fences, NO explanation
+2. Export format: module.exports = { name, description, usage, handler }
+3. name must equal: "${skillName}"
+4. handler is: async function(args, context) { ... }
+5. context provides: { agent, config, logger, browser }
+   - context.agent.telegram → Telegraf bot instance (for Telegram ops)
+   - context.agent.whatsapp → WhatsApp sock (for WhatsApp ops)
+   - context.agent.discord → Discord client (for Discord ops)
+   - context.agent.memory → MemoryManager
+   - context.config.get(key) → config values
+6. Fix the reported problem — pre-process args, add fallbacks, fix argument shapes, etc.
+7. Include error handling with try/catch — return { success: false, error: message } on failure
+8. Do not import external packages unless they are available in node_modules
+9. Add a comment header: // @tweak: <one-line description of what was fixed>
+
+Output the fixed CommonJS code now:`;
+
+                    logger.info(`TweakSkill: Generating patch for "${skillName}" via LLM...`);
+                    const patchCode = await this.llm.call(patchPrompt, 'You are an expert Node.js/TypeScript developer and AI skill-patching engine. Output ONLY the raw CommonJS code with no markdown.');
+
+                    // Strip any accidental markdown fences
+                    const cleanCode = patchCode
+                        .replace(/^```(?:javascript|typescript|js|ts)?\n?/gm, '')
+                        .replace(/^```\s*$/gm, '')
+                        .trim();
+
+                    // Basic validation — must contain module.exports
+                    if (!cleanCode.includes('module.exports')) {
+                        logger.warn(`TweakSkill: LLM output missing module.exports for "${skillName}"`);
+                        return `Error: Generated patch for "${skillName}" is invalid (missing module.exports). Try again with a more specific fix description.`;
+                    }
+
+                    if (!fs.existsSync(pluginsDir)) {
+                        fs.mkdirSync(path.resolve(pluginsDir), { recursive: true });
+                    }
+
+                    const patchFileName = `${skillName.replace(/[^a-zA-Z0-9_-]/g, '_')}_patch.js`;
+                    const patchFilePath = path.resolve(pluginsDir, patchFileName);
+                    fs.writeFileSync(patchFilePath, cleanCode, 'utf8');
+
+                    // Reload plugins so the patch takes effect immediately
+                    this.skills.loadPlugins();
+
+                    logger.info(`TweakSkill: Patch for "${skillName}" written to ${patchFilePath} and reloaded.`);
+                    return `Successfully patched skill "${skillName}". Patch saved to ${patchFileName} and loaded. You can now retry using "${skillName}".`;
+
+                } catch (error: any) {
+                    logger.error(`TweakSkill: Failed to patch "${skillName}": ${error.message}`);
+                    return `Patch failed for "${skillName}": ${error.message}`;
+                }
+            }
+        });
+
         // Skill: Set Config
         this.skills.registerSkill({
             name: 'set_config',
@@ -2596,29 +2763,47 @@ Output the fixed code:
         });
         // ─── Agent Skills (SKILL.md Format) ──────────────────────────────
 
-        // Skill: Install Agent Skill (from URL or path)
+        // Skill: Install Agent Skill (from URL, path, or npm package)
         this.skills.registerSkill({
             name: 'install_skill',
-            description: 'Install an Agent Skill from a GitHub repo URL, gist, .skill file URL, raw SKILL.md URL, or local path. Agent Skills follow the agentskills.io format and extend the agent with new capabilities, workflows, and knowledge.',
+            description: 'Install an Agent Skill from a GitHub repo URL, gist, .skill file URL, raw SKILL.md URL, local path, or npm package (e.g. "firecrawl/cli", "@anthropic/pdf-processing", "npm:my-skill"). Agent Skills follow the agentskills.io format and extend the agent with new capabilities, workflows, and knowledge.',
             usage: 'install_skill(source)',
             handler: async (args: any) => {
                 const source = args.source || args.url || args.path || args.repo;
-                if (!source) return 'Error: Missing source. Provide a URL or local path to a skill.';
+                if (!source) return 'Error: Missing source. Provide a URL, local path, or npm package ref (e.g. "firecrawl/cli").';
 
-                if (source.startsWith('http://') || source.startsWith('https://')) {
-                    const result = await this.skills.installSkillFromUrl(source);
-                    if (result.success && result.skillName) {
-                        // Auto-activate newly installed skill
-                        this.skills.activateAgentSkill(result.skillName);
+                // ── npm package patterns ──────────────────────────────────────
+                // Matches: "npm:xxx", "@scope/name", or "vendor/name" (no dots in vendor)
+                const isNpmRef =
+                    source.startsWith('npm:') ||
+                    /^@[a-z0-9-]+\/[a-z0-9-]+$/i.test(source) ||
+                    /^[a-z0-9-]+\/[a-z0-9-]+$/i.test(source);
+
+                if (isNpmRef && !source.startsWith('http://') && !source.startsWith('https://')) {
+                    const result = await this.skills.installSkillFromNpm(source);
+                    if (result.success) {
+                        // Auto-activate all newly installed skills
+                        const names: string[] = result.skillNames || (result.skillName ? [result.skillName] : []);
+                        for (const name of names) this.skills.activateAgentSkill(name);
                     }
                     return result.message;
-                } else {
-                    const result = await this.skills.installSkillFromPath(source);
+                }
+
+                // ── URL (GitHub, gist, direct .skill, raw SKILL.md) ──────────
+                if (source.startsWith('http://') || source.startsWith('https://')) {
+                    const result = await this.skills.installSkillFromUrl(source);
                     if (result.success && result.skillName) {
                         this.skills.activateAgentSkill(result.skillName);
                     }
                     return result.message;
                 }
+
+                // ── Local path ────────────────────────────────────────────────
+                const result = await this.skills.installSkillFromPath(source);
+                if (result.success && result.skillName) {
+                    this.skills.activateAgentSkill(result.skillName);
+                }
+                return result.message;
             }
         });
 
@@ -2854,11 +3039,50 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
         // Skill: Browser Navigate
         this.skills.registerSkill({
             name: 'browser_navigate',
-            description: 'Navigate to a URL and return a fast readable summary. Use browser_examine_page when you need interactive ref IDs.',
+            description: 'Navigate to a URL and return a fast readable summary. Use browser_examine_page when you need interactive ref IDs. If the site is bot-protected or JS-heavy and returns blank pages, switch to firecrawl_scrape(url) instead (requires firecrawl-cli installed).',
             usage: 'browser_navigate(url, include_snapshot?)',
             handler: async (args: any) => {
                 const url = args.url || args.link || args.site;
                 if (!url) return 'Error: Missing url.';
+
+                // ── browserProvider hook ──────────────────────────────────────
+                // If config.browserProvider is set to 'firecrawl', route through
+                // firecrawl_scrape instead of local Playwright. Falls back to
+                // Playwright if firecrawl is unavailable or returns an error.
+                // Set via: set_config("browserProvider", "firecrawl")
+                // Reset via: set_config("browserProvider", "playwright")
+                const provider = (this.config?.get?.('browserProvider') as string | undefined)?.toLowerCase();
+                if (provider === 'firecrawl') {
+                    try {
+                        const { execSync } = require('child_process');
+                        // Verify firecrawl is installed (fast check)
+                        execSync('firecrawl --version', { stdio: 'ignore', timeout: 4000 });
+                        const { exec } = require('child_process');
+                        const fcResult: string = await new Promise(resolve => {
+                            exec(
+                                `firecrawl scrape "${url.replace(/"/g, '\\"')}" --format markdown --only-main-content`,
+                                { timeout: 90000 },
+                                (_err: any, stdout: string, stderr: string) => {
+                                    const out = (stdout || '').trim();
+                                    resolve(out || (stderr ? `firecrawl error: ${stderr.slice(0, 300)}` : ''));
+                                }
+                            );
+                        });
+                        if (fcResult && !fcResult.startsWith('firecrawl error')) {
+                            const MAX = 12000;
+                            const body = fcResult.length > MAX
+                                ? fcResult.slice(0, MAX) + '\n\n[... truncated by browserProvider=firecrawl]'
+                                : fcResult;
+                            return `[browserProvider: firecrawl] Navigated to ${url}\n\n${body}`;
+                        }
+                        // Fall through to local Playwright on firecrawl failure
+                        logger.warn(`browser_navigate: firecrawl provider failed for ${url}, falling back to Playwright`);
+                    } catch {
+                        logger.warn('browser_navigate: firecrawl not installed, using Playwright');
+                    }
+                }
+                // ── End browserProvider hook ──────────────────────────────────
+
                 const res = await this.browser.navigate(url);
                 if (res.startsWith('Error')) return res;
                 const includeSnapshot = Boolean(args.include_snapshot || args.includeSnapshot || args.semantic || args.snapshot);
@@ -4273,7 +4497,7 @@ Be thorough and academic.`;
         // Skill: Learn User Info
         this.skills.registerSkill({
             name: 'update_user_profile',
-            description: 'Save permanent information learned about the user (name, preferences, habits, goals). Use this PROACTIVELY whenever you learn something new about Frederick.',
+            description: 'Save permanent information learned about the user (name, preferences, habits, goals). Use this PROACTIVELY whenever you learn something new about the user.',
             usage: 'update_user_profile(info_text)',
             handler: async (args: any) => {
                 const info_text = args.info_text || args.info || args.text || args.data;
@@ -6792,6 +7016,13 @@ REFLECTION: <1-2 sentences>`;
 
         eventBus.on('action:queued', (action: Action) => {
             logger.info(`Agent: Noticed new action ${action.id} in queue`);
+            // Trigger immediate processing without waiting for the next scheduler tick.
+            // This ensures channel messages (gateway, Telegram, etc.) are handled ASAP.
+            if (!this.isBusy) {
+                setImmediate(() => this.processNextAction().catch(e =>
+                    logger.error(`Agent: Immediate action trigger error: ${e}`)
+                ));
+            }
         });
 
         // Listen for config changes and reload relevant components
@@ -7031,22 +7262,22 @@ REFLECTION: <1-2 sentences>`;
         }
 
         const idleTimeMs = Date.now() - this.lastActionTime;
-        const heartbeatDue = (Date.now() - this.lastHeartbeatAt) > intervalMinutes * 60 * 1000;
 
-        // SMART COOLING: If last heartbeat was unproductive, exponentially back off
-        // After 3 unproductive heartbeats, wait 2x, then 4x, then 8x the interval
+        // SMART COOLING: If the last heartbeat was unproductive (agent had nothing to do),
+        // back off exponentially — 2×, 4×, up to 8× the base interval — so we don't spam
+        // LLM calls when the agent is genuinely idle with nothing meaningful to do.
+        // When any heartbeat actually does work (goalsMet=true) OR a real user action runs,
+        // processNextAction resets lastHeartbeatProductive=true and consecutiveIdleHeartbeats=0.
         const cooldownMultiplier = this.lastHeartbeatProductive ? 1 : Math.min(8, Math.pow(2, this.consecutiveIdleHeartbeats));
-        const effectiveInterval = intervalMinutes * cooldownMultiplier;
-        const smartHeartbeatDue = (Date.now() - this.lastHeartbeatAt) > effectiveInterval * 60 * 1000;
+        const effectiveIntervalMs = intervalMinutes * cooldownMultiplier * 60 * 1000;
 
-        if (!smartHeartbeatDue) {
-            // Still cooling off
+        if ((Date.now() - this.lastHeartbeatAt) <= effectiveIntervalMs) {
+            // Still within cooldown window
             return;
         }
 
-        if (heartbeatDue) {
-            this.heartbeatRunning = true;
-            try {
+        this.heartbeatRunning = true;
+        try {
             logger.info(`Agent: Heartbeat trigger - Agent idle for ${Math.floor(idleTimeMs / 60000)}m. Cooldown multiplier: ${cooldownMultiplier}x`);
 
             // Check if we have workers available for delegation
@@ -7065,14 +7296,14 @@ REFLECTION: <1-2 sentences>`;
                 this.pushTask(proactivePrompt, 2, { isHeartbeat: true }, 'autonomy');
             }
 
-            // Track productivity
-            this.lastHeartbeatProductive = false; // Will be set true if actual learning/action occurs
+            // Preset productivity to false — processNextAction will set it back to true
+            // once the heartbeat executes and achieves goalsMet=true.
+            this.lastHeartbeatProductive = false;
             this.consecutiveIdleHeartbeats++;
             this.updateLastHeartbeatTime();
             this.lastHeartbeatPushAt = Date.now();
-            } finally {
-                this.heartbeatRunning = false;
-            }
+        } finally {
+            this.heartbeatRunning = false;
         }
     }
 
@@ -9599,7 +9830,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                     this.memory.saveMemory({
                                         id: `${action.id}-step-${currentStep}-skill-loop-guidance`,
                                         type: 'short',
-                                        content: `[SYSTEM: You called '${skillName}' ${callCount} times but it kept failing. The skill EXISTS and works — the problem is that you are passing WRONG PARAMETERS. Review the skill's usage instructions carefully, check what parameters it expects, and try again with correct values. If you cannot determine the right parameters, INFORM THE USER that you need help with this skill.]`,
+                                        content: `[SYSTEM: You called '${skillName}' ${callCount} times but it kept failing. Options:\n1. WRONG PARAMETERS — review the skill usage and retry with corrected args.\n2. SKILL BUG — if the skill itself is broken (e.g. argument shape mismatch, API quirk), use tweak_skill("${skillName}", "<description of the problem>") to auto-generate a patched replacement that will be loaded immediately.\n3. INFORM USER — if neither option is feasible, tell the user what went wrong.]`,
                                         metadata: { actionId: action.id, skill: skillName, failures: failCount }
                                     });
                                 } else {
@@ -9693,7 +9924,13 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                         if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_discord' || toolCall.name === 'send_slack' || toolCall.name === 'send_gateway_chat' ||
                             toolCall.name === 'telegram_send_buttons' || toolCall.name === 'telegram_send_poll') {
-                            const currentMessage = (toolCall.metadata?.message || toolCall.metadata?.text || toolCall.metadata?.question || '').trim();
+                            const isStructuredSend = toolCall.name === 'telegram_send_buttons' || toolCall.name === 'telegram_send_poll';
+                            // For structured messages (buttons/polls) include their payload in the key so that
+                            // same caption text + different buttons/options is NOT treated as a duplicate.
+                            const structuredSuffix = isStructuredSend
+                                ? '|' + JSON.stringify(toolCall.metadata?.buttons ?? toolCall.metadata?.options ?? [])
+                                : '';
+                            const currentMessage = ((toolCall.metadata?.message || toolCall.metadata?.text || toolCall.metadata?.question || '').trim()) + structuredSuffix;
                             totalSendToolsInStep++;
 
                             // 0. HALLUCINATION / TEMPLATE PLACEHOLDER GUARD
@@ -9736,7 +9973,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             // - Step 1 is mandatory (Greeter)
                             // - If no message has been sent yet in this action (first reply must get through)
                             // - If 15+ steps have passed without an update (Status update for long tasks)
-                            if (currentStep > 1 && messagesSent > 0 && !deepToolExecutedSinceLastMessage && stepsSinceLastMessage < 15) {
+                            // - Structured interactive messages (buttons/polls) ARE the substantive delivery;
+                            //   they must never be blocked by the cooldown regardless of prior text sends.
+                            if (!isStructuredSend && currentStep > 1 && messagesSent > 0 && !deepToolExecutedSinceLastMessage && stepsSinceLastMessage < 15) {
                                 logger.warn(`Agent: Blocked redundant message in action ${action.id} (Communication Cooldown - No new deep data).`);
                                 toolsBlockedByCooldown++;
                                 continue;
@@ -9893,7 +10132,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 this.memory.saveMemory({
                                     id: `${action.id}-step-${currentStep}-skill-failure-limit`,
                                     type: 'short',
-                                    content: `[SYSTEM: Skill '${toolCall.name}' has failed ${MAX_CONSECUTIVE_FAILURES} times in a row. STOP using this skill. Try a completely different approach or inform the user that this method isn't working.]`,
+                                    content: `[SYSTEM: Skill '${toolCall.name}' has thrown errors ${MAX_CONSECUTIVE_FAILURES} times in a row. Options:\n1. Use tweak_skill("${toolCall.name}", "<describe what keeps failing>") to generate a patched plugin replacement that loads immediately — this is the PREFERRED recovery for built-in skills with API/argument issues.\n2. Try a completely different approach or fallback skill.\n3. Inform the user the method is not working.]`,
                                     metadata: { actionId: action.id, skill: toolCall.name, failures: skillFailCounts[toolCall.name] }
                                 });
                             }
@@ -9960,12 +10199,20 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         } else {
                             resultIndicatesError = false;
                         }
+                        // Channel send skills (telegram, whatsapp, discord, etc.) are NEVER added to
+                        // blockedFailedSignatures — they can fail transiently (API errors, parse failures)
+                        // and the LLM needs to retry with adjusted content/params.
+                        const isChannelSendSkill = [
+                            'send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat',
+                            'telegram_send_buttons', 'telegram_send_poll', 'telegram_edit_message', 'send_file', 'send_image'
+                        ].includes(toolCall.name);
+
                         if (!nonDeepSkills.includes(toolCall.name) && !resultIndicatesError) {
                             deepToolExecutedSinceLastMessage = true;
                             // Reset failure counter for this skill on success
                             skillFailCounts[toolCall.name] = 0;
                         } else if (resultIndicatesError) {
-                            blockedFailedSignatures.add(toolSignature);
+                            if (!isChannelSendSkill) blockedFailedSignatures.add(toolSignature);
                             // Track ALL tool failures that return error results (not just thrown exceptions)
                             skillFailCounts[toolCall.name] = (skillFailCounts[toolCall.name] || 0) + 1;
                             
@@ -10045,22 +10292,32 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 this.memory.saveMemory({
                                     id: `${action.id}-step-${currentStep}-${toolCall.name}-failure-limit`,
                                     type: 'short',
-                                    content: `[SYSTEM: CRITICAL — '${toolCall.name}' has FAILED ${MAX_CONSECUTIVE_FAILURES} times in a row. STOP using this skill entirely. The approach is NOT working. Either inform the user that you cannot complete this task with the current skill, or try a fundamentally different method.]`,
+                                    content: `[SYSTEM: CRITICAL — '${toolCall.name}' has returned errors ${MAX_CONSECUTIVE_FAILURES} times in a row. STOP calling it with the same approach. Your options:\n1. PATCH IT — call tweak_skill("${toolCall.name}", "<exact description of the error and what to fix>") to generate and load a patched replacement right now.\n2. ALTERNATIVE — use a different skill or method that achieves the same goal.\n3. INFORM USER — explain what failed and ask for guidance.]`,
                                     metadata: { actionId: action.id, skill: toolCall.name, failures: skillFailCounts[toolCall.name] }
                                 });
                             }
                         }
 
+                        // Data-returning tools need more of their output visible so the LLM can
+                        // recognise success/failure without looping. Message/action tools keep a
+                        // tighter cap since their result is just a confirmation string.
+                        const DATA_RETURNING_TOOLS = new Set([
+                            'run_command', 'read_file', 'write_file', 'web_search',
+                            'browser_navigate', 'browser_click', 'http_request',
+                            'find_skills', 'list_files', 'search_files',
+                        ]);
+                        const obsLimit = DATA_RETURNING_TOOLS.has(toolCall.name) ? 1400 : 500;
+
                         let observation: string;
                         if (resultIndicatesError) {
                             const errorDetail = hasStructuredResult && toolResult.error 
                                 ? toolResult.error 
-                                : resultString.slice(0, 400);
+                                : resultString.slice(0, obsLimit);
                             observation = `⚠️ TOOL ERROR: ${toolCall.name} FAILED — ${errorDetail}`;
                         } else if (hasStructuredResult && toolResult.success === true) {
-                            observation = `✅ Tool ${toolCall.name} succeeded: ${resultString.slice(0, 500)}`;
+                            observation = `✅ Tool ${toolCall.name} succeeded: ${resultString.slice(0, obsLimit)}`;
                         } else {
-                            observation = `Observation: Tool ${toolCall.name} returned: ${resultString.slice(0, 500)}`;
+                            observation = `Observation: Tool ${toolCall.name} returned: ${resultString.slice(0, obsLimit)}`;
                         }
                         if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_gateway_chat' || toolCall.name === 'send_discord' || toolCall.name === 'send_slack' ||
                             toolCall.name === 'telegram_send_buttons' || toolCall.name === 'telegram_send_poll') {
@@ -10128,10 +10385,11 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         // so the LLM recognizes that the delivery goal has been met.
                         if (toolCall.name === 'send_file' && !resultIndicatesError) {
                             logger.info(`Agent: File successfully delivered in action ${action.id}. Injecting delivery completion signal.`);
+                            const deliveryChannel = resultString.includes('Gateway Chat') ? 'Gateway Chat' : resultString.includes('Telegram') ? 'Telegram' : resultString.includes('WhatsApp') ? 'WhatsApp' : resultString.includes('Discord') ? 'Discord' : 'channel';
                             this.memory.saveMemory({
                                 id: `${action.id}-step-${currentStep}-file-delivered`,
                                 type: 'short',
-                                content: `[SYSTEM: FILE DELIVERED SUCCESSFULLY via ${resultString.includes('Telegram') ? 'Telegram' : resultString.includes('WhatsApp') ? 'WhatsApp' : 'channel'}. The user has received the file. If the task was to send/deliver/resend this file, the goal is NOW COMPLETE — set goals_met=true. Do NOT re-read or re-send the same file.]`,
+                                content: `[SYSTEM: FILE DELIVERED SUCCESSFULLY via ${deliveryChannel}. The user has received the file. If the task was to send/deliver/resend this file, the goal is NOW COMPLETE — set goals_met=true. Do NOT re-read or re-send the same file.]`,
                                 metadata: { actionId: action.id, step: currentStep, skill: 'send_file', delivered: true }
                             });
                         }
@@ -10189,7 +10447,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 this.memory.saveMemory({
                                     id: `${action.id}-step-${currentStep}-image-generated-send-failed`,
                                     type: 'short',
-                                    content: `[SYSTEM: Image was GENERATED at ${generatedImagePath || 'downloads folder'} but SEND FAILED. Do NOT generate another image. Use the correct channel skill to deliver: send_discord_file(channel_id, "${generatedImagePath}") for Discord, send_slack_file(channel_id, "${generatedImagePath}") for Slack, and send_file(jid, "${generatedImagePath}") for Telegram/WhatsApp.]`,
+                                    content: `[SYSTEM: Image was GENERATED at ${generatedImagePath || 'downloads folder'} but SEND FAILED. Do NOT generate another image. Use the correct channel skill to deliver: send_file("gateway-web", "${generatedImagePath}", "", "gateway-chat") for Gateway Chat, send_discord_file(channel_id, "${generatedImagePath}") for Discord, send_slack_file(channel_id, "${generatedImagePath}") for Slack, and send_file(jid, "${generatedImagePath}") for Telegram/WhatsApp.]`,
                                     metadata: { actionId: action.id, step: currentStep, skill: 'send_image', imageGenerated: true, sendFailed: true }
                                 });
                             }
@@ -10763,6 +11021,23 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
             });
 
             this.actionQueue.updateStatus(action.id, actionStatus);
+
+            // Reset heartbeat idle counters to prevent false exponential backoff accumulation.
+            // • Heartbeat completing with goalsMet=true  → it was productive; reset cooldown.
+            // • Non-heartbeat action completing           → agent is clearly active, not idle.
+            // Only a heartbeat that exits with goalsMet=false (truly nothing to do) should
+            // keep the counter incrementing, to back off genuinely idle periods.
+            if (action.payload?.isHeartbeat) {
+                if (goalsMet) {
+                    this.lastHeartbeatProductive = true;
+                    this.consecutiveIdleHeartbeats = 0;
+                }
+                // !goalsMet → preset false + incremented counter from push time are correct
+            } else {
+                // Real user-sourced or scheduled task completed — agent is active
+                this.lastHeartbeatProductive = true;
+                this.consecutiveIdleHeartbeats = 0;
+            }
 
             // POST-ACTION REFLECTION: Extract learnings and journal entries
             // Run BEFORE cleanup so we still have step memories to analyze

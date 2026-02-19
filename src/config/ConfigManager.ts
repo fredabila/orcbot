@@ -508,7 +508,10 @@ export class ConfigManager {
 
             // Handle relative paths (./something or just filename) - resolve to dataHome
             if (normalized.startsWith('./') || normalized.startsWith('../') || !path.isAbsolute(value)) {
-                const basename = normalized.replace(/^\.\//, '').replace(/^\.\.\//, '');
+                let basename = normalized.replace(/^\.\//, '').replace(/^\.\.\//, '');
+                // Strip leading .orcbot/ — dataHome already IS .orcbot, so prepending it again
+                // would produce double-nesting like ~/.orcbot/.orcbot/memory.json
+                basename = basename.replace(/^\.orcbot\//, '');
                 return path.join(this.dataHome, basename);
             }
 

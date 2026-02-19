@@ -773,6 +773,87 @@
         ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
 
+        /* Security / Token Panel */
+        .token-display {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px 16px;
+            margin-bottom: 16px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 14px;
+            word-break: break-all;
+        }
+
+        .token-display .token-text {
+            flex: 1;
+            letter-spacing: 0.05em;
+            color: var(--accent);
+        }
+
+        .token-display .token-copy-btn {
+            background: none;
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            border-radius: 6px;
+            padding: 4px 10px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+
+        .token-display .token-copy-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .badge.green { background: rgba(34,197,94,0.15); color: var(--accent); }
+        .badge.red { background: rgba(239,68,68,0.15); color: var(--red); }
+        .badge.yellow { background: rgba(234,179,8,0.15); color: var(--yellow); }
+
+        .security-alert {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 14px 16px;
+            border-radius: 10px;
+            font-size: 13px;
+            line-height: 1.5;
+            margin-bottom: 20px;
+        }
+
+        .security-alert.warning {
+            background: rgba(234,179,8,0.1);
+            border: 1px solid rgba(234,179,8,0.3);
+            color: var(--yellow);
+        }
+
+        .security-alert.success {
+            background: rgba(34,197,94,0.1);
+            border: 1px solid rgba(34,197,94,0.3);
+            color: var(--accent);
+        }
+
+        .security-alert.danger {
+            background: rgba(239,68,68,0.1);
+            border: 1px solid rgba(239,68,68,0.3);
+            color: var(--red);
+        }
+
         /* Chat Interface */
         .chat-container {
             display: flex;
@@ -1053,6 +1134,9 @@
             <div class="nav-item" data-page="logs">
                 <i class="fas fa-terminal"></i> Logs
             </div>
+            <div class="nav-item" data-page="security">
+                <i class="fas fa-shield-halved"></i> Security
+            </div>
             <div class="nav-item" data-page="api">
                 <i class="fas fa-compass"></i> API Explorer
             </div>
@@ -1202,10 +1286,27 @@
 
             <!-- Skills Page -->
             <div class="page" id="page-skills">
+                <div class="card" style="margin-bottom: 16px;">
+                    <div class="card-header">
+                        <h3><i class="fas fa-download"></i> Install Skill</h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="task-input-container" style="margin-bottom: 0;">
+                            <input type="text" class="task-input" id="skillsInstallInput" placeholder='e.g. firecrawl/cli  or  npm:some-package  or  https://…/skill.js'>
+                            <button class="btn btn-primary" onclick="installSkillFromSkillsPage()">
+                                <i class="fas fa-download"></i> Install
+                            </button>
+                        </div>
+                        <div id="skillsInstallResult" style="margin-top: 8px; font-size: 13px; color: var(--text-muted);"></div>
+                    </div>
+                </div>
                 <div class="card">
                     <div class="card-header">
                         <h3><i class="fas fa-wand-magic-sparkles"></i> Available Skills</h3>
-                        <span id="skillsCount" style="color: var(--text-muted); font-size: 13px;">-</span>
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <span id="skillsCount" style="color: var(--text-muted); font-size: 13px;">-</span>
+                            <button class="btn btn-secondary" onclick="loadSkills()"><i class="fas fa-refresh"></i></button>
+                        </div>
                     </div>
                     <div class="card-body no-padding">
                         <div class="skills-grid" id="skillsGrid">
@@ -1331,6 +1432,132 @@
                         <div class="log-viewer" id="logViewer">
                             Loading logs...
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Security Page -->
+            <div class="page" id="page-security">
+                <div class="two-col">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3><i class="fas fa-key"></i> Access Token</h3>
+                            <span id="tokenAuthBadge" class="badge">—</span>
+                        </div>
+                        <div class="card-body">
+                            <div id="tokenAlertBanner"></div>
+
+                            <div class="config-row" style="align-items: flex-start; flex-direction: column; gap: 8px;">
+                                <div class="label">Current Token</div>
+                                <div class="sublabel">Partial view for verification. Store the full token securely.</div>
+                                <div class="token-display" id="tokenDisplayBox">
+                                    <span class="token-text" id="tokenPartialEl">—</span>
+                                    <button class="token-copy-btn" onclick="copyStoredApiKey()">
+                                        <i class="fas fa-copy"></i> Copy
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="config-row" style="margin-top: 4px;">
+                                <div>
+                                    <div class="label">Token Length</div>
+                                    <div class="sublabel">Bytes in current token</div>
+                                </div>
+                                <span class="config-value" id="tokenLengthEl">—</span>
+                            </div>
+
+                            <div style="margin-top: 20px; display: flex; gap: 10px; flex-wrap: wrap;">
+                                <button class="btn btn-secondary" onclick="loadSecurity()">
+                                    <i class="fas fa-refresh"></i> Refresh
+                                </button>
+                                <button class="btn btn-danger" onclick="rotateApiToken()">
+                                    <i class="fas fa-rotate"></i> Rotate Token
+                                </button>
+                            </div>
+
+                            <div style="margin-top: 16px; padding: 12px 14px; background: var(--bg-hover); border-radius: 8px; font-size: 12px; color: var(--text-muted); line-height: 1.6;">
+                                <strong style="color: var(--text-dim);">How to use:</strong> Pass via <code>X-Api-Key</code> header or <code>?apiKey=…</code> query param, or store in the browser using "Change" in the Config page.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h3><i class="fas fa-shield-halved"></i> Access Controls</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="config-row">
+                                <div>
+                                    <div class="label">Safe Mode</div>
+                                    <div class="sublabel">Require confirmation for dangerous actions</div>
+                                </div>
+                                <div class="toggle" id="secSafeModeToggle" onclick="toggleSecSafeMode()"></div>
+                            </div>
+                            <div class="config-row">
+                                <div>
+                                    <div class="label">WebSocket Auth</div>
+                                    <div class="sublabel">Token required for WS connections (via ?apiKey=)</div>
+                                </div>
+                                <span class="config-value" id="secWsAuth">—</span>
+                            </div>
+                            <div class="config-row">
+                                <div>
+                                    <div class="label">Rate Limit</div>
+                                    <div class="sublabel">Max requests / minute per IP</div>
+                                </div>
+                                <span class="config-value">180 / min</span>
+                            </div>
+                            <div class="config-row">
+                                <div>
+                                    <div class="label">Timing-Safe Compare</div>
+                                    <div class="sublabel">API key checked with crypto.timingSafeEqual</div>
+                                </div>
+                                <span class="badge green"><i class="fas fa-check"></i> Enabled</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-list-check"></i> Allow / Deny Lists</h3>
+                        <button class="btn btn-secondary" onclick="loadSecurity()">
+                            <i class="fas fa-refresh"></i>
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="two-col">
+                            <div>
+                                <div class="form-group">
+                                    <label>Allowlist (comma-separated task patterns)</label>
+                                    <textarea class="form-input" id="secAllowList" rows="3" placeholder="Leave empty to allow all"></textarea>
+                                </div>
+                            </div>
+                            <div>
+                                <div class="form-group">
+                                    <label>Denylist (comma-separated task patterns)</label>
+                                    <textarea class="form-input" id="secDenyList" rows="3" placeholder="Leave empty to deny nothing"></textarea>
+                                </div>
+                            </div>
+                        </div>
+                        <button class="btn btn-primary" onclick="saveSecurityLists()">
+                            <i class="fas fa-save"></i> Save Lists
+                        </button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-plug"></i> Install Skill from Package</h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="task-input-container">
+                            <input type="text" class="task-input" id="skillInstallInput" placeholder='e.g. firecrawl/cli  or  npm:some-package  or  https://example.com/skill.js'>
+                            <button class="btn btn-primary" onclick="installSkillFromDashboard()">
+                                <i class="fas fa-download"></i> Install
+                            </button>
+                        </div>
+                        <div id="skillInstallResult" style="margin-top: 12px; font-size: 13px; color: var(--text-muted);"></div>
                     </div>
                 </div>
             </div>
@@ -1535,6 +1762,85 @@
     <!-- Toast Container -->
     <div class="toast-container" id="toastContainer"></div>
 
+    <!-- API Key Modal -->
+    <div class="modal-overlay" id="apiKeyModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3><i class="fas fa-key"></i> Set API Key</h3>
+                <button class="modal-close" onclick="closeApiKeyModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size: 13px; color: var(--text-dim); margin-bottom: 16px; line-height: 1.5;">
+                    Enter the gateway API key. It is stored in your browser's localStorage and sent via <code>X-Api-Key</code> header.
+                </p>
+                <div class="form-group">
+                    <label>API Key</label>
+                    <div style="display: flex; gap: 8px;">
+                        <input type="password" class="form-input" id="apiKeyInput" placeholder="Paste your API key here" style="flex: 1;">
+                        <button class="btn btn-secondary" style="padding: 12px 14px;" onclick="toggleApiKeyVisibility()" title="Show/hide">
+                            <i class="fas fa-eye" id="apiKeyEyeIcon"></i>
+                        </button>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <button class="btn btn-primary" style="flex: 1;" onclick="saveApiKeyFromModal()">
+                        <i class="fas fa-save"></i> Save Key
+                    </button>
+                    <button class="btn btn-secondary" onclick="clearApiKey()">
+                        <i class="fas fa-trash"></i> Clear
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Rotate Token Confirm Modal -->
+    <div class="modal-overlay" id="rotateTokenModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3><i class="fas fa-rotate"></i> Rotate API Token</h3>
+                <button class="modal-close" onclick="document.getElementById('rotateTokenModal').classList.remove('active')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="security-alert warning" style="margin-bottom: 12px;">
+                    <i class="fas fa-triangle-exclamation" style="flex-shrink:0;margin-top:2px;"></i>
+                    <span>This will generate a new 64-character random token and invalidate the current one immediately. Update all clients before rotating.</span>
+                </div>
+                <div id="rotateResultBox" style="display:none; margin-bottom:12px;"></div>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn btn-danger" style="flex: 1;" onclick="confirmRotateToken()">
+                        <i class="fas fa-rotate"></i> Confirm Rotate
+                    </button>
+                    <button class="btn btn-secondary" onclick="document.getElementById('rotateTokenModal').classList.remove('active')">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Skill Execute Modal -->
+    <div class="modal-overlay" id="skillExecModal">
+        <div class="modal" style="max-width: 600px;">
+            <div class="modal-header">
+                <h3><i class="fas fa-play"></i> Execute: <span id="skillExecName">—</span></h3>
+                <button class="modal-close" onclick="document.getElementById('skillExecModal').classList.remove('active')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="execSkillName">
+                <div class="form-group">
+                    <label>Arguments (JSON)</label>
+                    <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px;" id="skillExecUsageHint"></div>
+                    <textarea class="form-input" id="skillExecArgs" rows="4" placeholder='{"arg1": "value"}'>{}</textarea>
+                </div>
+                <button class="btn btn-primary" style="width: 100%; margin-bottom: 12px;" onclick="runSkillExecution()">
+                    <i class="fas fa-play"></i> Run
+                </button>
+                <div id="skillExecResult" class="log-viewer" style="display:none; max-height:260px; overflow-y:auto; white-space:pre-wrap; word-break:break-all;"></div>
+            </div>
+        </div>
+    </div>
+
     <script>
         // State
         let apiKey = localStorage.getItem('orcbot_api_key') || '';
@@ -1606,6 +1912,7 @@
                 orchestrator: 'Orchestrator',
                 channels: 'Channels',
                 logs: 'Logs',
+                security: 'Security',
                 api: 'API Explorer',
                 config: 'Configuration',
                 chat: 'Chat'
@@ -1619,6 +1926,7 @@
             if (page === 'orchestrator') loadOrchestrator();
             if (page === 'channels') loadChannels();
             if (page === 'logs') loadLogs();
+            if (page === 'security') loadSecurity();
             if (page === 'api') loadApiExplorer();
             if (page === 'config') loadConfig();
             if (page === 'chat') loadChatHistory();
@@ -1658,6 +1966,10 @@
                     // Handle chat messages sent directly as { type: 'chat:message', ... }
                     if (data.type === 'chat:message') {
                         handleIncomingChatMessage(data);
+                    }
+                    // Handle file/image deliveries from the agent
+                    if (data.type === 'chat:file') {
+                        handleIncomingChatFile(data);
                     }
                     if (data.type === 'chat:cleared') {
                         handleChatCleared();
@@ -1794,15 +2106,91 @@
                     return;
                 }
 
-                grid.innerHTML = skills.map(s => `
-                    <div class="skill-card" title="${escapeHtml(s.usage || '')}">
-                        <div class="skill-name">${escapeHtml(s.name)}</div>
-                        <div class="skill-desc">${escapeHtml(s.description || 'No description')}</div>
-                        <div class="skill-type">${s.source || 'core'}</div>
-                    </div>
-                `).join('');
+                grid.innerHTML = skills.map(s => {
+                    const isPlugin = !!s.isPlugin;
+                    const badge = isPlugin
+                        ? `<span class="badge yellow" style="font-size:10px;"><i class="fas fa-plug"></i> plugin</span>`
+                        : `<span style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;">core</span>`;
+                    const deleteBtn = isPlugin
+                        ? `<button class="btn btn-danger" style="padding:3px 8px;font-size:11px;" onclick="deleteSkill('${escapeHtml(s.name)}')" title="Uninstall plugin skill"><i class="fas fa-trash"></i></button>`
+                        : '';
+                    return `
+                        <div class="skill-card">
+                            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;margin-bottom:6px;">
+                                <div class="skill-name" style="margin-bottom:0;">${escapeHtml(s.name)}</div>
+                                ${badge}
+                            </div>
+                            <div class="skill-desc">${escapeHtml(s.description || 'No description')}</div>
+                            <div style="font-family:monospace;font-size:11px;color:var(--text-muted);margin-top:8px;word-break:break-all;">${escapeHtml(s.usage || '')}</div>
+                            <div style="display:flex;gap:6px;margin-top:10px;">
+                                <button class="btn btn-secondary" style="flex:1;padding:5px 8px;font-size:11px;" onclick="openSkillExecute('${escapeHtml(s.name)}','${escapeHtml(s.usage || '')}')">
+                                    <i class="fas fa-play"></i> Execute
+                                </button>
+                                ${deleteBtn}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
             } catch (e) {
                 console.error('Failed to load skills:', e);
+            }
+        }
+
+        function openSkillExecute(name, usage) {
+            document.getElementById('skillExecName').textContent = name;
+            document.getElementById('skillExecUsageHint').textContent = usage ? `Usage: ${usage}` : '';
+            document.getElementById('skillExecArgs').value = '{}';
+            document.getElementById('skillExecResult').style.display = 'none';
+            document.getElementById('skillExecModal').classList.add('active');
+            document.getElementById('execSkillName').value = name;
+        }
+
+        async function runSkillExecution() {
+            const name = document.getElementById('execSkillName').value;
+            const argsRaw = document.getElementById('skillExecArgs').value.trim();
+            const resultBox = document.getElementById('skillExecResult');
+            let args = {};
+            if (argsRaw && argsRaw !== '{}') {
+                try { args = JSON.parse(argsRaw); } catch { showToast('Invalid JSON args', 'error'); return; }
+            }
+            resultBox.style.display = 'block';
+            resultBox.innerHTML = `<span style="color:var(--text-muted);">Running ${escapeHtml(name)}…</span>`;
+            try {
+                const data = await api(`/skills/${encodeURIComponent(name)}/execute`, {
+                    method: 'POST', body: JSON.stringify(args)
+                });
+                resultBox.innerHTML = `<pre style="white-space:pre-wrap;word-break:break-all;font-size:12px;margin:0;">${escapeHtml(JSON.stringify(data.result ?? data, null, 2))}</pre>`;
+            } catch (e) {
+                resultBox.innerHTML = `<span style="color:var(--red);">${escapeHtml(String(e?.message || e))}</span>`;
+            }
+        }
+
+        async function deleteSkill(name) {
+            if (!confirm(`Uninstall plugin skill '${name}'? This deletes the plugin file.`)) return;
+            try {
+                const data = await api(`/skills/${encodeURIComponent(name)}`, { method: 'DELETE' });
+                showToast(data.message || (data.success ? 'Uninstalled' : 'Failed'), data.success ? 'success' : 'error');
+                loadSkills();
+            } catch (e) { showToast('Uninstall failed', 'error'); }
+        }
+
+        async function installSkillFromSkillsPage() {
+            const input = document.getElementById('skillsInstallInput');
+            const result = document.getElementById('skillsInstallResult');
+            const packageRef = input?.value.trim();
+            if (!packageRef) { showToast('Enter a package reference', 'error'); return; }
+            if (result) result.textContent = `Installing ${packageRef}…`;
+            try {
+                const data = await api('/skills/install', { method: 'POST', body: JSON.stringify({ packageRef }) });
+                if (result) {
+                    result.style.color = data.installed ? 'var(--accent)' : 'var(--red)';
+                    result.textContent = data.message || (data.installed ? 'Installed!' : 'Failed');
+                }
+                if (data.installed) { showToast('Skill installed!'); loadSkills(); if (input) input.value = ''; }
+                else showToast(data.message || 'Install failed', 'error');
+            } catch (e) {
+                if (result) { result.style.color = 'var(--red)'; result.textContent = String(e?.message || e); }
+                showToast('Install failed', 'error');
             }
         }
 
@@ -2296,7 +2684,7 @@
             container.innerHTML = '';
             
             chatMessages.forEach(msg => {
-                const messageEl = createChatMessage(msg.role, msg.content, msg.timestamp);
+                const messageEl = createChatMessage(msg.role, msg.content, msg.timestamp, msg.imageData, msg.imageType, msg.imageName);
                 container.appendChild(messageEl);
             });
 
@@ -2309,14 +2697,13 @@
             scrollChatToBottom();
         }
 
-        function createChatMessage(role, content, timestamp) {
+        function createChatMessage(role, content, timestamp, imageData, imageType, imageName) {
             const messageDiv = document.createElement('div');
             messageDiv.className = `chat-message ${role}`;
             
             const avatar = role === 'user' ? '👤' : '🤖';
             const time = timestamp ? new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
             
-            // Create elements to avoid XSS
             const avatarDiv = document.createElement('div');
             avatarDiv.className = 'chat-message-avatar';
             avatarDiv.textContent = avatar;
@@ -2326,7 +2713,36 @@
             
             const bubbleDiv = document.createElement('div');
             bubbleDiv.className = 'chat-message-bubble';
-            bubbleDiv.textContent = content; // Use textContent to avoid XSS
+
+            if (imageData) {
+                // Inline image/file rendering
+                const isImage = (imageType || '').startsWith('image/');
+                if (isImage) {
+                    const img = document.createElement('img');
+                    img.src = `data:${imageType};base64,${imageData}`;
+                    img.alt = imageName || 'Image';
+                    img.style.cssText = 'max-width:100%;max-height:400px;border-radius:8px;display:block;cursor:pointer;';
+                    img.title = 'Click to open full size';
+                    img.onclick = () => window.open(img.src, '_blank');
+                    bubbleDiv.appendChild(img);
+                    if (content && content !== imageName) {
+                        const captionEl = document.createElement('p');
+                        captionEl.style.cssText = 'margin:6px 0 0;font-size:0.85em;opacity:0.8;';
+                        captionEl.textContent = content;
+                        bubbleDiv.appendChild(captionEl);
+                    }
+                } else {
+                    // Non-image file: show download link
+                    const a = document.createElement('a');
+                    a.href = `data:${imageType || 'application/octet-stream'};base64,${imageData}`;
+                    a.download = imageName || 'file';
+                    a.textContent = `📎 ${imageName || 'Download file'}`;
+                    a.style.cssText = 'color:inherit;text-decoration:underline;';
+                    bubbleDiv.appendChild(a);
+                }
+            } else {
+                bubbleDiv.textContent = content;
+            }
             
             contentDiv.appendChild(bubbleDiv);
             
@@ -2436,6 +2852,24 @@
             }
         }
 
+        function handleIncomingChatFile(data) {
+            if (!data.data) return;
+            const exists = data.messageId && chatMessages.some(msg => msg.messageId === data.messageId);
+            if (!exists) {
+                chatMessages.push({
+                    role: data.role || 'assistant',
+                    content: data.caption || data.fileName || 'File',
+                    imageData: data.data,
+                    imageType: data.fileType || 'image/png',
+                    imageName: data.fileName || 'image.png',
+                    timestamp: data.timestamp || new Date().toISOString(),
+                    messageId: data.messageId || `file-${Date.now()}`
+                });
+                isTyping = false;
+                renderChatMessages();
+            }
+        }
+
         function handleChatCleared() {
             chatMessages = [];
             isTyping = false;
@@ -2478,7 +2912,217 @@
             }
         });
 
-        // Modals
+        function openApiKeyModal() {
+            const modal = document.getElementById('apiKeyModal');
+            const input = document.getElementById('apiKeyInput');
+            if (input) { input.value = apiKey || ''; input.type = 'password'; }
+            const eye = document.getElementById('apiKeyEyeIcon');
+            if (eye) { eye.className = 'fas fa-eye'; }
+            modal.classList.add('active');
+            setTimeout(() => input && input.focus(), 100);
+        }
+
+        function closeApiKeyModal() {
+            document.getElementById('apiKeyModal').classList.remove('active');
+        }
+
+        function toggleApiKeyVisibility() {
+            const input = document.getElementById('apiKeyInput');
+            const icon = document.getElementById('apiKeyEyeIcon');
+            if (!input) return;
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.className = 'fas fa-eye-slash';
+            } else {
+                input.type = 'password';
+                icon.className = 'fas fa-eye';
+            }
+        }
+
+        function saveApiKeyFromModal() {
+            const input = document.getElementById('apiKeyInput');
+            const key = input ? input.value.trim() : '';
+            apiKey = key;
+            if (key) {
+                localStorage.setItem('orcbot_api_key', key);
+                showToast('API key saved — reconnecting...');
+            } else {
+                localStorage.removeItem('orcbot_api_key');
+                showToast('API key cleared');
+            }
+            closeApiKeyModal();
+            connectWS();
+            refreshAll();
+        }
+
+        function clearApiKey() {
+            document.getElementById('apiKeyInput').value = '';
+            apiKey = '';
+            localStorage.removeItem('orcbot_api_key');
+            showToast('API key cleared');
+            closeApiKeyModal();
+            connectWS();
+        }
+
+        // === Security Page ===
+        let _rotatedToken = null;
+
+        async function loadSecurity() {
+            try {
+                const data = await api('/gateway/token/status');
+                const badge = document.getElementById('tokenAuthBadge');
+                const partial = document.getElementById('tokenPartialEl');
+                const lengthEl = document.getElementById('tokenLengthEl');
+                const alertBanner = document.getElementById('tokenAlertBanner');
+                const wsAuth = document.getElementById('secWsAuth');
+                const safeModeToggle = document.getElementById('secSafeModeToggle');
+
+                if (badge) {
+                    badge.className = `badge ${data.authEnabled ? 'green' : 'red'}`;
+                    badge.innerHTML = data.authEnabled
+                        ? '<i class="fas fa-lock"></i> Auth Enabled'
+                        : '<i class="fas fa-unlock"></i> Open (No Auth)';
+                }
+
+                if (partial) partial.textContent = data.tokenPartial || '— not set —';
+                if (lengthEl) lengthEl.textContent = data.tokenLength ? `${data.tokenLength} chars` : '—';
+
+                if (alertBanner) {
+                    if (!data.authEnabled) {
+                        alertBanner.innerHTML = `
+                            <div class="security-alert warning">
+                                <i class="fas fa-triangle-exclamation" style="flex-shrink:0;margin-top:2px;"></i>
+                                <span><strong>Gateway is open!</strong> Anyone with network access can control your agent. Click <em>Rotate Token</em> to generate an API key.</span>
+                            </div>`;
+                    } else {
+                        alertBanner.innerHTML = `
+                            <div class="security-alert success">
+                                <i class="fas fa-shield-halved" style="flex-shrink:0;margin-top:2px;"></i>
+                                <span>Authentication is active. Use the token stored in your browser via the Config page.</span>
+                            </div>`;
+                    }
+                }
+
+                if (wsAuth) wsAuth.textContent = data.authEnabled ? 'Required' : 'Not required';
+
+                // Sync safe mode toggle
+                const cfg = await api('/config');
+                if (safeModeToggle) {
+                    safeModeToggle.classList.toggle('active', !!(cfg.config?.safeMode));
+                }
+
+                // Load allow/deny lists
+                const secData = await api('/security');
+                if (document.getElementById('secAllowList')) {
+                    document.getElementById('secAllowList').value = (secData.allowList || []).join(', ');
+                }
+                if (document.getElementById('secDenyList')) {
+                    document.getElementById('secDenyList').value = (secData.denyList || []).join(', ');
+                }
+            } catch (e) {
+                console.error('Failed to load security info:', e);
+            }
+        }
+
+        function rotateApiToken() {
+            _rotatedToken = null;
+            const resultBox = document.getElementById('rotateResultBox');
+            if (resultBox) { resultBox.style.display = 'none'; resultBox.innerHTML = ''; }
+            document.getElementById('rotateTokenModal').classList.add('active');
+        }
+
+        async function confirmRotateToken() {
+            const resultBox = document.getElementById('rotateResultBox');
+            try {
+                const data = await api('/gateway/token/rotate', { method: 'POST' });
+                _rotatedToken = data.token || null;
+
+                if (resultBox) {
+                    resultBox.style.display = 'block';
+                    resultBox.innerHTML = `
+                        <div class="security-alert success">
+                            <i class="fas fa-check-circle" style="flex-shrink:0;margin-top:2px;"></i>
+                            <div>
+                                <strong>New Token (copy now!):</strong><br>
+                                <span style="font-family:monospace;word-break:break-all;font-size:12px;">${escapeHtml(data.token || '')}</span>
+                            </div>
+                        </div>
+                        <button class="btn btn-secondary" style="margin-top:8px;width:100%;" onclick="applyRotatedToken()">
+                            <i class="fas fa-key"></i> Save &amp; Use This Token
+                        </button>`;
+                }
+                showToast('Token rotated! Save it now.');
+                loadSecurity();
+            } catch (e) {
+                if (resultBox) {
+                    resultBox.style.display = 'block';
+                    resultBox.innerHTML = `<div class="security-alert danger"><i class="fas fa-xmark"></i> <span>Rotation failed: ${escapeHtml(String(e?.message || e))}</span></div>`;
+                }
+            }
+        }
+
+        function applyRotatedToken() {
+            if (!_rotatedToken) return;
+            apiKey = _rotatedToken;
+            localStorage.setItem('orcbot_api_key', _rotatedToken);
+            showToast('New token saved to browser — reconnecting...');
+            document.getElementById('rotateTokenModal').classList.remove('active');
+            connectWS();
+        }
+
+        function copyStoredApiKey() {
+            const key = apiKey || localStorage.getItem('orcbot_api_key') || '';
+            if (!key) { showToast('No API key stored in browser', 'error'); return; }
+            navigator.clipboard.writeText(key).then(() => showToast('Token copied to clipboard')).catch(() => {
+                prompt('Copy token:', key);
+            });
+        }
+
+        async function toggleSecSafeMode() {
+            const toggle = document.getElementById('secSafeModeToggle');
+            const newValue = !toggle.classList.contains('active');
+            try {
+                await api('/security', { method: 'PUT', body: JSON.stringify({ safeMode: newValue }) });
+                toggle.classList.toggle('active', newValue);
+                showToast(`Safe mode ${newValue ? 'enabled' : 'disabled'}`);
+                // Keep Config page toggle in sync
+                const cfgToggle = document.getElementById('safeModeToggle');
+                if (cfgToggle) cfgToggle.classList.toggle('active', newValue);
+            } catch (e) { showToast('Failed to update', 'error'); }
+        }
+
+        async function saveSecurityLists() {
+            const allowRaw = (document.getElementById('secAllowList')?.value || '').trim();
+            const denyRaw = (document.getElementById('secDenyList')?.value || '').trim();
+            const allowList = allowRaw ? allowRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+            const denyList = denyRaw ? denyRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+            try {
+                await api('/security', { method: 'PUT', body: JSON.stringify({ allowList, denyList }) });
+                showToast('Access lists saved');
+            } catch (e) { showToast('Failed to save', 'error'); }
+        }
+
+        async function installSkillFromDashboard() {
+            const input = document.getElementById('skillInstallInput');
+            const result = document.getElementById('skillInstallResult');
+            const packageRef = input?.value.trim();
+            if (!packageRef) { showToast('Enter a package reference', 'error'); return; }
+            if (result) result.textContent = `Installing ${packageRef}…`;
+            try {
+                const data = await api('/skills/install', { method: 'POST', body: JSON.stringify({ packageRef }) });
+                if (result) {
+                    result.style.color = data.installed ? 'var(--accent)' : 'var(--red)';
+                    result.textContent = data.message || (data.installed ? 'Installed!' : 'Failed');
+                }
+                if (data.installed) { showToast(`Skill installed!`); loadSkills(); }
+                else showToast(data.message || 'Install failed', 'error');
+            } catch (e) {
+                if (result) { result.style.color='var(--red)'; result.textContent = String(e?.message || e); }
+                showToast('Install failed', 'error');
+            }
+        }
+
+        // Modal helpers
         function openTaskModal() {
             document.getElementById('taskModal').classList.add('active');
             document.getElementById('modalTaskInput').value = '';
@@ -2487,16 +3131,6 @@
 
         function closeTaskModal() {
             document.getElementById('taskModal').classList.remove('active');
-        }
-
-        function openApiKeyModal() {
-            const key = prompt('Enter API Key:');
-            if (key !== null) {
-                apiKey = key;
-                localStorage.setItem('orcbot_api_key', key);
-                showToast('API key saved');
-                refreshAll();
-            }
         }
 
         // Utils
@@ -2518,6 +3152,18 @@
 
         document.getElementById('taskModal').addEventListener('click', e => {
             if (e.target.id === 'taskModal') closeTaskModal();
+        });
+
+        document.getElementById('apiKeyModal').addEventListener('click', e => {
+            if (e.target.id === 'apiKeyModal') closeApiKeyModal();
+        });
+
+        document.getElementById('rotateTokenModal').addEventListener('click', e => {
+            if (e.target.id === 'rotateTokenModal') document.getElementById('rotateTokenModal').classList.remove('active');
+        });
+
+        document.getElementById('skillExecModal').addEventListener('click', e => {
+            if (e.target.id === 'skillExecModal') document.getElementById('skillExecModal').classList.remove('active');
         });
 
         // Load initial data

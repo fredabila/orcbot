@@ -657,6 +657,9 @@ program
     .description('Start the agent autonomous loop (checks for daemon conflicts)')
     .option('-d, --daemon', 'Run in background as a daemon')
     .option('-b, --background', 'Run in background (nohup-style)')
+    .option('--with-gateway', 'Also start the web gateway server (overrides gatewayAutoStart config)')
+    .option('--no-gateway', 'Disable gateway auto-start even if gatewayAutoStart is set in config')
+    .option('-s, --gateway-static <path>', 'Path to static files for the gateway dashboard (default: apps/dashboard)')
     .option('--daemon-child', 'Internal: run as daemon child', false)
     .option('--background-child', 'Internal: run as background child', false)
     .action(async (options) => {
@@ -731,10 +734,33 @@ program
             return;
         }
 
+        // Determine whether to also start the gateway server.
+        // Priority: --with-gateway flag > --no-gateway flag > 'gatewayAutoStart' config key.
+        const gatewayAutoStartConfig = agent.config.get('gatewayAutoStart');
+        const shouldStartGateway = options.withGateway ||
+            (!options.noGateway && (gatewayAutoStartConfig === true || gatewayAutoStartConfig === 'true'));
+
+        const startGatewayIfNeeded = async () => {
+            if (!shouldStartGateway) return;
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            const { GatewayServer } = require('../gateway/GatewayServer');
+            const port = parseInt(String(agent.config.get('gatewayPort') || '3100'));
+            const host = String(agent.config.get('gatewayHost') || '0.0.0.0');
+            const apiKey = agent.config.get('gatewayApiKey');
+            const staticDir = options.gatewayStatic || agent.config.get('gatewayStaticDir') || undefined;
+            const gateway = new GatewayServer(agent, agent.config, { port, host, apiKey, staticDir });
+            await gateway.start();
+            gateway.setAgentLoopStarted(true);
+            logger.info(`Gateway server started on ${host}:${port} (auto-start via run command)`);
+            console.log(`🌐 Gateway server listening on http://${host}:${port}`);
+            process.on('SIGINT', () => { gateway.stop(); process.exit(0); });
+        };
+
         if (options.daemon || options.daemonChild) {
             // Daemon mode - check already handled in daemonize() method
             daemonManager.daemonize();
             logger.info('Agent loop starting in daemon mode...');
+            await startGatewayIfNeeded();
             await agent.start();
         } else {
             // Foreground mode - check if daemon is already running
@@ -751,6 +777,7 @@ program
             }
             
             console.log('Agent loop starting... (Press Ctrl+C to stop)');
+            await startGatewayIfNeeded();
             await agent.start();
         }
     });

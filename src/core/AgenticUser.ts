@@ -64,7 +64,7 @@ const DEFAULT_CONFIG: AgenticUserConfig = {
     responseDelay: 120,               // 2 minutes — gives the user a chance
     confidenceThreshold: 70,           // Only intervene when fairly sure
     proactiveGuidance: true,
-    proactiveStepThreshold: 8,         // After 8 steps without progress
+    proactiveStepThreshold: 15,        // After 15 steps without a clear resolution signal
     checkIntervalSeconds: 30,          // Check every 30 seconds
     maxInterventionsPerAction: 3,      // Don't over-intervene
     restrictedCategories: [
@@ -406,38 +406,14 @@ export class AgenticUser {
             this.postInterventionCooldown.set(action.id, Date.now());
             logger.info(`AgenticUser: Intervention applied for action ${action.id} (confidence: ${evaluation.confidence}%). Response: "${evaluation.response.slice(0, 100)}..."`);
         } else {
-            // Below threshold or restricted — log but don't intervene
+            // Below threshold or restricted — log but never auto-resume.
+            // Applying a vague "go ahead" safeDefault would resume actions the agent put on hold
+            // deliberately, and the LLM always produces a safeDefault, so it would fire on every
+            // waiting action — causing runaway re-execution cycles.
             const reason = evaluation.restricted
                 ? `restricted category (${evaluation.restrictedReason})`
                 : `low confidence (${evaluation.confidence}%)`;
-            logger.info(`AgenticUser: Skipped intervention for action ${action.id}: ${reason}`);
-            
-            // If significantly below threshold, provide a safe default instead
-            if (evaluation.confidence < this.settings.confidenceThreshold && evaluation.safeDefault) {
-                // Re-verify status before applying safe default too
-                const stillWaiting = this.actionQueue.getAction(action.id);
-                if (!stillWaiting || stillWaiting.status !== 'waiting') {
-                    logger.info(`AgenticUser: Action ${action.id} resolved before safe-default could apply. Discarding.`);
-                    this.interventionLog.push(intervention);
-                    this.saveInterventionLog();
-                    return;
-                }
-
-                const defaultIntervention: AgenticUserIntervention = {
-                    ...intervention,
-                    type: 'direction-guidance',
-                    response: evaluation.safeDefault,
-                    confidence: evaluation.confidence,
-                };
-                await this.applyIntervention(action, evaluation.safeDefault, defaultIntervention);
-                defaultIntervention.applied = true;
-                this.interventionCounts.set(action.id, interventionCount + 1);
-                this.postInterventionCooldown.set(action.id, Date.now());
-                logger.info(`AgenticUser: Applied safe-default guidance for action ${action.id}: "${evaluation.safeDefault.slice(0, 100)}..."`);
-                this.interventionLog.push(defaultIntervention);
-                this.saveInterventionLog();
-                return;
-            }
+            logger.info(`AgenticUser: Skipped intervention for action ${action.id}: ${reason}. Not applying safe-default (would cause unintentional re-runs).`);
         }
 
         this.interventionLog.push(intervention);
@@ -476,7 +452,24 @@ export class AgenticUser {
 
         // Detect stuck signals
         const stuckSignals = this.detectStuckSignals(actionMemories);
-        if (stuckSignals.length === 0) return;
+
+        // Require at least 2 concurrent stuck signals before intervening — a single signal
+        // (e.g. repeated tool calls during normal polling) is not reliable enough and causes
+        // spurious guidance injections that kick off unintended re-run cycles.
+        if (stuckSignals.length < 2) {
+            logger.debug(`AgenticUser: Only ${stuckSignals.length} stuck signal(s) for action ${action.id} — need ≥2. Skipping.`);
+            return;
+        }
+
+        // Also require the action to have been running for at least the responseDelay duration
+        // before we consider it truly stuck (brand-new actions are never "stuck").
+        const actionStartedAt = Date.parse(action.timestamp) || 0;
+        const runningForSeconds = (Date.now() - actionStartedAt) / 1000;
+        const minRunningSeconds = this.settings.responseDelay;
+        if (runningForSeconds < minRunningSeconds) {
+            logger.debug(`AgenticUser: Action ${action.id} has only been running ${Math.round(runningForSeconds)}s (min: ${minRunningSeconds}s). Too early to call it stuck.`);
+            return;
+        }
 
         logger.info(`AgenticUser: Stuck signals detected for action ${action.id}: ${stuckSignals.join(', ')}`);
 
@@ -983,15 +976,7 @@ Respond with ONLY the guidance text. No JSON, no formatting, just the message.`;
             }
         }
 
-        // 3. No messaging tools used (agent working silently)
-        const hasMessaged = recent.some(m =>
-            m.metadata?.tool?.startsWith('send_')
-        );
-        if (!hasMessaged && recent.length >= 5) {
-            signals.push('no user communication in last 5+ steps');
-        }
-
-        // 4. Planning-only turns (journal/learning updates without real work)
+        // 3. Planning-only turns (journal/learning updates without real work)
         const planningTools = ['update_journal', 'update_learning', 'update_user_profile'];
         const planningOnly = recent.filter(m =>
             planningTools.includes(m.metadata?.tool)

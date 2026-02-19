@@ -109,7 +109,7 @@ export class PollingManager {
             currentJobData.attempts++;
             const attempts = currentJobData.attempts;
 
-            logger.debug(`PollingManager: Job "${job.id}" - attempt ${attempts}`);
+            logger.info(`PollingManager: Job "${job.id}" — attempt ${attempts} (${job.description})`);
 
             if (job.onProgress) {
                 job.onProgress(job.id, attempts);

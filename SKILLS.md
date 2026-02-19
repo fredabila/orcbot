@@ -31,6 +31,7 @@ This file lists the available skills for the agent.
 - **set_config(key, value)**: Persist configuration values.
 - **manage_skills(skill_definition)**: Append new skill definitions to SKILLS.md.
 - **self_repair_skill(skillName, errorMessage)**: Diagnose and fix a failing plugin skill.
+- **tweak_skill(skillName, issue, fix?)**: Patch any skill — built-in or plugin — that keeps failing. Generates and saves a replacement wrapper plugin, reloads it immediately. Use when a core skill has a fixable argument-shape or API error.
 - **install_npm_dependency(packageName)**: Install an NPM package for custom skills.
 
 ## Browser & Web

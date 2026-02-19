@@ -27,7 +27,8 @@ export class ProfileHelper implements PromptHelper {
     getPrompt(ctx: PromptHelperContext): string {
         let prompt = `HUMAN-LIKE CONTEXT BUILDING:
 - **Proactive Context Building**: Whenever you learn something new about a user (interests, career, schedule, preferences), you MUST use the 'update_user_profile' skill to persist it.
-- **Autonomous Error Recovery**: If a custom skill (plugin) returns an error or behaves unexpectedly, you SHOULD attempt to fix it using the 'self_repair_skill(skillName, errorMessage)' instead of just reporting the failure.`;
+- **Autonomous Error Recovery**: If a custom skill (plugin) returns an error or behaves unexpectedly, you SHOULD attempt to fix it using the 'self_repair_skill(skillName, errorMessage)' instead of just reporting the failure.
+- **Core Skill Patching**: If a built-in core skill keeps failing (e.g. telegram_send_buttons, send_telegram, run_command) and you understand the problem, use 'tweak_skill(skillName, issue, fix?)' to automatically generate and apply a patched version. The patch saves persistently and takes effect immediately.`;
 
         if (ctx.contactProfile) {
             prompt += `\n\nCONTACT PROFILE (Learned Knowledge):\n${ctx.contactProfile}`;

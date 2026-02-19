@@ -115,14 +115,20 @@ export class GatewayServer {
      */
     private async handleChatMessage(message: string, metadata: any = {}): Promise<string> {
         const messageId = this.generateMessageId();
-        
+
+        // Ensure a stable sourceId so session scoping, thread context, and waiting-action
+        // resume all work correctly. Fall back to 'gateway-web' if the client didn't supply one.
+        const sourceId: string = metadata.sourceId || metadata.clientId || 'gateway-web';
+
+        logger.info(`Gateway Chat: message received (${messageId.slice(0, 8)}): "${message.slice(0, 80)}${message.length > 80 ? '...' : ''}"`);
+
         // Save user message to memory
         this.agent.memory.saveMemory({
             id: messageId,
             type: 'short',
             content: `User (Gateway Chat): ${message}`,
             timestamp: new Date().toISOString(),
-            metadata: { source: 'gateway-chat', role: 'user', ...metadata }
+            metadata: { source: 'gateway-chat', sourceId, role: 'user', ...metadata }
         });
 
         // Push task to agent to respond
@@ -131,6 +137,7 @@ export class GatewayServer {
             10,
             {
                 source: 'gateway-chat',
+                sourceId,
                 expectResponse: true,
                 messageId,
                 ...metadata
@@ -224,8 +231,19 @@ export class GatewayServer {
 
             const authHeader = (req.headers['authorization'] || '').toString();
             const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
-            const providedKey = req.headers['x-api-key'] || req.query.apiKey || bearer;
-            if (providedKey !== apiKey) {
+            const providedKey = String(req.headers['x-api-key'] || req.query.apiKey || bearer || '');
+            let authenticated = false;
+            try {
+                if (providedKey.length > 0 && providedKey.length === apiKey.length) {
+                    authenticated = crypto.timingSafeEqual(
+                        Buffer.from(providedKey, 'utf8'),
+                        Buffer.from(apiKey, 'utf8')
+                    );
+                }
+            } catch {
+                authenticated = false;
+            }
+            if (!authenticated) {
                 return res.status(401).json({
                     error: 'Invalid or missing API key',
                     requestId: (req as any).requestId
@@ -271,7 +289,8 @@ export class GatewayServer {
         return {
             auth: {
                 apiKeyRequired: !!this.gatewayConfig.apiKey,
-                acceptedHeaders: ['x-api-key', 'authorization: Bearer <key>']
+                acceptedHeaders: ['x-api-key', 'authorization: Bearer <key>'],
+                timingSafe: true
             },
             transport: {
                 restBase: '/api',
@@ -279,12 +298,14 @@ export class GatewayServer {
             },
             api: {
                 status: ['GET /api/status', 'GET /api/health', 'GET /api/gateway/capabilities', 'GET /api/system/info'],
+                security: ['GET /api/gateway/token/status', 'POST /api/gateway/token/rotate'],
                 tasks: ['POST /api/tasks', 'GET /api/tasks', 'GET /api/tasks/:id', 'POST /api/tasks/:id/cancel', 'POST /api/tasks/clear', 'GET /api/queue/stats'],
                 chat: ['POST /api/chat/send', 'GET /api/chat/history', 'GET /api/chat/export', 'POST /api/chat/clear'],
                 memory: ['GET /api/memory', 'GET /api/memory/stats', 'GET /api/memory/search'],
-                runtime: ['GET /api/models', 'PUT /api/models', 'GET /api/providers', 'GET /api/tokens', 'GET /api/connections', 'GET /api/tools', 'GET /api/security', 'PUT /api/security'],
+                runtime: ['GET /api/models', 'PUT /api/models', 'GET /api/providers', 'GET /api/tokens', 'GET /api/connections', 'GET /api/tools', 'GET /api/security', 'PUT /api/security', 'GET /api/config', 'GET /api/config/:key', 'PUT /api/config/:key'],
                 orchestrator: ['GET /api/orchestrator/agents', 'GET /api/orchestrator/tasks', 'POST /api/orchestrator/tasks/:id/cancel', 'POST /api/orchestrator/agents/:id/terminate'],
-                skills: ['GET /api/skills', 'POST /api/skills/:name/execute', 'GET /api/skills/health']
+                skills: ['GET /api/skills', 'POST /api/skills/install', 'POST /api/skills/:name/execute', 'DELETE /api/skills/:name', 'GET /api/skills/health'],
+                logs: ['GET /api/logs']
             },
             websocketActions: [
                 'subscribe', 'pushTask', 'executeSkill', 'cancelAction', 'clearActionQueue',
@@ -352,6 +373,42 @@ export class GatewayServer {
 
         router.get('/gateway/capabilities', (_req: Request, res: Response) => {
             res.json(this.getGatewayCapabilities());
+        });
+
+        // ===== GATEWAY TOKEN MANAGEMENT =====
+        router.get('/gateway/token/status', (_req: Request, res: Response) => {
+            const token = this.gatewayConfig.apiKey || this.config.get('gatewayApiKey');
+            const isSet = !!token;
+            const partial = isSet && token!.length >= 8
+                ? `${token!.slice(0, 4)}${'*'.repeat(Math.max(0, token!.length - 8))}${token!.slice(-4)}`
+                : (isSet ? '****' : null);
+            res.json({
+                authEnabled: isSet,
+                tokenPartial: partial,
+                tokenLength: isSet ? token!.length : 0,
+                hint: isSet
+                    ? 'Authentication is enabled. Pass token via X-Api-Key header or ?apiKey= query param.'
+                    : 'No API key configured — gateway is open. Set gatewayApiKey in config or POST /api/gateway/token/rotate to generate one.'
+            });
+        });
+
+        router.post('/gateway/token/rotate', (_req: Request, res: Response) => {
+            try {
+                const newToken = crypto.randomBytes(32).toString('hex');
+                this.config.set('gatewayApiKey', newToken);
+                // Hot-update the running instance
+                this.gatewayConfig.apiKey = newToken;
+                const partial = `${newToken.slice(0, 4)}${'*'.repeat(newToken.length - 8)}${newToken.slice(-4)}`;
+                logger.info('Gateway: API token rotated via /gateway/token/rotate');
+                res.json({
+                    success: true,
+                    message: 'Token rotated. Copy it now — it will not be shown again in full.',
+                    token: newToken,
+                    tokenPartial: partial
+                });
+            } catch (error: any) {
+                res.status(500).json({ error: error.message });
+            }
         });
 
         router.get('/system/info', (_req: Request, res: Response) => {
@@ -469,6 +526,36 @@ export class GatewayServer {
             try {
                 const health = await this.agent.skills.checkPluginsHealth();
                 res.json(health);
+            } catch (error: any) {
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        router.post('/skills/install', async (req: Request, res: Response) => {
+            try {
+                const { packageRef } = req.body;
+                if (!packageRef || typeof packageRef !== 'string') {
+                    return res.status(400).json({ error: 'packageRef is required (e.g. "firecrawl/cli", "npm:some-package", or a URL)' });
+                }
+                if (typeof (this.agent.skills as any).installSkillFromNpm === 'function') {
+                    const result = await (this.agent.skills as any).installSkillFromNpm(packageRef);
+                    return res.json(result);
+                }
+                return res.status(501).json({ error: 'Skill install not available in this build' });
+            } catch (error: any) {
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        router.delete('/skills/:name', (req: Request, res: Response) => {
+            try {
+                const { name } = req.params;
+                const skill = this.agent.skills.getAllSkills().find(s => s.name === name);
+                if (!skill) return res.status(404).json({ error: `Skill '${name}' not found` });
+                if (!skill.pluginPath) return res.status(403).json({ error: `Skill '${name}' is a built-in and cannot be removed` });
+                const message = this.agent.skills.uninstallSkill(name);
+                const success = message.startsWith('Successfully');
+                res.json({ success, message });
             } catch (error: any) {
                 res.status(500).json({ error: error.message });
             }
@@ -977,6 +1064,11 @@ export class GatewayServer {
 
         // Listen for gateway chat responses from the agent
         eventBus.on('gateway:chat:response', (data: any) => {
+            this.broadcast(data);
+        });
+
+        // Listen for gateway file deliveries (images, documents) from the agent
+        eventBus.on('gateway:chat:file', (data: any) => {
             this.broadcast(data);
         });
     }

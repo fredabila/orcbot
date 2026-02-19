@@ -34,7 +34,7 @@ export class MemoryManager {
     private consolidationBatch: number = 20;
     private memoryFlushSoftThreshold: number = 25;  // Trigger flush at this many memories
     private memoryFlushCooldownMinutes: number = 30; // Min minutes between flushes
-    private memoryContentMaxLength: number = 500;    // Hard truncation for stored content
+    private memoryContentMaxLength: number = 1500;   // Hard truncation for stored content (1500 allows full tool observations; step memories are ephemeral)
     private memoryExtendedContextLimit: number = 2000; // Max chars of long-term memory in extended context
 
     constructor(dbPath: string = './memory.json', userPath: string = './USER.md') {
