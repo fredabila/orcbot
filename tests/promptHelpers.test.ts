@@ -190,6 +190,18 @@ describe('ToolingHelper - Enhanced', () => {
         expect(prompt).toContain('Shell awareness');
     });
 
+    it('should include timeout recovery guidance for run_command', () => {
+        const prompt = helper.getPrompt(makeContext());
+        expect(prompt).toContain('run_command timeout recovery (MANDATORY)');
+        expect(prompt).toContain('timeoutBackoffFactor');
+    });
+
+    it('should include environment bootstrap guidance for missing audio tooling', () => {
+        const prompt = helper.getPrompt(makeContext());
+        expect(prompt).toContain('Environment bootstrap expectation');
+        expect(prompt).toContain('Audio-first adaptation');
+    });
+
     it('should include CLI interactivity guidance', () => {
         const prompt = helper.getPrompt(makeContext());
         expect(prompt).toContain('CLI tool interactivity');
