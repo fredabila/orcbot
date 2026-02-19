@@ -2047,8 +2047,8 @@ export class Agent {
         // Skill: Run Shell Command
         this.skills.registerSkill({
             name: 'run_command',
-            description: 'Execute a shell command on the server. On Windows, commands run in PowerShell — use PowerShell syntax (Get-ChildItem, Get-Command, Start-MpScan, etc.), NOT cmd.exe syntax (dir, where, etc.). For file creation, use write_file skill. To run commands in a specific directory, pass cwd parameter.',
-            usage: 'run_command(command, cwd?)',
+            description: 'Execute a shell command on the server. On Windows, commands run in PowerShell — use PowerShell syntax (Get-ChildItem, Get-Command, Start-MpScan, etc.), NOT cmd.exe syntax (dir, where, etc.). For file creation, use write_file skill. To run commands in a specific directory, pass cwd parameter. For long-running commands, tune timeoutMs/retries and timeoutBackoffFactor to adapt to slower environments.',
+            usage: 'run_command(command, cwd?, timeoutMs?, retries?, timeoutBackoffFactor?, maxTimeoutMs?)',
             handler: async (args: any) => {
                 let command = args.command || args.cmd || args.text;
                 if (!command) return 'Error: Missing command string.';
@@ -2136,12 +2136,14 @@ export class Agent {
                     }
                 }
 
-                const timeoutMs = parseInt(args.timeoutMs || args.timeout || this.config.get('commandTimeoutMs') || 120000, 10);
+                const baseTimeoutMs = parseInt(args.timeoutMs || args.timeout || this.config.get('commandTimeoutMs') || 120000, 10);
                 const retries = parseInt(args.retries || this.config.get('commandRetries') || 1, 10);
+                const timeoutBackoffFactor = Number(args.timeoutBackoffFactor || this.config.get('commandTimeoutBackoffFactor') || 1.5);
+                const maxTimeoutMs = parseInt(args.maxTimeoutMs || this.config.get('commandMaxTimeoutMs') || 600000, 10);
 
                 const { exec } = require('child_process');
 
-                const runOnce = () => new Promise<string>((resolve) => {
+                const runOnce = (attemptTimeoutMs: number) => new Promise<string>((resolve) => {
                     const execOptions: any = { cwd: workingDir };
                     // On Windows, use PowerShell as the shell so PowerShell cmdlets work.
                     // Do NOT pass the `timeout` option here on Windows — it relies on SIGKILL
@@ -2153,7 +2155,7 @@ export class Agent {
                         clearTimeout(killTimer);
                         if (error) {
                             if (error.killed || timedOut) {
-                                resolve(`Error: Command timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
+                                resolve(`Error: Command timed out after ${Math.round(attemptTimeoutMs / 1000)} seconds.`);
                                 return;
                             }
                             resolve(`Error: ${error.message}\nStderr: ${stderr}`);
@@ -2178,7 +2180,7 @@ export class Agent {
                         } else {
                             child.kill('SIGKILL');
                         }
-                    }, timeoutMs);
+                    }, attemptTimeoutMs);
 
                     child.on('error', (err: any) => {
                         clearTimeout(killTimer);
@@ -2189,11 +2191,15 @@ export class Agent {
                 let attempt = 0;
                 let lastResult = '';
                 while (attempt <= retries) {
-                    lastResult = await runOnce();
+                    const attemptTimeoutMs = Math.min(
+                        maxTimeoutMs,
+                        Math.max(1000, Math.round(baseTimeoutMs * Math.pow(Math.max(timeoutBackoffFactor, 1), attempt)))
+                    );
+                    lastResult = await runOnce(attemptTimeoutMs);
                     if (!lastResult.startsWith('Error:')) return lastResult;
                     attempt++;
                     if (attempt <= retries) {
-                        logger.warn(`run_command retry ${attempt}/${retries} after error: ${lastResult}`);
+                        logger.warn(`run_command retry ${attempt}/${retries} (timeout=${attemptTimeoutMs}ms) after error: ${lastResult}`);
                     }
                 }
 
