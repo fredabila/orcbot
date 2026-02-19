@@ -788,7 +788,14 @@ export class MultiLLM {
                         }
                     }
                 ]
-            }]
+            }],
+            ...(this.isGoogleComputerUseModel(model)
+                ? {
+                    // Computer-use preview models reject requests that do not explicitly
+                    // enable the computer use tool, even for screenshot analysis.
+                    tools: [{ computer_use: {} }]
+                }
+                : {})
         };
 
         try {
@@ -815,6 +822,11 @@ export class MultiLLM {
             logger.error(`MultiLLM Google Media Error: ${error}`);
             throw error;
         }
+    }
+
+    private isGoogleComputerUseModel(model: string): boolean {
+        const lower = (model || '').toLowerCase();
+        return lower.includes('computer-use') || lower.includes('computer_use');
     }
 
     private async analyzeMediaOpenAI(filePath: string, prompt: string): Promise<string> {
