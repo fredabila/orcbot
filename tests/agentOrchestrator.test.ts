@@ -52,4 +52,22 @@ describe('AgentOrchestrator spawnAgent capability normalization', () => {
         expect(agent.capabilities).toContain('execute');
         expect(agent.capabilities).not.toContain(' Execute ');
     });
+
+    it('ignores non-string capability values without throwing', () => {
+        const dir = makeTempDir('orcbot-orch-');
+        dirs.push(dir);
+
+        const orchestrator = new AgentOrchestrator(dir, 'primary-test');
+        const agent = orchestrator.spawnAgent({
+            name: 'worker-c',
+            role: 'worker',
+            capabilities: [1, true, { key: 'value' }, ' Search '] as unknown as string[]
+        });
+
+        expect(agent.capabilities).toContain('execute');
+        expect(agent.capabilities).toContain('1');
+        expect(agent.capabilities).toContain('true');
+        expect(agent.capabilities).toContain('[object object]');
+        expect(agent.capabilities).toContain('search');
+    });
 });

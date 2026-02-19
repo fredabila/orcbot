@@ -129,10 +129,10 @@ export class AgentOrchestrator extends EventEmitter {
     /**
      * Spawn a new agent instance as a child process
      */
-    private normalizeCapabilities(input?: string[]): string[] {
+    private normalizeCapabilities(input?: unknown[]): string[] {
         const normalized = new Set(
             (input || [])
-                .map(cap => (cap || '').trim().toLowerCase())
+                .map(cap => String(cap ?? '').trim().toLowerCase())
                 .filter(Boolean)
         );
 
