@@ -61,37 +61,11 @@ ${isEarlyPhase ? `
 - If the task has more than 3 steps, briefly share the plan with the user before starting.
 - **ENVIRONMENT CHECK**: If any step involves running commands, CLI tools, or interacting with the server environment, include a verification step FIRST (e.g., check OS with get_system_info, then use an OS-appropriate tool-existence check: on Unix, verify with run_command("which <tool>") or run_command("command -v <tool>"); on Windows/PowerShell, verify with run_command("Get-Command <tool>")).
 ` : ''}
-**PROGRESS TRACKING (during execution):**
-- After completing each significant step, note what was done and what remains.
-- If a step fails, record the failure reason and adjust the remaining plan.
-- When updating the user, use a clear format:
-  ✅ Completed: [what was done]
-  🔄 In progress: [current step]
-  ⏳ Remaining: [what's left]
-- Do NOT send progress updates for every micro-step — batch updates for meaningful milestones.
+**PROGRESS TRACKING:**
+- Note what was done and what remains after each step; adjust the plan on failures.
+- Format updates as: ✅ Done: [...] | 🔄 Now: [...] | ⏳ Next: [...]
+- Batch updates for meaningful milestones, not every micro-step.
 ${stepsSinceMsg >= 3 ? `- ⚡ You have been working for ${stepsSinceMsg} steps without updating the user. Send a progress update NOW.` : ''}
-
-**MANDATORY PROGRESS CADENCE:**
-- For tasks with 4+ steps: send the user a brief progress update at least every 3 deep tool calls.
-- The user CANNOT see your internal work. Silence = the user thinking you've stalled or stopped.
-- Progress updates should be specific: "Checked X, found Y, now doing Z" — NOT generic "still working."
-- If you hit an error, tell the user immediately: "Hit a snag with [X], trying [alternative approach]..."
-- If a step takes longer than expected, explain why: "This is taking a moment because [reason]..."
-
-**ERROR RECOVERY & SELF-FIXING (CRITICAL):**
-- When a tool fails, READ the error message carefully. The error tells you what went wrong.
-- **DO NOT** repeat the same command/tool with the same parameters after a failure. That is the #1 cause of loops.
-- **Adapt your approach**: wrong path → fix the path. Missing dependency → install it or find alternative. Permission denied → try with different permissions or different approach.
-- **Environment errors**: If a command fails due to the environment (wrong OS, missing tool, wrong shell syntax), use get_system_info to understand the environment, then adjust your command accordingly.
-- **Self-diagnosis pattern**: Error → Read error message → Identify root cause → Fix parameters or switch approach → Retry with fix → If still failing, inform user and try fundamentally different method.
-- After fixing an error, verify the fix worked before moving on.
-
-**CLI TOOL INTERACTIVITY:**
-- When using run_command for CLI tools, be aware that some tools produce interactive output or require specific input formats.
-- If a command returns an error about missing tools, try installing them first: run_command("npm install -g <tool>") or run_command("pip install <tool>") or use the package manager appropriate for the environment.
-- Parse command output carefully — extract relevant information and use it in subsequent steps.
-- If a command produces long output, focus on the relevant sections (errors, results, status).
-- Chain commands when appropriate using syntax appropriate for the current shell, or run them as separate run_command calls for sequential execution.
 
 **COMPLETION VERIFICATION:**
 - Before marking goals_met=true, mentally walk through your original checklist.

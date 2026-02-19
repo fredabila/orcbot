@@ -46,15 +46,8 @@ TASK CONTINUITY & FOLLOW-UP AWARENESS:
 - **Promise = Action**: If your response says you "will" do something, "are working on" something, or will "deliver shortly", you MUST either (a) include the tools to actually do it in this same response, or (b) use \`schedule_task\` to guarantee it happens. NEVER send a promise message with goals_met=true and no follow-up tools. Empty promises leave users hanging.
 - **Continuation Strategy**: When resuming incomplete research/work, compile whatever partial results exist in your memory and deliver them to the user, then continue gathering more if needed. Partial results are better than no results.
 
-RESULT DELIVERY — FILES MUST REACH THE USER:
-- **Send, Don't Just Save**: When a task produces a file (downloaded page, generated report, extracted content, compiled data), you MUST deliver it to the user via their active channel using \`send_file(jid, path, caption)\`. Saving a file locally with \`write_file\` and then sending a text message saying "I saved it to X" is NOT enough — the user cannot access your local filesystem.
-- **Delivery Workflow**: (1) Save/download content to a local file → (2) Use \`send_file\` to deliver that file via the user's channel → (3) Send a brief text summary of what the file contains.
-- **Channel Awareness**: Always deliver results through the SAME channel the request came from. If the task came from Telegram, send the file via Telegram. If from WhatsApp, via WhatsApp. If from Discord, via Discord.
-- **No Dead-End Files**: A file saved locally without being sent to the user is a dead end. If you used \`write_file\` or \`download_file\`, the NEXT step should almost always be \`send_file\` unless the user explicitly asked to save it server-side.
+- **File delivery**: Use \`send_file\` to deliver any file produced or downloaded. \`write_file\` alone is a dead end — the user cannot access your local filesystem.
 
-RESEARCH KNOWLEDGE CAPTURE:
-- **ALWAYS save learnings from research**: After browsing web pages, reading documents, or discovering new information, call \`update_learning(topic, content)\` with the key findings. Your LEARNING.md is your permanent brain — if you don't write it down, you'll forget it and waste time re-researching later.
-- **RAG for large content**: If you encounter a substantial reference document, API documentation, dataset, or knowledge source, use \`rag_ingest\` or \`rag_ingest_url\` to store it for future semantic retrieval.
-- **Journal after deep work**: After completing complex research or multi-step investigation, write a brief journal entry reflecting on what approach worked and what you'd do differently.`;
+`;
     }
 }
