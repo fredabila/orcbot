@@ -49,6 +49,11 @@ describe('TaskChecklistHelper', () => {
         expect(helper.shouldActivate(makeContext({ taskDescription: 'do X and also handle Y' }))).toBe(true);
     });
 
+    it('should activate for looser sequencing phrasing', () => {
+        expect(helper.shouldActivate(makeContext({ taskDescription: 'set up the repo, then run tests' }))).toBe(true);
+        expect(helper.shouldActivate(makeContext({ taskDescription: 'install deps and configure env and run checks' }))).toBe(true);
+    });
+
     it('should NOT activate for simple tasks', () => {
         expect(helper.shouldActivate(makeContext({ taskDescription: 'hello' }))).toBe(false);
         expect(helper.shouldActivate(makeContext({ taskDescription: 'what time is it' }))).toBe(false);
@@ -88,6 +93,11 @@ describe('PollingHelper', () => {
     it('should activate for retry-related tasks', () => {
         expect(helper.shouldActivate(makeContext({ taskDescription: 'retry the upload' }))).toBe(true);
         expect(helper.shouldActivate(makeContext({ taskDescription: 'try again in a few minutes' }))).toBe(true);
+    });
+
+    it('should activate for broader polling phrasings', () => {
+        expect(helper.shouldActivate(makeContext({ taskDescription: 'let me know when the service is back up' }))).toBe(true);
+        expect(helper.shouldActivate(makeContext({ taskDescription: 'wait until deployment is complete' }))).toBe(true);
     });
 
     it('should activate when monitoring skills have been used', () => {

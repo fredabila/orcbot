@@ -129,6 +129,22 @@ export class AgentOrchestrator extends EventEmitter {
     /**
      * Spawn a new agent instance as a child process
      */
+    private normalizeCapabilities(input?: string[]): string[] {
+        const normalized = new Set(
+            (input || [])
+                .map(cap => (cap || '').trim().toLowerCase())
+                .filter(Boolean)
+        );
+
+        // Workers should remain task-executable even when custom capabilities are
+        // provided from loose user input (e.g. "browser,search" without "execute").
+        if (normalized.size === 0 || !normalized.has('execute')) {
+            normalized.add('execute');
+        }
+
+        return Array.from(normalized);
+    }
+
     public spawnAgent(config: {
         name: string;
         role: string;
@@ -148,7 +164,7 @@ export class AgentOrchestrator extends EventEmitter {
             name: config.name,
             role: config.role,
             parentId: config.parentId || this.primaryAgentId,
-            capabilities: config.capabilities || ['execute'],
+            capabilities: this.normalizeCapabilities(config.capabilities),
             status: 'idle',
             currentTask: null,
             createdAt: new Date().toISOString(),

@@ -40,8 +40,13 @@ export class TaskChecklistHelper implements PromptHelper {
         // Activate for long task descriptions (likely complex)
         if (task.length > 120) return true;
 
-        // Activate when task contains conjunctions suggesting multiple actions
-        if (/\b(and then|and also|as well as|in addition|plus|along with)\b/.test(task)) return true;
+        // Activate when task contains conjunctions/sequencing suggesting multiple actions
+        const sequencingMatches = task.match(/\b(and then|and also|as well as|in addition|plus|along with|followed by|before that|after that|finally|next|then)\b/g) || [];
+        if (sequencingMatches.length >= 1) return true;
+
+        // Broader fallback for compact instructions like: "do X, Y, and Z"
+        const connectorMatches = task.match(/\b(and|then)\b/g) || [];
+        if (connectorMatches.length >= 2) return true;
 
         return false;
     }

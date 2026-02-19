@@ -306,13 +306,13 @@ Rules:
         }
 
         // Broad action-verb detection (covers creative phrasings the keyword lists missed)
-        const hasActionIntent = /\b(make|do|get|give|help|put|show|figure|work|handle|take\s+care|sort\s+out|come\s+up\s+with|hook\s+.+up|throw|set|run|start|launch|open|try)\b/.test(task);
+        const hasActionIntent = /\b(make|do|get|give|help|put|show|figure|work|handle|take\s+care|sort\s+out|come\s+up\s+with|hook\s+.+up|throw|set|run|start|launch|open|try|spin\s+up|stand\s+up|wire\s+up|build\s+out)\b/.test(task);
         // Question/information-seeking intent
-        const hasQuestionIntent = /\b(what|how|why|where|when|who|which|can\s+you|could\s+you|is\s+there|tell\s+me|explain|describe)\b/.test(task);
+        const hasQuestionIntent = /\b(what|how|why|where|when|who|which|can\s+you|could\s+you|can\s+u|is\s+there|tell\s+me|explain|describe|any\s+idea|thoughts\s+on)\b/.test(task);
         // Polling/monitoring intent — route to polling helper
-        const hasPollingIntent = /\b(wait\s+for|monitor|watch\s+for|poll|check\s+if|notify\s+me\s+when|alert\s+me|keep\s+checking|retry|is\s+it\s+ready|is\s+it\s+done)\b/.test(task);
+        const hasPollingIntent = /\b(wait\s+for|wait\s+until|monitor|watch\s+for|poll|check\s+if|check\s+whether|notify\s+me\s+when|let\s+me\s+know\s+when|alert\s+me|keep\s+checking|retry|try\s+again|is\s+it\s+ready|is\s+it\s+done|status\s+of|keep\s+an\s+eye\s+on)\b/.test(task);
         // Multi-step/checklist intent — route to task-checklist helper
-        const hasChecklistIntent = /\b(step\s+by\s+step|break\s+down|checklist|multiple\s+steps|first.*then|plan\s+out|track\s+progress)\b/.test(task);
+        const hasChecklistIntent = /\b(step\s+by\s+step|break\s+down|checklist|multiple\s+steps|first.*then|plan\s+out|track\s+progress|walk\s+me\s+through|phased\s+approach|one\s+step\s+at\s+a\s+time)\b/.test(task);
 
         if (hasActionIntent) {
             // Action tasks most often need dev or research guidance
