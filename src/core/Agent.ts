@@ -96,7 +96,6 @@ export class Agent {
     private lastHeartbeatProductive: boolean = true;
     private heartbeatRunning: boolean = false;
     private lastHeartbeatPushAt: number = 0;
-    private lastHeartbeatMessageSentAt: number = 0; // When a heartbeat last actually sent a message to the user
     private lastUserActivityAt: number = 0;
     private maxStepFallbackCount: number = 0;
     private delayRiskHighCount: number = 0;
@@ -4518,29 +4517,30 @@ Be thorough and academic.`;
             }
         });
 
-        // Skill: Evolve Identity (legacy .AI.md compatibility)
+        // Skill: Evolve Identity — writes to IDENTITY.md (bootstrap single source of truth)
         this.skills.registerSkill({
             name: 'update_agent_identity',
-            description: 'Update your own identity, personality, or name. Provide a snippet or a full block. Deprecated: Use update_bootstrap_file("IDENTITY.md", content) instead.',
+            description: 'Update your own identity, personality, or name. Writes to IDENTITY.md. Provide a full markdown block to replace, or a short trait to append.',
             usage: 'update_agent_identity(trait)',
             handler: async (args: any) => {
                 const trait = args.trait || args.info || args.text;
                 if (!trait) return 'Error: Missing trait information.';
 
-                const identityPath = this.config.get('agentIdentityPath');
                 try {
-                    // If the trait looks like a full block or a specific name update, we overwrite/restructure.
+                    // Full replacement: trait is a complete markdown block
                     if (trait.startsWith('#') || trait.includes('Name:')) {
-                        fs.writeFileSync(identityPath, trait.trim());
+                        this.bootstrap.updateFile('IDENTITY.md', trait.trim());
                         this.loadAgentIdentity();
-                        return `Identity completely redefined at ${identityPath}.`;
+                        return 'Identity completely redefined in IDENTITY.md.';
                     } else {
-                        fs.appendFileSync(identityPath, `\n- Learned Trait: ${trait}`);
+                        // Append a learned trait to existing IDENTITY.md
+                        const current = this.bootstrap.getFile('IDENTITY.md') || '';
+                        this.bootstrap.updateFile('IDENTITY.md', current + `\n- Learned Trait: ${trait}`);
                         this.loadAgentIdentity();
-                        return `Successfully added trait to agent identity at ${identityPath}: "${trait}"`;
+                        return `Added trait to IDENTITY.md: "${trait}"`;
                     }
                 } catch (e) {
-                    return `Failed to update identity at ${identityPath}: ${e}`;
+                    return `Failed to update IDENTITY.md: ${e}`;
                 }
             }
         });
@@ -5647,12 +5647,18 @@ Be thorough and academic.`;
     }
 
     private loadAgentIdentity() {
-        if (fs.existsSync(this.agentConfigFile)) {
+        // Primary: IDENTITY.md (bootstrap system — single source of truth)
+        const bootstrapIdentity = this.bootstrap?.getFile('IDENTITY.md');
+        if (bootstrapIdentity && bootstrapIdentity.trim()) {
+            this.agentIdentity = bootstrapIdentity;
+            logger.info('Agent identity loaded from IDENTITY.md (bootstrap)');
+        } else if (fs.existsSync(this.agentConfigFile)) {
+            // Legacy fallback: .AI.md — only used if IDENTITY.md doesn't exist yet
             this.agentIdentity = fs.readFileSync(this.agentConfigFile, 'utf-8');
-            logger.info(`Agent identity loaded from ${this.agentConfigFile}`);
+            logger.warn(`IDENTITY.md not found — falling back to legacy ${this.agentConfigFile}`);
         } else {
             this.agentIdentity = "You are a capable, direct autonomous agent. Be natural and concise — not a customer service bot.";
-            logger.warn(`${this.agentConfigFile} not found. Using default identity.`);
+            logger.warn('No identity file found. Using default identity.');
         }
         this.decisionEngine.setAgentIdentity(this.agentIdentity);
     }
@@ -7472,19 +7478,6 @@ REFLECTION: <1-2 sentences>`;
         const idleHours = Math.floor(idleMinutes / 60);
         const autonomyLevel = idleHours >= 4 ? 'high' : idleHours >= 1 ? 'moderate' : 'low';
 
-        // ── 10b. Last heartbeat message age ──
-        const lastMsgAgeMs = this.lastHeartbeatMessageSentAt > 0 ? now - this.lastHeartbeatMessageSentAt : -1;
-        const lastMsgAgeStr = lastMsgAgeMs < 0
-            ? 'never (no heartbeat message sent yet this session)'
-            : lastMsgAgeMs < 3600_000
-                ? `${Math.floor(lastMsgAgeMs / 60000)} minutes ago`
-                : `${Math.round(lastMsgAgeMs / 3600_000 * 10) / 10} hours ago`;
-        const messagingBarNote = lastMsgAgeMs >= 0 && lastMsgAgeMs < 14400_000
-            ? `⚠️  A heartbeat message was sent ${lastMsgAgeStr}. The bar for sending ANOTHER message is VERY HIGH — only message if you have specific new actionable information that was NOT included in the previous message.`
-            : lastMsgAgeMs < 0
-                ? `No heartbeat message has been sent yet this session.`
-                : `Last heartbeat message was ${lastMsgAgeStr} — messaging bar is normal.`;
-
         // ── 11. Available channels summary (skills are provided by the DecisionEngine, not duplicated here) ──
         const channelSkills = [];
         if (this.telegram) channelSkills.push('send_telegram');
@@ -7527,6 +7520,18 @@ ${userContext ? `\nUSER PROFILE:\n${userContext.slice(0, 300)}` : ''}
 ${journalTail ? `\nJOURNAL (recent):\n${journalTail.slice(0, 400)}` : ''}
 ${learningTail ? `\nKNOWLEDGE BASE (recent):\n${learningTail.slice(0, 400)}` : ''}
 ═══════════════════════════════════════════
+
+⚠️  IDLE-TERMINATION RULE (read this before anything else):
+If you look at the context above and find:
+  • No unresolved user requests
+  • No failed or overdue tasks
+  • No stale conversations awaiting a reply
+  • No world-event signal that is directly, concretely actionable for THIS user right now
+  • No scheduled item that is due or imminently due
+→ Call goals_met: true IMMEDIATELY. Do NOT send any message. Do NOT announce your presence.
+Messages like "OrcBot online and ready", "All systems nominal", "Awaiting tasks", "Just checking in",
+or any variation of a status ping are STRICTLY PROHIBITED. They provide zero value and annoy the user.
+Only send a channel message if you have something SPECIFIC and USEFUL to say.
 
 You are an autonomous agent with full capabilities. You have TWO modes of thinking:
 
@@ -7601,13 +7606,14 @@ ${autonomyLevel === 'low' ? '- Short idle. Prefer reacting to recent context ove
 🔧 **YOUR FULL TOOLSET**: All your skills are listed in the "Available Skills" section of the system prompt above. Use whichever tools best serve the task.
 
 **HARD RULES:**
+- ❌ NEVER send a message that only says you are online, running, ready, or awaiting tasks. This is explicitly banned.
+- ❌ NEVER send a greeting or acknowledgement at the start of a heartbeat. The user knows you are running.
 - Never be performative. Every action must create real value.
-- **STATUS-ONLY MESSAGES ARE BANNED.** Do NOT send any message whose primary content is just announcing you are online, running, or available — e.g. "OrcBot online and ready", "All systems nominal", "Awaiting tasks", "Just checking in", "I'm here if you need me", or any similar content-free announcement. These offer zero value to the user and are noise. If that's all you have to say, set goals_met: true and terminate silently.
-- If you message the user, have something worth reading. No "just checking in" without substance.
-- ${messagingBarNote}
+- If you message the user, have something specific and worth reading. No "just checking in" without substance.
 - Don't repeat actions that recently failed unless you have a NEW strategy.
 - Keep world-event usage contextual: no generic doomscroll summaries; only tie events to user-relevant impact or planning.
-- If nothing meaningful to do, terminate cleanly (goals_met: true). Silence is better than noise.
+- When in doubt, DO NOTHING and terminate with goals_met: true. Silence is better than noise.
+- If you cannot find a genuinely useful task within the first few steps, stop immediately. Do not fabricate busy-work.
 `;
     }
 
@@ -11100,12 +11106,6 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                 if (goalsMet) {
                     this.lastHeartbeatProductive = true;
                     this.consecutiveIdleHeartbeats = 0;
-                }
-                // Track when a heartbeat last sent a message — used by buildSmartHeartbeatPrompt
-                // to enforce a high bar for re-messaging when a send already happened recently.
-                if (messagesSent > 0) {
-                    this.lastHeartbeatMessageSentAt = Date.now();
-                    logger.debug(`Agent: Heartbeat sent ${messagesSent} message(s) — lastHeartbeatMessageSentAt updated`);
                 }
                 // !goalsMet → preset false + incremented counter from push time are correct
             } else {
