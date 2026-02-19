@@ -634,7 +634,37 @@ If the user asks for an opinion, explanation, summary, or normal chat response, 
                 .filter(m => {
                     const md: any = (m as any)?.metadata || {};
                     if (sessionScopeId) {
-                        return md.sessionScopeId?.toString() === sessionScopeId.toString();
+                        // Primary: direct sessionScopeId match (inbound messages + recent outbound)
+                        if (md.sessionScopeId?.toString() === sessionScopeId.toString()) return true;
+                        // Fallback for outbound assistant messages: they are saved without
+                        // sessionScopeId (the skill handler doesn't have access to it), but
+                        // they DO carry source + chatId.  Include them so the LLM can see its
+                        // own prior replies when reconstructing the conversation thread.
+                        if (md.role === 'assistant' && (md.source || '').toLowerCase() === source) {
+                            if (source === 'telegram') {
+                                return telegramChatId != null && md.chatId?.toString() === telegramChatId.toString();
+                            }
+                            if (source === 'whatsapp') {
+                                return sourceId != null && (
+                                    md.senderId?.toString() === sourceId.toString() ||
+                                    md.sourceId?.toString() === sourceId.toString() ||
+                                    md.chatId?.toString()   === sourceId.toString()
+                                );
+                            }
+                            if (source === 'discord') {
+                                return sourceId != null && (
+                                    md.channelId?.toString() === sourceId.toString() ||
+                                    md.sourceId?.toString()  === sourceId.toString()
+                                );
+                            }
+                            if (source === 'gateway-chat') {
+                                return sourceId != null && (
+                                    md.chatId?.toString()   === sourceId.toString() ||
+                                    md.sourceId?.toString() === sourceId.toString()
+                                );
+                            }
+                        }
+                        return false;
                     }
                     return md.source && (md.source || '').toString().toLowerCase() === source;
                 })

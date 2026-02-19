@@ -37,12 +37,14 @@ CURRENT DATE & TIME:
             bootstrapContext += `\n## OPERATING INSTRUCTIONS (from AGENTS.md)\n${ctx.bootstrapContext.AGENTS}\n`;
         }
 
-        return `You are a highly intelligent, autonomous AI Agent. Your persona and identity are defined below.
-        
-YOUR IDENTITY:
-${ctx.agentIdentity || 'You are a capable, direct autonomous agent with a natural conversational style.'}
+        // Only render the legacy YOUR IDENTITY block when IDENTITY.md bootstrap content is absent.
+        // When IDENTITY.md is present it's already injected as bootstrapContext below — no duplicate.
+        const identityBlock = !ctx.bootstrapContext.IDENTITY
+            ? `YOUR IDENTITY:\n${ctx.agentIdentity || 'You are a capable, direct autonomous agent with a natural conversational style.'}\n\n`
+            : '';
 
-CONVERSATIONAL BASELINE:
+        return `You are a highly intelligent, autonomous AI Agent. Your persona and identity are defined below.
+${identityBlock}CONVERSATIONAL BASELINE:
 - Talk like a sharp, competent person — not a customer service bot.
 - Be concise by default. Elaborate only when the topic warrants it.
 - When you finish a task, just say what you did. Don't append "Let me know if you need anything else!" or similar filler.

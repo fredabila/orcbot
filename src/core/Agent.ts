@@ -96,6 +96,7 @@ export class Agent {
     private lastHeartbeatProductive: boolean = true;
     private heartbeatRunning: boolean = false;
     private lastHeartbeatPushAt: number = 0;
+    private lastHeartbeatMessageSentAt: number = 0; // When a heartbeat last actually sent a message to the user
     private lastUserActivityAt: number = 0;
     private maxStepFallbackCount: number = 0;
     private delayRiskHighCount: number = 0;
@@ -5830,7 +5831,7 @@ The plugin handles all logic internally. See the plugin source for implementatio
      */
     private async sendProgressFeedback(
         action: Action,
-        type: 'start' | 'working' | 'error' | 'recovering',
+        type: 'start' | 'working' | 'error' | 'recovering' | 'retry',
         details?: string
     ): Promise<void> {
         if (!this.config.get('progressFeedbackEnabled')) return;
@@ -5857,6 +5858,9 @@ The plugin handles all logic internally. See the plugin source for implementatio
             case 'recovering':
                 message = details ? `🔧 ${details}` : '🔧 Recovering from error...';
                 break;
+            case 'retry':
+                message = details ? `🔄 ${details}` : '🔄 Hit a snag — trying again shortly...';
+                break;
         }
         
         try {
@@ -5877,6 +5881,26 @@ The plugin handles all logic internally. See the plugin source for implementatio
                     messageId: `progress-${Date.now()}`
                 });
             }
+
+            // Save progress messages to memory so the LLM can see them in thread context
+            // and knows what status updates it already sent the user.
+            const chatId = action.payload?.chatId || sourceId;
+            const sessionScopeId = action.payload?.sessionScopeId;
+            this.memory.saveMemory({
+                id: `${source}-progress-${Date.now()}`,
+                type: 'short',
+                content: `Assistant sent status update to ${source} ${chatId}: ${message}`,
+                timestamp: new Date().toISOString(),
+                metadata: {
+                    source,
+                    role: 'assistant',
+                    sessionScopeId,
+                    chatId,
+                    sourceId,
+                    userId: action.payload?.userId,
+                    progressType: type
+                }
+            });
         } catch (e) {
             logger.debug(`Failed to send progress feedback: ${e}`);
         }
@@ -7448,6 +7472,19 @@ REFLECTION: <1-2 sentences>`;
         const idleHours = Math.floor(idleMinutes / 60);
         const autonomyLevel = idleHours >= 4 ? 'high' : idleHours >= 1 ? 'moderate' : 'low';
 
+        // ── 10b. Last heartbeat message age ──
+        const lastMsgAgeMs = this.lastHeartbeatMessageSentAt > 0 ? now - this.lastHeartbeatMessageSentAt : -1;
+        const lastMsgAgeStr = lastMsgAgeMs < 0
+            ? 'never (no heartbeat message sent yet this session)'
+            : lastMsgAgeMs < 3600_000
+                ? `${Math.floor(lastMsgAgeMs / 60000)} minutes ago`
+                : `${Math.round(lastMsgAgeMs / 3600_000 * 10) / 10} hours ago`;
+        const messagingBarNote = lastMsgAgeMs >= 0 && lastMsgAgeMs < 14400_000
+            ? `⚠️  A heartbeat message was sent ${lastMsgAgeStr}. The bar for sending ANOTHER message is VERY HIGH — only message if you have specific new actionable information that was NOT included in the previous message.`
+            : lastMsgAgeMs < 0
+                ? `No heartbeat message has been sent yet this session.`
+                : `Last heartbeat message was ${lastMsgAgeStr} — messaging bar is normal.`;
+
         // ── 11. Available channels summary (skills are provided by the DecisionEngine, not duplicated here) ──
         const channelSkills = [];
         if (this.telegram) channelSkills.push('send_telegram');
@@ -7565,7 +7602,9 @@ ${autonomyLevel === 'low' ? '- Short idle. Prefer reacting to recent context ove
 
 **HARD RULES:**
 - Never be performative. Every action must create real value.
+- **STATUS-ONLY MESSAGES ARE BANNED.** Do NOT send any message whose primary content is just announcing you are online, running, or available — e.g. "OrcBot online and ready", "All systems nominal", "Awaiting tasks", "Just checking in", "I'm here if you need me", or any similar content-free announcement. These offer zero value to the user and are noise. If that's all you have to say, set goals_met: true and terminate silently.
 - If you message the user, have something worth reading. No "just checking in" without substance.
+- ${messagingBarNote}
 - Don't repeat actions that recently failed unless you have a NEW strategy.
 - Keep world-event usage contextual: no generic doomscroll summaries; only tie events to user-relevant impact or planning.
 - If nothing meaningful to do, terminate cleanly (goals_met: true). Silence is better than noise.
@@ -9425,8 +9464,15 @@ Respond with a single actionable task description (one sentence). Be specific ab
             
             // PROGRESS FEEDBACK: Let user know we're working on non-trivial tasks
             // Skip for heartbeats — no user initiated this task
+            // On retry attempts, say "trying again" rather than "working on it" so the
+            // user knows this is a recovery pass, not a fresh start.
             if (!isSimpleTask && action.payload.source) {
-                await this.sendProgressFeedback(action, 'start');
+                const isRetryAttempt = (action.retry?.attempts ?? 0) > 0;
+                if (isRetryAttempt) {
+                    await this.sendProgressFeedback(action, 'retry', `Trying again on your request...`);
+                } else {
+                    await this.sendProgressFeedback(action, 'start');
+                }
                 lastUserDeliveryAtMs = Date.now();
             }
             
@@ -10137,9 +10183,14 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 });
                             }
                             
-                            // PROGRESS FEEDBACK: Let user know we hit an error but are recovering
-                            await this.sendProgressFeedback(action, 'error', `${toolCall.name} failed`);
-                            lastUserDeliveryAtMs = Date.now();
+                            // PROGRESS FEEDBACK: Let user know we hit an error but are recovering.
+                            // Do NOT fire for channel send skills — you can't tell the user
+                            // "send_telegram failed" by calling send_telegram again.
+                            const sendSkillNames = ['send_telegram','send_whatsapp','send_discord','send_slack','send_gateway_chat','telegram_send_buttons','telegram_send_poll'];
+                            if (!sendSkillNames.includes(toolCall.name)) {
+                                await this.sendProgressFeedback(action, 'error', `${toolCall.name} failed`);
+                                lastUserDeliveryAtMs = Date.now();
+                            }
                         }
 
                         // CLARIFICATION HANDLING: Break sequence if agent is asking for info
@@ -11022,6 +11073,24 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
 
             this.actionQueue.updateStatus(action.id, actionStatus);
 
+            // If ActionQueue silently auto-retried (flipped status back to 'pending'),
+            // tell the user so they're not left wondering why nothing happened after
+            // being told "Working on it...".
+            if (
+                actionStatus === 'failed' &&
+                action.status === 'pending' &&
+                action.retry?.nextRetryAt &&
+                action.payload?.source && !action.payload?.isHeartbeat
+            ) {
+                const delaySecs = Math.max(5, Math.round(
+                    (new Date(action.retry.nextRetryAt).getTime() - Date.now()) / 1000
+                ));
+                await this.sendProgressFeedback(
+                    action, 'retry',
+                    `Had trouble with that — will try again in ${delaySecs}s.`
+                );
+            }
+
             // Reset heartbeat idle counters to prevent false exponential backoff accumulation.
             // • Heartbeat completing with goalsMet=true  → it was productive; reset cooldown.
             // • Non-heartbeat action completing           → agent is clearly active, not idle.
@@ -11031,6 +11100,12 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                 if (goalsMet) {
                     this.lastHeartbeatProductive = true;
                     this.consecutiveIdleHeartbeats = 0;
+                }
+                // Track when a heartbeat last sent a message — used by buildSmartHeartbeatPrompt
+                // to enforce a high bar for re-messaging when a send already happened recently.
+                if (messagesSent > 0) {
+                    this.lastHeartbeatMessageSentAt = Date.now();
+                    logger.debug(`Agent: Heartbeat sent ${messagesSent} message(s) — lastHeartbeatMessageSentAt updated`);
                 }
                 // !goalsMet → preset false + incremented counter from push time are correct
             } else {
