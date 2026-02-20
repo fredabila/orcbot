@@ -5988,15 +5988,38 @@ The plugin handles all logic internally. See the plugin source for implementatio
         action: Action,
         type: 'start' | 'working' | 'error' | 'recovering' | 'retry',
         details?: string
-    ): Promise<void> {
-        if (!this.config.get('progressFeedbackEnabled')) return;
+    ): Promise<boolean> {
+        if (!this.config.get('progressFeedbackEnabled')) return false;
+
+        const typingOnly = this.config.get('progressFeedbackTypingOnly') !== false;
 
         // Only send feedback for channel-sourced actions
         const source = action.payload?.source;
         const sourceId = action.payload?.sourceId;
-        if (!source) return;
+        if (!source) return false;
         // Gateway-chat doesn't require sourceId (uses eventBus broadcast)
-        if (source !== 'gateway-chat' && !sourceId) return;
+        if (source !== 'gateway-chat' && !sourceId) return false;
+
+        if (typingOnly) {
+            try {
+                if (source === 'telegram' && this.telegram) {
+                    await this.telegram.sendTypingIndicator(sourceId);
+                    return false;
+                } else if (source === 'whatsapp' && this.whatsapp) {
+                    await (this.whatsapp as any).sendPresenceComposing(sourceId);
+                    return false;
+                } else if (source === 'discord' && this.discord) {
+                    await this.discord.sendTypingIndicator(sourceId);
+                    return false;
+                } else if (source === 'slack' && this.slack) {
+                    await this.slack.sendTypingIndicator(sourceId);
+                    return false;
+                }
+                // gateway-chat has no typing indicator; fall back to status text below.
+            } catch {
+                // Typing indicators are non-critical; if unavailable, fall back to status text.
+            }
+        }
 
         // Craft compact, non-intrusive messages
         let message = '';
@@ -6018,15 +6041,20 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 break;
         }
 
+        let sentMessage = false;
         try {
             if (source === 'telegram' && this.telegram) {
                 await this.telegram.sendMessage(sourceId, message);
+                sentMessage = true;
             } else if (source === 'whatsapp' && this.whatsapp) {
                 await this.whatsapp.sendMessage(sourceId, message);
+                sentMessage = true;
             } else if (source === 'discord' && this.discord) {
                 await this.discord.sendMessage(sourceId, message);
+                sentMessage = true;
             } else if (source === 'slack' && this.slack) {
                 await this.slack.sendMessage(sourceId, message);
+                sentMessage = true;
             } else if (source === 'gateway-chat') {
                 eventBus.emit('gateway:chat:response', {
                     type: 'chat:message',
@@ -6035,6 +6063,11 @@ The plugin handles all logic internally. See the plugin source for implementatio
                     timestamp: new Date().toISOString(),
                     messageId: `progress-${Date.now()}`
                 });
+                sentMessage = true;
+            }
+
+            if (!sentMessage) {
+                return false;
             }
 
             // Save progress messages to memory so the LLM can see them in thread context
@@ -6058,7 +6091,10 @@ The plugin handles all logic internally. See the plugin source for implementatio
             });
         } catch (e) {
             logger.debug(`Failed to send progress feedback: ${e}`);
+            return false;
         }
+
+        return true;
     }
 
     /**
@@ -9808,11 +9844,16 @@ Respond with a single actionable task description (one sentence). Be specific ab
             if (!isSimpleTask && action.payload.source) {
                 const isRetryAttempt = (action.retry?.attempts ?? 0) > 0;
                 if (isRetryAttempt) {
-                    await this.sendProgressFeedback(action, 'retry', `Trying again on your request...`);
+                    const progressSent = await this.sendProgressFeedback(action, 'retry', `Trying again on your request...`);
+                    if (progressSent) {
+                        lastUserDeliveryAtMs = Date.now();
+                    }
                 } else {
-                    await this.sendProgressFeedback(action, 'start');
+                    const progressSent = await this.sendProgressFeedback(action, 'start');
+                    if (progressSent) {
+                        lastUserDeliveryAtMs = Date.now();
+                    }
                 }
-                lastUserDeliveryAtMs = Date.now();
             }
 
             const executionPlan = isSimpleTask
@@ -9966,12 +10007,14 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 // periodic "still working" feedback so they know we haven't stalled.
                 // Fires once after 8 consecutive silent steps (stepsSinceLastMessage resets on send).
                 if (!isSimpleTask && currentStep > 1 && stepsSinceLastMessage >= progressIntervalSteps && action.payload.source) {
-                    await this.sendProgressFeedback(action, 'working', `Still working on your request (step ${currentStep})...`);
-                    lastUserDeliveryAtMs = Date.now();
-                    // Progress message was just sent; reset silent-step counter and count toward message budget.
-                    stepsSinceLastMessage = 0;
-                    messagesSent++;
-                    lastProgressFeedbackStep = currentStep;
+                    const progressSent = await this.sendProgressFeedback(action, 'working', `Still working on your request (step ${currentStep})...`);
+                    if (progressSent) {
+                        lastUserDeliveryAtMs = Date.now();
+                        // Progress message was just sent; reset silent-step counter and count toward message budget.
+                        stepsSinceLastMessage = 0;
+                        messagesSent++;
+                        lastProgressFeedbackStep = currentStep;
+                    }
                 }
 
                 if (messagesSent >= MAX_MESSAGES) {
@@ -10088,11 +10131,13 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         const details = shouldForceInitial
                             ? 'Started your task and working through it now...'
                             : `Still working and making progress (step ${currentStep})...`;
-                        await this.sendProgressFeedback(action, 'working', details);
-                        lastUserDeliveryAtMs = Date.now();
-                        messagesSent++;
-                        stepsSinceLastMessage = 0;
-                        lastProgressFeedbackStep = currentStep;
+                        const progressSent = await this.sendProgressFeedback(action, 'working', details);
+                        if (progressSent) {
+                            lastUserDeliveryAtMs = Date.now();
+                            messagesSent++;
+                            stepsSinceLastMessage = 0;
+                            lastProgressFeedbackStep = currentStep;
+                        }
                     }
                 }
 

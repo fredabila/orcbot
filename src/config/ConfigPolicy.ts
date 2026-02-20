@@ -65,6 +65,20 @@ export class ConfigPolicy {
             reason: 'Agents can adjust feedback verbosity',
             validation: (value: any) => typeof value === 'boolean'
         }],
+        ['progressFeedbackTypingOnly', {
+            key: 'progressFeedbackTypingOnly',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Use typing indicators instead of sending progress status messages',
+            reason: 'Agents can reduce channel noise while preserving feedback via typing indicators',
+            validation: (value: any) => typeof value === 'boolean'
+        }],
+        ['enforceExplicitFileRequestForSendFile', {
+            key: 'enforceExplicitFileRequestForSendFile',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Require explicit user request before send_file is allowed',
+            reason: 'Agents can tune delivery strictness for file attachments',
+            validation: (value: any) => typeof value === 'boolean'
+        }],
         ['searchProviderOrder', {
             key: 'searchProviderOrder',
             level: ConfigChangeLevel.SAFE,

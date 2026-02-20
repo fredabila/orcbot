@@ -132,4 +132,71 @@ describe('DecisionPipeline', () => {
     expect(names).toContain('send_whatsapp');
     expect(names).not.toContain('send_telegram');
   });
+
+  it('allows send_file without explicit file request when enforcement is disabled', () => {
+    const pipeline = new DecisionPipeline(
+      new StubConfig({
+        maxMessagesPerAction: 3,
+        maxStepsPerAction: 10,
+        messageDedupWindow: 5,
+        enforceExplicitFileRequestForSendFile: false,
+      }) as any,
+    );
+
+    const proposed: StandardResponse = {
+      success: true,
+      tools: [
+        { name: 'send_file', metadata: { jid: 'u1', path: '/tmp/result.txt' } },
+        { name: 'send_telegram', metadata: { chatId: 'u1', message: 'Done.' } },
+      ],
+    };
+
+    const evaluated = pipeline.evaluate(proposed, {
+      actionId: 'a4',
+      source: 'telegram',
+      sourceId: 'u1',
+      messagesSent: 0,
+      currentStep: 1,
+      fileIntent: 'unknown',
+      taskDescription: 'Generate summary and share results',
+    });
+
+    const names = evaluated.tools?.map((t) => t.name) || [];
+    expect(names).toContain('send_file');
+    expect(names).toContain('send_telegram');
+  });
+
+  it('suppresses send_file without explicit request when enforcement is enabled', () => {
+    const pipeline = new DecisionPipeline(
+      new StubConfig({
+        maxMessagesPerAction: 3,
+        maxStepsPerAction: 10,
+        messageDedupWindow: 5,
+        enforceExplicitFileRequestForSendFile: true,
+      }) as any,
+    );
+
+    const proposed: StandardResponse = {
+      success: true,
+      tools: [
+        { name: 'send_file', metadata: { jid: 'u1', path: '/tmp/result.txt' } },
+        { name: 'send_telegram', metadata: { chatId: 'u1', message: 'Done.' } },
+      ],
+    };
+
+    const evaluated = pipeline.evaluate(proposed, {
+      actionId: 'a5',
+      source: 'telegram',
+      sourceId: 'u1',
+      messagesSent: 0,
+      currentStep: 1,
+      fileIntent: 'unknown',
+      taskDescription: 'Generate summary and share results',
+    });
+
+    const names = evaluated.tools?.map((t) => t.name) || [];
+    expect(names).not.toContain('send_file');
+    expect(names).toContain('send_telegram');
+  });
+
 });
