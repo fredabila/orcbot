@@ -120,7 +120,7 @@ export class Agent {
     private scheduledTasks: Map<string, Cron> = new Map();
     private scheduledTaskMeta: Map<string, any> = new Map();
     private scheduledTasksPath: string = '';
-    
+
     // Track processed messages to prevent duplicates
     private processedMessages: Set<string> = new Set();
     private processedMessagesMaxSize: number = 1000;
@@ -149,7 +149,7 @@ export class Agent {
             this.config.get('memoryPath'),
             this.config.get('userProfilePath')
         );
-        
+
         // Configure memory limits from config
         this.memory.setLimits({
             contextLimit: this.config.get('memoryContextLimit'),
@@ -175,7 +175,7 @@ export class Agent {
             preferredProvider: this.config.get('llmProvider'),
             maxEntries: this.config.get('vectorMemoryMaxEntries'),
         });
-        
+
         const tokenTracker = new TokenTracker(
             this.config.get('tokenUsagePath'),
             this.config.get('tokenLogPath')
@@ -220,12 +220,12 @@ export class Agent {
                 logger: logger
             }
         );
-        
+
         // Initialize Bootstrap Manager for workspace files early
         this.bootstrap = new BootstrapManager(this.config.getDataHome());
         this.bootstrap.initializeFiles();
         logger.info('Bootstrap manager initialized');
-        
+
         this.decisionEngine = new DecisionEngine(
             this.memory,
             this.llm,
@@ -246,10 +246,10 @@ export class Agent {
         });
         this.scheduler = new Scheduler();
         this.pollingManager = new PollingManager();
-        
+
         // Initialize RuntimeTuner for self-tuning capabilities
         this.tuner = new RuntimeTuner(path.dirname(this.config.get('memoryPath')));
-        
+
         this.browser = new WebBrowser(
             this.config.get('serperApiKey'),
             this.config.get('captchaApiKey'),
@@ -436,7 +436,7 @@ export class Agent {
         const match = recentMemories.find((m: any) =>
             m.metadata?.source === 'telegram' &&
             (m.metadata?.senderName?.toLowerCase() === trimmed.toLowerCase() ||
-             m.content?.toLowerCase().includes(trimmed.toLowerCase()))
+                m.content?.toLowerCase().includes(trimmed.toLowerCase()))
         );
         if (match?.metadata?.chatId && /^-?\d+$/.test(String(match.metadata.chatId))) {
             logger.info(`resolveTelegramChatId: Resolved "${trimmed}" → ${match.metadata.chatId}`);
@@ -533,645 +533,645 @@ export class Agent {
         // ═══════════════════════════════════════════
         if (!this.isWorker) {
 
-        // Skill: Send Telegram
-        this.skills.registerSkill({
-            name: 'send_telegram',
-            description: 'Send a message to a Telegram user. The chatId MUST be the numeric Telegram ID (e.g. 123456789), NOT the user\'s name.',
-            usage: 'send_telegram(chatId, message)',
-            handler: async (args: any) => {
-                let chat_id = args.chat_id || args.chatId || args.id;
-                const message = args.message || args.content || args.text;
+            // Skill: Send Telegram
+            this.skills.registerSkill({
+                name: 'send_telegram',
+                description: 'Send a message to a Telegram user. The chatId MUST be the numeric Telegram ID (e.g. 123456789), NOT the user\'s name.',
+                usage: 'send_telegram(chatId, message)',
+                handler: async (args: any) => {
+                    let chat_id = args.chat_id || args.chatId || args.id;
+                    const message = args.message || args.content || args.text;
 
-                if (!chat_id) return 'Error: Missing chatId. Use the NUMERIC Telegram chat ID from the message metadata (e.g. 123456789), not the user\'s name.';
-                if (!message) return 'Error: Missing message content.';
+                    if (!chat_id) return 'Error: Missing chatId. Use the NUMERIC Telegram chat ID from the message metadata (e.g. 123456789), not the user\'s name.';
+                    if (!message) return 'Error: Missing message content.';
 
-                // Validate: Telegram chat IDs are numeric. If the agent passed a name, try to resolve it.
-                const resolved = this.resolveTelegramChatId(String(chat_id));
-                if (!resolved) {
-                    return `Error: "${chat_id}" is not a valid Telegram chat ID. Telegram IDs are numeric (e.g. 123456789). Check the incoming message metadata for the correct chatId or userId.`;
-                }
-                chat_id = resolved.id;
+                    // Validate: Telegram chat IDs are numeric. If the agent passed a name, try to resolve it.
+                    const resolved = this.resolveTelegramChatId(String(chat_id));
+                    if (!resolved) {
+                        return `Error: "${chat_id}" is not a valid Telegram chat ID. Telegram IDs are numeric (e.g. 123456789). Check the incoming message metadata for the correct chatId or userId.`;
+                    }
+                    chat_id = resolved.id;
 
-                if (this.telegram) {
-                    await this.telegram.sendMessage(chat_id, message);
+                    if (this.telegram) {
+                        await this.telegram.sendMessage(chat_id, message);
 
-                    // Persist outbound message so future actions can use it as thread context.
-                    this.memory.saveMemory({
-                        id: `tg-out-${Date.now()}`,
-                        type: 'short',
-                        content: `Assistant sent Telegram message to ${chat_id}: ${message}`,
-                        timestamp: new Date().toISOString(),
-                        metadata: {
-                            source: 'telegram',
-                            role: 'assistant',
-                            chatId: chat_id
-                        }
-                    });
-                    return `Message sent to ${chat_id}`;
-                }
-                return 'Telegram channel not available';
-            }
-        });
-
-        // Skill: Telegram — send message with inline buttons
-        this.skills.registerSkill({
-            name: 'telegram_send_buttons',
-            description: 'Send a Telegram message with inline keyboard buttons. Use this to ask the user to choose an option, confirm an action, or provide navigation. buttons is a 2-D array of rows; each cell has text and an optional callback_data (payload sent back when pressed) or url.',
-            usage: 'telegram_send_buttons(chatId, message, buttons)',
-            handler: async (args: any) => {
-                let chat_id = args.chat_id || args.chatId || args.id;
-                const message = args.message || args.content || args.text;
-                let buttons = args.buttons;
-
-                if (!chat_id) return 'Error: Missing chatId.';
-                if (!message) return 'Error: Missing message content.';
-                if (!Array.isArray(buttons) || buttons.length === 0) return 'Error: buttons must be a non-empty 2-D array, e.g. [[{text:"Yes",callback_data:"yes"},{text:"No",callback_data:"no"}]]';
-
-                // Auto-coerce: if the LLM passed a flat 1-D array of button objects,
-                // wrap each object into its own row so the call still works.
-                // e.g. [{text:"A"},{text:"B"}] → [[{text:"A"},{text:"B"}]]
-                // e.g. [{text:"A",callback_data:"a"}] → [[{text:"A",callback_data:"a"}]]
-                if (buttons.every((item: any) => item && typeof item === 'object' && !Array.isArray(item))) {
-                    buttons = [buttons];
-                }
-
-                const resolved = this.resolveTelegramChatId(String(chat_id));
-                if (!resolved) return `Error: "${chat_id}" is not a valid Telegram chat ID.`;
-                chat_id = resolved.id;
-
-                if (this.telegram) {
-                    try {
-                        const messageId = await this.telegram.sendWithButtons(chat_id, message, buttons);
+                        // Persist outbound message so future actions can use it as thread context.
                         this.memory.saveMemory({
-                            id: `tg-btn-${Date.now()}`,
+                            id: `tg-out-${Date.now()}`,
                             type: 'short',
-                            content: `Assistant sent Telegram inline-buttons message to ${chat_id} (message_id=${messageId}): ${message}`,
+                            content: `Assistant sent Telegram message to ${chat_id}: ${message}`,
+                            timestamp: new Date().toISOString(),
+                            metadata: {
+                                source: 'telegram',
+                                role: 'assistant',
+                                chatId: chat_id
+                            }
+                        });
+                        return `Message sent to ${chat_id}`;
+                    }
+                    return 'Telegram channel not available';
+                }
+            });
+
+            // Skill: Telegram — send message with inline buttons
+            this.skills.registerSkill({
+                name: 'telegram_send_buttons',
+                description: 'Send a Telegram message with inline keyboard buttons. Use this to ask the user to choose an option, confirm an action, or provide navigation. buttons is a 2-D array of rows; each cell has text and an optional callback_data (payload sent back when pressed) or url.',
+                usage: 'telegram_send_buttons(chatId, message, buttons)',
+                handler: async (args: any) => {
+                    let chat_id = args.chat_id || args.chatId || args.id;
+                    const message = args.message || args.content || args.text;
+                    let buttons = args.buttons;
+
+                    if (!chat_id) return 'Error: Missing chatId.';
+                    if (!message) return 'Error: Missing message content.';
+                    if (!Array.isArray(buttons) || buttons.length === 0) return 'Error: buttons must be a non-empty 2-D array, e.g. [[{text:"Yes",callback_data:"yes"},{text:"No",callback_data:"no"}]]';
+
+                    // Auto-coerce: if the LLM passed a flat 1-D array of button objects,
+                    // wrap each object into its own row so the call still works.
+                    // e.g. [{text:"A"},{text:"B"}] → [[{text:"A"},{text:"B"}]]
+                    // e.g. [{text:"A",callback_data:"a"}] → [[{text:"A",callback_data:"a"}]]
+                    if (buttons.every((item: any) => item && typeof item === 'object' && !Array.isArray(item))) {
+                        buttons = [buttons];
+                    }
+
+                    const resolved = this.resolveTelegramChatId(String(chat_id));
+                    if (!resolved) return `Error: "${chat_id}" is not a valid Telegram chat ID.`;
+                    chat_id = resolved.id;
+
+                    if (this.telegram) {
+                        try {
+                            const messageId = await this.telegram.sendWithButtons(chat_id, message, buttons);
+                            this.memory.saveMemory({
+                                id: `tg-btn-${Date.now()}`,
+                                type: 'short',
+                                content: `Assistant sent Telegram inline-buttons message to ${chat_id} (message_id=${messageId}): ${message}`,
+                                timestamp: new Date().toISOString(),
+                                metadata: { source: 'telegram', role: 'assistant', chatId: chat_id, messageId }
+                            });
+                            return `Message with buttons sent to ${chat_id} (message_id=${messageId})`;
+                        } catch (err: any) {
+                            const errMsg = String(err?.response?.description || err?.message || err);
+                            // Provide specific guidance: if it's a button/markup issue, tell the LLM to simplify.
+                            if (/button|keyboard|markup|inline/i.test(errMsg)) {
+                                return `Telegram rejected the inline keyboard: ${errMsg}. Try simplifying the buttons — use only {text, callback_data} fields and keep text short (max 40 chars).`;
+                            }
+                            return `Telegram API error sending buttons to ${chat_id}: ${errMsg}. Try send_telegram instead if buttons are not required.`;
+                        }
+                    }
+                    return 'Telegram channel not available';
+                }
+            });
+
+            // Skill: Telegram — edit a sent message in-place
+            this.skills.registerSkill({
+                name: 'telegram_edit_message',
+                description: 'Edit the text of a previously-sent Telegram message in-place. Ideal for live progress updates (e.g. "Searching… → Found 5 results") without spamming new messages. Requires the message_id returned by send_telegram or telegram_send_buttons.',
+                usage: 'telegram_edit_message(chatId, messageId, newText)',
+                handler: async (args: any) => {
+                    let chat_id = args.chat_id || args.chatId;
+                    const messageId = parseInt(String(args.message_id || args.messageId || args.id), 10);
+                    const newText = args.new_text || args.newText || args.text || args.message || args.content;
+
+                    if (!chat_id) return 'Error: Missing chatId.';
+                    if (isNaN(messageId)) return 'Error: Missing or invalid messageId (must be a number).';
+                    if (!newText) return 'Error: Missing newText.';
+
+                    const resolved = this.resolveTelegramChatId(String(chat_id));
+                    if (!resolved) return `Error: "${chat_id}" is not a valid Telegram chat ID.`;
+                    chat_id = resolved.id;
+
+                    if (this.telegram) {
+                        await this.telegram.editMessage(chat_id, messageId, newText);
+                        return `Message ${messageId} in chat ${chat_id} updated`;
+                    }
+                    return 'Telegram channel not available';
+                }
+            });
+
+            // Skill: Telegram — create a native poll
+            this.skills.registerSkill({
+                name: 'telegram_send_poll',
+                description: 'Create a native Telegram poll in a chat. Great for gathering structured user input. options is an array of 2–10 strings.',
+                usage: 'telegram_send_poll(chatId, question, options, isAnonymous?)',
+                handler: async (args: any) => {
+                    let chat_id = args.chat_id || args.chatId || args.id;
+                    const question = args.question;
+                    const options = args.options;
+                    const isAnonymous = args.is_anonymous ?? args.isAnonymous ?? true;
+                    const allowsMultiple = args.allows_multiple_answers ?? args.allowsMultipleAnswers ?? false;
+
+                    if (!chat_id) return 'Error: Missing chatId.';
+                    if (!question) return 'Error: Missing question.';
+                    if (!Array.isArray(options) || options.length < 2) return 'Error: options must be an array of at least 2 strings.';
+                    if (options.length > 10) return 'Error: Telegram polls support at most 10 options.';
+
+                    const resolved = this.resolveTelegramChatId(String(chat_id));
+                    if (!resolved) return `Error: "${chat_id}" is not a valid Telegram chat ID.`;
+                    chat_id = resolved.id;
+
+                    if (this.telegram) {
+                        const messageId = await this.telegram.sendPoll(chat_id, question, options, isAnonymous, allowsMultiple);
+                        this.memory.saveMemory({
+                            id: `tg-poll-${Date.now()}`,
+                            type: 'short',
+                            content: `Assistant sent Telegram poll to ${chat_id}: "${question}" [${options.join(', ')}]`,
                             timestamp: new Date().toISOString(),
                             metadata: { source: 'telegram', role: 'assistant', chatId: chat_id, messageId }
                         });
-                        return `Message with buttons sent to ${chat_id} (message_id=${messageId})`;
-                    } catch (err: any) {
-                        const errMsg = String(err?.response?.description || err?.message || err);
-                        // Provide specific guidance: if it's a button/markup issue, tell the LLM to simplify.
-                        if (/button|keyboard|markup|inline/i.test(errMsg)) {
-                            return `Telegram rejected the inline keyboard: ${errMsg}. Try simplifying the buttons — use only {text, callback_data} fields and keep text short (max 40 chars).`;
-                        }
-                        return `Telegram API error sending buttons to ${chat_id}: ${errMsg}. Try send_telegram instead if buttons are not required.`;
+                        return `Poll sent to ${chat_id} (message_id=${messageId})`;
                     }
+                    return 'Telegram channel not available';
                 }
-                return 'Telegram channel not available';
-            }
-        });
+            });
 
-        // Skill: Telegram — edit a sent message in-place
-        this.skills.registerSkill({
-            name: 'telegram_edit_message',
-            description: 'Edit the text of a previously-sent Telegram message in-place. Ideal for live progress updates (e.g. "Searching… → Found 5 results") without spamming new messages. Requires the message_id returned by send_telegram or telegram_send_buttons.',
-            usage: 'telegram_edit_message(chatId, messageId, newText)',
-            handler: async (args: any) => {
-                let chat_id = args.chat_id || args.chatId;
-                const messageId = parseInt(String(args.message_id || args.messageId || args.id), 10);
-                const newText = args.new_text || args.newText || args.text || args.message || args.content;
+            // Skill: Telegram — react to a message with an emoji
+            this.skills.registerSkill({
+                name: 'telegram_react',
+                description: 'React to a Telegram message with an emoji. NOTE: Telegram restricts bots from setting native reactions in most chat types (private chats, groups). In those cases the bot automatically falls back to *replying* to the target message with the emoji — this is normal and expected, not an error. Native reactions only work in channels where the bot is an admin. Common emojis: 👍 👎 ❤ 🔥 🎉 🤔 👏 😁 🙏 ✅ ❌. messageId must be the numeric ID of the message to react to.',
+                usage: 'telegram_react(chatId, messageId, emoji)',
+                handler: async (args: any) => {
+                    let chat_id = args.chat_id || args.chatId || args.id;
+                    const messageId = String(args.message_id || args.messageId);
+                    const emoji = args.emoji || args.reaction || '👍';
 
-                if (!chat_id) return 'Error: Missing chatId.';
-                if (isNaN(messageId)) return 'Error: Missing or invalid messageId (must be a number).';
-                if (!newText) return 'Error: Missing newText.';
+                    if (!chat_id) return { success: false, error: 'Missing chatId.' };
+                    if (!messageId || messageId === 'undefined') return { success: false, error: 'Missing messageId.' };
 
-                const resolved = this.resolveTelegramChatId(String(chat_id));
-                if (!resolved) return `Error: "${chat_id}" is not a valid Telegram chat ID.`;
-                chat_id = resolved.id;
+                    const resolved = this.resolveTelegramChatId(String(chat_id));
+                    if (!resolved) return { success: false, error: `"${chat_id}" is not a valid Telegram chat ID.` };
+                    chat_id = resolved.id;
 
-                if (this.telegram) {
-                    await this.telegram.editMessage(chat_id, messageId, newText);
-                    return `Message ${messageId} in chat ${chat_id} updated`;
+                    if (this.telegram) {
+                        try {
+                            const result = await this.telegram.react(chat_id, messageId, emoji);
+                            const method = result.method === 'reply'
+                                ? 'reply (native reaction unavailable for bots in this chat type)'
+                                : 'native reaction';
+                            return { success: true, method, emoji, message: `Reacted with ${emoji} via ${method}` };
+                        } catch (err: any) {
+                            return { success: false, error: String(err?.message || err) };
+                        }
+                    }
+                    return { success: false, error: 'Telegram channel not available' };
                 }
-                return 'Telegram channel not available';
-            }
-        });
+            });
 
-        // Skill: Telegram — create a native poll
-        this.skills.registerSkill({
-            name: 'telegram_send_poll',
-            description: 'Create a native Telegram poll in a chat. Great for gathering structured user input. options is an array of 2–10 strings.',
-            usage: 'telegram_send_poll(chatId, question, options, isAnonymous?)',
-            handler: async (args: any) => {
-                let chat_id = args.chat_id || args.chatId || args.id;
-                const question = args.question;
-                const options = args.options;
-                const isAnonymous = args.is_anonymous ?? args.isAnonymous ?? true;
-                const allowsMultiple = args.allows_multiple_answers ?? args.allowsMultipleAnswers ?? false;
+            // Skill: Telegram — pin a message
+            this.skills.registerSkill({
+                name: 'telegram_pin_message',
+                description: 'Pin a message in a Telegram chat (bot must be admin in groups/channels). The pinned message appears at the top of the chat for all members.',
+                usage: 'telegram_pin_message(chatId, messageId, silent?)',
+                handler: async (args: any) => {
+                    let chat_id = args.chat_id || args.chatId || args.id;
+                    const messageId = parseInt(String(args.message_id || args.messageId), 10);
+                    const silent = args.silent ?? true;
 
-                if (!chat_id) return 'Error: Missing chatId.';
-                if (!question) return 'Error: Missing question.';
-                if (!Array.isArray(options) || options.length < 2) return 'Error: options must be an array of at least 2 strings.';
-                if (options.length > 10) return 'Error: Telegram polls support at most 10 options.';
+                    if (!chat_id) return 'Error: Missing chatId.';
+                    if (isNaN(messageId)) return 'Error: Missing or invalid messageId.';
 
-                const resolved = this.resolveTelegramChatId(String(chat_id));
-                if (!resolved) return `Error: "${chat_id}" is not a valid Telegram chat ID.`;
-                chat_id = resolved.id;
+                    const resolved = this.resolveTelegramChatId(String(chat_id));
+                    if (!resolved) return `Error: "${chat_id}" is not a valid Telegram chat ID.`;
+                    chat_id = resolved.id;
 
-                if (this.telegram) {
-                    const messageId = await this.telegram.sendPoll(chat_id, question, options, isAnonymous, allowsMultiple);
+                    if (this.telegram) {
+                        await this.telegram.pinMessage(chat_id, messageId, silent);
+                        return `Message ${messageId} pinned in chat ${chat_id}`;
+                    }
+                    return 'Telegram channel not available';
+                }
+            });
+
+            // Skill: Send WhatsApp
+            this.skills.registerSkill({
+                name: 'send_whatsapp',
+                description: 'Send a message to a WhatsApp contact or group',
+                usage: 'send_whatsapp(jid, message)',
+                handler: async (args: any) => {
+                    const jid = args.jid || args.to || args.id;
+                    const message = args.message || args.content || args.text;
+
+                    if (!jid) return 'Error: Missing jid (WhatsApp ID).';
+                    if (!message) return 'Error: Missing message content.';
+
+                    if (this.whatsapp) {
+                        await this.whatsapp.sendMessage(jid, message);
+
+                        // Persist outbound message so future actions can use it as thread context.
+                        this.memory.saveMemory({
+                            id: `wa-out-${Date.now()}`,
+                            type: 'short',
+                            content: `Assistant sent WhatsApp message to ${jid}: ${message}`,
+                            timestamp: new Date().toISOString(),
+                            metadata: {
+                                source: 'whatsapp',
+                                role: 'assistant',
+                                senderId: jid,
+                                sourceId: jid
+                            }
+                        });
+                        return `Message sent to ${jid} via WhatsApp`;
+                    }
+                    return 'WhatsApp channel not available';
+                }
+            });
+
+            // Skill: Send Discord
+            this.skills.registerSkill({
+                name: 'send_discord',
+                description: 'Send a message to a Discord channel',
+                usage: 'send_discord(channel_id, message)',
+                handler: async (args: any) => {
+                    const channel_id = args.channel_id || args.channelId || args.id || args.to;
+                    const message = args.message || args.content || args.text;
+
+                    if (!channel_id) return 'Error: Missing channel_id. Use the Discord channel ID.';
+                    if (!message) return 'Error: Missing message content.';
+
+                    if (this.discord) {
+                        await this.discord.sendMessage(channel_id, message);
+
+                        // Persist outbound message so future actions can use it as thread context.
+                        this.memory.saveMemory({
+                            id: `discord-out-${Date.now()}`,
+                            type: 'short',
+                            content: `Assistant sent Discord message to channel ${channel_id}: ${message}`,
+                            timestamp: new Date().toISOString(),
+                            metadata: {
+                                source: 'discord',
+                                role: 'assistant',
+                                channelId: channel_id,
+                                sourceId: channel_id
+                            }
+                        });
+                        return `Message sent to Discord channel ${channel_id}`;
+                    }
+                    return 'Discord channel not available';
+                }
+            });
+
+            // Skill: Send Slack
+            this.skills.registerSkill({
+                name: 'send_slack',
+                description: 'Send a message to a Slack channel or DM',
+                usage: 'send_slack(channel_id, message)',
+                handler: async (args: any) => {
+                    const channel_id = args.channel_id || args.channelId || args.to || args.id;
+                    const message = args.message || args.content || args.text;
+
+                    if (!channel_id) return 'Error: Missing channel_id.';
+                    if (!message) return 'Error: Missing message content.';
+
+                    if (this.slack) {
+                        await this.slack.sendMessage(channel_id, message);
+
+                        this.memory.saveMemory({
+                            id: `slack-out-${Date.now()}`,
+                            type: 'short',
+                            content: `Assistant sent Slack message to ${channel_id}: ${message}`,
+                            timestamp: new Date().toISOString(),
+                            metadata: {
+                                source: 'slack',
+                                role: 'assistant',
+                                channelId: channel_id
+                            }
+                        });
+                        return `Message sent to Slack channel ${channel_id}`;
+                    }
+                    return 'Slack channel not available';
+                }
+            });
+
+            // Skill: Send Slack File
+            this.skills.registerSkill({
+                name: 'send_slack_file',
+                description: 'Send a file to a Slack channel or DM',
+                usage: 'send_slack_file(channel_id, file_path, caption?)',
+                handler: async (args: any) => {
+                    const channel_id = args.channel_id || args.channelId || args.to || args.id;
+                    const file_path = args.file_path || args.filePath || args.path;
+                    const caption = args.caption || args.message;
+
+                    if (!channel_id) return 'Error: Missing channel_id.';
+                    if (!file_path) return 'Error: Missing file_path.';
+                    if (!this.slack) return 'Slack channel not available';
+
+                    await this.slack.sendFile(channel_id, file_path, caption);
+                    return `File sent to Slack channel ${channel_id}`;
+                }
+            });
+
+            // Skill: Send Discord File
+            this.skills.registerSkill({
+                name: 'send_discord_file',
+                description: 'Send a file to a Discord channel with optional caption',
+                usage: 'send_discord_file(channel_id, file_path, caption?)',
+                handler: async (args: any) => {
+                    const channel_id = args.channel_id || args.channelId || args.id || args.to;
+                    const file_path = args.file_path || args.filePath || args.path;
+                    const caption = args.caption || args.message;
+
+                    if (!channel_id) return 'Error: Missing channel_id.';
+                    if (!file_path) return 'Error: Missing file_path.';
+
+                    if (this.discord) {
+                        await this.discord.sendFile(channel_id, file_path, caption);
+                        return `File sent to Discord channel ${channel_id}`;
+                    }
+                    return 'Discord channel not available';
+                }
+            });
+
+            // Skill: Send Gateway Chat
+            this.skills.registerSkill({
+                name: 'send_gateway_chat',
+                description: 'Send a message to the Gateway Chat interface',
+                usage: 'send_gateway_chat(message)',
+                handler: async (args: any) => {
+                    const message = args.message || args.content || args.text;
+
+                    if (!message) return 'Error: Missing message content.';
+
+                    // Save assistant message to memory with proper metadata
+                    const messageId = `gateway-chat-response-${Date.now()}`;
                     this.memory.saveMemory({
-                        id: `tg-poll-${Date.now()}`,
+                        id: messageId,
                         type: 'short',
-                        content: `Assistant sent Telegram poll to ${chat_id}: "${question}" [${options.join(', ')}]`,
+                        content: message,
                         timestamp: new Date().toISOString(),
-                        metadata: { source: 'telegram', role: 'assistant', chatId: chat_id, messageId }
+                        metadata: { source: 'gateway-chat', role: 'assistant' }
                     });
-                    return `Poll sent to ${chat_id} (message_id=${messageId})`;
+
+                    // Broadcast via event bus so GatewayServer can forward to WebSocket clients
+                    eventBus.emit('gateway:chat:response', {
+                        type: 'chat:message',
+                        role: 'assistant',
+                        content: message,
+                        format: hasMarkdown(message) ? 'markdown' : 'text',
+                        timestamp: new Date().toISOString(),
+                        messageId
+                    });
+
+                    return `Message sent to Gateway Chat`;
                 }
-                return 'Telegram channel not available';
-            }
-        });
+            });
 
-        // Skill: Telegram — react to a message with an emoji
-        this.skills.registerSkill({
-            name: 'telegram_react',
-            description: 'React to a Telegram message with an emoji. NOTE: Telegram restricts bots from setting native reactions in most chat types (private chats, groups). In those cases the bot automatically falls back to *replying* to the target message with the emoji — this is normal and expected, not an error. Native reactions only work in channels where the bot is an admin. Common emojis: 👍 👎 ❤ 🔥 🎉 🤔 👏 😁 🙏 ✅ ❌. messageId must be the numeric ID of the message to react to.',
-            usage: 'telegram_react(chatId, messageId, emoji)',
-            handler: async (args: any) => {
-                let chat_id = args.chat_id || args.chatId || args.id;
-                const messageId = String(args.message_id || args.messageId);
-                const emoji = args.emoji || args.reaction || '👍';
+            // ═══════════════════════════════════════════
+            // Reaction Skills (unified across channels)
+            // ═══════════════════════════════════════════
 
-                if (!chat_id) return { success: false, error: 'Missing chatId.' };
-                if (!messageId || messageId === 'undefined') return { success: false, error: 'Missing messageId.' };
+            // Skill: React to a message (auto-detect channel)
+            this.skills.registerSkill({
+                name: 'react',
+                description: 'React to a message with an emoji. Auto-detects the channel from context. Supports semantic names ("thumbs_up", "love", "fire", "laugh", "check", "eyes", "thinking") or raw emoji ("👍", "❤️"). The message_id comes from the incoming message metadata.',
+                usage: 'react(message_id, emoji, channel?, chat_id?)',
+                handler: async (args: any) => {
+                    let messageId = args.message_id || args.messageId || args.id;
+                    const emojiInput = args.emoji || args.reaction || args.text || 'thumbs_up';
+                    let channel = (args.channel || args.source || '').toLowerCase();
+                    let chatId = args.chat_id || args.chatId || args.jid || args.to;
 
-                const resolved = this.resolveTelegramChatId(String(chat_id));
-                if (!resolved) return { success: false, error: `"${chat_id}" is not a valid Telegram chat ID.` };
-                chat_id = resolved.id;
+                    const isTemplateId = (raw: any) => /\{\{[^}]+\}\}|\[\[[^\]]+\]\]/.test(String(raw || ''));
+                    const resolveFallbackMessageId = (sourceHint?: string, chatHint?: string): string | null => {
+                        const recent = this.memory.searchMemory('short').slice().reverse();
+                        const found = recent.find((m: any) => {
+                            const md = m.metadata || {};
+                            if (!md.messageId) return false;
+                            if (sourceHint && md.source !== sourceHint) return false;
+                            if (chatHint && String(md.chatId || md.sourceId || '') !== String(chatHint)) return false;
+                            return true;
+                        });
+                        return found?.metadata?.messageId ? String(found.metadata.messageId) : null;
+                    };
 
-                if (this.telegram) {
+                    if (!messageId || isTemplateId(messageId)) {
+                        const fallback = resolveFallbackMessageId(channel || undefined, chatId ? String(chatId) : undefined)
+                            || resolveFallbackMessageId(channel || undefined)
+                            || resolveFallbackMessageId();
+                        if (fallback) {
+                            logger.warn(`react: Replaced invalid message_id "${messageId}" with fallback "${fallback}" from recent context`);
+                            messageId = fallback;
+                        }
+                    }
+
+                    if (!messageId) return 'Error: Missing message_id. Use the messageId from the incoming message metadata.';
+                    if (isTemplateId(messageId)) return 'Error: Invalid message_id template (e.g., {{message.id}}). Use the real numeric/alphanumeric messageId from metadata.';
+
+                    const emoji = resolveEmoji(emojiInput);
+
+                    // Auto-detect channel from action context if not specified
+                    if (!channel || !chatId) {
+                        const recentMemories = this.memory.searchMemory('short');
+                        // Support composite "chatId_msgId" formats - extract the message part for matching
+                        const msgIdStr = String(messageId);
+                        const plainMsgId = msgIdStr.includes('_') ? msgIdStr.split('_').pop() : msgIdStr;
+                        const matchingMemory = recentMemories.find((m: any) =>
+                            m.metadata?.messageId === messageId ||
+                            m.metadata?.messageId?.toString() === messageId ||
+                            m.metadata?.messageId?.toString() === plainMsgId
+                        );
+                        if (matchingMemory?.metadata) {
+                            if (!channel) channel = detectChannelFromMetadata(matchingMemory.metadata);
+                            if (!chatId) chatId = matchingMemory.metadata.chatId || matchingMemory.metadata.channelId || matchingMemory.metadata.sourceId;
+                        }
+                        // If chatId still missing but messageId is composite, extract chatId from it
+                        if (!chatId && msgIdStr.includes('_')) {
+                            chatId = msgIdStr.split('_')[0];
+                        }
+                    }
+
+                    if (!channel) return 'Error: Could not detect channel. Specify channel (telegram/whatsapp/discord/slack) explicitly.';
+                    if (!chatId) return 'Error: Could not detect chat_id. Specify it explicitly.';
+
                     try {
-                        const result = await this.telegram.react(chat_id, messageId, emoji);
-                        const method = result.method === 'reply'
-                            ? 'reply (native reaction unavailable for bots in this chat type)'
-                            : 'native reaction';
-                        return { success: true, method, emoji, message: `Reacted with ${emoji} via ${method}` };
-                    } catch (err: any) {
-                        return { success: false, error: String(err?.message || err) };
-                    }
-                }
-                return { success: false, error: 'Telegram channel not available' };
-            }
-        });
-
-        // Skill: Telegram — pin a message
-        this.skills.registerSkill({
-            name: 'telegram_pin_message',
-            description: 'Pin a message in a Telegram chat (bot must be admin in groups/channels). The pinned message appears at the top of the chat for all members.',
-            usage: 'telegram_pin_message(chatId, messageId, silent?)',
-            handler: async (args: any) => {
-                let chat_id = args.chat_id || args.chatId || args.id;
-                const messageId = parseInt(String(args.message_id || args.messageId), 10);
-                const silent = args.silent ?? true;
-
-                if (!chat_id) return 'Error: Missing chatId.';
-                if (isNaN(messageId)) return 'Error: Missing or invalid messageId.';
-
-                const resolved = this.resolveTelegramChatId(String(chat_id));
-                if (!resolved) return `Error: "${chat_id}" is not a valid Telegram chat ID.`;
-                chat_id = resolved.id;
-
-                if (this.telegram) {
-                    await this.telegram.pinMessage(chat_id, messageId, silent);
-                    return `Message ${messageId} pinned in chat ${chat_id}`;
-                }
-                return 'Telegram channel not available';
-            }
-        });
-
-        // Skill: Send WhatsApp
-        this.skills.registerSkill({
-            name: 'send_whatsapp',
-            description: 'Send a message to a WhatsApp contact or group',
-            usage: 'send_whatsapp(jid, message)',
-            handler: async (args: any) => {
-                const jid = args.jid || args.to || args.id;
-                const message = args.message || args.content || args.text;
-
-                if (!jid) return 'Error: Missing jid (WhatsApp ID).';
-                if (!message) return 'Error: Missing message content.';
-
-                if (this.whatsapp) {
-                    await this.whatsapp.sendMessage(jid, message);
-
-                    // Persist outbound message so future actions can use it as thread context.
-                    this.memory.saveMemory({
-                        id: `wa-out-${Date.now()}`,
-                        type: 'short',
-                        content: `Assistant sent WhatsApp message to ${jid}: ${message}`,
-                        timestamp: new Date().toISOString(),
-                        metadata: {
-                            source: 'whatsapp',
-                            role: 'assistant',
-                            senderId: jid,
-                            sourceId: jid
+                        if (channel === 'telegram' && this.telegram) {
+                            await this.telegram.react(chatId, messageId, emoji);
+                        } else if (channel === 'whatsapp' && this.whatsapp) {
+                            await this.whatsapp.react(chatId, messageId, emoji);
+                        } else if (channel === 'discord' && this.discord) {
+                            await this.discord.react(chatId, messageId, emoji);
+                        } else if (channel === 'slack' && this.slack) {
+                            await this.slack.react(chatId, messageId, emoji);
+                        } else {
+                            return `Error: Channel "${channel}" not available or not recognized.`;
                         }
-                    });
-                    return `Message sent to ${jid} via WhatsApp`;
+                        return `Reacted with ${emoji} to message ${messageId} on ${channel}`;
+                    } catch (e) {
+                        return `Error reacting: ${e}`;
+                    }
                 }
-                return 'WhatsApp channel not available';
-            }
-        });
+            });
 
-        // Skill: Send Discord
-        this.skills.registerSkill({
-            name: 'send_discord',
-            description: 'Send a message to a Discord channel',
-            usage: 'send_discord(channel_id, message)',
-            handler: async (args: any) => {
-                const channel_id = args.channel_id || args.channelId || args.id || args.to;
-                const message = args.message || args.content || args.text;
+            // Skill: React Telegram
+            this.skills.registerSkill({
+                name: 'react_telegram',
+                description: 'React to a Telegram message with an emoji. Use semantic names ("thumbs_up", "love", "fire") or raw emoji.',
+                usage: 'react_telegram(chat_id, message_id, emoji)',
+                handler: async (args: any) => {
+                    let chatId = args.chat_id || args.chatId || args.to;
+                    let messageId = args.message_id || args.messageId || args.id;
+                    const emojiInput = args.emoji || args.reaction || 'thumbs_up';
 
-                if (!channel_id) return 'Error: Missing channel_id. Use the Discord channel ID.';
-                if (!message) return 'Error: Missing message content.';
+                    const isTemplateId = (raw: any) => /\{\{[^}]+\}\}|\[\[[^\]]+\]\]/.test(String(raw || ''));
+                    const resolveFallbackTelegramMessageId = (chatHint?: string): string | null => {
+                        const recent = this.memory.searchMemory('short').slice().reverse();
+                        const found = recent.find((m: any) => {
+                            const md = m.metadata || {};
+                            if (md.source !== 'telegram') return false;
+                            if (!md.messageId) return false;
+                            if (chatHint && String(md.chatId || md.sourceId || '') !== String(chatHint)) return false;
+                            return true;
+                        });
+                        return found?.metadata?.messageId ? String(found.metadata.messageId) : null;
+                    };
 
-                if (this.discord) {
-                    await this.discord.sendMessage(channel_id, message);
+                    if (!chatId) return 'Error: Missing chat_id (numeric Telegram ID).';
+                    if (!messageId) return 'Error: Missing message_id.';
 
-                    // Persist outbound message so future actions can use it as thread context.
-                    this.memory.saveMemory({
-                        id: `discord-out-${Date.now()}`,
-                        type: 'short',
-                        content: `Assistant sent Discord message to channel ${channel_id}: ${message}`,
-                        timestamp: new Date().toISOString(),
-                        metadata: {
-                            source: 'discord',
-                            role: 'assistant',
-                            channelId: channel_id,
-                            sourceId: channel_id
+                    // Resolve name → numeric ID if needed
+                    const resolved = this.resolveTelegramChatId(String(chatId));
+                    if (!resolved) {
+                        return `Error: "${chatId}" is not a valid Telegram chat ID. Use the numeric ID from message metadata.`;
+                    }
+                    chatId = resolved.id;
+
+                    if (isTemplateId(messageId)) {
+                        const fallback = resolveFallbackTelegramMessageId(String(chatId)) || resolveFallbackTelegramMessageId();
+                        if (fallback) {
+                            logger.warn(`react_telegram: Replaced invalid message_id "${messageId}" with fallback "${fallback}" from recent telegram context`);
+                            messageId = fallback;
                         }
-                    });
-                    return `Message sent to Discord channel ${channel_id}`;
-                }
-                return 'Discord channel not available';
-            }
-        });
-
-        // Skill: Send Slack
-        this.skills.registerSkill({
-            name: 'send_slack',
-            description: 'Send a message to a Slack channel or DM',
-            usage: 'send_slack(channel_id, message)',
-            handler: async (args: any) => {
-                const channel_id = args.channel_id || args.channelId || args.to || args.id;
-                const message = args.message || args.content || args.text;
-
-                if (!channel_id) return 'Error: Missing channel_id.';
-                if (!message) return 'Error: Missing message content.';
-
-                if (this.slack) {
-                    await this.slack.sendMessage(channel_id, message);
-
-                    this.memory.saveMemory({
-                        id: `slack-out-${Date.now()}`,
-                        type: 'short',
-                        content: `Assistant sent Slack message to ${channel_id}: ${message}`,
-                        timestamp: new Date().toISOString(),
-                        metadata: {
-                            source: 'slack',
-                            role: 'assistant',
-                            channelId: channel_id
-                        }
-                    });
-                    return `Message sent to Slack channel ${channel_id}`;
-                }
-                return 'Slack channel not available';
-            }
-        });
-
-        // Skill: Send Slack File
-        this.skills.registerSkill({
-            name: 'send_slack_file',
-            description: 'Send a file to a Slack channel or DM',
-            usage: 'send_slack_file(channel_id, file_path, caption?)',
-            handler: async (args: any) => {
-                const channel_id = args.channel_id || args.channelId || args.to || args.id;
-                const file_path = args.file_path || args.filePath || args.path;
-                const caption = args.caption || args.message;
-
-                if (!channel_id) return 'Error: Missing channel_id.';
-                if (!file_path) return 'Error: Missing file_path.';
-                if (!this.slack) return 'Slack channel not available';
-
-                await this.slack.sendFile(channel_id, file_path, caption);
-                return `File sent to Slack channel ${channel_id}`;
-            }
-        });
-
-        // Skill: Send Discord File
-        this.skills.registerSkill({
-            name: 'send_discord_file',
-            description: 'Send a file to a Discord channel with optional caption',
-            usage: 'send_discord_file(channel_id, file_path, caption?)',
-            handler: async (args: any) => {
-                const channel_id = args.channel_id || args.channelId || args.id || args.to;
-                const file_path = args.file_path || args.filePath || args.path;
-                const caption = args.caption || args.message;
-
-                if (!channel_id) return 'Error: Missing channel_id.';
-                if (!file_path) return 'Error: Missing file_path.';
-
-                if (this.discord) {
-                    await this.discord.sendFile(channel_id, file_path, caption);
-                    return `File sent to Discord channel ${channel_id}`;
-                }
-                return 'Discord channel not available';
-            }
-        });
-
-        // Skill: Send Gateway Chat
-        this.skills.registerSkill({
-            name: 'send_gateway_chat',
-            description: 'Send a message to the Gateway Chat interface',
-            usage: 'send_gateway_chat(message)',
-            handler: async (args: any) => {
-                const message = args.message || args.content || args.text;
-
-                if (!message) return 'Error: Missing message content.';
-
-                // Save assistant message to memory with proper metadata
-                const messageId = `gateway-chat-response-${Date.now()}`;
-                this.memory.saveMemory({
-                    id: messageId,
-                    type: 'short',
-                    content: message,
-                    timestamp: new Date().toISOString(),
-                    metadata: { source: 'gateway-chat', role: 'assistant' }
-                });
-
-                // Broadcast via event bus so GatewayServer can forward to WebSocket clients
-                eventBus.emit('gateway:chat:response', {
-                    type: 'chat:message',
-                    role: 'assistant',
-                    content: message,
-                    format: hasMarkdown(message) ? 'markdown' : 'text',
-                    timestamp: new Date().toISOString(),
-                    messageId
-                });
-
-                return `Message sent to Gateway Chat`;
-            }
-        });
-
-        // ═══════════════════════════════════════════
-        // Reaction Skills (unified across channels)
-        // ═══════════════════════════════════════════
-
-        // Skill: React to a message (auto-detect channel)
-        this.skills.registerSkill({
-            name: 'react',
-            description: 'React to a message with an emoji. Auto-detects the channel from context. Supports semantic names ("thumbs_up", "love", "fire", "laugh", "check", "eyes", "thinking") or raw emoji ("👍", "❤️"). The message_id comes from the incoming message metadata.',
-            usage: 'react(message_id, emoji, channel?, chat_id?)',
-            handler: async (args: any) => {
-                let messageId = args.message_id || args.messageId || args.id;
-                const emojiInput = args.emoji || args.reaction || args.text || 'thumbs_up';
-                let channel = (args.channel || args.source || '').toLowerCase();
-                let chatId = args.chat_id || args.chatId || args.jid || args.to;
-
-                const isTemplateId = (raw: any) => /\{\{[^}]+\}\}|\[\[[^\]]+\]\]/.test(String(raw || ''));
-                const resolveFallbackMessageId = (sourceHint?: string, chatHint?: string): string | null => {
-                    const recent = this.memory.searchMemory('short').slice().reverse();
-                    const found = recent.find((m: any) => {
-                        const md = m.metadata || {};
-                        if (!md.messageId) return false;
-                        if (sourceHint && md.source !== sourceHint) return false;
-                        if (chatHint && String(md.chatId || md.sourceId || '') !== String(chatHint)) return false;
-                        return true;
-                    });
-                    return found?.metadata?.messageId ? String(found.metadata.messageId) : null;
-                };
-
-                if (!messageId || isTemplateId(messageId)) {
-                    const fallback = resolveFallbackMessageId(channel || undefined, chatId ? String(chatId) : undefined)
-                        || resolveFallbackMessageId(channel || undefined)
-                        || resolveFallbackMessageId();
-                    if (fallback) {
-                        logger.warn(`react: Replaced invalid message_id "${messageId}" with fallback "${fallback}" from recent context`);
-                        messageId = fallback;
                     }
-                }
 
-                if (!messageId) return 'Error: Missing message_id. Use the messageId from the incoming message metadata.';
-                if (isTemplateId(messageId)) return 'Error: Invalid message_id template (e.g., {{message.id}}). Use the real numeric/alphanumeric messageId from metadata.';
-
-                const emoji = resolveEmoji(emojiInput);
-
-                // Auto-detect channel from action context if not specified
-                if (!channel || !chatId) {
-                    const recentMemories = this.memory.searchMemory('short');
-                    // Support composite "chatId_msgId" formats - extract the message part for matching
-                    const msgIdStr = String(messageId);
-                    const plainMsgId = msgIdStr.includes('_') ? msgIdStr.split('_').pop() : msgIdStr;
-                    const matchingMemory = recentMemories.find((m: any) =>
-                        m.metadata?.messageId === messageId ||
-                        m.metadata?.messageId?.toString() === messageId ||
-                        m.metadata?.messageId?.toString() === plainMsgId
-                    );
-                    if (matchingMemory?.metadata) {
-                        if (!channel) channel = detectChannelFromMetadata(matchingMemory.metadata);
-                        if (!chatId) chatId = matchingMemory.metadata.chatId || matchingMemory.metadata.channelId || matchingMemory.metadata.sourceId;
+                    if (isTemplateId(messageId)) {
+                        return 'Error: Invalid Telegram message_id template (e.g., {{message.id}}). Use the actual numeric messageId from metadata.';
                     }
-                    // If chatId still missing but messageId is composite, extract chatId from it
-                    if (!chatId && msgIdStr.includes('_')) {
-                        chatId = msgIdStr.split('_')[0];
-                    }
-                }
 
-                if (!channel) return 'Error: Could not detect channel. Specify channel (telegram/whatsapp/discord/slack) explicitly.';
-                if (!chatId) return 'Error: Could not detect chat_id. Specify it explicitly.';
+                    if (!this.telegram) return 'Telegram channel not available';
 
-                try {
-                    if (channel === 'telegram' && this.telegram) {
+                    const emoji = resolveEmoji(emojiInput);
+                    try {
                         await this.telegram.react(chatId, messageId, emoji);
-                    } else if (channel === 'whatsapp' && this.whatsapp) {
-                        await this.whatsapp.react(chatId, messageId, emoji);
-                    } else if (channel === 'discord' && this.discord) {
-                        await this.discord.react(chatId, messageId, emoji);
-                    } else if (channel === 'slack' && this.slack) {
-                        await this.slack.react(chatId, messageId, emoji);
-                    } else {
-                        return `Error: Channel "${channel}" not available or not recognized.`;
-                    }
-                    return `Reacted with ${emoji} to message ${messageId} on ${channel}`;
-                } catch (e) {
-                    return `Error reacting: ${e}`;
-                }
-            }
-        });
-
-        // Skill: React Telegram
-        this.skills.registerSkill({
-            name: 'react_telegram',
-            description: 'React to a Telegram message with an emoji. Use semantic names ("thumbs_up", "love", "fire") or raw emoji.',
-            usage: 'react_telegram(chat_id, message_id, emoji)',
-            handler: async (args: any) => {
-                let chatId = args.chat_id || args.chatId || args.to;
-                let messageId = args.message_id || args.messageId || args.id;
-                const emojiInput = args.emoji || args.reaction || 'thumbs_up';
-
-                const isTemplateId = (raw: any) => /\{\{[^}]+\}\}|\[\[[^\]]+\]\]/.test(String(raw || ''));
-                const resolveFallbackTelegramMessageId = (chatHint?: string): string | null => {
-                    const recent = this.memory.searchMemory('short').slice().reverse();
-                    const found = recent.find((m: any) => {
-                        const md = m.metadata || {};
-                        if (md.source !== 'telegram') return false;
-                        if (!md.messageId) return false;
-                        if (chatHint && String(md.chatId || md.sourceId || '') !== String(chatHint)) return false;
-                        return true;
-                    });
-                    return found?.metadata?.messageId ? String(found.metadata.messageId) : null;
-                };
-
-                if (!chatId) return 'Error: Missing chat_id (numeric Telegram ID).';
-                if (!messageId) return 'Error: Missing message_id.';
-
-                // Resolve name → numeric ID if needed
-                const resolved = this.resolveTelegramChatId(String(chatId));
-                if (!resolved) {
-                    return `Error: "${chatId}" is not a valid Telegram chat ID. Use the numeric ID from message metadata.`;
-                }
-                chatId = resolved.id;
-
-                if (isTemplateId(messageId)) {
-                    const fallback = resolveFallbackTelegramMessageId(String(chatId)) || resolveFallbackTelegramMessageId();
-                    if (fallback) {
-                        logger.warn(`react_telegram: Replaced invalid message_id "${messageId}" with fallback "${fallback}" from recent telegram context`);
-                        messageId = fallback;
+                        return `Reacted with ${emoji} to Telegram message ${messageId}`;
+                    } catch (e) {
+                        return `Error: ${e}`;
                     }
                 }
+            });
 
-                if (isTemplateId(messageId)) {
-                    return 'Error: Invalid Telegram message_id template (e.g., {{message.id}}). Use the actual numeric messageId from metadata.';
-                }
+            // Skill: React WhatsApp
+            this.skills.registerSkill({
+                name: 'react_whatsapp',
+                description: 'React to a WhatsApp message with an emoji. Use semantic names ("thumbs_up", "love", "fire") or raw emoji.',
+                usage: 'react_whatsapp(jid, message_id, emoji)',
+                handler: async (args: any) => {
+                    const jid = args.jid || args.to || args.chat_id;
+                    const messageId = args.message_id || args.messageId || args.id;
+                    const emojiInput = args.emoji || args.reaction || 'thumbs_up';
 
-                if (!this.telegram) return 'Telegram channel not available';
+                    if (!jid) return 'Error: Missing jid (WhatsApp ID).';
+                    if (!messageId) return 'Error: Missing message_id.';
 
-                const emoji = resolveEmoji(emojiInput);
-                try {
-                    await this.telegram.react(chatId, messageId, emoji);
-                    return `Reacted with ${emoji} to Telegram message ${messageId}`;
-                } catch (e) {
-                    return `Error: ${e}`;
-                }
-            }
-        });
+                    if (!this.whatsapp) return 'WhatsApp channel not available';
 
-        // Skill: React WhatsApp
-        this.skills.registerSkill({
-            name: 'react_whatsapp',
-            description: 'React to a WhatsApp message with an emoji. Use semantic names ("thumbs_up", "love", "fire") or raw emoji.',
-            usage: 'react_whatsapp(jid, message_id, emoji)',
-            handler: async (args: any) => {
-                const jid = args.jid || args.to || args.chat_id;
-                const messageId = args.message_id || args.messageId || args.id;
-                const emojiInput = args.emoji || args.reaction || 'thumbs_up';
-
-                if (!jid) return 'Error: Missing jid (WhatsApp ID).';
-                if (!messageId) return 'Error: Missing message_id.';
-
-                if (!this.whatsapp) return 'WhatsApp channel not available';
-
-                const emoji = resolveEmoji(emojiInput);
-                try {
-                    await this.whatsapp.react(jid, messageId, emoji);
-                    return `Reacted with ${emoji} to WhatsApp message ${messageId}`;
-                } catch (e) {
-                    return `Error: ${e}`;
-                }
-            }
-        });
-
-        // Skill: React Discord
-        this.skills.registerSkill({
-            name: 'react_discord',
-            description: 'React to a Discord message with an emoji. Use semantic names ("thumbs_up", "love", "fire") or raw emoji.',
-            usage: 'react_discord(channel_id, message_id, emoji)',
-            handler: async (args: any) => {
-                const channelId = args.channel_id || args.channelId || args.to;
-                const messageId = args.message_id || args.messageId || args.id;
-                const emojiInput = args.emoji || args.reaction || 'thumbs_up';
-
-                if (!channelId) return 'Error: Missing channel_id.';
-                if (!messageId) return 'Error: Missing message_id.';
-
-                if (!this.discord) return 'Discord channel not available';
-
-                const emoji = resolveEmoji(emojiInput);
-                try {
-                    await this.discord.react(channelId, messageId, emoji);
-                    return `Reacted with ${emoji} to Discord message ${messageId}`;
-                } catch (e) {
-                    return `Error: ${e}`;
-                }
-            }
-        });
-
-        // Skill: React Slack
-        this.skills.registerSkill({
-            name: 'react_slack',
-            description: 'React to a Slack message with an emoji. message_id should be the Slack message timestamp.',
-            usage: 'react_slack(channel_id, message_id, emoji)',
-            handler: async (args: any) => {
-                const channelId = args.channel_id || args.channelId || args.to;
-                const messageId = args.message_id || args.messageId || args.id;
-                const emojiInput = args.emoji || args.reaction || 'thumbs_up';
-
-                if (!channelId) return 'Error: Missing channel_id.';
-                if (!messageId) return 'Error: Missing message_id (Slack timestamp).';
-                if (!this.slack) return 'Slack channel not available';
-
-                const emoji = resolveEmoji(emojiInput);
-                try {
-                    await this.slack.react(channelId, messageId, emoji);
-                    return `Reacted with ${emoji} to Slack message ${messageId}`;
-                } catch (e) {
-                    return `Error: ${e}`;
-                }
-            }
-        });
-
-        // Skill: Get Discord Guilds
-        this.skills.registerSkill({
-            name: 'get_discord_guilds',
-            description: 'Get list of Discord servers (guilds) the bot is in',
-            usage: 'get_discord_guilds()',
-            handler: async (args: any) => {
-                if (this.discord) {
-                    const guilds = await this.discord.getGuilds();
-                    if (guilds.length === 0) {
-                        return 'Bot is not in any Discord servers';
+                    const emoji = resolveEmoji(emojiInput);
+                    try {
+                        await this.whatsapp.react(jid, messageId, emoji);
+                        return `Reacted with ${emoji} to WhatsApp message ${messageId}`;
+                    } catch (e) {
+                        return `Error: ${e}`;
                     }
-                    return `Discord servers (${guilds.length}):\n` + 
-                        guilds.map(g => `- ${g.name} (ID: ${g.id})`).join('\n');
                 }
-                return 'Discord channel not available';
-            }
-        });
+            });
 
-        // Skill: Get Discord Channels
-        this.skills.registerSkill({
-            name: 'get_discord_channels',
-            description: 'Get list of text channels in a Discord server',
-            usage: 'get_discord_channels(guild_id)',
-            handler: async (args: any) => {
-                const guild_id = args.guild_id || args.guildId || args.server_id;
-                
-                if (!guild_id) return 'Error: Missing guild_id (server ID).';
+            // Skill: React Discord
+            this.skills.registerSkill({
+                name: 'react_discord',
+                description: 'React to a Discord message with an emoji. Use semantic names ("thumbs_up", "love", "fire") or raw emoji.',
+                usage: 'react_discord(channel_id, message_id, emoji)',
+                handler: async (args: any) => {
+                    const channelId = args.channel_id || args.channelId || args.to;
+                    const messageId = args.message_id || args.messageId || args.id;
+                    const emojiInput = args.emoji || args.reaction || 'thumbs_up';
 
-                if (this.discord) {
-                    const channels = await this.discord.getTextChannels(guild_id);
-                    if (channels.length === 0) {
-                        return `No text channels found in server ${guild_id}`;
+                    if (!channelId) return 'Error: Missing channel_id.';
+                    if (!messageId) return 'Error: Missing message_id.';
+
+                    if (!this.discord) return 'Discord channel not available';
+
+                    const emoji = resolveEmoji(emojiInput);
+                    try {
+                        await this.discord.react(channelId, messageId, emoji);
+                        return `Reacted with ${emoji} to Discord message ${messageId}`;
+                    } catch (e) {
+                        return `Error: ${e}`;
                     }
-                    return `Text channels in server ${guild_id} (${channels.length}):\n` + 
-                        channels.map(c => `- #${c.name} (ID: ${c.id})`).join('\n');
                 }
-                return 'Discord channel not available';
-            }
-        });
+            });
+
+            // Skill: React Slack
+            this.skills.registerSkill({
+                name: 'react_slack',
+                description: 'React to a Slack message with an emoji. message_id should be the Slack message timestamp.',
+                usage: 'react_slack(channel_id, message_id, emoji)',
+                handler: async (args: any) => {
+                    const channelId = args.channel_id || args.channelId || args.to;
+                    const messageId = args.message_id || args.messageId || args.id;
+                    const emojiInput = args.emoji || args.reaction || 'thumbs_up';
+
+                    if (!channelId) return 'Error: Missing channel_id.';
+                    if (!messageId) return 'Error: Missing message_id (Slack timestamp).';
+                    if (!this.slack) return 'Slack channel not available';
+
+                    const emoji = resolveEmoji(emojiInput);
+                    try {
+                        await this.slack.react(channelId, messageId, emoji);
+                        return `Reacted with ${emoji} to Slack message ${messageId}`;
+                    } catch (e) {
+                        return `Error: ${e}`;
+                    }
+                }
+            });
+
+            // Skill: Get Discord Guilds
+            this.skills.registerSkill({
+                name: 'get_discord_guilds',
+                description: 'Get list of Discord servers (guilds) the bot is in',
+                usage: 'get_discord_guilds()',
+                handler: async (args: any) => {
+                    if (this.discord) {
+                        const guilds = await this.discord.getGuilds();
+                        if (guilds.length === 0) {
+                            return 'Bot is not in any Discord servers';
+                        }
+                        return `Discord servers (${guilds.length}):\n` +
+                            guilds.map(g => `- ${g.name} (ID: ${g.id})`).join('\n');
+                    }
+                    return 'Discord channel not available';
+                }
+            });
+
+            // Skill: Get Discord Channels
+            this.skills.registerSkill({
+                name: 'get_discord_channels',
+                description: 'Get list of text channels in a Discord server',
+                usage: 'get_discord_channels(guild_id)',
+                handler: async (args: any) => {
+                    const guild_id = args.guild_id || args.guildId || args.server_id;
+
+                    if (!guild_id) return 'Error: Missing guild_id (server ID).';
+
+                    if (this.discord) {
+                        const channels = await this.discord.getTextChannels(guild_id);
+                        if (channels.length === 0) {
+                            return `No text channels found in server ${guild_id}`;
+                        }
+                        return `Text channels in server ${guild_id} (${channels.length}):\n` +
+                            channels.map(c => `- #${c.name} (ID: ${c.id})`).join('\n');
+                    }
+                    return 'Discord channel not available';
+                }
+            });
 
         } // end !isWorker channel skills guard
 
@@ -1359,7 +1359,7 @@ export class Agent {
                 try {
                     const resolvedPath = this.resolveAgentWorkspacePath(String(filePath));
                     const dir = path.dirname(resolvedPath);
-                    
+
                     // Create parent directories if needed
                     if (!fs.existsSync(dir)) {
                         fs.mkdirSync(dir, { recursive: true });
@@ -1390,11 +1390,11 @@ export class Agent {
 
                 try {
                     const resolvedPath = this.resolveAgentWorkspacePath(String(dirPath));
-                    
+
                     if (fs.existsSync(resolvedPath)) {
                         return `Directory already exists: ${resolvedPath}`;
                     }
-                    
+
                     fs.mkdirSync(resolvedPath, { recursive: true });
                     return `Directory created: ${resolvedPath}`;
                 } catch (e) {
@@ -1415,23 +1415,23 @@ export class Agent {
 
                 try {
                     const resolvedPath = this.resolveAgentWorkspacePath(String(filePath));
-                    
+
                     if (!fs.existsSync(resolvedPath)) {
                         return `Error: File not found: ${resolvedPath}`;
                     }
-                    
+
                     const content = fs.readFileSync(resolvedPath, 'utf8');
 
                     // Line-range slicing (1-based, inclusive)
                     const startLine = args.start_line ? Math.max(1, parseInt(args.start_line, 10)) : undefined;
-                    const endLine   = args.end_line   ? Math.max(1, parseInt(args.end_line,   10)) : undefined;
+                    const endLine = args.end_line ? Math.max(1, parseInt(args.end_line, 10)) : undefined;
 
                     let result = content;
                     let rangeNote = '';
                     if (startLine !== undefined || endLine !== undefined) {
                         const lines = content.split('\n');
                         const from = (startLine ?? 1) - 1;
-                        const to   = endLine ?? lines.length;
+                        const to = endLine ?? lines.length;
                         result = lines.slice(from, to).join('\n');
                         rangeNote = ` (lines ${from + 1}–${Math.min(to, lines.length)} of ${lines.length})`;
                     }
@@ -1458,17 +1458,17 @@ export class Agent {
 
                 try {
                     const resolvedPath = this.resolveAgentWorkspacePath(String(dirPath));
-                    
+
                     if (!fs.existsSync(resolvedPath)) {
                         return `Error: Directory not found: ${resolvedPath}`;
                     }
-                    
+
                     const entries = fs.readdirSync(resolvedPath, { withFileTypes: true });
                     const formatted = entries.map(e => {
                         const indicator = e.isDirectory() ? '📁' : '📄';
                         return `${indicator} ${e.name}`;
                     }).join('\n');
-                    
+
                     return `Contents of ${resolvedPath}:\n${formatted || '(empty directory)'}`;
                 } catch (e) {
                     return `Error listing directory: ${e}`;
@@ -1513,7 +1513,7 @@ export class Agent {
                     const downloadsDir = path.join(this.config.getDataHome(), 'downloads');
                     if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
                     const outputPath = path.join(downloadsDir, `tts_${Date.now()}.ogg`);
-                    
+
                     await this.llm.textToSpeech(text, outputPath, voice, speed);
                     return `Audio generated successfully: ${outputPath} (voice: ${voice}, ${text.length} chars)`;
                 } catch (e) {
@@ -1712,8 +1712,10 @@ export class Agent {
                     // If the image was generated but the SEND failed, return structured partial success
                     // so the tracking code knows an image exists and the LLM can deliver it via the correct skill
                     if (generatedFilePath) {
-                        return { success: false, error: `Send failed: ${e}`, imageGenerated: true, filePath: generatedFilePath,
-                            hint: `Image was generated at ${generatedFilePath}. Use send_discord_file, send_file, or the correct channel skill to deliver it.` };
+                        return {
+                            success: false, error: `Send failed: ${e}`, imageGenerated: true, filePath: generatedFilePath,
+                            hint: `Image was generated at ${generatedFilePath}. Use send_discord_file, send_file, or the correct channel skill to deliver it.`
+                        };
                     }
                     return `Error generating/sending image: ${e}`;
                 }
@@ -1839,15 +1841,15 @@ export class Agent {
                 try {
                     // Get recent WhatsApp messages from memory
                     const memories = this.memory.searchMemory('short');
-                    const whatsappMessages = memories.filter((m: any) => 
-                        m.metadata?.source === 'whatsapp' && 
-                        m.metadata?.senderId && 
+                    const whatsappMessages = memories.filter((m: any) =>
+                        m.metadata?.source === 'whatsapp' &&
+                        m.metadata?.senderId &&
                         m.metadata?.senderId !== 'status@broadcast'
                     );
 
                     // Extract unique contacts with their last interaction
                     const contactMap = new Map<string, { jid: string; name: string; lastMessage: string; timestamp: string }>();
-                    
+
                     for (const msg of whatsappMessages) {
                         const jid = msg.metadata.senderId;
                         const name = msg.metadata.senderName || jid;
@@ -1869,7 +1871,7 @@ export class Agent {
                         return 'No recent WhatsApp contacts found in memory.';
                     }
 
-                    const formatted = contacts.map((c, i) => 
+                    const formatted = contacts.map((c, i) =>
                         `${i + 1}. ${c.name} (${c.jid})\n   Last: ${c.lastMessage.substring(0, 60)}...\n   Time: ${c.timestamp}`
                     ).join('\n\n');
 
@@ -1877,6 +1879,36 @@ export class Agent {
                 } catch (e) {
                     return `Error listing contacts: ${e}`;
                 }
+            }
+        });
+
+        // Skill: Search WhatsApp Contacts
+        this.skills.registerSkill({
+            name: 'search_whatsapp_contacts',
+            description: 'Search the entire synced WhatsApp phonebook for a contact by name to find their JID.',
+            usage: 'search_whatsapp_contacts(query)',
+            handler: async (args: any) => {
+                const query = args.query || args.name || args.search;
+
+                if (!query) return 'Error: Missing query.';
+
+                if (this.whatsapp) {
+                    try {
+                        const results = this.whatsapp.searchContacts(query);
+                        if (results.length === 0) {
+                            return `No contacts found matching "${query}".`;
+                        }
+
+                        const formatted = results.map((c, i) =>
+                            `${i + 1}. ${c.name} (${c.jid})`
+                        ).join('\n');
+
+                        return `Found ${results.length} contacts matching "${query}":\n\n${formatted}`;
+                    } catch (e) {
+                        return `Error searching contacts: ${e}`;
+                    }
+                }
+                return 'WhatsApp channel not available';
             }
         });
 
@@ -1955,18 +1987,18 @@ export class Agent {
                 try {
                     // Get profile
                     const profile = this.memory.getContactProfile(jid);
-                    
+
                     // Get recent chat history
                     const memories = this.memory.searchMemory('short');
                     const chatHistory = memories
-                        .filter((m: any) => 
-                            m.metadata?.source === 'whatsapp' && 
+                        .filter((m: any) =>
+                            m.metadata?.source === 'whatsapp' &&
                             m.metadata?.senderId === jid
                         )
                         .slice(-5);
 
                     let context = `=== WhatsApp Context for ${jid} ===\n\n`;
-                    
+
                     if (profile) {
                         context += `📋 PROFILE:\n${profile}\n\n`;
                     } else {
@@ -2066,7 +2098,7 @@ export class Agent {
                         return `Error: Multiline echo commands don't work on Windows. Use the create_custom_skill to write files, or use PowerShell's Set-Content/Out-File, or write files one line at a time.`;
                     }
                 }
-                
+
                 // Smart handling for "cd <path> ; <command>" or "cd <path> && <command>" patterns
                 // Extract the directory and convert to use cwd parameter instead
                 // Note: Only handles cd at the start of command. Multi-command chains like
@@ -2077,29 +2109,29 @@ export class Agent {
                         ? this.resolveAgentWorkspacePath(String(this.config.get('commandWorkingDir')))
                         : this.getBuildWorkspacePath();
                 let actualCommand = command;
-                
+
                 // Only attempt pattern extraction if explicit cwd is not already provided
                 if (!args.cwd) {
                     // Match patterns like: "cd /path/to/dir ; command" or "cd C:\path ; command"
                     // Supports paths with or without quotes
                     const cdPattern = /^\s*cd\s+([^\s;&]+|'[^']+'|"[^"]+"|`[^`]+`)\s*[;&]+\s*(.+)$/i;
                     const cdMatch = trimmedCmd.match(cdPattern);
-                    
+
                     if (cdMatch) {
                         let targetDir = cdMatch[1].trim();
                         const remainingCmd = cdMatch[2].trim();
-                        
+
                         // Remove surrounding quotes if present
                         if ((targetDir.startsWith('"') && targetDir.endsWith('"')) ||
                             (targetDir.startsWith("'") && targetDir.endsWith("'")) ||
                             (targetDir.startsWith('`') && targetDir.endsWith('`'))) {
                             targetDir = targetDir.slice(1, -1);
                         }
-                        
+
                         // Basic path validation to prevent directory traversal attacks
                         // Resolve to absolute path and check for suspicious patterns
                         const resolvedPath = path.resolve(workingDir, targetDir);
-                        
+
                         // Warn if path contains excessive parent directory references
                         // Note: This is a heuristic check; the command will still execute
                         // but administrators are alerted to review potentially suspicious activity
@@ -2107,11 +2139,11 @@ export class Agent {
                         if (parentDirCount > 2) {
                             logger.warn(`run_command: Suspicious path with ${parentDirCount} parent directory references: ${targetDir}`);
                         }
-                        
+
                         // Use the extracted directory as cwd and run only the remaining command
                         workingDir = resolvedPath;
                         actualCommand = remainingCmd;
-                        
+
                         logger.debug(`run_command: Detected directory change pattern. cwd="${workingDir}", actualCommand="${actualCommand}"`);
                     }
                 }
@@ -2176,7 +2208,7 @@ export class Agent {
                         if (process.platform === 'win32' && child.pid) {
                             // On Windows exec() with PowerShell doesn't propagate SIGKILL to the
                             // child tree.  Use taskkill /F /T to forcefully kill the whole tree.
-                            require('child_process').exec(`taskkill /PID ${child.pid} /T /F`, () => {});
+                            require('child_process').exec(`taskkill /PID ${child.pid} /T /F`, () => { });
                         } else {
                             child.kill('SIGKILL');
                         }
@@ -2335,10 +2367,10 @@ export class Agent {
                 const isWindows = process.platform === 'win32';
                 const isMac = process.platform === 'darwin';
                 const isLinux = process.platform === 'linux';
-                
+
                 const platformName = isWindows ? 'Windows' : isMac ? 'macOS' : isLinux ? 'Linux' : process.platform;
                 const shell = isWindows ? 'PowerShell' : 'Bash/Zsh';
-                
+
                 const commandGuidance = isWindows ? `
 📋 WINDOWS COMMAND GUIDANCE (PowerShell):
 - Commands run in PowerShell, NOT cmd.exe
@@ -2348,8 +2380,8 @@ export class Agent {
 - For file creation: Use 'write_file' skill instead of echo
 - For directories: Use 'create_directory' skill instead of mkdir
 - Path separator: Use \\ or / (both work in PowerShell)
-- Environment vars: $env:VAR_NAME` 
-                : `
+- Environment vars: $env:VAR_NAME`
+                    : `
 📋 UNIX COMMAND GUIDANCE:
 - Use && to chain commands
 - Use standard Unix commands (ls, cat, mkdir, echo, etc.)
@@ -3492,18 +3524,18 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             handler: async (args: any) => {
                 const engine = args.engine || args.browserEngine;
                 const endpoint = args.endpoint || args.lightpandaEndpoint;
-                
+
                 if (!engine) return 'Error: Missing engine. Use "playwright" or "lightpanda".';
                 if (engine !== 'playwright' && engine !== 'lightpanda') {
                     return `Error: Invalid engine "${engine}". Use "playwright" or "lightpanda".`;
                 }
-                
+
                 // Update config
                 this.config.set('browserEngine', engine);
                 if (endpoint && engine === 'lightpanda') {
                     this.config.set('lightpandaEndpoint', endpoint);
                 }
-                
+
                 // Close existing browser and reinitialize
                 await this.browser.close();
                 this.browser = new WebBrowser(
@@ -3525,7 +3557,7 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                         traceSnapshots: this.config.get('browserTraceSnapshots')
                     }
                 );
-                
+
                 // Update skills context
                 this.skills.setContext({
                     browser: this.browser,
@@ -3533,7 +3565,7 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                     agent: this,
                     logger: logger,
                 });
-                
+
                 if (engine === 'lightpanda') {
                     const ep = this.config.get('lightpandaEndpoint') || 'ws://127.0.0.1:9222';
                     return `Switched to Lightpanda browser engine. CDP endpoint: ${ep}. Make sure Lightpanda is running: ./lightpanda serve --host 127.0.0.1 --port 9222`;
@@ -3850,7 +3882,7 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 }
                 const { name, description, usage, code } = args;
                 if (!name || !code) return 'Error: Name and code are required.';
-                
+
                 // Validate skill name (alphanumeric + underscore only)
                 if (!/^[a-z][a-z0-9_]*$/i.test(name)) {
                     return 'Error: Skill name must be alphanumeric with underscores, starting with a letter.';
@@ -3866,26 +3898,26 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
 
                 // Sanitize code: Remove outer function wrappers if the AI messed up
                 let sanitizedCode = code.trim();
-                
+
                 // Remove markdown code blocks if present
                 sanitizedCode = sanitizedCode.replace(/^```(?:typescript|ts|javascript|js)?\n?/gm, '');
                 sanitizedCode = sanitizedCode.replace(/```$/gm, '');
                 sanitizedCode = sanitizedCode.trim();
-                
+
                 // Detect if the LLM provided a FULL MODULE instead of just the handler body
                 // Signs: has `const ${name} =`, `export const`, `export default`, or multiple top-level declarations
-                const looksLikeFullModule = 
+                const looksLikeFullModule =
                     sanitizedCode.includes('export const') ||
                     sanitizedCode.includes('export default') ||
                     sanitizedCode.match(new RegExp(`const\\s+${name}\\s*=`)) ||
                     // Multiple const/let/var at top level suggests full module
                     (sanitizedCode.match(/^(const|let|var)\s+\w+\s*=/gm) || []).length > 1;
-                
+
                 if (looksLikeFullModule) {
                     // The LLM provided what looks like a full module - try to use it directly
                     // but ensure it has proper exports
                     let moduleCode = sanitizedCode;
-                    
+
                     // If it doesn't have exports, try to add them
                     if (!moduleCode.includes('export const') && !moduleCode.includes('export default')) {
                         // Look for the main skill declaration like: const skillName = { name: "...", handler: ... }
@@ -3902,44 +3934,44 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                             return `Error: The code looks like a full module but doesn't have the expected structure. Please provide ONLY the handler body (the code inside the handler function), not a full plugin file. The handler body should start with your logic, not with 'const' declarations for the skill itself.`;
                         }
                     }
-                    
+
                     // Add source header
                     const finalCode = `// @source: generated-by-orcbot\n// @generated: ${new Date().toISOString()}\n` + moduleCode;
-                    
+
                     // Write and try to load
                     fs.writeFileSync(filePath, finalCode);
                     this.skills.clearLoadError(name);
-                    
+
                     try {
                         this.skills.loadPlugins();
                         const loadError = this.skills.getLoadError(name);
                         if (loadError) {
-                            try { fs.unlinkSync(filePath); } catch {}
+                            try { fs.unlinkSync(filePath); } catch { }
                             return `Error: The provided module code has errors:\n${loadError}\n\nPlease provide corrected code.`;
                         }
-                        
+
                         const loaded = this.skills.getAllSkills().find(s => s.name === name);
                         if (!loaded) {
-                            try { fs.unlinkSync(filePath); } catch {}
+                            try { fs.unlinkSync(filePath); } catch { }
                             return `Error: The skill '${name}' failed to register. The module may be missing the required exports (name, description, usage, handler).`;
                         }
-                        
+
                         // Also generate SKILL.md wrapper so plugin is visible in both systems
                         this.generateSkillMdForPlugin(name, description || loaded?.description || '', filePath);
                         return `Skill '${name}' created from full module code at ${filePath} and registered successfully.`;
                     } catch (loadError: any) {
-                        try { fs.unlinkSync(filePath); } catch {}
+                        try { fs.unlinkSync(filePath); } catch { }
                         return `Error: Skill '${name}' has syntax errors: ${loadError?.message || loadError}`;
                     }
                 }
-                
+
                 // Standard case: LLM provided just the handler body
                 // Remove outer async function wrapper if present
                 const functionWrapperRegex = /^(async\s+)?function\s*\w*\s*\([^)]*\)\s*\{([\s\S]*)\}\s*$/;
                 const arrowWrapperRegex = /^(async\s+)?\([^)]*\)\s*=>\s*\{([\s\S]*)\}\s*$/;
                 // Also handle: const funcName = async (args) => { ... }
                 const namedArrowRegex = /^const\s+\w+\s*=\s*(async\s+)?\([^)]*\)\s*=>\s*\{([\s\S]*)\}\s*;?\s*$/;
-                
+
                 let match = sanitizedCode.match(functionWrapperRegex);
                 if (match) {
                     sanitizedCode = match[2].trim();
@@ -3954,20 +3986,20 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                         }
                     }
                 }
-                
+
                 // Check for obvious syntax issues
                 const openBraces = (sanitizedCode.match(/\{/g) || []).length;
                 const closeBraces = (sanitizedCode.match(/\}/g) || []).length;
                 const openParens = (sanitizedCode.match(/\(/g) || []).length;
                 const closeParens = (sanitizedCode.match(/\)/g) || []).length;
-                
+
                 if (openBraces !== closeBraces) {
                     return `Error: Mismatched braces in code. Open: ${openBraces}, Close: ${closeBraces}. Please fix and retry.`;
                 }
                 if (openParens !== closeParens) {
                     return `Error: Mismatched parentheses in code. Open: ${openParens}, Close: ${closeParens}. Please fix and retry.`;
                 }
-                
+
                 // Check for await outside async context (common LLM mistake)
                 // The handler is already async, so top-level await in the body is fine
                 // But if there's a non-async nested function with await, that's an error
@@ -3975,7 +4007,7 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 if (nonAsyncFunctionWithAwait) {
                     return `Error: Found 'await' inside a non-async function. All functions that use 'await' must be declared as 'async'. Please fix and retry.`;
                 }
-                
+
                 // Escape description and usage for embedding in string
                 const safeDesc = (description || '').replace(/"/g, '\\"').replace(/\n/g, '\\n');
                 const safeUsage = (usage || '').replace(/"/g, '\\"').replace(/\n/g, '\\n');
@@ -4011,38 +4043,38 @@ export default ${name};
 
                 // Write the file
                 fs.writeFileSync(filePath, finalCode);
-                
+
                 // Clear any previous load error for this skill name
                 this.skills.clearLoadError(name);
-                
+
                 // Try to load it and catch errors
                 try {
                     this.skills.loadPlugins();
-                    
+
                     // Check for load error
                     const loadError = this.skills.getLoadError(name);
                     if (loadError) {
                         // Skill had compilation errors - clean up
-                        try { fs.unlinkSync(filePath); } catch {}
+                        try { fs.unlinkSync(filePath); } catch { }
                         return `Error: Skill '${name}' has syntax/compilation errors and was not saved:\n${loadError}\n\nPlease fix the code and try again.`;
                     }
-                    
+
                     // Verify the skill actually loaded
                     const allSkills = this.skills.getAllSkills();
                     const loaded = allSkills.find(s => s.name === name);
-                    
+
                     if (!loaded) {
                         // Skill didn't load - clean up
-                        try { fs.unlinkSync(filePath); } catch {}
+                        try { fs.unlinkSync(filePath); } catch { }
                         return `Error: Skill '${name}' failed to load after creation. The code may have syntax errors or invalid exports. Please review and provide corrected code.`;
                     }
-                    
+
                     // Also generate SKILL.md wrapper so plugin is visible in both systems
                     this.generateSkillMdForPlugin(name, description || loaded?.description || '', filePath);
                     return `Skill '${name}' created at ${filePath} and registered successfully. You can use it immediately.`;
                 } catch (loadError: any) {
                     // Delete the broken file
-                    try { fs.unlinkSync(filePath); } catch {}
+                    try { fs.unlinkSync(filePath); } catch { }
                     return `Error: Skill '${name}' has syntax errors and was not saved: ${loadError?.message || loadError}`;
                 }
             }
@@ -4083,7 +4115,7 @@ export default ${name};
             handler: async (args: any) => {
                 let query = args.query || args.text || args.search || args.q;
                 if (!query) return 'Error: Missing search query.';
-                
+
                 // Handle array or object queries - convert to string
                 if (Array.isArray(query)) {
                     query = query.join(' ');
@@ -4092,24 +4124,24 @@ export default ${name};
                 } else if (typeof query !== 'string') {
                     query = String(query);
                 }
-                
+
                 query = query.trim();
                 if (!query) return 'Error: Empty search query after processing.';
-                
+
                 logger.info(`Searching: "${query}"`);
-                
+
                 // First attempt with standard search (includes API + browser fallbacks)
                 let result = await this.browser.search(query);
-                
+
                 // If all providers failed, try a direct deep browser search
                 if (result.includes('Error: All search providers failed')) {
                     logger.warn('All standard search providers failed. Attempting deep browser search...');
-                    
+
                     // Try navigating directly and extracting any useful content
                     try {
                         // Try DuckDuckGo's no-JS version as final fallback
                         const deepResult = await this.browser.navigate(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`);
-                        
+
                         if (deepResult && !deepResult.includes('Error')) {
                             // Extract links from the page content
                             const links = await this.browser.page?.evaluate(() => {
@@ -4117,9 +4149,9 @@ export default ${name};
                                 return anchors
                                     .filter(a => {
                                         const href = (a as HTMLAnchorElement).href;
-                                        return !href.includes('duckduckgo') && 
-                                               !href.includes('duck.co') &&
-                                               a.textContent && a.textContent.trim().length > 5;
+                                        return !href.includes('duckduckgo') &&
+                                            !href.includes('duck.co') &&
+                                            a.textContent && a.textContent.trim().length > 5;
                                     })
                                     .slice(0, 5)
                                     .map(a => ({
@@ -4127,7 +4159,7 @@ export default ${name};
                                         url: (a as HTMLAnchorElement).href
                                     }));
                             });
-                            
+
                             if (links && links.length > 0) {
                                 const formatted = links.map((l: any) => `• [${l.title}](${l.url})`).join('\n');
                                 return `Search Results (via lite browser):\n\n${formatted}\n\n[Note: Limited results due to search API unavailability. Consider configuring Serper API for better results.]`;
@@ -4136,11 +4168,11 @@ export default ${name};
                     } catch (e) {
                         logger.debug(`Deep browser search failed: ${e}`);
                     }
-                    
+
                     // Final fallback: Provide guidance
                     return `Unable to search at this time. Search services are unavailable.\n\nSuggestions:\n• Try again in a few minutes\n• Use browse_website to visit a specific URL directly\n• Configure a search API (Serper, Brave) for reliable results\n\nQuery attempted: "${query}"`;
                 }
-                
+
                 return result;
             }
         });
@@ -4153,12 +4185,12 @@ export default ${name};
             handler: async (args: any) => {
                 const region = args.region || args.country || 'US';
                 const category = args.category || 'all';
-                
+
                 try {
                     // Try YouTube's public RSS/Atom feeds first (no API key needed)
                     // These don't give "trending" but popular channels work
                     // For trending, we need to use a different approach
-                    
+
                     // Method 1: Use Invidious API (public YouTube frontend)
                     const invidiousInstances = [
                         'https://vid.puffyan.us',
@@ -4166,21 +4198,21 @@ export default ${name};
                         'https://yewtu.be',
                         'https://invidious.kavin.rocks'
                     ];
-                    
+
                     for (const instance of invidiousInstances) {
                         try {
                             const response = await fetch(`${instance}/api/v1/trending?region=${region}`, {
                                 headers: { 'Accept': 'application/json' },
                                 signal: AbortSignal.timeout(10000)
                             });
-                            
+
                             if (response.ok) {
                                 const videos = await response.json() as any[];
                                 if (videos && videos.length > 0) {
-                                    const formatted = videos.slice(0, 10).map((v: any, i: number) => 
+                                    const formatted = videos.slice(0, 10).map((v: any, i: number) =>
                                         `${i + 1}. **${v.title}**\n   Channel: ${v.author}\n   Views: ${v.viewCount?.toLocaleString() || 'N/A'}\n   Link: https://youtube.com/watch?v=${v.videoId}`
                                     ).join('\n\n');
-                                    
+
                                     return `🔥 **YouTube Trending (${region})**\n\n${formatted}\n\n[via Invidious API]`;
                                 }
                             }
@@ -4189,17 +4221,17 @@ export default ${name};
                             continue;
                         }
                     }
-                    
+
                     // Method 2: Fallback to web search for "youtube trending today"
                     logger.warn('Invidious APIs unavailable. Falling back to web search...');
                     const searchResult = await this.browser.search(`youtube trending videos today ${region}`);
-                    
+
                     if (!searchResult.includes('Error')) {
                         return `Could not fetch direct YouTube trending data. Here are search results about trending videos:\n\n${searchResult}`;
                     }
-                    
+
                     return `Unable to fetch YouTube trending at this time. YouTube actively blocks automated access.\n\nAlternatives:\n• Visit https://www.youtube.com/feed/trending manually\n• Check social media for trending video discussions\n• Try a specific search query with web_search`;
-                    
+
                 } catch (e) {
                     return `Error fetching YouTube trending: ${e}`;
                 }
@@ -4619,7 +4651,7 @@ Be thorough and academic.`;
             handler: async () => {
                 try {
                     const files = this.bootstrap.listFiles();
-                    const result = files.map(f => 
+                    const result = files.map(f =>
                         `- ${f.name}: ${f.exists ? `${f.size} bytes` : 'not created'}`
                     ).join('\n');
                     return `Bootstrap files:\n${result}`;
@@ -4664,7 +4696,7 @@ Be thorough and academic.`;
                     try {
                         logger.info(`Learning: Auto-researching topic "${topic}"...`);
                         const searchResult = await this.browser.search(`${topic} latest developments 2024 2025`);
-                        
+
                         if (searchResult && searchResult.length > 100) {
                             // Extract key facts using LLM — cap input to avoid huge prompts
                             const extractPrompt = `Extract 5-10 key facts/insights from this search result about "${topic}". Format as bullet points with clear, factual statements:\n\n${searchResult.slice(0, 3000)}`;
@@ -4785,277 +4817,277 @@ Be thorough and academic.`;
         // spawning and circular delegation. Only the primary agent orchestrates.
         if (!this.isWorker) {
 
-        // Skill: Spawn Agent (Self-Duplication)
-        this.skills.registerSkill({
-            name: 'spawn_agent',
-            description: 'Create a new sub-agent instance for parallel task execution. The spawned agent inherits capabilities and can work independently.',
-            usage: 'spawn_agent(name, role, capabilities?)',
-            handler: async (args: any) => {
-                const name = args.name || args.agent_name;
-                const role = args.role || 'worker';
-                const capabilities = args.capabilities || ['execute'];
+            // Skill: Spawn Agent (Self-Duplication)
+            this.skills.registerSkill({
+                name: 'spawn_agent',
+                description: 'Create a new sub-agent instance for parallel task execution. The spawned agent inherits capabilities and can work independently.',
+                usage: 'spawn_agent(name, role, capabilities?)',
+                handler: async (args: any) => {
+                    const name = args.name || args.agent_name;
+                    const role = args.role || 'worker';
+                    const capabilities = args.capabilities || ['execute'];
 
-                if (!name) return 'Error: Missing agent name.';
+                    if (!name) return 'Error: Missing agent name.';
 
-                try {
-                    const agent = this.orchestrator.spawnAgent({
-                        name,
-                        role,
-                        capabilities: Array.isArray(capabilities) ? capabilities : [capabilities]
-                    });
-                    return `Successfully spawned agent "${agent.name}" (ID: ${agent.id}) with role "${agent.role}" and capabilities: ${agent.capabilities.join(', ')}`;
-                } catch (e) {
-                    return `Error spawning agent: ${e}`;
-                }
-            }
-        });
-
-        // Skill: List Agents
-        this.skills.registerSkill({
-            name: 'list_agents',
-            description: 'List all agent instances in the orchestration layer with their status and current tasks.',
-            usage: 'list_agents()',
-            handler: async () => {
-                const agents = this.orchestrator.getAgents();
-                if (agents.length === 0) return 'No agents registered.';
-
-                return agents.map(a => {
-                    const taskInfo = a.currentTask ? ` [Task: ${a.currentTask}]` : '';
-                    return `- ${a.name} (${a.id}): ${a.status}${taskInfo} | Role: ${a.role} | Capabilities: ${a.capabilities.join(', ')}`;
-                }).join('\n');
-            }
-        });
-
-        // Skill: Terminate Agent
-        this.skills.registerSkill({
-            name: 'terminate_agent',
-            description: 'Terminate a spawned agent instance. Cannot terminate the primary agent.',
-            usage: 'terminate_agent(agent_id)',
-            handler: async (args: any) => {
-                const agentId = args.agent_id || args.id;
-                if (!agentId) return 'Error: Missing agent_id.';
-
-                const success = this.orchestrator.terminateAgent(agentId);
-                return success
-                    ? `Agent ${agentId} terminated successfully.`
-                    : `Failed to terminate agent ${agentId}. It may not exist or is the primary agent.`;
-            }
-        });
-
-        // Skill: Delegate Task
-        this.skills.registerSkill({
-            name: 'delegate_task',
-            description: 'Create a task and optionally assign it to a specific agent or let the orchestrator auto-assign.',
-            usage: 'delegate_task(description, priority?, agent_id?)',
-            handler: async (args: any) => {
-                const description = args.description || args.task || args.text;
-                const priority = parseInt(args.priority || '5');
-                const agentId = args.agent_id || args.id;
-
-                if (!description) return 'Error: Missing task description.';
-
-                const task = this.orchestrator.createTask(description, priority);
-
-                if (agentId) {
-                    const assigned = this.orchestrator.assignTask(task.id, agentId);
-                    if (assigned) {
-                        return `Task "${task.id}" created and assigned to agent ${agentId}.`;
-                    } else {
-                        return `Task "${task.id}" created but could not be assigned to ${agentId} (agent busy or not found). Task is pending.`;
+                    try {
+                        const agent = this.orchestrator.spawnAgent({
+                            name,
+                            role,
+                            capabilities: Array.isArray(capabilities) ? capabilities : [capabilities]
+                        });
+                        return `Successfully spawned agent "${agent.name}" (ID: ${agent.id}) with role "${agent.role}" and capabilities: ${agent.capabilities.join(', ')}`;
+                    } catch (e) {
+                        return `Error spawning agent: ${e}`;
                     }
                 }
+            });
 
-                return `Task "${task.id}" created with priority ${priority}. Use distribute_tasks() to auto-assign or assign manually.`;
-            }
-        });
+            // Skill: List Agents
+            this.skills.registerSkill({
+                name: 'list_agents',
+                description: 'List all agent instances in the orchestration layer with their status and current tasks.',
+                usage: 'list_agents()',
+                handler: async () => {
+                    const agents = this.orchestrator.getAgents();
+                    if (agents.length === 0) return 'No agents registered.';
 
-        // Skill: Distribute Tasks
-        this.skills.registerSkill({
-            name: 'distribute_tasks',
-            description: 'Auto-assign all pending tasks to available agents based on priority and capability.',
-            usage: 'distribute_tasks()',
-            handler: async () => {
-                const assigned = this.orchestrator.distributeTasks();
-                return assigned > 0
-                    ? `Distributed ${assigned} task(s) to available agents.`
-                    : 'No tasks were distributed. Either no pending tasks or no available agents.';
-            }
-        });
+                    return agents.map(a => {
+                        const taskInfo = a.currentTask ? ` [Task: ${a.currentTask}]` : '';
+                        return `- ${a.name} (${a.id}): ${a.status}${taskInfo} | Role: ${a.role} | Capabilities: ${a.capabilities.join(', ')}`;
+                    }).join('\n');
+                }
+            });
 
-        // Skill: Get Orchestrator Status
-        this.skills.registerSkill({
-            name: 'orchestrator_status',
-            description: 'Get a summary of the multi-agent orchestration layer including agent and task counts.',
-            usage: 'orchestrator_status()',
-            handler: async () => {
-                return this.orchestrator.getSummary();
-            }
-        });
+            // Skill: Terminate Agent
+            this.skills.registerSkill({
+                name: 'terminate_agent',
+                description: 'Terminate a spawned agent instance. Cannot terminate the primary agent.',
+                usage: 'terminate_agent(agent_id)',
+                handler: async (args: any) => {
+                    const agentId = args.agent_id || args.id;
+                    if (!agentId) return 'Error: Missing agent_id.';
 
-        // Skill: Complete Delegated Task
-        this.skills.registerSkill({
-            name: 'complete_delegated_task',
-            description: 'Mark a delegated task as completed with an optional result.',
-            usage: 'complete_delegated_task(task_id, result?)',
-            handler: async (args: any) => {
-                const taskId = args.task_id || args.id;
-                const result = args.result || args.output;
+                    const success = this.orchestrator.terminateAgent(agentId);
+                    return success
+                        ? `Agent ${agentId} terminated successfully.`
+                        : `Failed to terminate agent ${agentId}. It may not exist or is the primary agent.`;
+                }
+            });
 
-                if (!taskId) return 'Error: Missing task_id.';
+            // Skill: Delegate Task
+            this.skills.registerSkill({
+                name: 'delegate_task',
+                description: 'Create a task and optionally assign it to a specific agent or let the orchestrator auto-assign.',
+                usage: 'delegate_task(description, priority?, agent_id?)',
+                handler: async (args: any) => {
+                    const description = args.description || args.task || args.text;
+                    const priority = parseInt(args.priority || '5');
+                    const agentId = args.agent_id || args.id;
 
-                const success = this.orchestrator.completeTask(taskId, result);
-                return success
-                    ? `Task ${taskId} marked as completed.`
-                    : `Failed to complete task ${taskId}. Task may not exist.`;
-            }
-        });
+                    if (!description) return 'Error: Missing task description.';
 
-        // Skill: Fail Delegated Task
-        this.skills.registerSkill({
-            name: 'fail_delegated_task',
-            description: 'Mark a delegated task as failed with an error message.',
-            usage: 'fail_delegated_task(task_id, error)',
-            handler: async (args: any) => {
-                const taskId = args.task_id || args.id;
-                const error = args.error || args.reason || 'Unknown error';
+                    const task = this.orchestrator.createTask(description, priority);
 
-                if (!taskId) return 'Error: Missing task_id.';
+                    if (agentId) {
+                        const assigned = this.orchestrator.assignTask(task.id, agentId);
+                        if (assigned) {
+                            return `Task "${task.id}" created and assigned to agent ${agentId}.`;
+                        } else {
+                            return `Task "${task.id}" created but could not be assigned to ${agentId} (agent busy or not found). Task is pending.`;
+                        }
+                    }
 
-                const success = this.orchestrator.failTask(taskId, error);
-                return success
-                    ? `Task ${taskId} marked as failed.`
-                    : `Failed to update task ${taskId}. Task may not exist.`;
-            }
-        });
+                    return `Task "${task.id}" created with priority ${priority}. Use distribute_tasks() to auto-assign or assign manually.`;
+                }
+            });
 
-        // Skill: Cancel Delegated Task
-        this.skills.registerSkill({
-            name: 'cancel_delegated_task',
-            description: 'Cancel a delegated task in the orchestrator and mark it as failed.',
-            usage: 'cancel_delegated_task(task_id, reason?)',
-            handler: async (args: any) => {
-                const taskId = args.task_id || args.id;
-                const reason = args.reason || args.message || 'Cancelled by user';
+            // Skill: Distribute Tasks
+            this.skills.registerSkill({
+                name: 'distribute_tasks',
+                description: 'Auto-assign all pending tasks to available agents based on priority and capability.',
+                usage: 'distribute_tasks()',
+                handler: async () => {
+                    const assigned = this.orchestrator.distributeTasks();
+                    return assigned > 0
+                        ? `Distributed ${assigned} task(s) to available agents.`
+                        : 'No tasks were distributed. Either no pending tasks or no available agents.';
+                }
+            });
 
-                if (!taskId) return 'Error: Missing task_id.';
+            // Skill: Get Orchestrator Status
+            this.skills.registerSkill({
+                name: 'orchestrator_status',
+                description: 'Get a summary of the multi-agent orchestration layer including agent and task counts.',
+                usage: 'orchestrator_status()',
+                handler: async () => {
+                    return this.orchestrator.getSummary();
+                }
+            });
 
-                const success = this.orchestrator.cancelTask(taskId, reason);
-                return success
-                    ? `Delegated task ${taskId} cancelled.`
-                    : `Failed to cancel task ${taskId}. Task may not exist.`;
-            }
-        });
+            // Skill: Complete Delegated Task
+            this.skills.registerSkill({
+                name: 'complete_delegated_task',
+                description: 'Mark a delegated task as completed with an optional result.',
+                usage: 'complete_delegated_task(task_id, result?)',
+                handler: async (args: any) => {
+                    const taskId = args.task_id || args.id;
+                    const result = args.result || args.output;
 
-        // Skill: Send Agent Message
-        this.skills.registerSkill({
-            name: 'send_agent_message',
-            description: 'Send a message from one agent to another for inter-agent communication.',
-            usage: 'send_agent_message(to_agent_id, message, type?)',
-            handler: async (args: any) => {
-                const to = args.to_agent_id || args.to;
-                const message = args.message || args.content || args.text;
-                const type = args.type || 'command';
+                    if (!taskId) return 'Error: Missing task_id.';
 
-                if (!to || !message) return 'Error: Missing to_agent_id or message.';
+                    const success = this.orchestrator.completeTask(taskId, result);
+                    return success
+                        ? `Task ${taskId} marked as completed.`
+                        : `Failed to complete task ${taskId}. Task may not exist.`;
+                }
+            });
 
-                const msg = this.orchestrator.sendMessage('primary', to, type as any, { message });
-                return `Message sent to ${to}: ${msg.id}`;
-            }
-        });
+            // Skill: Fail Delegated Task
+            this.skills.registerSkill({
+                name: 'fail_delegated_task',
+                description: 'Mark a delegated task as failed with an error message.',
+                usage: 'fail_delegated_task(task_id, error)',
+                handler: async (args: any) => {
+                    const taskId = args.task_id || args.id;
+                    const error = args.error || args.reason || 'Unknown error';
 
-        // Skill: Broadcast to Agents
-        this.skills.registerSkill({
-            name: 'broadcast_to_agents',
-            description: 'Broadcast a message to all active agents.',
-            usage: 'broadcast_to_agents(message)',
-            handler: async (args: any) => {
-                const message = args.message || args.content || args.text;
-                if (!message) return 'Error: Missing message.';
+                    if (!taskId) return 'Error: Missing task_id.';
 
-                this.orchestrator.broadcast('primary', { message });
-                const agents = this.orchestrator.getAgents().filter(a => a.status !== 'terminated' && a.id !== 'primary');
-                return `Broadcast sent to ${agents.length} agent(s).`;
-            }
-        });
+                    const success = this.orchestrator.failTask(taskId, error);
+                    return success
+                        ? `Task ${taskId} marked as failed.`
+                        : `Failed to update task ${taskId}. Task may not exist.`;
+                }
+            });
 
-        // Skill: Get Agent Messages
-        this.skills.registerSkill({
-            name: 'get_agent_messages',
-            description: 'Retrieve messages sent to a specific agent.',
-            usage: 'get_agent_messages(agent_id?, limit?)',
-            handler: async (args: any) => {
-                const agentId = args.agent_id || args.id || 'primary';
-                const limit = parseInt(args.limit || '20');
+            // Skill: Cancel Delegated Task
+            this.skills.registerSkill({
+                name: 'cancel_delegated_task',
+                description: 'Cancel a delegated task in the orchestrator and mark it as failed.',
+                usage: 'cancel_delegated_task(task_id, reason?)',
+                handler: async (args: any) => {
+                    const taskId = args.task_id || args.id;
+                    const reason = args.reason || args.message || 'Cancelled by user';
 
-                const messages = this.orchestrator.getMessagesFor(agentId, limit);
-                if (messages.length === 0) return `No messages for agent ${agentId}.`;
+                    if (!taskId) return 'Error: Missing task_id.';
 
-                return messages.map(m =>
-                    `[${m.timestamp}] From: ${m.from} | Type: ${m.type}\n  ${JSON.stringify(m.payload)}`
-                ).join('\n\n');
-            }
-        });
+                    const success = this.orchestrator.cancelTask(taskId, reason);
+                    return success
+                        ? `Delegated task ${taskId} cancelled.`
+                        : `Failed to cancel task ${taskId}. Task may not exist.`;
+                }
+            });
 
-        // Skill: Clone Self
-        this.skills.registerSkill({
-            name: 'clone_self',
-            description: 'Create a clone of the primary agent with inherited capabilities for parallel processing.',
-            usage: 'clone_self(clone_name, specialized_role?)',
-            handler: async (args: any) => {
-                const cloneName = args.clone_name || args.name || `Clone-${Date.now()}`;
-                const role = args.specialized_role || args.role || 'clone';
+            // Skill: Send Agent Message
+            this.skills.registerSkill({
+                name: 'send_agent_message',
+                description: 'Send a message from one agent to another for inter-agent communication.',
+                usage: 'send_agent_message(to_agent_id, message, type?)',
+                handler: async (args: any) => {
+                    const to = args.to_agent_id || args.to;
+                    const message = args.message || args.content || args.text;
+                    const type = args.type || 'command';
 
-                const clone = this.orchestrator.spawnAgent({
-                    name: cloneName,
-                    role,
-                    capabilities: ['execute', 'browse', 'search', 'analyze']
-                });
+                    if (!to || !message) return 'Error: Missing to_agent_id or message.';
 
-                return `Created clone "${clone.name}" (${clone.id}) with full capabilities. Use delegate_task() to assign work to this clone.`;
-            }
-        });
+                    const msg = this.orchestrator.sendMessage('primary', to, type as any, { message });
+                    return `Message sent to ${to}: ${msg.id}`;
+                }
+            });
 
-        // Skill: Get Worker Token Usage
-        this.skills.registerSkill({
-            name: 'get_worker_token_usage',
-            description: 'Get aggregated token usage across all worker agents, broken down by real API-reported vs estimated tokens.',
-            usage: 'get_worker_token_usage()',
-            handler: async () => {
-                const workerTokens = this.orchestrator.getAggregateWorkerTokenUsage();
-                if (workerTokens.length === 0) return 'No worker token usage data available. Workers may not have been active yet.';
+            // Skill: Broadcast to Agents
+            this.skills.registerSkill({
+                name: 'broadcast_to_agents',
+                description: 'Broadcast a message to all active agents.',
+                usage: 'broadcast_to_agents(message)',
+                handler: async (args: any) => {
+                    const message = args.message || args.content || args.text;
+                    if (!message) return 'Error: Missing message.';
 
-                let total = 0, totalReal = 0, totalEst = 0;
-                const lines = workerTokens.map(wt => {
-                    total += wt.totalTokens;
-                    totalReal += wt.realTokens;
-                    totalEst += wt.estimatedTokens;
-                    return `- ${wt.name} (${wt.agentId}): ${wt.totalTokens.toLocaleString()} tokens (${wt.realTokens.toLocaleString()} real, ${wt.estimatedTokens.toLocaleString()} estimated)`;
-                });
-                lines.push(`\nTotal across workers: ${total.toLocaleString()} tokens (${totalReal.toLocaleString()} real, ${totalEst.toLocaleString()} estimated)`);
-                return lines.join('\n');
-            }
-        });
+                    this.orchestrator.broadcast('primary', { message });
+                    const agents = this.orchestrator.getAgents().filter(a => a.status !== 'terminated' && a.id !== 'primary');
+                    return `Broadcast sent to ${agents.length} agent(s).`;
+                }
+            });
 
-        // Skill: Get Detailed Worker Status
-        this.skills.registerSkill({
-            name: 'get_worker_status',
-            description: 'Get detailed status of all worker agents including PID, current task, and whether they are running.',
-            usage: 'get_worker_status()',
-            handler: async () => {
-                const workers = this.orchestrator.getDetailedWorkerStatus();
-                if (workers.length === 0) return 'No worker agents are currently registered.';
+            // Skill: Get Agent Messages
+            this.skills.registerSkill({
+                name: 'get_agent_messages',
+                description: 'Retrieve messages sent to a specific agent.',
+                usage: 'get_agent_messages(agent_id?, limit?)',
+                handler: async (args: any) => {
+                    const agentId = args.agent_id || args.id || 'primary';
+                    const limit = parseInt(args.limit || '20');
 
-                return workers.map(w => {
-                    const taskInfo = w.currentTaskDescription ? `\n  Task: ${w.currentTaskDescription.slice(0, 100)}...` : '';
-                    return `- ${w.name} (${w.agentId}): ${w.status} | PID: ${w.pid || 'N/A'} | Running: ${w.isRunning} | Role: ${w.role}${taskInfo}`;
-                }).join('\n');
-            }
-        });
+                    const messages = this.orchestrator.getMessagesFor(agentId, limit);
+                    if (messages.length === 0) return `No messages for agent ${agentId}.`;
+
+                    return messages.map(m =>
+                        `[${m.timestamp}] From: ${m.from} | Type: ${m.type}\n  ${JSON.stringify(m.payload)}`
+                    ).join('\n\n');
+                }
+            });
+
+            // Skill: Clone Self
+            this.skills.registerSkill({
+                name: 'clone_self',
+                description: 'Create a clone of the primary agent with inherited capabilities for parallel processing.',
+                usage: 'clone_self(clone_name, specialized_role?)',
+                handler: async (args: any) => {
+                    const cloneName = args.clone_name || args.name || `Clone-${Date.now()}`;
+                    const role = args.specialized_role || args.role || 'clone';
+
+                    const clone = this.orchestrator.spawnAgent({
+                        name: cloneName,
+                        role,
+                        capabilities: ['execute', 'browse', 'search', 'analyze']
+                    });
+
+                    return `Created clone "${clone.name}" (${clone.id}) with full capabilities. Use delegate_task() to assign work to this clone.`;
+                }
+            });
+
+            // Skill: Get Worker Token Usage
+            this.skills.registerSkill({
+                name: 'get_worker_token_usage',
+                description: 'Get aggregated token usage across all worker agents, broken down by real API-reported vs estimated tokens.',
+                usage: 'get_worker_token_usage()',
+                handler: async () => {
+                    const workerTokens = this.orchestrator.getAggregateWorkerTokenUsage();
+                    if (workerTokens.length === 0) return 'No worker token usage data available. Workers may not have been active yet.';
+
+                    let total = 0, totalReal = 0, totalEst = 0;
+                    const lines = workerTokens.map(wt => {
+                        total += wt.totalTokens;
+                        totalReal += wt.realTokens;
+                        totalEst += wt.estimatedTokens;
+                        return `- ${wt.name} (${wt.agentId}): ${wt.totalTokens.toLocaleString()} tokens (${wt.realTokens.toLocaleString()} real, ${wt.estimatedTokens.toLocaleString()} estimated)`;
+                    });
+                    lines.push(`\nTotal across workers: ${total.toLocaleString()} tokens (${totalReal.toLocaleString()} real, ${totalEst.toLocaleString()} estimated)`);
+                    return lines.join('\n');
+                }
+            });
+
+            // Skill: Get Detailed Worker Status
+            this.skills.registerSkill({
+                name: 'get_worker_status',
+                description: 'Get detailed status of all worker agents including PID, current task, and whether they are running.',
+                usage: 'get_worker_status()',
+                handler: async () => {
+                    const workers = this.orchestrator.getDetailedWorkerStatus();
+                    if (workers.length === 0) return 'No worker agents are currently registered.';
+
+                    return workers.map(w => {
+                        const taskInfo = w.currentTaskDescription ? `\n  Task: ${w.currentTaskDescription.slice(0, 100)}...` : '';
+                        return `- ${w.name} (${w.agentId}): ${w.status} | PID: ${w.pid || 'N/A'} | Running: ${w.isRunning} | Role: ${w.role}${taskInfo}`;
+                    }).join('\n');
+                }
+            });
 
         } // end !isWorker orchestration skills guard
 
         // ============ SELF-TUNING SKILLS ============
-        
+
         // Skill: Get Tunable Options
         this.skills.registerSkill({
             name: 'get_tuning_options',
@@ -5075,7 +5107,7 @@ Be thorough and academic.`;
             handler: async (args: any) => {
                 const domain = args.domain;
                 const reason = args.reason || 'Agent-initiated tuning';
-                
+
                 if (!domain) return 'Error: Missing domain (e.g., "example.com")';
 
                 const settings: any = {};
@@ -5103,7 +5135,7 @@ Be thorough and academic.`;
             handler: async (args: any) => {
                 const domain = args.domain;
                 const reason = args.reason || 'Headless mode detected/blocked';
-                
+
                 if (!domain) return 'Error: Missing domain';
                 return this.tuner.markDomainAsHeadful(domain, reason);
             }
@@ -5151,7 +5183,7 @@ Be thorough and academic.`;
                 const limit = args.limit ? Number(args.limit) : 20;
                 const history = this.tuner.getTuningHistory(limit);
                 if (history.length === 0) return 'No tuning history yet.';
-                return history.map(h => 
+                return history.map(h =>
                     `[${h.timestamp}] ${h.domain ? `Domain: ${h.domain} | ` : ''}${h.setting}: ${JSON.stringify(h.oldValue)} → ${JSON.stringify(h.newValue)}\n  Reason: ${h.reason}${h.success !== undefined ? ` | Success: ${h.success}` : ''}`
                 ).join('\n\n');
             }
@@ -5216,7 +5248,7 @@ Be thorough and academic.`;
                         }
                         checkFn = async () => {
                             const recentMemories = this.memory.getRecentContext(10);
-                            return recentMemories.some(m => 
+                            return recentMemories.some(m =>
                                 m.content.toLowerCase().includes(searchText.toLowerCase())
                             );
                         };
@@ -5243,8 +5275,8 @@ Be thorough and academic.`;
                         checkFn = async () => {
                             // Look for a custom check result in memory
                             const memories = this.memory.getRecentContext(5);
-                            return memories.some(m => 
-                                m.content.includes(`${checkKey}:true`) || 
+                            return memories.some(m =>
+                                m.content.includes(`${checkKey}:true`) ||
                                 m.content.includes(`${checkKey}: true`)
                             );
                         };
@@ -5282,7 +5314,7 @@ Be thorough and academic.`;
                 if (!jobId) return 'Error: Missing job_id';
 
                 const cancelled = this.pollingManager.cancelJob(jobId);
-                return cancelled 
+                return cancelled
                     ? `Polling job '${jobId}' cancelled successfully`
                     : `Polling job '${jobId}' not found`;
             }
@@ -5307,7 +5339,7 @@ Be thorough and academic.`;
                     if (jobs.length === 0) {
                         return 'No active polling jobs';
                     }
-                    return `Active polling jobs (${jobs.length}):\n` + 
+                    return `Active polling jobs (${jobs.length}):\n` +
                         jobs.map(j => `- ${j.id}: ${j.description} (${j.attempts} attempts, ${Math.round(j.duration / 1000)}s)`).join('\n');
                 }
             }
@@ -5427,8 +5459,8 @@ Be thorough and academic.`;
 
                     const format = contentType.includes('json') ? 'json'
                         : contentType.includes('csv') ? 'csv'
-                        : contentType.includes('html') ? 'text'
-                        : 'text';
+                            : contentType.includes('html') ? 'text'
+                                : 'text';
                     const parsed = this.knowledgeStore.parseContent(text, format);
 
                     const result = await this.knowledgeStore.ingest(parsed, url, collection, {
@@ -5562,7 +5594,7 @@ Be thorough and academic.`;
                     if (jobs.length === 0) {
                         return 'No active polling jobs.';
                     }
-                    const jobList = jobs.map(j => 
+                    const jobList = jobs.map(j =>
                         `- ${j.id}: ${j.description} (${j.attempts} attempts, ${Math.round(j.duration / 1000)}s elapsed, interval: ${j.intervalMs}ms)`
                     ).join('\n');
                     return `Active polling jobs (${jobs.length}):\n${jobList}`;
@@ -5598,56 +5630,56 @@ Be thorough and academic.`;
         // ═══════════════════════════════════════════════════════════════
         if (!this.isWorker) {
 
-        this.skills.registerSkill({
-            name: 'agentic_user_status',
-            description: 'Check the Agentic User status — whether the autonomous HITL proxy is active, its configuration, and recent intervention stats.',
-            usage: 'agentic_user_status()',
-            handler: async () => {
-                const stats = this.agenticUser.getStats();
-                const settings = this.agenticUser.getSettings();
-                return JSON.stringify({
-                    active: stats.isActive,
-                    settings: {
-                        enabled: settings.enabled,
-                        responseDelay: `${settings.responseDelay}s`,
-                        confidenceThreshold: `${settings.confidenceThreshold}%`,
-                        proactiveGuidance: settings.proactiveGuidance,
-                        maxInterventionsPerAction: settings.maxInterventionsPerAction,
-                    },
-                    stats: {
-                        totalInterventions: stats.totalInterventions,
-                        appliedInterventions: stats.appliedInterventions,
-                        activeTimers: stats.activeTimers,
-                    }
-                }, null, 2);
-            }
-        });
-
-        this.skills.registerSkill({
-            name: 'agentic_user_log',
-            description: 'Get recent Agentic User interventions — see what the autonomous HITL proxy decided on behalf of the user.',
-            usage: 'agentic_user_log(limit?)',
-            handler: async (args: any) => {
-                const limit = args.limit || args.count || 10;
-                const log = this.agenticUser.getInterventionLog(limit);
-                if (log.length === 0) {
-                    return 'No Agentic User interventions recorded yet.';
+            this.skills.registerSkill({
+                name: 'agentic_user_status',
+                description: 'Check the Agentic User status — whether the autonomous HITL proxy is active, its configuration, and recent intervention stats.',
+                usage: 'agentic_user_status()',
+                handler: async () => {
+                    const stats = this.agenticUser.getStats();
+                    const settings = this.agenticUser.getSettings();
+                    return JSON.stringify({
+                        active: stats.isActive,
+                        settings: {
+                            enabled: settings.enabled,
+                            responseDelay: `${settings.responseDelay}s`,
+                            confidenceThreshold: `${settings.confidenceThreshold}%`,
+                            proactiveGuidance: settings.proactiveGuidance,
+                            maxInterventionsPerAction: settings.maxInterventionsPerAction,
+                        },
+                        stats: {
+                            totalInterventions: stats.totalInterventions,
+                            appliedInterventions: stats.appliedInterventions,
+                            activeTimers: stats.activeTimers,
+                        }
+                    }, null, 2);
                 }
-                return log.map(entry =>
-                    `[${entry.timestamp}] ${entry.type} | Action: ${entry.actionId} | Confidence: ${entry.confidence}% | Applied: ${entry.applied}\n  Trigger: ${entry.trigger.slice(0, 100)}\n  Response: ${entry.response.slice(0, 150)}`
-                ).join('\n\n');
-            }
-        });
+            });
 
-        this.skills.registerSkill({
-            name: 'agentic_user_clear',
-            description: 'Clear Agentic User intervention history.',
-            usage: 'agentic_user_clear()',
-            handler: async () => {
-                this.agenticUser.clearHistory();
-                return 'Agentic User intervention history cleared.';
-            }
-        });
+            this.skills.registerSkill({
+                name: 'agentic_user_log',
+                description: 'Get recent Agentic User interventions — see what the autonomous HITL proxy decided on behalf of the user.',
+                usage: 'agentic_user_log(limit?)',
+                handler: async (args: any) => {
+                    const limit = args.limit || args.count || 10;
+                    const log = this.agenticUser.getInterventionLog(limit);
+                    if (log.length === 0) {
+                        return 'No Agentic User interventions recorded yet.';
+                    }
+                    return log.map(entry =>
+                        `[${entry.timestamp}] ${entry.type} | Action: ${entry.actionId} | Confidence: ${entry.confidence}% | Applied: ${entry.applied}\n  Trigger: ${entry.trigger.slice(0, 100)}\n  Response: ${entry.response.slice(0, 150)}`
+                    ).join('\n\n');
+                }
+            });
+
+            this.skills.registerSkill({
+                name: 'agentic_user_clear',
+                description: 'Clear Agentic User intervention history.',
+                usage: 'agentic_user_clear()',
+                handler: async () => {
+                    this.agenticUser.clearHistory();
+                    return 'Agentic User intervention history cleared.';
+                }
+            });
 
         } // end !isWorker agentic user skills guard
     }
@@ -5671,11 +5703,11 @@ Be thorough and academic.`;
         try {
             // Don't spam skill creation - check if we recently tried
             const recentMemories = this.memory.searchMemory('short');
-            const recentSkillCreations = recentMemories.filter(m => 
-                m.metadata?.tool === 'auto_skill_creation' && 
+            const recentSkillCreations = recentMemories.filter(m =>
+                m.metadata?.tool === 'auto_skill_creation' &&
                 Date.now() - new Date(m.timestamp || 0).getTime() < 30 * 60 * 1000 // 30 min cooldown
             );
-            
+
             if (recentSkillCreations.length >= 2) {
                 logger.info('Agent: Skipping auto skill creation (cooldown - already tried recently)');
                 return;
@@ -5711,7 +5743,7 @@ Respond in JSON:
 }`;
 
             const analysis = await this.llm.call(analysisPrompt, 'You are a helpful AI assistant. Respond only with valid JSON.');
-            
+
             let parsed: any;
             try {
                 // Extract JSON from response
@@ -5841,14 +5873,14 @@ The plugin handles all logic internally. See the plugin source for implementatio
         details?: string
     ): Promise<void> {
         if (!this.config.get('progressFeedbackEnabled')) return;
-        
+
         // Only send feedback for channel-sourced actions
         const source = action.payload?.source;
         const sourceId = action.payload?.sourceId;
         if (!source) return;
         // Gateway-chat doesn't require sourceId (uses eventBus broadcast)
         if (source !== 'gateway-chat' && !sourceId) return;
-        
+
         // Craft compact, non-intrusive messages
         let message = '';
         switch (type) {
@@ -5868,7 +5900,7 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 message = details ? `🔄 ${details}` : '🔄 Hit a snag — trying again shortly...';
                 break;
         }
-        
+
         try {
             if (source === 'telegram' && this.telegram) {
                 await this.telegram.sendMessage(sourceId, message);
@@ -6063,7 +6095,7 @@ Respond with ONLY valid JSON:
         try {
             // Only check short actions (1-3 steps) that sent a message — longer actions likely did real work
             if (stepCount > 3 || sentMessages.length === 0) return;
-            
+
             // Only check follow-up-style actions (user asking about status/completion)
             const taskDesc = (action.payload?.description || '').toLowerCase();
             const isFollowUpInquiry = /\b(are (you|u) done|is it (ready|done|finished)|status|update|what('?s| is) (the )?(progress|status)|how('?s| is) it going|finished yet|ready yet|done yet|completed)\b/.test(taskDesc);
@@ -6077,19 +6109,19 @@ Respond with ONLY valid JSON:
                 'nearly done', 'finishing up', 'wrapping up', 'give me a moment',
                 'bear with me', 'just a bit', 'coming soon', 'on it', 'hold on'
             ];
-            
+
             const lastMessage = sentMessages[sentMessages.length - 1]?.toLowerCase() || '';
             const acknowledgesIncomplete = incompleteIndicators.some(ind => lastMessage.includes(ind));
-            
+
             if (!acknowledgesIncomplete) return;
 
             // Check if the agent also scheduled or pushed continuation work
             const recentShort = this.memory.searchMemory('short');
-            const thisActionMemories = recentShort.filter(m => 
+            const thisActionMemories = recentShort.filter(m =>
                 m.metadata?.actionId === action.id
             );
-            const didScheduleOrContinue = thisActionMemories.some(m => 
-                m.metadata?.tool === 'schedule_task' || 
+            const didScheduleOrContinue = thisActionMemories.some(m =>
+                m.metadata?.tool === 'schedule_task' ||
                 m.metadata?.tool === 'web_search' ||
                 m.metadata?.tool === 'browser_navigate' ||
                 m.metadata?.tool === 'extract_article' ||
@@ -6106,9 +6138,9 @@ Respond with ONLY valid JSON:
             const recentIncomplete = episodicMemories
                 .filter(m => {
                     const content = (m.content || '').toLowerCase();
-                    return content.includes('task finished:') && 
-                           m.metadata?.actionId !== action.id &&
-                           m.metadata?.steps !== undefined;
+                    return content.includes('task finished:') &&
+                        m.metadata?.actionId !== action.id &&
+                        m.metadata?.steps !== undefined;
                 })
                 .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
                 .slice(0, 3); // Check the last 3 completed tasks
@@ -6118,13 +6150,13 @@ Respond with ONLY valid JSON:
                 .filter(m => {
                     const content = (m.content || '').toLowerCase();
                     return (content.includes('web_search') || content.includes('browser_navigate') || content.includes('research')) &&
-                           m.metadata?.actionId !== action.id;
+                        m.metadata?.actionId !== action.id;
                 })
                 .slice(-5);
 
             // Build a description for the continuation task
             const contextHint = taskContextMemories.map(m => m.content?.slice(0, 100)).join(' | ');
-            
+
             const continuationDesc = `CONTINUATION: Resume the incomplete task that the user asked about. The user asked "${action.payload?.description?.slice(0, 100)}" and I acknowledged the work is not done. I MUST now actually complete it. ${contextHint ? `Previous progress context: ${contextHint}` : 'Check episodic memory for the original task details.'}. Compile all available results and deliver a comprehensive response to the user.`;
 
             if (this.hasExistingRecoveryTask(
@@ -6316,7 +6348,7 @@ REFLECTION: <1-2 sentences>`;
                 const learningPath = this.config.get('learningPath');
                 const topic = this.extractTopicFromDescription(desc);
                 const entry = `\n\n## ${topic}\n**Date**: ${new Date().toISOString().split('T')[0]}\n**Source**: Auto-extracted from action ${action.id}\n\n${learnings}\n\n---`;
-                
+
                 try {
                     fs.appendFileSync(learningPath, entry);
                     logger.info(`Agent: Auto-learning captured for topic "${topic}" (${learnings.length} chars)`);
@@ -6335,7 +6367,7 @@ REFLECTION: <1-2 sentences>`;
             if (reflection && reflection.length > 15) {
                 const journalPath = this.config.get('journalPath');
                 const entry = `\n\n## [${new Date().toISOString()}] Post-Action Reflection\n**Task**: ${desc.slice(0, 150)}\n**Status**: ${status} (${stepCount} steps)\n**Skills**: ${skillsUsed || 'none'}\n\n${reflection}\n`;
-                
+
                 try {
                     fs.appendFileSync(journalPath, entry);
                     logger.info(`Agent: Journal reflection written for action ${action.id}`);
@@ -6407,7 +6439,7 @@ REFLECTION: <1-2 sentences>`;
         }
 
         // Heuristic fallback
-        if (payload.length <= 50 && !payload.includes('build') && !payload.includes('create') && 
+        if (payload.length <= 50 && !payload.includes('build') && !payload.includes('create') &&
             !payload.includes('search') && !payload.includes('find')) {
             return 'simple';
         }
@@ -6471,7 +6503,7 @@ REFLECTION: <1-2 sentences>`;
      */
     private messageContainsQuestion(message: string): boolean {
         const normalized = message.toLowerCase().trim();
-        
+
         // Direct question indicators
         const questionPatterns = [
             /\?$/,  // Ends with question mark
@@ -6489,19 +6521,19 @@ REFLECTION: <1-2 sentences>`;
             /\bclarif(y|ication)\b/i,
             /\bprefer(ence|red)?\??\b.*\bor\b/i,
         ];
-        
+
         // Check if message contains question patterns
         for (const pattern of questionPatterns) {
             if (pattern.test(normalized)) {
                 return true;
             }
         }
-        
+
         // Also check for "either...or" choice patterns
         if (/\beither\b.*\bor\b/i.test(normalized)) {
             return true;
         }
-        
+
         return false;
     }
 
@@ -7060,22 +7092,22 @@ REFLECTION: <1-2 sentences>`;
             try {
                 logger.info('Agent: Config changed, reloading affected components...');
                 const { oldConfig, newConfig } = data;
-                
+
                 // Reload WhatsApp channel if settings changed
-                const whatsappChanged = 
+                const whatsappChanged =
                     oldConfig.whatsappEnabled !== newConfig.whatsappEnabled ||
                     oldConfig.whatsappAutoReplyEnabled !== newConfig.whatsappAutoReplyEnabled ||
                     oldConfig.whatsappStatusReplyEnabled !== newConfig.whatsappStatusReplyEnabled ||
                     oldConfig.whatsappAutoReactEnabled !== newConfig.whatsappAutoReactEnabled ||
                     oldConfig.whatsappContextProfilingEnabled !== newConfig.whatsappContextProfilingEnabled;
-                
+
                 if (whatsappChanged && this.whatsapp) {
                     logger.info('Agent: WhatsApp config changed, notifying channel...');
                     eventBus.emit('whatsapp:config-changed', newConfig);
                 }
-                
+
                 // Reload memory limits if changed
-                const memoryChanged = 
+                const memoryChanged =
                     oldConfig.memoryContextLimit !== newConfig.memoryContextLimit ||
                     oldConfig.memoryEpisodicLimit !== newConfig.memoryEpisodicLimit ||
                     oldConfig.memoryConsolidationThreshold !== newConfig.memoryConsolidationThreshold ||
@@ -7084,7 +7116,7 @@ REFLECTION: <1-2 sentences>`;
                     oldConfig.memoryFlushCooldownMinutes !== newConfig.memoryFlushCooldownMinutes ||
                     oldConfig.memoryContentMaxLength !== newConfig.memoryContentMaxLength ||
                     oldConfig.memoryExtendedContextLimit !== newConfig.memoryExtendedContextLimit;
-                
+
                 if (memoryChanged) {
                     this.memory.setLimits({
                         contextLimit: newConfig.memoryContextLimit,
@@ -7100,7 +7132,7 @@ REFLECTION: <1-2 sentences>`;
                 }
 
                 // Reload AgenticUser settings if changed
-                const agenticUserChanged = 
+                const agenticUserChanged =
                     oldConfig.agenticUserEnabled !== newConfig.agenticUserEnabled ||
                     oldConfig.agenticUserResponseDelay !== newConfig.agenticUserResponseDelay ||
                     oldConfig.agenticUserConfidenceThreshold !== newConfig.agenticUserConfidenceThreshold ||
@@ -7132,7 +7164,7 @@ REFLECTION: <1-2 sentences>`;
                 // Build a concise notification
                 const typeLabel = type === 'question-answer' ? '💬 Answered a question'
                     : type === 'direction-guidance' ? '🧭 Provided direction'
-                    : '🔧 Stuck recovery';
+                        : '🔧 Stuck recovery';
                 const notification = [
                     `🤖 *Agentic User Intervention* (${confidence}% confidence)`,
                     `${typeLabel}`,
@@ -7497,8 +7529,8 @@ REFLECTION: <1-2 sentences>`;
         if (this.whatsapp) channelSkills.push('send_whatsapp');
         if (this.discord) channelSkills.push('send_discord');
         if (this.slack) channelSkills.push('send_slack');
-        const channelSkillNote = channelSkills.length > 0 
-            ? `Messaging: ${channelSkills.join(', ')}` 
+        const channelSkillNote = channelSkills.length > 0
+            ? `Messaging: ${channelSkills.join(', ')}`
             : 'No messaging channels active';
 
         const worldEventAgeMinutes = this.lastWorldEventsRefreshAt > 0
@@ -7860,38 +7892,38 @@ Respond with a single actionable task description (one sentence). Be specific ab
         let cron: Cron;
         try {
             cron = new Cron(scheduleDef.schedule, () => {
-            // Guard: skip if agent is busy, another heartbeat just fired, or pending heartbeat tasks exist
-            if (this.isBusy) {
-                logger.debug(`Heartbeat Schedule ${id}: Skipped - agent is busy`);
-                return;
-            }
-            // Avoid heartbeat collisions immediately after fresh inbound user activity.
-            const postUserCooldownMs = Math.max(0, Number(this.config.get('autonomyPostUserCooldownSeconds') ?? 90)) * 1000;
-            if (postUserCooldownMs > 0 && this.lastUserActivityAt > 0) {
-                const elapsedSinceUserActivity = Date.now() - this.lastUserActivityAt;
-                if (elapsedSinceUserActivity < postUserCooldownMs) {
-                    logger.debug(`Heartbeat Schedule ${id}: Skipped - recent user activity ${Math.floor(elapsedSinceUserActivity / 1000)}s ago`);
+                // Guard: skip if agent is busy, another heartbeat just fired, or pending heartbeat tasks exist
+                if (this.isBusy) {
+                    logger.debug(`Heartbeat Schedule ${id}: Skipped - agent is busy`);
                     return;
                 }
-            }
-            // Cooldown: don't fire if any heartbeat pushed a task in the last 60 seconds
-            const heartbeatCooldownMs = 60_000;
-            if (Date.now() - this.lastHeartbeatPushAt < heartbeatCooldownMs) {
-                logger.debug(`Heartbeat Schedule ${id}: Skipped - another heartbeat task pushed ${Math.floor((Date.now() - this.lastHeartbeatPushAt) / 1000)}s ago`);
-                return;
-            }
-            // Check for existing pending/in-progress heartbeat tasks
-            const pendingHeartbeat = this.actionQueue.getQueue().find(a =>
-                (a.status === 'pending' || a.status === 'in-progress') && a.payload?.isHeartbeat
-            );
-            if (pendingHeartbeat) {
-                logger.debug(`Heartbeat Schedule ${id}: Skipped - heartbeat task ${pendingHeartbeat.id} already in queue`);
-                return;
-            }
+                // Avoid heartbeat collisions immediately after fresh inbound user activity.
+                const postUserCooldownMs = Math.max(0, Number(this.config.get('autonomyPostUserCooldownSeconds') ?? 90)) * 1000;
+                if (postUserCooldownMs > 0 && this.lastUserActivityAt > 0) {
+                    const elapsedSinceUserActivity = Date.now() - this.lastUserActivityAt;
+                    if (elapsedSinceUserActivity < postUserCooldownMs) {
+                        logger.debug(`Heartbeat Schedule ${id}: Skipped - recent user activity ${Math.floor(elapsedSinceUserActivity / 1000)}s ago`);
+                        return;
+                    }
+                }
+                // Cooldown: don't fire if any heartbeat pushed a task in the last 60 seconds
+                const heartbeatCooldownMs = 60_000;
+                if (Date.now() - this.lastHeartbeatPushAt < heartbeatCooldownMs) {
+                    logger.debug(`Heartbeat Schedule ${id}: Skipped - another heartbeat task pushed ${Math.floor((Date.now() - this.lastHeartbeatPushAt) / 1000)}s ago`);
+                    return;
+                }
+                // Check for existing pending/in-progress heartbeat tasks
+                const pendingHeartbeat = this.actionQueue.getQueue().find(a =>
+                    (a.status === 'pending' || a.status === 'in-progress') && a.payload?.isHeartbeat
+                );
+                if (pendingHeartbeat) {
+                    logger.debug(`Heartbeat Schedule ${id}: Skipped - heartbeat task ${pendingHeartbeat.id} already in queue`);
+                    return;
+                }
 
-            logger.info(`Heartbeat Schedule Triggered: ${scheduleDef.task}`);
-            this.pushTask(`Heartbeat Task: ${scheduleDef.task}`, scheduleDef.priority || 6, { isHeartbeat: true, heartbeatId: id }, 'autonomy');
-            this.lastHeartbeatPushAt = Date.now();
+                logger.info(`Heartbeat Schedule Triggered: ${scheduleDef.task}`);
+                this.pushTask(`Heartbeat Task: ${scheduleDef.task}`, scheduleDef.priority || 6, { isHeartbeat: true, heartbeatId: id }, 'autonomy');
+                this.lastHeartbeatPushAt = Date.now();
             });
         } catch (e) {
             throw new Error(`Invalid heartbeat schedule "${scheduleDef.schedule}": ${e}`);
@@ -7926,19 +7958,19 @@ Respond with a single actionable task description (one sentence). Be specific ab
         if (normalized === 'every evening') return '0 18 * * *';
         if (normalized === 'every night') return '0 21 * * *';
 
-        const everySecondMatch = raw.match(/every\s+(\d+)\s+seconds?/i);
+        const everySecondMatch = raw.match(/every\s+(\d+)\s+(second|sec)s?/i);
         if (everySecondMatch) {
             const amount = parseInt(everySecondMatch[1]);
             if (amount > 0) return `*/${amount} * * * * *`;
         }
 
-        const everyMatch = raw.match(/every\s+(\d+)\s+(minute|hour|day)s?/i);
+        const everyMatch = raw.match(/every\s+(\d+)\s+(minute|min|hour|hr|day)s?/i);
         if (everyMatch) {
             const amount = parseInt(everyMatch[1]);
             const unit = everyMatch[2].toLowerCase();
-            if (unit.startsWith('minute')) return `*/${amount} * * * *`;
-            if (unit.startsWith('hour')) return `0 */${amount} * * *`;
-            if (unit.startsWith('day')) return `0 0 */${amount} * *`;
+            if (unit.startsWith('min') || unit === 'm') return `*/${amount} * * * *`;
+            if (unit.startsWith('h')) return `0 */${amount} * * *`;
+            if (unit.startsWith('day') || unit === 'd') return `0 0 */${amount} * *`;
         }
         return raw; // assume cron
     }
@@ -7976,7 +8008,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
         const staleWaiting = queue.filter(a => a.status === 'waiting' && new Date(a.updatedAt || a.timestamp).getTime() < waitingThreshold);
         for (const action of staleWaiting) {
             logger.warn(`Agent: Waiting action ${action.id} stale for >${maxWaitingMinutes}min without user reply. Resetting to pending.`);
-            
+
             // Heartbeat tasks get their context rebuilt at execution time,
             // so don't append stale-waiting notes to them (it just adds noise to a prompt
             // that will be fully replaced with fresh context).
@@ -8019,7 +8051,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             schedules: clearAll || options?.schedules || false,
         };
 
-        logger.info(`Agent: Resetting${clearAll ? ' ALL' : ''} — ${Object.entries(opts).filter(([,v]) => v).map(([k]) => k).join(', ')}`);
+        logger.info(`Agent: Resetting${clearAll ? ' ALL' : ''} — ${Object.entries(opts).filter(([, v]) => v).map(([k]) => k).join(', ')}`);
         const dataHome = this.config.getDataHome();
         const memoryPath = this.config.get('memoryPath') || path.join(dataHome, 'memory.json');
         const actionPath = this.config.get('actionQueuePath') || path.join(dataHome, 'actions.json');
@@ -8298,7 +8330,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 if (decision.verification?.goals_met) {
                     logger.info(`runOnce: goals_met=true at step ${currentStep}`);
                     result = decision.content || 'Task completed';
-                    
+
                     // Still execute any tools before terminating
                     if (decision.tools && decision.tools.length > 0) {
                         for (const tool of decision.tools) {
@@ -8318,7 +8350,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 } else {
                     noToolSteps++;
                     logger.warn(`runOnce: Step ${currentStep} produced no tools (${noToolSteps}/${MAX_NO_TOOL_STEPS})`);
-                    
+
                     if (noToolSteps >= MAX_NO_TOOL_STEPS) {
                         logger.error(`runOnce: Aborting - ${MAX_NO_TOOL_STEPS} consecutive steps with no tools`);
                         result = 'Task aborted: Agent stuck without producing tools. May need clearer instructions.';
@@ -8327,14 +8359,14 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     }
                 }
             }
-            
+
             if (currentStep >= MAX_STEPS) {
                 logger.warn(`runOnce: Reached max steps (${MAX_STEPS}) for action ${action.id}`);
                 result = `Task incomplete: Reached maximum steps (${MAX_STEPS})`;
             }
 
             this.actionQueue.updateStatus(action.id, 'completed');
-            
+
             this.memory.saveMemory({
                 id: `${action.id}-complete`,
                 type: 'episodic',
@@ -9122,20 +9154,20 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 logger.debug(`Agent: Skipping duplicate message ${dedupKey}`);
                 return;
             }
-            
+
             // Also check if there's already a pending/waiting/in-progress task for this message
-            const existingTask = this.actionQueue.getQueue().find(a => 
-                (a.status === 'pending' || a.status === 'waiting' || a.status === 'in-progress') && 
+            const existingTask = this.actionQueue.getQueue().find(a =>
+                (a.status === 'pending' || a.status === 'waiting' || a.status === 'in-progress') &&
                 a.payload?.messageId === messageId
             );
             if (existingTask) {
                 logger.debug(`Agent: Task already exists for message ${messageId} (action ${existingTask.id})`);
                 return;
             }
-            
+
             // Mark as processed
             this.processedMessages.add(dedupKey);
-            
+
             // Prevent unbounded growth — evict oldest 100 entries via iterator (O(1) per delete, no full copy)
             if (this.processedMessages.size > this.processedMessagesMaxSize) {
                 let evicted = 0;
@@ -9292,7 +9324,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 return;
             }
         }
-        
+
         // Tag the action with admin status based on the requesting user
         const isAdmin = this.isUserAdmin(metadata);
 
@@ -9489,7 +9521,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             const isSimpleTask = taskComplexity === 'trivial' || taskComplexity === 'simple' || isHeartbeatTask;
             const actionStartedAtMs = Date.now();
             let lastUserDeliveryAtMs = actionStartedAtMs;
-            
+
             // PROGRESS FEEDBACK: Let user know we're working on non-trivial tasks
             // Skip for heartbeats — no user initiated this task
             // On retry attempts, say "trying again" rather than "working on it" so the
@@ -9503,14 +9535,14 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 }
                 lastUserDeliveryAtMs = Date.now();
             }
-            
+
             const executionPlan = isSimpleTask
                 ? 'Simple task: Respond directly and terminate. No multi-step planning needed.'
                 : await this.simulationEngine.simulate(
                     action.payload.description,
                     `${contextStr.slice(-1000)}${sessionContinuityHint ? `\n\n${sessionContinuityHint}` : ''}`, // Limit context for simulation to save tokens
-                    this.config.get('compactSkillsPrompt') 
-                        ? this.skills.getCompactSkillsPrompt() 
+                    this.config.get('compactSkillsPrompt')
+                        ? this.skills.getCompactSkillsPrompt()
                         : this.skills.getSkillsPrompt()
                 );
             const robustReasoningMode = this.isRobustReasoningEnabled();
@@ -9543,10 +9575,10 @@ Respond with a single actionable task description (one sentence). Be specific ab
             }
 
             const COMPLEXITY_LIMITS: Record<string, { steps: number; messages: number }> = {
-                trivial:  { steps: 2, messages: 1 },
-                simple:   { steps: 5, messages: 2 },
+                trivial: { steps: 2, messages: 1 },
+                simple: { steps: 5, messages: 2 },
                 standard: { steps: configMaxSteps, messages: configMaxMessages },
-                complex:  { steps: configMaxSteps, messages: Math.max(configMaxMessages, 8) },
+                complex: { steps: configMaxSteps, messages: Math.max(configMaxMessages, 8) },
             };
             const limits = COMPLEXITY_LIMITS[taskComplexity] || COMPLEXITY_LIMITS.standard;
             const MAX_STEPS = limits.steps;
@@ -9665,14 +9697,14 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                 if (messagesSent >= MAX_MESSAGES) {
                     logger.warn(`Agent: Message budget reached (${messagesSent}/${MAX_MESSAGES}) for action ${action.id}. Checking if task is truly done...`);
-                    
+
                     // REVIEW GATE: Don't blindly kill — ask the review layer if task is actually done
                     const budgetReviewResult = await this.reviewForcedTermination(
                         action, 'message_budget', currentStep,
                         `Message budget reached (${messagesSent}/${MAX_MESSAGES}). Agent has been sending status updates while working.`,
                         { messagesSent, anyUserDeliverySuccess, substantiveDeliveriesSent }
                     );
-                    
+
                     if (budgetReviewResult === 'continue') {
                         // Review layer says the task isn't done — suppress future status messages
                         // by making budget unreachable, but let the agent keep WORKING silently
@@ -9765,7 +9797,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     const hasChannelSendTool = decision.tools.some((t: any) => {
                         const name = String(t?.name || '').toLowerCase();
                         return name === 'send_telegram' || name === 'send_whatsapp' || name === 'send_discord' || name === 'send_slack' || name === 'send_gateway_chat' ||
-                               name === 'telegram_send_buttons' || name === 'telegram_edit_message' || name === 'telegram_send_poll' || name === 'telegram_react' || name === 'telegram_pin_message';
+                            name === 'telegram_send_buttons' || name === 'telegram_edit_message' || name === 'telegram_send_poll' || name === 'telegram_react' || name === 'telegram_pin_message';
                     });
 
                     const hasDeepTool = decision.tools.some((t: any) => !nonDeepSkills.includes(String(t?.name || '')));
@@ -9790,7 +9822,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 if (decision.tools && decision.tools.length > 0) {
                     // Reset no-tools retry counter since we have valid tools
                     noToolsRetryCount = 0;
-                    
+
                     // 1. INTRA-STEP DEDUPLICATION (Fixes multi-call issues on commands)
                     const uniqueTools: any[] = [];
                     const seenSignatures = new Set<string>();
@@ -9824,11 +9856,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         loopCounter++;
                         if (loopCounter >= 3) {
                             logger.warn(`Agent: Detected persistent redundant logic loop (3x). Breaking action ${action.id}.`);
-                            
+
                             // PROGRESS FEEDBACK: Let user know we got stuck
                             await this.sendProgressFeedback(action, 'recovering', 'Got stuck in a loop. Learning from this to improve...');
                             lastUserDeliveryAtMs = Date.now();
-                            
+
                             // SELF-IMPROVEMENT: Trigger selective analysis. The analyzer decides
                             // whether to create a skill or skip (strategy/parameter issue).
                             const failingTool = decision.tools[0]?.name;
@@ -9837,7 +9869,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 const taskDescription = typeof action.payload === 'string' ? action.payload : JSON.stringify(action.payload);
                                 await this.triggerSkillCreationForFailure(taskDescription, failingTool, failingContext, action);
                             }
-                            
+
                             break;
                         } else {
                             logger.info(`Agent: Detected potential loop (${loopCounter}/3). allowing retry...`);
@@ -9857,28 +9889,28 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         const argHint = (meta.command || meta.url || meta.query || meta.message || meta.path || '').toString().slice(0, 80);
                         recentSkillSignatures.push(`${t.name}:${argHint}`);
                     }
-                    
+
                     // Research tools (web_search, browser_*, extract_article) get a higher ceiling
                     // because they legitimately need many calls with different queries for deep research.
                     const overusedSkill = Object.entries(skillCallCounts).find(([skillName, count]) => {
                         const limit = RESEARCH_TOOLS.has(skillName) ? MAX_RESEARCH_SKILL_REPEATS : MAX_SKILL_REPEATS;
                         return count >= limit;
                     });
-                    
+
                     if (overusedSkill) {
                         const [skillName, callCount] = overusedSkill;
                         const isResearchTool = RESEARCH_TOOLS.has(skillName);
                         const failCount = skillFailCounts[skillName] || 0;
                         const skillExists = this.skills.getAllSkills().some(s => s.name === skillName);
-                        
+
                         logger.warn(`Agent: Skill '${skillName}' called ${callCount} times in action ${action.id}${isResearchTool ? ' (research tool, higher limit)' : ''}.`);
-                        
+
                         // REVIEW GATE: Ask the review layer before killing the task
                         const reviewResult = await this.reviewForcedTermination(
                             action, 'skill_frequency', currentStep,
                             `Skill '${skillName}' called ${callCount} times. ${isResearchTool ? 'This is a research tool that has hit even the extended ceiling.' : 'Non-research tool exceeded call limit.'} Fail count: ${failCount}. Task: ${action.payload?.description?.slice(0, 200)}`
                         );
-                        
+
                         if (reviewResult === 'continue') {
                             // Review says task isn't done — inject pivot guidance instead of killing
                             logger.info(`Agent: Review layer says task is NOT done despite skill overuse. Injecting pivot guidance.`);
@@ -9895,7 +9927,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             // Review layer confirms we should stop
                             await this.sendProgressFeedback(action, 'recovering', `Got stuck repeating '${skillName}'. Wrapping up with what I have...`);
                             lastUserDeliveryAtMs = Date.now();
-                            
+
                             // Trigger selective self-improvement analysis for all tool classes.
                             // The analyzer can still choose not to create a skill.
                             if (skillName) {
@@ -10100,7 +10132,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             }
                             deepToolExecutedSinceLastMessage = false; // Reset cooldown after sending
                             stepsSinceLastMessage = 0; // Reset status update timer
-                            
+
                             // 4. QUESTION DETECTION: If message contains a question, pause and wait for response
                             if (this.messageContainsQuestion(currentMessage)) {
                                 logger.info(`Agent: Message contains question. Will pause after sending to wait for user response.`);
@@ -10198,7 +10230,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         } catch (e) {
                             logger.error(`Skill execution failed: ${toolCall.name} - ${e}`);
                             toolResult = `Error executing skill ${toolCall.name}: ${e}`;
-                            
+
                             // Track consecutive failures per skill
                             skillFailCounts[toolCall.name] = (skillFailCounts[toolCall.name] || 0) + 1;
                             if (skillFailCounts[toolCall.name] >= MAX_CONSECUTIVE_FAILURES) {
@@ -10210,11 +10242,11 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                     metadata: { actionId: action.id, skill: toolCall.name, failures: skillFailCounts[toolCall.name] }
                                 });
                             }
-                            
+
                             // PROGRESS FEEDBACK: Let user know we hit an error but are recovering.
                             // Do NOT fire for channel send skills — you can't tell the user
                             // "send_telegram failed" by calling send_telegram again.
-                            const sendSkillNames = ['send_telegram','send_whatsapp','send_discord','send_slack','send_gateway_chat','telegram_send_buttons','telegram_send_poll'];
+                            const sendSkillNames = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat', 'telegram_send_buttons', 'telegram_send_poll'];
                             if (!sendSkillNames.includes(toolCall.name)) {
                                 await this.sendProgressFeedback(action, 'error', `${toolCall.name} failed`);
                                 lastUserDeliveryAtMs = Date.now();
@@ -10224,7 +10256,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         // CLARIFICATION HANDLING: Break sequence if agent is asking for info
                         if (toolCall.name === 'request_supporting_data') {
                             const question = toolCall.metadata?.question || toolCall.metadata?.text || 'I need more information to proceed.';
-                            
+
                             // Send clarification to appropriate channel
                             if (this.telegram && action.payload.source === 'telegram') {
                                 await this.telegram.sendMessage(action.payload.sourceId, `❓ *Clarification Needed*: ${question}`);
@@ -10235,19 +10267,19 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             } else if (this.slack && action.payload.source === 'slack') {
                                 await this.slack.sendMessage(action.payload.sourceId, `❓ *Clarification Needed*: ${question}`);
                             }
-                            
+
                             logger.info(`Agent: Clarification requested. Pausing action ${action.id} - waiting for user response.`);
-                            
+
                             // Mark action as waiting (not completed) so it won't be re-picked until user replies
                             this.actionQueue.updateStatus(action.id, 'waiting');
-                            
+
                             this.memory.saveMemory({
                                 id: `${action.id}-step-${currentStep}-clarification`,
                                 type: 'short',
                                 content: `[SYSTEM: Agent requested clarification: "${question}". Action PAUSED. Waiting for user response.]`,
                                 metadata: { waitingForClarification: true, actionId: action.id, question }
                             });
-                            
+
                             // Set a flag to skip the normal completion logic
                             waitingForClarification = true;
                             forceBreak = true;
@@ -10257,11 +10289,11 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         // Determine if the result indicates an error using STRUCTURED checks first,
                         // then fall back to string scanning for unstructured results.
                         const resultString = JSON.stringify(toolResult) || '';
-                        
+
                         // Structured check: if result is an object with explicit success/error fields, trust those
                         const hasStructuredResult = toolResult && typeof toolResult === 'object' && !Array.isArray(toolResult);
                         let resultIndicatesError: boolean;
-                        
+
                         if (hasStructuredResult && 'success' in toolResult) {
                             // Plugin returned { success: true/false, ... } — trust the explicit field
                             resultIndicatesError = toolResult.success === false;
@@ -10272,9 +10304,9 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             // Unstructured string result — scan for error indicators
                             // But only at the START of the string (not deeply nested in response data)
                             const lower = toolResult.toLowerCase();
-                            resultIndicatesError = lower.startsWith('error') || 
-                                                   lower.startsWith('failed') || 
-                                                   lower.includes('error executing skill');
+                            resultIndicatesError = lower.startsWith('error') ||
+                                lower.startsWith('failed') ||
+                                lower.includes('error executing skill');
                         } else {
                             resultIndicatesError = false;
                         }
@@ -10294,15 +10326,15 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             if (!isChannelSendSkill) blockedFailedSignatures.add(toolSignature);
                             // Track ALL tool failures that return error results (not just thrown exceptions)
                             skillFailCounts[toolCall.name] = (skillFailCounts[toolCall.name] || 0) + 1;
-                            
+
                             // Inject explicit error feedback so the LLM learns from this failure
                             const errorSnippet = resultString.slice(0, 300);
                             const paramsSummary = JSON.stringify(toolCall.metadata || {}).slice(0, 200);
-                            
+
                             // Detect rate-limit errors and suggest schedule_task instead of giving up
                             const rateLimitMatch = resultString.match(/(?:wait|retry.*?after|rate.*?limit).*?(\d+)\s*(second|minute|hour|min|sec|hr)s?/i);
                             const hasRetryAfter = hasStructuredResult && (toolResult.retry_after_minutes || toolResult.retry_after_seconds || toolResult.details?.retry_after_minutes || toolResult.details?.retry_after_seconds);
-                            
+
                             if (rateLimitMatch || hasRetryAfter) {
                                 let waitMinutes: number;
                                 if (hasRetryAfter) {
@@ -10316,7 +10348,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 }
                                 // Add 1 minute buffer
                                 waitMinutes = Math.max(waitMinutes + 1, 2);
-                                
+
                                 logger.info(`Agent: Rate limit detected for '${toolCall.name}'. Suggesting schedule_task for ${waitMinutes} minutes.`);
                                 this.memory.saveMemory({
                                     id: `${action.id}-step-${currentStep}-${toolCall.name}-rate-limit-guidance`,
@@ -10364,7 +10396,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                     metadata: { actionId: action.id, skill: toolCall.name, failures: skillFailCounts[toolCall.name], step: currentStep }
                                 });
                             }
-                            
+
                             if (skillFailCounts[toolCall.name] >= MAX_CONSECUTIVE_FAILURES) {
                                 logger.warn(`Agent: '${toolCall.name}' returned errors ${MAX_CONSECUTIVE_FAILURES} times in action ${action.id}. Injecting hard stop notice.`);
                                 blockedFailedTools.add(toolCall.name);
@@ -10389,8 +10421,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
 
                         let observation: string;
                         if (resultIndicatesError) {
-                            const errorDetail = hasStructuredResult && toolResult.error 
-                                ? toolResult.error 
+                            const errorDetail = hasStructuredResult && toolResult.error
+                                ? toolResult.error
                                 : resultString.slice(0, obsLimit);
                             observation = `⚠️ TOOL ERROR: ${toolCall.name} FAILED — ${errorDetail}`;
                         } else if (hasStructuredResult && toolResult.success === true) {
@@ -10409,9 +10441,9 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 anyUserDeliverySuccess = true;
                                 lastUserDeliveryAtMs = Date.now();
                             }
-                            
+
                             // QUESTION PAUSE: If this message asked a question, pause and wait for response
-                            
+
                             const wasSuccessfulSend = !resultIndicatesError;
                             if (this.messageContainsQuestion(sentMessage) && wasSuccessfulSend && !decision.verification?.goals_met) {
                                 this.memory.saveMemory({
@@ -10423,7 +10455,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 logger.info(`Agent: Pausing action ${action.id} - waiting for user response to question.`);
 
                                 this.actionQueue.updateStatus(action.id, 'waiting');
-                                
+
                                 // Actually pause - set flags to break loop and skip completion
                                 waitingForClarification = true;
                                 forceBreak = true;
@@ -10512,8 +10544,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         if (toolCall.name === 'send_image' && resultIndicatesError) {
                             // Check if the result indicates the image was generated despite send failure
                             const hasImageGenerated = (hasStructuredResult && toolResult.imageGenerated === true) ||
-                                                      resultString.includes('imageGenerated') ||
-                                                      resultString.includes('Image was generated');
+                                resultString.includes('imageGenerated') ||
+                                resultString.includes('Image was generated');
                             if (hasImageGenerated) {
                                 imageGeneratedInAction = true;
                                 // Extract file path from structured result or string
@@ -10547,10 +10579,10 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         const isChannelSend = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat', 'telegram_send_buttons', 'telegram_send_poll'].includes(toolCall.name);
                         const isFileDelivery = toolCall.name === 'send_file' || toolCall.name === 'send_image';
                         const isResponseTask = action.payload?.description?.toLowerCase().includes('respond to') ||
-                                               action.payload?.requiresResponse === true;
+                            action.payload?.requiresResponse === true;
                         const isRecoveryDeliveryTask = action.payload?.trigger === 'completion_audit_recovery';
                         const wasSuccessful = toolResult && !JSON.stringify(toolResult).toLowerCase().includes('error');
-                        
+
                         if (isChannelSend && isResponseTask && wasSuccessful) {
                             logger.info(`Agent: Channel message sent for response task ${action.id}. Terminating to prevent duplicates.`);
                             goalsMet = true;
@@ -10570,11 +10602,11 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         if (isFileDelivery && wasSuccessful) {
                             const taskDesc = (action.payload?.description || '').toLowerCase();
                             const isFileCentricTask = taskDesc.includes('send') || taskDesc.includes('file') ||
-                                                      taskDesc.includes('cut short') || taskDesc.includes('resend') ||
-                                                      taskDesc.includes('deliver') || taskDesc.includes('share') ||
-                                                      taskDesc.includes('truncat') || taskDesc.includes('incomplete') ||
-                                                      taskDesc.includes('image') || taskDesc.includes('picture') ||
-                                                      taskDesc.includes('draw') || taskDesc.includes('generat');
+                                taskDesc.includes('cut short') || taskDesc.includes('resend') ||
+                                taskDesc.includes('deliver') || taskDesc.includes('share') ||
+                                taskDesc.includes('truncat') || taskDesc.includes('incomplete') ||
+                                taskDesc.includes('image') || taskDesc.includes('picture') ||
+                                taskDesc.includes('draw') || taskDesc.includes('generat');
                             if (isFileCentricTask) {
                                 logger.info(`Agent: File delivered for file-centric task ${action.id}. Terminating.`);
                                 goalsMet = true;
@@ -10656,7 +10688,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
 
                         logger.warn(`Agent: All ${totalSendToolsInStep} send tool(s) blocked but no substantive delivery yet. Forcing continuation for action ${action.id}.`);
                         this.memory.saveMemory({
-                            id: `${action.id}-step-${currentStep}-suppressed-before-substantive` ,
+                            id: `${action.id}-step-${currentStep}-suppressed-before-substantive`,
                             type: 'short',
                             content: `[SYSTEM: Your recent sends were suppressed, but you have NOT delivered a substantive answer yet. Send ONE concrete, content-rich response now (not an acknowledgment/status update). If needed, combine your acknowledgment and the actual content in a single message.]`,
                             metadata: { actionId: action.id, step: currentStep }
@@ -10668,7 +10700,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                     // No tools in response - check why before self-terminating
                     const toolsWereFiltered = (decision as any).toolsFiltered > 0;
                     const goalsNotMet = decision.verification?.goals_met === false;
-                    
+
                     // Case 1: Tools were filtered by validator - retry with feedback
                     if (toolsWereFiltered && goalsNotMet) {
                         noToolsRetryCount++;
@@ -10677,17 +10709,17 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             break;
                         }
                         logger.warn(`Agent: ${(decision as any).toolsFiltered} tool(s) were filtered by validator but goals_met=false. Retry ${noToolsRetryCount}/${MAX_NO_TOOLS_RETRIES}...`);
-                        
+
                         this.memory.saveMemory({
                             id: `${action.id}-step-${currentStep}-tools-filtered`,
                             type: 'short',
                             content: `[SYSTEM: Your tool calls were INVALID and filtered. Common issues: browser_click/browser_type require 'selector' (use ref number from snapshot), browser_type requires 'text'. Check your tool metadata and try again with valid parameters.]`,
                             metadata: { actionId: action.id, step: currentStep, toolsFiltered: (decision as any).toolsFiltered }
                         });
-                        
+
                         continue;
                     }
-                    
+
                     // Case 2: LLM said goals_met=false but provided no tools - this is an error, retry
                     if (goalsNotMet && !toolsWereFiltered) {
                         noToolsRetryCount++;
@@ -10695,13 +10727,13 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             logger.error(`Agent: Exceeded max retries (${MAX_NO_TOOLS_RETRIES}) for no-tools error. Terminating action ${action.id}.`);
                             break;
                         }
-                        
+
                         // Check if the pipeline suppressed send tools as duplicates
                         const pipelineDropped = pipelineNotes?.dropped || [];
-                        const wasSendSuppressed = pipelineDropped.some((d: string) => 
+                        const wasSendSuppressed = pipelineDropped.some((d: string) =>
                             d.startsWith('semantic-dupe:') || d.startsWith('dupe:') || d.startsWith('limit:')
                         );
-                        
+
                         if (wasSendSuppressed && messagesSent === 0) {
                             // Pipeline incorrectly suppressed the first reply — this shouldn't happen
                             // with our fix, but as a safety net, inject a better error message
@@ -10721,14 +10753,14 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 metadata: { actionId: action.id, step: currentStep, error: 'no_tools_but_goals_not_met' }
                             });
                         }
-                        
+
                         continue;
                     }
-                    
+
                     // Case 3: goals_met=true or undefined with no tools - legitimate termination
                     // BUT: catch silent termination — if from a channel and never sent a message, force a retry
-                    const isChannelTask = action.payload.source === 'telegram' || action.payload.source === 'whatsapp' || 
-                                          action.payload.source === 'discord' || action.payload.source === 'slack' || action.payload.source === 'gateway-chat';
+                    const isChannelTask = action.payload.source === 'telegram' || action.payload.source === 'whatsapp' ||
+                        action.payload.source === 'discord' || action.payload.source === 'slack' || action.payload.source === 'gateway-chat';
                     if (isChannelTask && messagesSent > 0 && substantiveDeliveriesSent === 0 && currentStep < MAX_STEPS) {
                         noToolsRetryCount++;
                         if (noToolsRetryCount < MAX_NO_TOOLS_RETRIES) {
@@ -10782,13 +10814,13 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
             // If we exhausted all steps without completing, review before giving up
             if (currentStep >= MAX_STEPS && !goalsMet) {
                 logger.warn(`Agent: Reached max steps (${MAX_STEPS}) for action ${action.id}. Reviewing if task is truly done...`);
-                
+
                 const maxStepsReview = await this.reviewForcedTermination(
                     action, 'max_steps', currentStep,
                     `Reached max steps (${MAX_STEPS}). The agent may have made progress but not delivered results yet.`,
                     { messagesSent, anyUserDeliverySuccess, substantiveDeliveriesSent }
                 );
-                
+
                 if (maxStepsReview === 'continue') {
                     // Give the agent a few more steps to compile and deliver results
                     const nonSendCalls = Object.entries(skillCallCounts)
@@ -10816,7 +10848,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                     for (let bonus = 0; bonus < bonusSteps; bonus++) {
                         currentStep++;
                         logger.info(`Agent: Bonus step ${bonus + 1}/${bonusSteps} for action ${action.id}`);
-                        
+
                         try {
                             const bonusTimeSignals = this.buildActionTimeSignals(action, {
                                 actionStartedAtMs,
@@ -10841,7 +10873,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                     }
                                 });
                             }, { maxRetries: 2, initialDelay: 1000 });
-                            
+
                             if (!bonusDecision?.tools?.length) {
                                 const bonusGoalsNotMet = bonusDecision?.verification?.goals_met === false;
                                 if (bonusGoalsNotMet) {
@@ -10862,12 +10894,12 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 logger.info(`Agent: No tools in bonus step. Wrapping up.`);
                                 break;
                             }
-                            
+
                             let bonusMsgSentThisStep = false;
                             for (const toolCall of bonusDecision.tools) {
                                 const isSendTool = toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_discord' || toolCall.name === 'send_slack' || toolCall.name === 'send_gateway_chat' ||
-                                   toolCall.name === 'telegram_send_buttons' || toolCall.name === 'telegram_send_poll';
-                                
+                                    toolCall.name === 'telegram_send_buttons' || toolCall.name === 'telegram_send_poll';
+
                                 // Apply message guards to bonus steps too
                                 if (isSendTool) {
                                     const bonusMsg = (toolCall.metadata?.message || '').trim();
@@ -10927,7 +10959,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                     bonusSameToolCount = 0;
                                 }
                             }
-                            
+
                             // If we already sent the wrap-up message, no need for more bonus steps
                             if (bonusMessageSent) {
                                 logger.info(`Agent: Final message sent in bonus steps. Done.`);
@@ -10971,7 +11003,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
             if (!goalsMet && isUserFacingAction && anyUserDeliverySuccess) {
                 logger.warn(`Agent: Reconciled final status to completed for ${action.id} because user delivery succeeded.`);
                 this.memory.saveMemory({
-                    id: `${action.id}-delivery-reconciled` ,
+                    id: `${action.id}-delivery-reconciled`,
                     type: 'short',
                     content: `[SYSTEM: Final-state reconciliation: delivery/send succeeded in this action. Marking task completed to avoid false failure due to guardrail exhaustion.]`,
                     metadata: { actionId: action.id, deliveryReconciled: true, messagesSent, substantiveDeliveriesSent }
@@ -10983,13 +11015,13 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
             if (finalStatus === 'failed') {
                 return;
             }
-            
+
             // If we're waiting for clarification, don't mark as completed
             if (waitingForClarification) {
                 logger.info(`Agent: Action ${action.id} paused awaiting user clarification. Will resume when user responds.`);
                 return; // Skip the completion logic - action stays waiting
             }
-            
+
             // TASK CONTINUITY CHECK: Detect if the agent acknowledged incomplete prior work
             // but didn't actually resume it (empty promise detection)
             await this.detectAndResumeIncompleteWork(action, sentMessagesInAction, currentStep);
@@ -11031,26 +11063,26 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             logger.info(`Agent: Skipping duplicate completion_audit_recovery for ${action.id}; recovery already exists or was recently completed.`);
                             handedOffToRecovery = true;
                         } else {
-                        // Include the original task description so the recovery agent has clear
-                        // context and doesn't confuse it with unrelated older tasks in memory.
-                        const originalDesc = (action.payload?.description || 'unknown task').slice(0, 300);
-                        const recoveryDesc = `RECOVERY for action ${action.id}: The previous attempt at "${originalDesc}" gathered results but did not deliver a concrete final answer to the user. Review ONLY the step logs for action ${action.id} and send a specific answer now. Do not rehash or resend content from unrelated prior tasks.`;
-                        await this.pushTask(
-                            recoveryDesc,
-                            9,
-                            {
-                                source: action.payload?.source,
-                                sourceId: action.payload?.sourceId,
-                                chatId: action.payload?.chatId,
-                                userId: action.payload?.userId,
-                                senderName: action.payload?.senderName,
-                                sessionScopeId: action.payload?.sessionScopeId,
-                                trigger: 'completion_audit_recovery',
-                                originalActionId: action.id
-                            },
-                            action.lane === 'autonomy' ? 'autonomy' : 'user'
-                        );
-                        handedOffToRecovery = true;
+                            // Include the original task description so the recovery agent has clear
+                            // context and doesn't confuse it with unrelated older tasks in memory.
+                            const originalDesc = (action.payload?.description || 'unknown task').slice(0, 300);
+                            const recoveryDesc = `RECOVERY for action ${action.id}: The previous attempt at "${originalDesc}" gathered results but did not deliver a concrete final answer to the user. Review ONLY the step logs for action ${action.id} and send a specific answer now. Do not rehash or resend content from unrelated prior tasks.`;
+                            await this.pushTask(
+                                recoveryDesc,
+                                9,
+                                {
+                                    source: action.payload?.source,
+                                    sourceId: action.payload?.sourceId,
+                                    chatId: action.payload?.chatId,
+                                    userId: action.payload?.userId,
+                                    senderName: action.payload?.senderName,
+                                    sessionScopeId: action.payload?.sessionScopeId,
+                                    trigger: 'completion_audit_recovery',
+                                    originalActionId: action.id
+                                },
+                                action.lane === 'autonomy' ? 'autonomy' : 'user'
+                            );
+                            handedOffToRecovery = true;
                         }
                     }
 

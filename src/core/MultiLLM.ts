@@ -5,6 +5,7 @@ import path from 'path';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { TokenTracker } from './TokenTracker';
 import { piAiCall, piAiCallWithTools, type PiAIAdapterOptions } from './PiAIAdapter';
+import { convertToWhisperCompatible, getMimeType as getAudioHelperMimeType, isAudioFile } from '../utils/AudioHelper';
 
 export type LLMProvider = 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia' | 'anthropic';
 
@@ -164,7 +165,7 @@ export class MultiLLM {
             }
         }
         const primaryProvider = provider || this.preferredProvider || this.inferProvider(modelOverride || this.modelName);
-        
+
         // Build fallback chain: try all available providers
         const fallbackProvider = this.getFallbackProvider(primaryProvider);
 
@@ -576,10 +577,10 @@ export class MultiLLM {
     private getFallbackProvider(primaryProvider: LLMProvider): LLMProvider | null {
         // Priority order for fallbacks based on what's configured
         const fallbackOrder: LLMProvider[] = ['openai', 'anthropic', 'google', 'nvidia', 'openrouter', 'bedrock'];
-        
+
         for (const provider of fallbackOrder) {
             if (provider === primaryProvider) continue;
-            
+
             if (provider === 'openai' && this.openaiKey) return 'openai';
             if (provider === 'anthropic' && this.anthropicKey) return 'anthropic';
             if (provider === 'google' && this.googleKey) return 'google';
@@ -587,7 +588,7 @@ export class MultiLLM {
             if (provider === 'openrouter' && this.openrouterKey) return 'openrouter';
             if (provider === 'bedrock' && this.bedrockAccessKeyId) return 'bedrock';
         }
-        
+
         return null;
     }
 
@@ -674,7 +675,7 @@ export class MultiLLM {
             }
 
             const buffer = Buffer.from(await response.arrayBuffer());
-            
+
             // Ensure output directory exists
             const dir = path.dirname(outputPath);
             if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -866,10 +867,14 @@ export class MultiLLM {
             if (!response.ok) throw new Error(`OpenAI Vision Error: ${response.status}`);
             const data = await response.json() as any;
             return data.choices[0].message.content;
-        } else if (['mp3', 'm4a', 'wav', 'ogg'].includes(ext) || detectedMime.startsWith('audio/')) {
+        } else if (isAudioFile(filePath) || detectedMime.startsWith('audio/')) {
+            // Auto-convert unsupported formats (e.g. OGG, OPUS, AMR) to MP3 for Whisper
+            const compatiblePath = await convertToWhisperCompatible(filePath);
+            const audioBuffer = fs.readFileSync(compatiblePath);
+            const audioFilename = path.basename(compatiblePath);
             const formData = new FormData();
             // In Node environments, global FormData might behave differently.
-            formData.append('file', new Blob([buffer]), path.basename(filePath));
+            formData.append('file', new Blob([audioBuffer]), audioFilename);
             formData.append('model', 'whisper-1');
 
             const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
@@ -908,18 +913,7 @@ export class MultiLLM {
     }
 
     private getMimeType(filePath: string): string {
-        const ext = path.extname(filePath).toLowerCase().substring(1);
-        switch (ext) {
-            case 'png': return 'image/png';
-            case 'jpg':
-            case 'jpeg': return 'image/jpeg';
-            case 'webp': return 'image/webp';
-            case 'mp4': return 'video/mp4';
-            case 'mp3': return 'audio/mpeg';
-            case 'wav': return 'audio/wav';
-            case 'pdf': return 'application/pdf';
-            default: return 'application/octet-stream';
-        }
+        return getAudioHelperMimeType(filePath);
     }
 
     private async detectMime(buffer: Buffer, fallbackExt: string): Promise<string> {

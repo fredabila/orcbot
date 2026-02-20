@@ -18,6 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { renderMarkdown, hasMarkdown } from '../utils/MarkdownRenderer';
+import { isImageFile, isVideoFile, isAudioFile, getMimeType } from '../utils/AudioHelper';
 
 export class WhatsAppChannel implements IChannel {
     public name = 'whatsapp';
@@ -26,6 +27,7 @@ export class WhatsAppChannel implements IChannel {
     private sessionPath: string;
     private store: any;
     private contactJids: Set<string> = new Set();
+    private contactNames: Map<string, string> = new Map();
     // Prefix used to identify agent-sent messages (for self-chat distinction)
     private readonly AGENT_MESSAGE_PREFIX = '🤖 ';
     // Cache config values to avoid repeated lookups
@@ -80,11 +82,35 @@ export class WhatsAppChannel implements IChannel {
         this.contactJids.add(jid);
     }
 
-    private recordContacts(contacts: Array<{ id?: string }>) {
+    private recordContacts(contacts: Array<any>) {
         if (!contacts || contacts.length === 0) return;
         for (const contact of contacts) {
-            this.recordContactJid(contact.id);
+            if (contact.id) {
+                this.recordContactJid(contact.id);
+                // Also store human readable name if available
+                const name = contact.name || contact.notify || contact.verifiedName;
+                if (name) {
+                    this.contactNames.set(contact.id, name);
+                }
+            }
         }
+    }
+
+    /**
+     * Search the synced contacts by name.
+     */
+    public searchContacts(query: string): Array<{ jid: string, name: string }> {
+        const results: Array<{ jid: string, name: string }> = [];
+        const normalizedQuery = query.toLowerCase().trim();
+        if (!normalizedQuery) return results;
+
+        for (const [jid, name] of this.contactNames.entries()) {
+            if (name.toLowerCase().includes(normalizedQuery) || jid.includes(normalizedQuery)) {
+                results.push({ jid, name });
+                if (results.length >= 50) break; // Cap at 50 to avoid overflowing LLM
+            }
+        }
+        return results;
     }
 
     public async start(): Promise<void> {
@@ -172,7 +198,7 @@ export class WhatsAppChannel implements IChannel {
                     if (isFromMe) {
                         if (isSelfChat) {
                             // In self-chat, check if this is an agent message by looking for the prefix
-                            const msgText = msg.message?.conversation || 
+                            const msgText = msg.message?.conversation ||
                                 msg.message?.extendedTextMessage?.text || '';
                             if (msgText.startsWith(this.AGENT_MESSAGE_PREFIX)) {
                                 logger.debug(`WhatsApp: Skipping agent's own message in self-chat (has prefix)`);
@@ -210,7 +236,7 @@ export class WhatsAppChannel implements IChannel {
                         const contextInfo = extendedText?.contextInfo || imageMsg?.contextInfo || videoMsg?.contextInfo || docMsg?.contextInfo;
                         if (contextInfo?.quotedMessage) {
                             quotedMessageId = contextInfo.stanzaId;
-                            const quotedText = contextInfo.quotedMessage.conversation || 
+                            const quotedText = contextInfo.quotedMessage.conversation ||
                                 contextInfo.quotedMessage.extendedTextMessage?.text ||
                                 contextInfo.quotedMessage.imageMessage?.caption ||
                                 '[Media/Sticker]';
@@ -316,7 +342,7 @@ export class WhatsAppChannel implements IChannel {
                         // Build content string that includes media info + transcription/analysis
                         const voiceLabel = transcription ? ` [Voice message transcription: "${transcription}"]` : '';
                         const mediaLabel = mediaAnalysis ? ` [Media analysis: ${mediaAnalysis}]` : '';
-                        const contentStr = text 
+                        const contentStr = text
                             ? `User ${senderName} (${senderId}) said on WhatsApp: ${text}${voiceLabel}${mediaLabel}${replyContext ? ' ' + replyContext : ''}`
                             : transcription
                                 ? `User ${senderName} (${senderId}) sent a voice message on WhatsApp: "${transcription}"${replyContext ? ' ' + replyContext : ''}`
@@ -330,12 +356,12 @@ export class WhatsAppChannel implements IChannel {
                             type: 'short',
                             content: contentStr,
                             timestamp: new Date().toISOString(),
-                            metadata: { 
-                                source: 'whatsapp', 
+                            metadata: {
+                                source: 'whatsapp',
                                 role: 'user',
                                 sessionScopeId,
-                                messageId, 
-                                senderId, 
+                                messageId,
+                                senderId,
                                 senderName,
                                 mediaPath: mediaPath || undefined,
                                 quotedMessageId,
@@ -353,9 +379,11 @@ export class WhatsAppChannel implements IChannel {
                         const mediaContext = mediaAnalysis ? ` [Media analysis: ${mediaAnalysis}]` : '';
                         const displayText = text || (transcription ? `[Voice: "${transcription}"]` : '[Media]');
 
-                        if (isSelfChat) {
+                        if (isSelfChat && this.autoReplyEnabled) {
                             await this.agent.pushTask(
-                                `WhatsApp command from yourself (ID: ${messageId}): \"${displayText}\"${mediaContext}${replyNote}${mediaNote}${profileInstruction}`,
+                                `WhatsApp command from yourself (ID: ${messageId}): \"${displayText}\"${mediaContext}${replyNote}${mediaNote}${profileInstruction}
+                                
+CRITICAL: You MUST use 'send_whatsapp' to reply. Do NOT send cross-channel Telegram notifications.`,
                                 10,
                                 { source: 'whatsapp', sourceId: senderId, sessionScopeId, senderName: senderName, isOwner: true, messageId, quotedMessageId, replyContext: replyContext || undefined, mediaPath: mediaPath || undefined }
                             );
@@ -367,7 +395,7 @@ export class WhatsAppChannel implements IChannel {
                                 { source: 'whatsapp', sourceId: senderId, sessionScopeId, senderName: senderName, isExternal: true, messageId, quotedMessageId, replyContext: replyContext || undefined, mediaPath: mediaPath || undefined }
                             );
                         } else {
-                            logger.info(`WhatsApp: External message from ${senderName} not queued - autoReplyEnabled is false`);
+                            logger.info(`WhatsApp: Message from ${senderName} not queued - autoReplyEnabled is false`);
                         }
                     }
                 }
@@ -508,24 +536,24 @@ export class WhatsAppChannel implements IChannel {
                 throw new Error(`File not found: ${filePath}`);
             }
 
-            const ext = path.extname(filePath).toLowerCase().substring(1);
             const fileName = path.basename(filePath);
             const buffer = fs.readFileSync(filePath);
+            const mime = getMimeType(filePath);
 
             let messageContent: any = {};
 
-            if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
-                messageContent = { image: buffer, caption };
-            } else if (['mp4', 'mov'].includes(ext)) {
-                messageContent = { video: buffer, caption };
-            } else if (['mp3', 'm4a', 'ogg'].includes(ext)) {
-                messageContent = { audio: buffer, caption, mimetype: `audio/${ext === 'mp3' ? 'mpeg' : ext}` };
+            if (isImageFile(filePath)) {
+                messageContent = { image: buffer, caption, mimetype: mime };
+            } else if (isVideoFile(filePath)) {
+                messageContent = { video: buffer, caption, mimetype: mime };
+            } else if (isAudioFile(filePath)) {
+                messageContent = { audio: buffer, caption, mimetype: mime };
             } else {
                 messageContent = {
                     document: buffer,
-                    fileName: fileName,
-                    caption: caption,
-                    mimetype: 'application/octet-stream'
+                    fileName,
+                    caption,
+                    mimetype: mime
                 };
             }
 
@@ -553,8 +581,7 @@ export class WhatsAppChannel implements IChannel {
             }
 
             const buffer = fs.readFileSync(filePath);
-            const ext = path.extname(filePath).toLowerCase().substring(1);
-            const mimetype = ext === 'mp3' ? 'audio/mpeg' : ext === 'ogg' ? 'audio/ogg; codecs=opus' : `audio/${ext}`;
+            const mimetype = getMimeType(filePath);
 
             await this.sock.sendMessage(jid, {
                 audio: buffer,

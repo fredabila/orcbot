@@ -6,6 +6,7 @@ import { logger } from '../utils/logger';
 import { renderMarkdown, hasMarkdown } from '../utils/MarkdownRenderer';
 import { Agent } from '../core/Agent';
 import { eventBus } from '../core/EventBus';
+import { isImageFile, isVideoFile, isAudioFile } from '../utils/AudioHelper';
 
 import { IChannel } from './IChannel';
 
@@ -133,7 +134,7 @@ export class TelegramChannel implements IChannel {
             // Build content with transcription / media analysis if available
             const voiceLabel = transcription ? ` [Voice message transcription: "${transcription}"]` : '';
             const mediaLabel = mediaAnalysis ? ` [Media analysis: ${mediaAnalysis}]` : '';
-            const content = text 
+            const content = text
                 ? `User ${userName} (Telegram ${userId}) said: ${text}${voiceLabel}${mediaLabel}${replyContext ? ' ' + replyContext : ''}`
                 : transcription
                     ? `User ${userName} (Telegram ${userId}) sent a voice message: "${transcription}"${replyContext ? ' ' + replyContext : ''}`
@@ -147,14 +148,14 @@ export class TelegramChannel implements IChannel {
                 type: 'short',
                 content: content,
                 timestamp: new Date().toISOString(),
-                metadata: { 
-                    source: 'telegram', 
+                metadata: {
+                    source: 'telegram',
                     role: 'user',
                     sessionScopeId,
-                    messageId: message.message_id, 
+                    messageId: message.message_id,
                     chatId,
-                    userId, 
-                    userName, 
+                    userId,
+                    userName,
                     mediaPath,
                     replyToMessageId,
                     replyContext: replyContext || undefined
@@ -172,7 +173,7 @@ export class TelegramChannel implements IChannel {
             const taskDescription = replyContext
                 ? `Telegram message from ${userName}: "${displayText}"${mediaContext} ${replyContext}${mediaPath ? ` (File stored at: ${mediaPath})` : ''}`
                 : `Telegram message from ${userName}: "${displayText}"${mediaContext}${mediaPath ? ` (File stored at: ${mediaPath})` : ''}`;
-            
+
             await this.agent.pushTask(
                 taskDescription,
                 10,
@@ -355,18 +356,16 @@ export class TelegramChannel implements IChannel {
                 throw new Error(`File not found: ${filePath}`);
             }
 
-            const ext = filePath.split('.').pop()?.toLowerCase();
-
             // Format captions with HTML if they contain markdown
             const useHtml = caption ? hasMarkdown(caption) : false;
             const formattedCaption = useHtml && caption ? renderMarkdown(caption, 'telegram_html') : caption;
             const captionOpts = useHtml ? { caption: formattedCaption, parse_mode: 'HTML' as const } : { caption: formattedCaption };
 
-            if (['png', 'jpg', 'jpeg', 'webp'].includes(ext || '')) {
+            if (isImageFile(filePath)) {
                 await this.bot.telegram.sendPhoto(to, { source: filePath }, captionOpts);
-            } else if (['mp4', 'mov'].includes(ext || '')) {
+            } else if (isVideoFile(filePath)) {
                 await this.bot.telegram.sendVideo(to, { source: filePath }, captionOpts);
-            } else if (['mp3', 'm4a', 'ogg'].includes(ext || '')) {
+            } else if (isAudioFile(filePath)) {
                 await this.bot.telegram.sendAudio(to, { source: filePath }, captionOpts);
             } else {
                 await this.bot.telegram.sendDocument(to, { source: filePath }, captionOpts);
