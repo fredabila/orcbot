@@ -423,7 +423,18 @@ export class TelegramChannel implements IChannel {
             } else if (isVideoFile(filePath)) {
                 await this.bot.telegram.sendVideo(to, { source: filePath }, captionOpts);
             } else if (isAudioFile(filePath)) {
-                await this.bot.telegram.sendAudio(to, { source: filePath }, captionOpts);
+                try {
+                    await this.bot.telegram.sendAudio(to, { source: filePath }, captionOpts);
+                } catch (audioErr) {
+                    const ext = path.extname(filePath).toLowerCase();
+                    if (ext === '.ogg' || ext === '.opus' || ext === '.webm') {
+                        logger.warn(`TelegramChannel: sendAudio failed for ${filePath}; retrying as voice. Error: ${audioErr}`);
+                        await this.bot.telegram.sendVoice(to, { source: filePath }, captionOpts);
+                    } else {
+                        logger.warn(`TelegramChannel: sendAudio failed for ${filePath}; retrying as document. Error: ${audioErr}`);
+                        await this.bot.telegram.sendDocument(to, { source: filePath }, captionOpts);
+                    }
+                }
             } else {
                 await this.bot.telegram.sendDocument(to, { source: filePath }, captionOpts);
             }
@@ -445,7 +456,17 @@ export class TelegramChannel implements IChannel {
                 throw new Error(`File not found: ${filePath}`);
             }
 
-            await this.bot.telegram.sendVoice(to, { source: filePath });
+            try {
+                await this.bot.telegram.sendVoice(to, { source: filePath });
+            } catch (voiceErr) {
+                logger.warn(`TelegramChannel: sendVoice failed for ${filePath}; retrying as audio. Error: ${voiceErr}`);
+                try {
+                    await this.bot.telegram.sendAudio(to, { source: filePath });
+                } catch (audioErr) {
+                    logger.warn(`TelegramChannel: sendAudio fallback failed for ${filePath}; retrying as document. Error: ${audioErr}`);
+                    await this.bot.telegram.sendDocument(to, { source: filePath });
+                }
+            }
             logger.info(`TelegramChannel: Sent voice note ${filePath} to ${to}`);
         } catch (error) {
             logger.error(`TelegramChannel: Error sending voice note: ${error}`);

@@ -132,6 +132,8 @@ export interface AgentConfig {
     progressFeedbackEnabled?: boolean;
     progressFeedbackStepInterval?: number; // Silent-step threshold before automatic status update
     progressFeedbackForceInitial?: boolean; // Force an initial status update before deep tool work
+    progressFeedbackTypingOnly?: boolean; // Use typing indicators instead of status chat messages when supported
+    enforceExplicitFileRequestForSendFile?: boolean; // Restrict send_file unless user explicitly requested a file
     onboardingQuestionnaireEnabled?: boolean; // Send first-contact preference questionnaire to new users
     reconnectBriefingEnabled?: boolean;           // Send a wake-up context briefing when a known user returns after absence
     reconnectBriefingThresholdDays?: number;      // Days of absence before triggering reconnect briefing (default 3)
@@ -739,6 +741,8 @@ export class ConfigManager {
             progressFeedbackEnabled: true,
             progressFeedbackStepInterval: 4,
             progressFeedbackForceInitial: true,
+            progressFeedbackTypingOnly: true,
+            enforceExplicitFileRequestForSendFile: false,
             onboardingQuestionnaireEnabled: true,
             reconnectBriefingEnabled: true,
             reconnectBriefingThresholdDays: 3,

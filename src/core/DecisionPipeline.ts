@@ -264,6 +264,7 @@ export class DecisionPipeline {
         }>;
         const taskText = (ctx.taskDescription || '').toString();
         const taskTextLower = taskText.toLowerCase();
+        const enforceExplicitFileRequestForSendFile = this.config.get('enforceExplicitFileRequestForSendFile') === true;
         const userExplicitlyAskedForFile =
             ctx.fileIntent === 'requested'
                 ? true
@@ -413,7 +414,7 @@ export class DecisionPipeline {
                 continue;
             }
 
-            if (toolName === 'send_file' && !userExplicitlyAskedForFile) {
+            if (enforceExplicitFileRequestForSendFile && toolName === 'send_file' && !userExplicitlyAskedForFile) {
                 dropped.push(`unsolicited-file:${tool.name}`);
                 notes.push('Suppressed send_file: user did not ask for an attachment/file delivery');
                 continue;

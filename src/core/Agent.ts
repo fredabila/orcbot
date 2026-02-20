@@ -5991,12 +5991,35 @@ The plugin handles all logic internally. See the plugin source for implementatio
     ): Promise<void> {
         if (!this.config.get('progressFeedbackEnabled')) return;
 
+        const typingOnly = this.config.get('progressFeedbackTypingOnly') !== false;
+
         // Only send feedback for channel-sourced actions
         const source = action.payload?.source;
         const sourceId = action.payload?.sourceId;
         if (!source) return;
         // Gateway-chat doesn't require sourceId (uses eventBus broadcast)
         if (source !== 'gateway-chat' && !sourceId) return;
+
+        if (typingOnly) {
+            try {
+                if (source === 'telegram' && this.telegram) {
+                    await this.telegram.sendTypingIndicator(sourceId);
+                    return;
+                } else if (source === 'whatsapp' && this.whatsapp) {
+                    await (this.whatsapp as any).sendPresenceComposing(sourceId);
+                    return;
+                } else if (source === 'discord' && this.discord) {
+                    await this.discord.sendTypingIndicator(sourceId);
+                    return;
+                } else if (source === 'slack' && this.slack) {
+                    await this.slack.sendTypingIndicator(sourceId);
+                    return;
+                }
+                // gateway-chat has no typing indicator; fall back to status text below.
+            } catch {
+                // Typing indicators are non-critical; if unavailable, fall back to status text.
+            }
+        }
 
         // Craft compact, non-intrusive messages
         let message = '';
