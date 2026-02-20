@@ -28,6 +28,9 @@ export class WhatsAppChannel implements IChannel {
     private store: any;
     private contactJids: Set<string> = new Set();
     private contactNames: Map<string, string> = new Map();
+    // Cache of recent status message keys so we can reply to them properly
+    // Key: participant JID, Value: the latest status messageKey from Baileys
+    private statusMessageKeys: Map<string, any> = new Map();
     // Prefix used to identify agent-sent messages (for self-chat distinction)
     private readonly AGENT_MESSAGE_PREFIX = '🤖 ';
     // Cache config values to avoid repeated lookups
@@ -276,6 +279,9 @@ export class WhatsAppChannel implements IChannel {
                             logger.info(`WhatsApp Status: ${participant} posted: ${text} | statusReplyEnabled=${this.statusReplyEnabled}`);
                             this.recordContactJid(participant);
 
+                            // Cache the full message key so we can send a proper status reply later
+                            this.statusMessageKeys.set(participant, msg.key);
+
                             // Record it in memory so the agent knows.
                             this.agent.memory.saveMemory({
                                 id: `wa-status-${messageId}`,
@@ -288,7 +294,7 @@ export class WhatsAppChannel implements IChannel {
                             // Only trigger a task if Status Interactions are enabled
                             if (this.statusReplyEnabled) {
                                 await this.agent.pushTask(
-                                    `WhatsApp STATUS update from ${participant} (ID: ${messageId}): "${text}". \n\nGoal: Decide if you should reply to this status. If yes, use 'reply_whatsapp_status'.`,
+                                    `WhatsApp STATUS update from ${participant} (ID: ${messageId}): "${text}". \n\nGoal: Decide if you should reply to this status. If yes, use 'reply_whatsapp_status' with the JID '${participant}' and a short, conversational reply message. The reply will appear as a proper status reply to the person, not as a regular DM.`,
                                     3,
                                     { source: 'whatsapp', sourceId: participant, senderName: participant, type: 'status', messageId }
                                 );
@@ -528,6 +534,59 @@ CRITICAL: You MUST use 'send_whatsapp' to reply. Do NOT send cross-channel Teleg
     public async getHistory(jid: string, count: number = 20): Promise<any[]> {
         // Basic history stub since makeInMemoryStore is currently unavailable
         return [];
+    }
+
+    /**
+     * Reply to a WhatsApp status update properly.
+     * 
+     * A proper status reply must be sent to 'status@broadcast' with the original
+     * status message quoted. This makes the reply appear in the contact's status
+     * thread, NOT as a standalone DM in their regular chat.
+     *
+     * @param participantJid - The JID of the person whose status you're replying to
+     * @param message - The reply text
+     */
+    public async sendStatusReply(participantJid: string, message: string): Promise<void> {
+        if (!this.sock) {
+            throw new Error('WhatsApp socket not connected');
+        }
+
+        // Look up the cached message key for this participant's latest status
+        const originalKey = this.statusMessageKeys.get(participantJid);
+        if (!originalKey) {
+            logger.warn(`WhatsAppChannel: No cached status key for ${participantJid}. Falling back to regular DM.`);
+            // Graceful degradation: send as a DM with context prefix so user knows it's related to their status
+            await this.sendMessage(participantJid, `[Re: your status] ${message}`);
+            return;
+        }
+
+        const ownerJid = this.sock.user?.id;
+
+        try {
+            // The correct Baileys method to reply to a status:
+            // - Send to 'status@broadcast'
+            // - Provide `quoted` pointing to the original status message
+            // - Provide `statusJidPair` with the participant's JID so WhatsApp
+            //   knows whose status this reply is for
+            await this.sock.sendMessage(
+                'status@broadcast',
+                {
+                    text: message,
+                    // `quoted` creates the contextual reply bubble referencing the original status
+                    quoted: {
+                        key: originalKey,
+                        message: {}
+                    }
+                },
+                {
+                    statusJidList: [participantJid, ownerJid].filter(Boolean)
+                }
+            );
+            logger.info(`WhatsAppChannel: Sent status reply to ${participantJid}'s status`);
+        } catch (error) {
+            logger.error(`WhatsAppChannel: Error sending status reply to ${participantJid}: ${error}`);
+            throw error;
+        }
     }
 
     public async sendFile(to: string, filePath: string, caption?: string): Promise<void> {

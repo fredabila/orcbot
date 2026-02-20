@@ -177,13 +177,22 @@ export class ActionQueue {
      * - Dependency chains (skip if dependsOn action hasn't completed)
      * - Retry backoff (skip if nextRetryAt is in the future)
      * - Lane fairness: user lane is preferred over autonomy lane when both are eligible
+     *
+     * @param lane — if provided, only return actions belonging to this lane.
+     *               Used by parallel workers so each lane has its own independent cursor.
      */
-    public getNext(): Action | undefined {
+    public getNext(lane?: 'user' | 'autonomy'): Action | undefined {
         const now = new Date().toISOString();
 
         const eligible = this.cache.filter(a => this.isEligiblePendingAction(a, now));
         if (eligible.length === 0) return undefined;
 
+        // Lane-filtered mode: used by dedicated lane workers
+        if (lane !== undefined) {
+            return eligible.find(a => this.getLane(a) === lane);
+        }
+
+        // Legacy single-worker mode: prefer user lane over autonomy
         const nextUser = eligible.find(a => this.getLane(a) === 'user');
         if (nextUser) return nextUser;
 

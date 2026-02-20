@@ -35,6 +35,7 @@ import { fetchWorldEvents, summarizeWorldEvents, WorldEventSource } from '../too
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import { shellSessions } from '../utils/ShellSession';
 
 /**
  * Skills that require admin-level permissions.
@@ -43,6 +44,7 @@ import os from 'os';
  */
 export const ELEVATED_SKILLS = new Set([
     'run_command',
+    'shell_start', 'shell_read', 'shell_send', 'shell_stop', 'shell_list',
     'orcbot_control',
     'write_file', 'write_to_file', 'create_file', 'delete_file', 'read_file',
     'install_npm_dependency',
@@ -108,8 +110,12 @@ export class Agent {
     private agentConfigFile: string;
     private agentIdentity: string = '';
     private isBusy: boolean = false;
+    /** Per-lane busy flags used by the parallel worker pool */
+    private busyLanes: Set<'user' | 'autonomy'> = new Set();
     private lastPluginHealthCheckAt: number = 0;
     private currentActionId: string | null = null;
+    /** Per-lane action IDs for the parallel worker pool */
+    private currentActionIds: Map<'user' | 'autonomy', string | null> = new Map();
     private currentActionStartAt: number | null = null;
     private cancelledActions: Set<string> = new Set();
     private persistentTypingTimer: NodeJS.Timeout | null = null;
@@ -1767,7 +1773,7 @@ export class Agent {
         // Skill: Reply to WhatsApp Status
         this.skills.registerSkill({
             name: 'reply_whatsapp_status',
-            description: 'Reply to a contact\'s WhatsApp status update',
+            description: 'Reply to a contact\'s WhatsApp status update. This sends the message as a proper status reply, visible inside the status thread — NOT as a standalone DM. Use this when reacting to a status someone posted.',
             usage: 'reply_whatsapp_status(jid, message)',
             handler: async (args: any) => {
                 const jid = args.jid || args.to;
@@ -1777,9 +1783,10 @@ export class Agent {
                 if (!message) return 'Error: Missing message content.';
 
                 if (this.whatsapp) {
-                    // For status reply, the JID is the person who posted the status
-                    await this.whatsapp.sendMessage(jid, message);
-                    return `Replied to status of ${jid}`;
+                    // Use sendStatusReply which correctly targets the status thread
+                    // rather than opening a new DM conversation
+                    await this.whatsapp.sendStatusReply(jid, message);
+                    return `Replied to ${jid}'s status successfully.`;
                 }
                 return 'WhatsApp channel not available';
             }
@@ -2236,6 +2243,116 @@ export class Agent {
                 }
 
                 return lastResult;
+            }
+        });
+
+        // Skill: Start Interactive Shell Session
+        this.skills.registerSkill({
+            name: 'shell_start',
+            description: 'Spawn a long-running or interactive shell command in the background as a named session. Returns immediately — the process runs asynchronously. Use shell_read to see output later. Ideal for dev servers, build watchers, or any non-terminating command. On Windows uses PowerShell.',
+            usage: 'shell_start(id, command, cwd?)',
+            handler: async (args: any) => {
+                const id = args.id || args.name;
+                const command = args.command || args.cmd;
+                const cwd = args.cwd
+                    ? this.resolveAgentWorkspacePath(String(args.cwd))
+                    : this.getBuildWorkspacePath();
+
+                if (!id) return 'Error: Missing session id.';
+                if (!command) return 'Error: Missing command.';
+                if (this.config.get('safeMode')) return 'Error: Safe mode is enabled. shell_start is disabled.';
+
+                try {
+                    const session = shellSessions.start(String(id), String(command), cwd);
+                    // Give it 500ms to surface any immediate launch errors
+                    await new Promise(r => setTimeout(r, 500));
+                    const info = session.info();
+                    const preview = session.read(5).join('\n');
+                    return `Session "${id}" started (PID=${info.pid}, status=${info.status}).${preview ? `\n\nFirst output:\n${preview}` : '\n(No output yet — use shell_read to check later)'}`;
+                } catch (e) {
+                    return `Error starting session "${id}": ${e}`;
+                }
+            }
+        });
+
+        // Skill: Read Shell Session Output
+        this.skills.registerSkill({
+            name: 'shell_read',
+            description: 'Read the latest output (stdout + stderr) from a running shell session. Returns the last N lines from the ring buffer.',
+            usage: 'shell_read(id, lines?)',
+            handler: async (args: any) => {
+                const id = args.id || args.name;
+                const lines = parseInt(args.lines || args.count || '50', 10);
+
+                if (!id) return 'Error: Missing session id.';
+
+                const session = shellSessions.get(String(id));
+                if (!session) return `Error: No session found with id "${id}". Use shell_list to see active sessions.`;
+
+                const output = session.read(lines);
+                const info = session.info();
+                const header = `Session "${id}" [status=${info.status}, pid=${info.pid ?? 'N/A'}, lines_buffered=${info.lineCount}]`;
+                return output.length > 0
+                    ? `${header}\n\n${output.join('\n')}`
+                    : `${header}\n\n(No output yet)`;
+            }
+        });
+
+        // Skill: Send Input to Shell Session
+        this.skills.registerSkill({
+            name: 'shell_send',
+            description: 'Send a line of text to the stdin of a running shell session. Useful for answering prompts, sending commands to a REPL, or restarting a watcher.',
+            usage: 'shell_send(id, input)',
+            handler: async (args: any) => {
+                const id = args.id || args.name;
+                const input = args.input || args.text || args.command;
+
+                if (!id) return 'Error: Missing session id.';
+                if (input === undefined || input === null) return 'Error: Missing input text.';
+
+                const session = shellSessions.get(String(id));
+                if (!session) return `Error: No session found with id "${id}".`;
+
+                try {
+                    session.send(String(input));
+                    return `Sent to "${id}": ${String(input).trim()}`;
+                } catch (e) {
+                    return `Error sending to session "${id}": ${e}`;
+                }
+            }
+        });
+
+        // Skill: Stop Shell Session
+        this.skills.registerSkill({
+            name: 'shell_stop',
+            description: 'Kill a running shell session by ID. Sends SIGTERM to the process. Use this to stop dev servers, build watchers, or any long-running session started with shell_start.',
+            usage: 'shell_stop(id)',
+            handler: async (args: any) => {
+                const id = args.id || args.name;
+                if (!id) return 'Error: Missing session id.';
+
+                try {
+                    shellSessions.stop(String(id));
+                    return `Session "${id}" stopped.`;
+                } catch (e) {
+                    return `Error stopping session "${id}": ${e}`;
+                }
+            }
+        });
+
+        // Skill: List Shell Sessions
+        this.skills.registerSkill({
+            name: 'shell_list',
+            description: 'List all shell sessions (running and recently exited) with their status, PID, and output line count.',
+            usage: 'shell_list()',
+            handler: async (_args: any) => {
+                const sessions = shellSessions.list();
+                if (sessions.length === 0) return 'No shell sessions active.';
+
+                const lines = sessions.map(s =>
+                    `• [${s.status.toUpperCase()}] id="${s.id}" pid=${s.pid ?? 'N/A'} lines=${s.lineCount} cmd="${s.command.substring(0, 60)}" started=${s.startedAt}`
+                );
+                return `Active sessions (${sessions.length}):\n\n${lines.join('\n')}`;
             }
         });
 
@@ -8386,6 +8503,163 @@ Respond with a single actionable task description (one sentence). Be specific ab
         }
     }
 
+    /**
+     * Run a single decision cycle for a specific lane.
+     * This is the parallel-safe variant of runOnce(), used by the dual-lane worker pool.
+     * Each call is independent — the user lane and autonomy lane never block each other.
+     */
+    public async runOnceLane(lane: 'user' | 'autonomy'): Promise<string | null> {
+        if (this.busyLanes.has(lane)) return null;
+
+        const action = this.actionQueue.getNext(lane);
+        if (!action) return null;
+
+        this.busyLanes.add(lane);
+        this.currentActionIds.set(lane, action.id);
+
+        // Also update the legacy isBusy/currentActionId fields for compatibility
+        // with existing code that reads them (TUI, cancel logic, etc.)
+        if (lane === 'user') {
+            this.isBusy = true;
+            this.currentActionId = action.id;
+            this.currentActionStartAt = Date.now();
+        }
+
+        try {
+            this.actionQueue.updateStatus(action.id, 'in-progress');
+
+            const recentHist = this.memory.getRecentContext();
+            const contextStr = recentHist.map(c => `[${c.type}] ${c.content}`).join('\n');
+            const sessionContinuityHint = this.buildSessionContinuityHint(action.payload);
+            const executionPlan = await this.simulationEngine.simulate(
+                action.payload.description,
+                `${contextStr}${sessionContinuityHint ? `\n\n${sessionContinuityHint}` : ''}`,
+                this.skills.getSkillsPrompt()
+            );
+            const robustReasoningMode = this.isRobustReasoningEnabled();
+
+            const MAX_STEPS = 20;
+            let currentStep = 0;
+            let result = '';
+            let noToolSteps = 0;
+            const MAX_NO_TOOL_STEPS = 3;
+
+            while (currentStep < MAX_STEPS) {
+                currentStep++;
+                logger.info(`runOnceLane[${lane}]: Step ${currentStep}/${MAX_STEPS} for action ${action.id}`);
+
+                if (this.cancelledActions.has(action.id)) {
+                    logger.warn(`runOnceLane[${lane}]: Action ${action.id} cancelled`);
+                    result = 'Task cancelled by user';
+                    this.actionQueue.updateStatus(action.id, 'failed');
+                    this.cancelledActions.delete(action.id);
+                    return result;
+                }
+
+                const decision = await this.decisionEngine.decide({
+                    ...action,
+                    payload: {
+                        ...action.payload,
+                        currentStep,
+                        executionPlan,
+                        robustReasoningMode,
+                        sessionContinuityHint
+                    }
+                });
+
+                if (decision.verification?.goals_met) {
+                    result = decision.content || 'Task completed';
+                    if (decision.tools && decision.tools.length > 0) {
+                        for (const tool of decision.tools) {
+                            await this.skills.executeSkill(tool.name, tool.metadata || {});
+                        }
+                    }
+                    break;
+                }
+
+                if (!decision.tools || decision.tools.length === 0) {
+                    noToolSteps++;
+                    if (noToolSteps >= MAX_NO_TOOL_STEPS) {
+                        result = decision.content || 'No tools executed';
+                        break;
+                    }
+                } else {
+                    noToolSteps = 0;
+                    for (const tool of decision.tools) {
+                        await this.skills.executeSkill(tool.name, tool.metadata || {});
+                    }
+                }
+
+                result = decision.content || result;
+            }
+
+            this.actionQueue.updateStatus(action.id, 'completed');
+            return result;
+        } catch (err: any) {
+            logger.error(`Agent runOnceLane[${lane}] error: ${err.message}`);
+            this.actionQueue.updateStatus(action.id, 'failed');
+            return `Error: ${err.message}`;
+        } finally {
+            this.busyLanes.delete(lane);
+            this.currentActionIds.set(lane, null);
+            if (lane === 'user') {
+                this.isBusy = false;
+                this.currentActionId = null;
+                this.currentActionStartAt = null;
+            }
+        }
+    }
+
+    /**
+     * Start the dual-lane parallel worker pool.
+     *
+     * Runs two independent polling loops:
+     * - User lane: picks up messages from Telegram, WhatsApp, Discord, Slack — low latency, high priority
+     * - Autonomy lane: picks up heartbeats, scheduled tasks, proactive work — runs whenever idle
+     *
+     * Both workers share the same Agent instance (memory, LLM, skills) but never block each other.
+     * The polling interval is short (500ms) to minimise response latency.
+     *
+     * @param pollIntervalMs  How often each lane checks for new work. Default: 500ms
+     * @param autonomyDelayMs Extra idle delay added to the autonomy loop to yield CPU to user lane. Default: 1000ms
+     */
+    public startWorkerPool(pollIntervalMs: number = 500, autonomyDelayMs: number = 1000): void {
+        logger.info('Agent: Starting dual-lane parallel worker pool...');
+
+        // User lane — reacts quickly to incoming channel messages
+        const runUserLane = async () => {
+            while (true) {
+                try {
+                    await this.runOnceLane('user');
+                } catch (e) {
+                    logger.error(`Worker pool [user]: uncaught error: ${e}`);
+                }
+                await new Promise(r => setTimeout(r, pollIntervalMs));
+            }
+        };
+
+        // Autonomy lane — background work that should never block user responses
+        const runAutonomyLane = async () => {
+            while (true) {
+                try {
+                    // Only run autonomy work when user lane is idle, to avoid competing for LLM quota
+                    if (!this.busyLanes.has('user')) {
+                        await this.runOnceLane('autonomy');
+                    }
+                } catch (e) {
+                    logger.error(`Worker pool [autonomy]: uncaught error: ${e}`);
+                }
+                await new Promise(r => setTimeout(r, pollIntervalMs + autonomyDelayMs));
+            }
+        };
+
+        // Fire-and-forget — both loops run concurrently as independent async tasks
+        runUserLane();
+        runAutonomyLane();
+
+        logger.info(`Agent: Worker pool started (poll=${pollIntervalMs}ms, autonomyDelay=${autonomyDelayMs}ms)`);
+    }
+
     public async start() {
         this.acquireInstanceLock();
         logger.info('Agent is starting...');
@@ -8415,6 +8689,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
         });
         await this.runPluginHealthCheck('startup');
         logger.info('Agent: All channels initialized');
+
+        // Start the dual-lane parallel worker pool (unless we are a dedicated single-task worker)
+        if (!this.isWorker) {
+            this.startWorkerPool();
+        }
     }
 
     public async stop() {
