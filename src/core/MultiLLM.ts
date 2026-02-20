@@ -431,7 +431,7 @@ export class MultiLLM {
 
         // Convert OpenAI tool format → Gemini function declaration format
         const geminiTools = [{
-            function_declarations: tools.map(t => ({
+            functionDeclarations: tools.map(t => ({
                 name: t.function.name,
                 description: t.function.description,
                 parameters: t.function.parameters,
@@ -783,8 +783,8 @@ export class MultiLLM {
                 parts: [
                     { text: prompt },
                     {
-                        inline_data: {
-                            mime_type: mimeType,
+                        inlineData: {
+                            mimeType: mimeType,
                             data: base64Data
                         }
                     }
@@ -812,11 +812,18 @@ export class MultiLLM {
             }
 
             const data = await response.json() as any;
-            if (data.candidates && data.candidates.length > 0 &&
-                data.candidates[0].content &&
-                data.candidates[0].content.parts &&
-                data.candidates[0].content.parts.length > 0) {
-                return data.candidates[0].content.parts[0].text;
+            const parts = data.candidates?.[0]?.content?.parts;
+
+            if (parts && parts.length > 0) {
+                // Find first part with text
+                for (const part of parts) {
+                    if (part.text) return part.text;
+                    if (part.functionCall) {
+                        logger.info(`MultiLLM: Model returned functionCall instead of text: ${JSON.stringify(part.functionCall)}`);
+                        // If it's a computer_use call, we might want to return its arguments as string for now
+                        return JSON.stringify(part.functionCall.args || part.functionCall);
+                    }
+                }
             }
             throw new Error(`No analytical content in Gemini response: ${JSON.stringify(data)}`);
         } catch (error) {
