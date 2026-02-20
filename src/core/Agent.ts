@@ -11501,4 +11501,96 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
             });
         }
     }
+
+    /**
+     * Estimate the time it will take to profile a list of contacts.
+     * @param contactCount Number of contacts to profile
+     * @returns Duration in minutes
+     */
+    public estimateProfilingDuration(contactCount: number): number {
+        // Assume 5-10 seconds per contact for LLM analysis
+        const secondsPerContact = 8;
+        const totalSeconds = contactCount * secondsPerContact;
+        return Math.ceil(totalSeconds / 60);
+    }
+
+    /**
+     * Profile WhatsApp chat history for multiple contacts to build context.
+     * This is a batch process that should be triggered from the TUI.
+     */
+    public async profileWhatsAppHistory(
+        contacts: Array<{ jid: string, name: string }>,
+        msgsPerContact: number = 20,
+        onProgress?: (processed: number, total: number, currentName: string) => void
+    ): Promise<{ processed: number, updated: number }> {
+        if (!this.whatsapp) throw new Error('WhatsApp channel not available');
+
+        let processed = 0;
+        let updated = 0;
+        const total = contacts.length;
+
+        for (const contact of contacts) {
+            try {
+                if (onProgress) onProgress(processed, total, contact.name);
+
+                logger.info(`Agent: Profiling history for ${contact.name} (${contact.jid})...`);
+                const history = await this.whatsapp.getHistory(contact.jid, msgsPerContact);
+
+                if (history.length === 0) {
+                    logger.info(`Agent: No history found for ${contact.name}. Skipping.`);
+                    processed++;
+                    continue;
+                }
+
+                // Format history for LLM
+                const formattedHistory = history.map(m => `${m.fromMe ? '[Me]' : '[Contact]'} (${m.timestamp}): ${m.text}`).join('\n');
+                const existingProfile = this.memory.getContactProfile(contact.jid) || 'No existing profile.';
+
+                const prompt = `
+You are analyzing past WhatsApp chat history to build a persistent context profile for a contact.
+Your goal is to understand the relationship between the user and this contact, the contact's preferences, tone, and recurring topics.
+
+CONTACT INFO:
+Name: ${contact.name}
+JID: ${contact.jid}
+
+EXISTING PROFILE:
+${existingProfile}
+
+RECENT CHAT HISTORY (Last ${history.length} messages):
+${formattedHistory}
+
+TASK:
+Based on the chat history and the existing profile, generate an updated, comprehensive JSON profile for this contact.
+Include fields like:
+- "relationship": (e.g. friend, colleague, customer)
+- "tone_preferences": (e.g. formal, casual, uses emojis, concise)
+- "recurring_topics": [list of main subjects discussed]
+- "key_facts": [list of important details learned about them]
+- "response_strategy": [how the bot should best interact with this person]
+
+Return ONLY the valid JSON object.
+`;
+
+                const response = await this.llm.callFast(prompt, "You are a personality and relationship analyst for an AI agent.");
+
+                // Clean up markdown if present
+                let jsonStr = response.trim();
+                if (jsonStr.startsWith('```json')) jsonStr = jsonStr.substring(7);
+                if (jsonStr.startsWith('```')) jsonStr = jsonStr.substring(3);
+                if (jsonStr.endsWith('```')) jsonStr = jsonStr.substring(0, jsonStr.length - 3);
+
+                // Save to memory
+                this.memory.saveContactProfile(contact.jid, jsonStr.trim());
+
+                updated++;
+                processed++;
+            } catch (error) {
+                logger.error(`Agent: Error profiling contact ${contact.jid}: ${error}`);
+                processed++;
+            }
+        }
+
+        return { processed, updated };
+    }
 }

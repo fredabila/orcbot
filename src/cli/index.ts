@@ -37,6 +37,7 @@ const c = {
     magenta: '\x1b[35m',
     blue: '\x1b[34m',
     white: '\x1b[37m',
+    black: '\x1b[30m',
     gray: '\x1b[90m',
     brightCyan: '\x1b[96m',
     brightGreen: '\x1b[92m',
@@ -274,7 +275,7 @@ function table(rows: string[][], opts: { indent?: string; separator?: string; he
     const indent = opts.indent || '  ';
     const sep = opts.separator || '  ';
     if (rows.length === 0) return;
-    
+
     const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
     const colWidths: number[] = [];
     for (const row of rows) {
@@ -282,7 +283,7 @@ function table(rows: string[][], opts: { indent?: string; separator?: string; he
             colWidths[i] = Math.max(colWidths[i] || 0, stripAnsi(row[i]).length);
         }
     }
-    
+
     rows.forEach((row, ri) => {
         const cells = row.map((cell, ci) => {
             const padLen = colWidths[ci] - stripAnsi(cell).length;
@@ -588,7 +589,7 @@ program
                             process.kill(pid, 0);
                             process.kill(pid, 'SIGKILL');
                             console.log(`   🔪 Force-killed ${label} (PID: ${pid})`);
-                        } catch {}
+                        } catch { }
                     }, 2000);
                 }
                 return true;
@@ -611,7 +612,7 @@ program
                 }
                 fs.unlinkSync(lockPath);
             } catch {
-                try { fs.unlinkSync(lockPath); } catch {}
+                try { fs.unlinkSync(lockPath); } catch { }
             }
         }
 
@@ -625,7 +626,7 @@ program
                 }
                 fs.unlinkSync(daemonPidPath);
             } catch {
-                try { fs.unlinkSync(daemonPidPath); } catch {}
+                try { fs.unlinkSync(daemonPidPath); } catch { }
             }
         }
 
@@ -639,7 +640,7 @@ program
                 }
                 fs.unlinkSync(lightpandaPidPath);
             } catch {
-                try { fs.unlinkSync(lightpandaPidPath); } catch {}
+                try { fs.unlinkSync(lightpandaPidPath); } catch { }
             }
         }
 
@@ -669,7 +670,7 @@ program
         // Check for ANY existing OrcBot instance via lock file
         const lockPath = path.join(os.homedir(), '.orcbot', 'orcbot.lock');
         let existingInstance: { pid: number; startedAt: string; host: string } | null = null;
-        
+
         if (fs.existsSync(lockPath)) {
             try {
                 const lockData = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
@@ -775,7 +776,7 @@ program
                 console.error('');
                 process.exit(1);
             }
-            
+
             console.log('Agent loop starting... (Press Ctrl+C to stop)');
             await startGatewayIfNeeded();
             await agent.start();
@@ -821,16 +822,16 @@ program
         if (isFullReset) {
             console.log('');
             box([
-                    `${c.red}${c.bold}⚠  This will clear EVERYTHING:${c.reset}`,
-                    '',
-                    `  ${c.yellow}●${c.reset} Memory & action queue`,
-                    `  ${c.yellow}●${c.reset} Identity files (USER.md, .AI.md, JOURNAL, LEARNING)`,
-                    `  ${c.yellow}●${c.reset} Custom plugins & agent skills`,
-                    `  ${c.yellow}●${c.reset} Contact profiles`,
-                    `  ${c.yellow}●${c.reset} Downloaded media files`,
-                    `  ${c.yellow}●${c.reset} Bootstrap files (reset to defaults)`,
-                    `  ${c.yellow}●${c.reset} Schedules & heartbeat data`,
-                ], {
+                `${c.red}${c.bold}⚠  This will clear EVERYTHING:${c.reset}`,
+                '',
+                `  ${c.yellow}●${c.reset} Memory & action queue`,
+                `  ${c.yellow}●${c.reset} Identity files (USER.md, .AI.md, JOURNAL, LEARNING)`,
+                `  ${c.yellow}●${c.reset} Custom plugins & agent skills`,
+                `  ${c.yellow}●${c.reset} Contact profiles`,
+                `  ${c.yellow}●${c.reset} Downloaded media files`,
+                `  ${c.yellow}●${c.reset} Bootstrap files (reset to defaults)`,
+                `  ${c.yellow}●${c.reset} Schedules & heartbeat data`,
+            ], {
                 title: 'FULL RESET',
                 color: c.red,
                 width: 54
@@ -889,13 +890,13 @@ program
         // Check for running instance
         const lockPath = path.join(os.homedir(), '.orcbot', 'orcbot.lock');
         console.log('\n=== OrcBot Status ===\n');
-        
+
         if (fs.existsSync(lockPath)) {
             try {
                 const lockData = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
                 const pid = Number(lockData.pid);
                 let isRunning = false;
-                
+
                 if (pid) {
                     try {
                         process.kill(pid, 0);
@@ -904,7 +905,7 @@ program
                         // Process not running
                     }
                 }
-                
+
                 if (isRunning) {
                     console.log('🟢 OrcBot is RUNNING');
                     console.log(`   PID: ${lockData.pid}`);
@@ -924,7 +925,7 @@ program
             console.log('🔴 OrcBot is NOT running');
             console.log('\n   To start: orcbot run  OR  systemctl start orcbot');
         }
-        
+
         console.log('\n--- Memory & Queue ---');
         showStatus();
     });
@@ -1018,7 +1019,7 @@ program
     .argument('[action]', 'Action: status, stop', 'status')
     .action(async (action) => {
         const daemonManager = DaemonManager.createDefault();
-        
+
         switch (action) {
             case 'status':
                 console.log(daemonManager.getStatus());
@@ -1113,7 +1114,7 @@ program
 
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { GatewayServer } = require('../gateway/GatewayServer');
-        
+
         const gatewayConfig = {
             port: parseInt(options.port),
             host: options.host,
@@ -1122,10 +1123,10 @@ program
         };
 
         const gateway = new GatewayServer(agent, agent.config, gatewayConfig);
-        
+
         console.log('\n🌐 Starting OrcBot Web Gateway...');
         await gateway.start();
-        
+
         console.log(`\n📡 Gateway is ready!`);
         console.log(`   REST API: http://${gatewayConfig.host}:${gatewayConfig.port}/api`);
         console.log(`   WebSocket: ws://${gatewayConfig.host}:${gatewayConfig.port}`);
@@ -1200,13 +1201,13 @@ lightpandaCommand
         const installDir = options.dir;
         const platform = process.platform;
         const arch = process.arch;
-        
+
         console.log('\n🐼 Installing Lightpanda browser...\n');
-        
+
         // Determine download URL based on platform
         let downloadUrl: string;
         let binaryName = 'lightpanda';
-        
+
         if (platform === 'linux' && arch === 'x64') {
             downloadUrl = 'https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux';
         } else if (platform === 'darwin' && arch === 'arm64') {
@@ -1236,43 +1237,43 @@ lightpandaCommand
             console.log('   docker run -d --name lightpanda -p 9222:9222 lightpanda/browser:nightly');
             process.exit(1);
         }
-        
+
         // Create install directory
         if (!fs.existsSync(installDir)) {
             fs.mkdirSync(installDir, { recursive: true });
         }
-        
+
         const binaryPath = path.join(installDir, binaryName);
-        
+
         console.log(`   Platform: ${platform}/${arch}`);
         console.log(`   Installing to: ${installDir}`);
         console.log(`   Downloading from: ${downloadUrl}\n`);
-        
+
         try {
             const https = require('https');
             const http = require('http');
-            
+
             // Follow redirects to get actual download URL
             const download = (url: string, dest: string): Promise<void> => {
                 return new Promise((resolve, reject) => {
                     const protocol = url.startsWith('https') ? https : http;
                     const file = fs.createWriteStream(dest);
-                    
+
                     const request = (redirectUrl: string) => {
                         protocol.get(redirectUrl, { headers: { 'User-Agent': 'OrcBot' } }, (response: any) => {
                             if (response.statusCode === 302 || response.statusCode === 301) {
                                 request(response.headers.location);
                                 return;
                             }
-                            
+
                             if (response.statusCode !== 200) {
                                 reject(new Error(`Failed to download: ${response.statusCode}`));
                                 return;
                             }
-                            
+
                             const total = parseInt(response.headers['content-length'] || '0', 10);
                             let downloaded = 0;
-                            
+
                             response.on('data', (chunk: Buffer) => {
                                 downloaded += chunk.length;
                                 if (total > 0) {
@@ -1280,7 +1281,7 @@ lightpandaCommand
                                     process.stdout.write(`\r   Downloading... ${pct}%`);
                                 }
                             });
-                            
+
                             response.pipe(file);
                             file.on('finish', () => {
                                 file.close();
@@ -1289,26 +1290,26 @@ lightpandaCommand
                             });
                         }).on('error', reject);
                     };
-                    
+
                     request(url);
                 });
             };
-            
+
             await download(downloadUrl, binaryPath);
-            
+
             // Make executable
             fs.chmodSync(binaryPath, 0o755);
-            
+
             console.log('✅ Lightpanda installed successfully!\n');
             console.log('   Next steps:');
             console.log(`   1. Start Lightpanda: orcbot lightpanda start`);
             console.log(`   2. Enable in config: orcbot config set browserEngine lightpanda`);
             console.log(`   3. Run OrcBot normally: orcbot run\n`);
-            
+
             // Auto-configure
             agent.config.set('lightpandaPath', binaryPath);
             console.log(`   ✓ Config updated: lightpandaPath = ${binaryPath}`);
-            
+
         } catch (error: any) {
             console.error(`\n❌ Installation failed: ${error.message}`);
             console.log('\n   Manual installation (Linux):');
@@ -1330,53 +1331,53 @@ lightpandaCommand
     .option('-b, --background', 'Run in background')
     .action(async (options) => {
         const lightpandaPath = agent.config.get('lightpandaPath') || path.join(os.homedir(), '.orcbot', 'lightpanda', 'lightpanda');
-        
+
         if (!fs.existsSync(lightpandaPath)) {
             console.error('❌ Lightpanda not found. Run: orcbot lightpanda install');
             process.exit(1);
         }
-        
+
         const { spawn } = require('child_process');
         const args = ['serve', '--host', options.host, '--port', options.port, '--timeout', options.timeout];
-        
+
         console.log(`\n🐼 Starting Lightpanda browser...`);
         console.log(`   Binary: ${lightpandaPath}`);
         console.log(`   Endpoint: ws://${options.host}:${options.port}\n`);
-        
+
         if (options.background) {
             const dataDir = path.join(os.homedir(), '.orcbot');
             const logPath = path.join(dataDir, 'lightpanda.log');
             const pidPath = path.join(dataDir, 'lightpanda.pid');
             const out = fs.openSync(logPath, 'a');
-            
+
             const child = spawn(lightpandaPath, args, {
                 detached: true,
                 stdio: ['ignore', out, out]
             });
-            
+
             fs.writeFileSync(pidPath, String(child.pid));
             child.unref();
-            
+
             console.log('✅ Lightpanda running in background');
             console.log(`   PID: ${child.pid}`);
             console.log(`   Log: ${logPath}`);
             console.log(`   Stop with: orcbot lightpanda stop\n`);
-            
+
             // Auto-configure endpoint
             const endpoint = `ws://${options.host}:${options.port}`;
             agent.config.set('lightpandaEndpoint', endpoint);
             console.log(`   ✓ Config updated: lightpandaEndpoint = ${endpoint}`);
         } else {
             console.log('   Press Ctrl+C to stop\n');
-            
+
             const child = spawn(lightpandaPath, args, {
                 stdio: 'inherit'
             });
-            
+
             child.on('error', (err: Error) => {
                 console.error(`❌ Failed to start: ${err.message}`);
             });
-            
+
             child.on('exit', (code: number) => {
                 console.log(`\nLightpanda exited with code ${code}`);
             });
@@ -1388,12 +1389,12 @@ lightpandaCommand
     .description('Stop Lightpanda browser server')
     .action(() => {
         const pidPath = path.join(os.homedir(), '.orcbot', 'lightpanda.pid');
-        
+
         if (!fs.existsSync(pidPath)) {
             console.log('Lightpanda is not running (no PID file found)');
             return;
         }
-        
+
         try {
             const pid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
             process.kill(pid, 'SIGTERM');
@@ -1417,16 +1418,16 @@ lightpandaCommand
         const lightpandaPath = agent.config.get('lightpandaPath');
         const endpoint = agent.config.get('lightpandaEndpoint') || 'ws://127.0.0.1:9222';
         const engineSetting = agent.config.get('browserEngine') || 'playwright';
-        
+
         console.log('\n🐼 Lightpanda Status\n');
-        
+
         // Installation status
         if (lightpandaPath && fs.existsSync(lightpandaPath)) {
             console.log(`   ✅ Installed: ${lightpandaPath}`);
         } else {
             console.log('   ❌ Not installed (run: orcbot lightpanda install)');
         }
-        
+
         // Running status
         if (fs.existsSync(pidPath)) {
             try {
@@ -1440,15 +1441,15 @@ lightpandaCommand
         } else {
             console.log('   ⚪ Not running');
         }
-        
+
         // Config status
         console.log(`   📡 Endpoint: ${endpoint}`);
         console.log(`   ⚙️  Browser engine: ${engineSetting}`);
-        
+
         if (engineSetting !== 'lightpanda') {
             console.log('\n   💡 To enable: orcbot config set browserEngine lightpanda');
         }
-        
+
         console.log('');
     });
 
@@ -2316,10 +2317,10 @@ async function showBrowserMenu() {
     const lightpandaPath = agent.config.get('lightpandaPath');
     const lightpandaEndpoint = agent.config.get('lightpandaEndpoint') || 'ws://127.0.0.1:9222';
     const pidPath = path.join(os.homedir(), '.orcbot', 'lightpanda.pid');
-    
+
     // Check if Lightpanda is installed
     const isInstalled = lightpandaPath && fs.existsSync(lightpandaPath);
-    
+
     // Check if Lightpanda is running
     let isRunning = false;
     let runningPid: number | null = null;
@@ -2332,7 +2333,7 @@ async function showBrowserMenu() {
             fs.unlinkSync(pidPath);
         }
     }
-    
+
     console.clear();
     banner();
     sectionHeader('🐼', 'Browser Engine');
@@ -2356,7 +2357,7 @@ async function showBrowserMenu() {
         { name: currentEngine === 'playwright' ? '🐼 Switch to Lightpanda (9x less RAM)' : '🌐 Switch to Playwright (Chrome)', value: 'toggle' },
         { name: computerUseEnabled ? `🤖 ${bold('Disable')} Gemini Computer Use` : `🤖 ${bold('Enable')} Gemini Computer Use ${dim('(vision-based browser control)')}`, value: 'computeruse' },
     ];
-    
+
     if (!isInstalled) {
         choices.push({ name: '📦 Install Lightpanda', value: 'install' });
     } else {
@@ -2366,7 +2367,7 @@ async function showBrowserMenu() {
             choices.push({ name: '🚀 Start Lightpanda Server', value: 'start' });
         }
     }
-    
+
     choices.push({ name: 'Back', value: 'back' });
 
     const { action } = await inquirer.prompt([
@@ -2379,7 +2380,7 @@ async function showBrowserMenu() {
     ]);
 
     if (action === 'back') return showToolingMenu();
-    
+
     if (action === 'toggle') {
         if (currentEngine === 'playwright') {
             if (!isInstalled) {
@@ -2445,16 +2446,16 @@ async function showBrowserMenu() {
         const dataDir = path.join(os.homedir(), '.orcbot');
         const logPath = path.join(dataDir, 'lightpanda.log');
         const out = fs.openSync(logPath, 'a');
-        
+
         // Use --timeout 300 (5 minutes) to prevent premature disconnection
         const child = spawn(lightpandaPath, ['serve', '--host', '127.0.0.1', '--port', '9222', '--timeout', '300'], {
             detached: true,
             stdio: ['ignore', out, out]
         });
-        
+
         fs.writeFileSync(pidPath, String(child.pid));
         child.unref();
-        
+
         console.log('\n✅ Lightpanda started');
         console.log(`   PID: ${child.pid}`);
         console.log(`   Endpoint: ws://127.0.0.1:9222`);
@@ -2467,7 +2468,7 @@ async function showBrowserMenu() {
             console.error(`\n❌ Failed to stop: ${e.message}`);
         }
     }
-    
+
     await waitKeyPress();
     return showBrowserMenu();
 }
@@ -2708,7 +2709,7 @@ async function showGatewayMenu() {
     if (action === 'start' || action === 'start_with_agent') {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { GatewayServer } = require('../gateway/GatewayServer');
-        
+
         const gatewayConfig = {
             port: currentPort,
             host: currentHost,
@@ -2716,10 +2717,10 @@ async function showGatewayMenu() {
         };
 
         const gateway = new GatewayServer(agent, agent.config, gatewayConfig);
-        
+
         console.log('\n🌐 Starting OrcBot Web Gateway...');
         await gateway.start();
-        
+
         console.log(`\n📡 Gateway is ready!`);
         console.log(`   REST API: http://${currentHost}:${currentPort}/api`);
         console.log(`   WebSocket: ws://${currentHost}:${currentPort}`);
@@ -2734,7 +2735,7 @@ async function showGatewayMenu() {
         }
 
         // Keep running - don't return to menu
-        await new Promise(() => {}); // Wait forever until Ctrl+C
+        await new Promise(() => { }); // Wait forever until Ctrl+C
     } else if (action === 'port') {
         const { val } = await inquirer.prompt([
             { type: 'number', name: 'val', message: 'Enter gateway port:', default: currentPort }
@@ -2836,146 +2837,70 @@ async function showModelsMenu() {
     }
 }
 
-// ── Curated pi-ai model catalogue ───────────────────────────────────────────
-// Kept inline to avoid external fetches; mirrors pi-ai's supported providers.
-const PI_AI_CATALOGUE: Record<string, { label: string; models: { id: string; note: string }[] }> = {
-    openai: {
-        label: 'OpenAI',
-        models: [
-            { id: 'gpt-4o',             note: 'Best overall, vision + tools' },
-            { id: 'gpt-4o-mini',        note: 'Fast & cheap, great for tasks' },
-            { id: 'gpt-4.1',            note: 'Latest GPT-4.1 flagship' },
-            { id: 'gpt-4.1-mini',       note: 'GPT-4.1 mini — balanced' },
-            { id: 'o4-mini',            note: 'Reasoning model, fast' },
-            { id: 'o3',                 note: 'Advanced reasoning' },
-        ],
-    },
-    google: {
-        label: 'Google Gemini',
-        models: [
-            { id: 'gemini-2.5-pro',        note: 'Most capable Gemini' },
-            { id: 'gemini-2.5-flash',       note: 'Fast multimodal' },
-            { id: 'gemini-2.0-flash',       note: 'Previous gen flash' },
-            { id: 'gemini-2.0-flash-lite',  note: 'Lightest Gemini' },
-        ],
-    },
-    anthropic: {
-        label: 'Anthropic (Claude)',
-        models: [
-            { id: 'claude-opus-4-5',      note: 'Most intelligent Claude' },
-            { id: 'claude-sonnet-4-5',    note: 'Best balance' },
-            { id: 'claude-haiku-4-5',     note: 'Fastest Claude' },
-            { id: 'claude-3-5-sonnet-latest', note: 'Previous gen workhorse' },
-        ],
-    },
-    openrouter: {
-        label: 'OpenRouter (Multi-model gateway)',
-        models: [
-            { id: 'meta-llama/llama-3.3-70b-instruct:free', note: 'Llama 3.3 70B — free tier' },
-            { id: 'deepseek/deepseek-r1:free',              note: 'DeepSeek R1 — free tier' },
-            { id: 'mistralai/mistral-7b-instruct:free',     note: 'Mistral 7B — free tier' },
-            { id: 'qwen/qwen-2.5-72b-instruct',             note: 'Qwen 2.5 72B' },
-            { id: 'x-ai/grok-3-beta',                       note: 'Grok-3 via xAI' },
-        ],
-    },
-    'amazon-bedrock': {
-        label: 'AWS Bedrock',
-        models: [
-            { id: 'anthropic.claude-3-5-sonnet-20241022-v2:0', note: 'Claude 3.5 Sonnet on Bedrock' },
-            { id: 'amazon.nova-pro-v1:0',                      note: 'Amazon Nova Pro' },
-            { id: 'amazon.nova-lite-v1:0',                     note: 'Amazon Nova Lite — fast' },
-            { id: 'meta.llama3-3-70b-instruct-v1:0',           note: 'Llama 3.3 70B on Bedrock' },
-        ],
-    },
-    groq: {
-        label: 'Groq (Ultra-fast inference)',
-        models: [
-            { id: 'llama-3.3-70b-versatile', note: 'Best quality on Groq' },
-            { id: 'llama-3.1-8b-instant',    note: 'Fastest Groq option' },
-            { id: 'mixtral-8x7b-32768',      note: 'Mixtral 8x7B' },
-            { id: 'gemma2-9b-it',            note: 'Gemma 2 9B' },
-        ],
-    },
-    mistral: {
-        label: 'Mistral AI',
-        models: [
-            { id: 'mistral-large-latest',   note: 'Most capable Mistral' },
-            { id: 'mistral-small-latest',   note: 'Fast & affordable' },
-            { id: 'codestral-latest',       note: 'Code-optimised' },
-            { id: 'open-mistral-nemo',      note: 'Nemo — compact open model' },
-        ],
-    },
-    cerebras: {
-        label: 'Cerebras (Wafer-scale speed)',
-        models: [
-            { id: 'llama3.3-70b',   note: 'Llama 3.3 70B — extremely fast' },
-            { id: 'llama3.1-8b',    note: 'Llama 3.1 8B — ultra-low latency' },
-        ],
-    },
-    xai: {
-        label: 'xAI (Grok)',
-        models: [
-            { id: 'grok-3',        note: 'Flagship Grok-3' },
-            { id: 'grok-3-mini',   note: 'Grok-3 Mini — efficient' },
-            { id: 'grok-2-latest', note: 'Grok-2 stable' },
-        ],
-    },
-};
-
-// Maps pi-ai catalogue provider keys → legacy llmProvider enum values
-// Providers not in the legacy enum (groq, mistral, cerebras, xai) are set to undefined
-// so the Active Model box shows 'AUTO' and model-name inference handles routing
-const PI_CAT_TO_LEGACY_PROVIDER: Record<string, string | undefined> = {
-    openai:          'openai',
-    google:          'google',
-    anthropic:       'anthropic',
-    openrouter:      'openrouter',
-    'amazon-bedrock':'bedrock',
-    groq:            undefined,
-    mistral:         undefined,
-    cerebras:        undefined,
-    xai:             undefined,
-};
+// ── pi-ai model catalogue ───────────────────────────────────────────
+// Catalogue is now fetched dynamically from agent.llm.getPiAICatalogue()
 
 async function showPiAIConfig() {
     console.clear();
     banner();
     sectionHeader('🔄', 'pi-ai Model Browser');
 
+    const catalogue = await agent.llm.getPiAICatalogue();
+
     const piAiEnabled = agent.config.get('usePiAI') !== false;
     const currentModel = agent.config.get('modelName') || 'gpt-4o';
 
     // Key lookup per catalogue provider
     const piKeyMap: Record<string, () => string | undefined> = {
-        openai:          () => agent.config.get('openaiApiKey'),
-        google:          () => agent.config.get('googleApiKey'),
-        anthropic:       () => agent.config.get('anthropicApiKey'),
-        openrouter:      () => agent.config.get('openrouterApiKey'),
-        'amazon-bedrock':() => agent.config.get('bedrockAccessKeyId'),
-        groq:            () => agent.config.get('groqApiKey'),
-        mistral:         () => agent.config.get('mistralApiKey'),
-        cerebras:        () => agent.config.get('cerebrasApiKey'),
-        xai:             () => agent.config.get('xaiApiKey'),
+        openai: () => agent.config.get('openaiApiKey'),
+        google: () => agent.config.get('googleApiKey'),
+        openrouter: () => agent.config.get('openrouterApiKey'),
+        'amazon-bedrock': () => agent.config.get('bedrockAccessKeyId'),
+        groq: () => agent.config.get('groqApiKey'),
+        mistral: () => agent.config.get('mistralApiKey'),
+        cerebras: () => agent.config.get('cerebrasApiKey'),
+        xai: () => agent.config.get('xaiApiKey'),
+        huggingface: () => agent.config.get('huggingfaceApiKey'),
+        'kimi-coding': () => agent.config.get('kimiApiKey'),
+        minimax: () => agent.config.get('minimaxApiKey'),
+        'minimax-cn': () => agent.config.get('minimaxApiKey'),
+        zai: () => agent.config.get('zaiApiKey'),
+        perplexity: () => agent.config.get('perplexityApiKey'),
+        deepseek: () => agent.config.get('deepseekApiKey'),
+        opencode: () => agent.config.get('opencodeApiKey'),
+        anthropic: () => agent.config.get('anthropicApiKey') || (agent.llm.isPiAiLinked('anthropic') ? 'oauth' : undefined),
+        'github-copilot': () => agent.llm.isPiAiLinked('github-copilot') ? 'oauth' : undefined,
+        'google-antigravity': () => agent.llm.isPiAiLinked('google-antigravity') ? 'oauth' : undefined,
+        'google-gemini-cli': () => agent.llm.isPiAiLinked('google-gemini-cli') ? 'oauth' : undefined,
+        'openai-codex': () => agent.llm.isPiAiLinked('openai-codex') ? 'oauth' : undefined,
+        'azure-openai-responses': () => agent.config.get('openaiApiKey') && agent.config.get('azureEndpoint'),
+        'google-vertex': () => agent.config.get('googleProjectId') && agent.config.get('googleLocation'),
     };
     // Config key to store when the user enters a key for a pi-ai provider
     const piConfigKey: Record<string, string> = {
         openai: 'openaiApiKey', google: 'googleApiKey', anthropic: 'anthropicApiKey',
         openrouter: 'openrouterApiKey', 'amazon-bedrock': 'bedrockAccessKeyId',
         groq: 'groqApiKey', mistral: 'mistralApiKey', cerebras: 'cerebrasApiKey', xai: 'xaiApiKey',
+        huggingface: 'huggingfaceApiKey', 'kimi-coding': 'kimiApiKey', minimax: 'minimaxApiKey',
+        'minimax-cn': 'minimaxApiKey', zai: 'zaiApiKey', perplexity: 'perplexityApiKey',
+        deepseek: 'deepseekApiKey', opencode: 'opencodeApiKey',
+        'azure-openai-responses': 'openaiApiKey', // Primary key
+        'google-vertex': 'googleProjectId', // Primary field
     };
 
     console.log('');
     box([
         `${dim('Status')}   ${piAiEnabled ? green('Enabled (primary transport)') : yellow('Disabled (legacy mode)')}`,
         `${dim('Model')}    ${bold(currentModel)}`,
-        `${dim('Fallback')} ${dim('Legacy per-provider code runs automatically if pi-ai fails')}`,
+        `${dim('Providers')} ${cyan(String(Object.keys(catalogue).length))} providers found dynamically`,
     ], { title: '🔄 pi-ai STATUS', width: 58, color: piAiEnabled ? c.green : c.yellow });
     console.log('');
 
     const topChoices: any[] = [
         { name: `  ${piAiEnabled ? '✅ Disable pi-ai' : '🔄 Enable pi-ai'} ${dim('(toggle)')}`, value: 'toggle' },
+        { name: `  📦 ${bold('Check for Catalog Updates')} ${dim('(npm update)')}`, value: 'update_catalog' },
         new inquirer.Separator(gradient('  ─── Browse & Select Model ────────────', [c.brightCyan, c.gray])),
-        ...Object.entries(PI_AI_CATALOGUE).map(([key, cat]) => {
+        ...Object.entries(catalogue).map(([key, cat]) => {
             const hasKey = !!(piKeyMap[key] ? piKeyMap[key]() : undefined);
             return {
                 name: `  ${statusDot(hasKey, '')} ${bold(cat.label.padEnd(32))} ${hasKey ? green('key set') : yellow('no key')}  ${dim(`${cat.models.length} models`)}`,
@@ -3002,9 +2927,14 @@ async function showPiAIConfig() {
         return showPiAIConfig();
     }
 
+    if (choice === 'update_catalog') {
+        await performPiAIUpdate();
+        return showPiAIConfig();
+    }
+
     if ((choice as string).startsWith('cat:')) {
         const catKey = (choice as string).slice(4);
-        const cat = PI_AI_CATALOGUE[catKey];
+        const cat = catalogue[catKey];
         const hasKey = !!(piKeyMap[catKey] ? piKeyMap[catKey]() : undefined);
 
         const modelChoices = cat.models.map(m => ({
@@ -3026,15 +2956,67 @@ async function showPiAIConfig() {
         if (selectedModel === '__back__') return showPiAIConfig();
 
         if (selectedModel === '__setkey__') {
-            const cfgKey = piConfigKey[catKey];
-            if (cfgKey) {
+            const oauthProvider = ['github-copilot', 'google-antigravity', 'google-gemini-cli', 'openai-codex', 'opencode'].includes(catKey);
+
+            if (oauthProvider) {
+                const { doLogin } = await inquirer.prompt([{
+                    type: 'confirm', name: 'doLogin',
+                    message: `${cat.label} requires OAuth. Authorize & Login now?`,
+                    default: true,
+                }]);
+
+                if (doLogin) {
+                    console.log(cyan(`\n  Opening browser for ${cat.label} authorization...`));
+                    await agent.llm.piAiLogin(catKey);
+                    console.log(green(`\n  Login process completed. Try selecting a model again.`));
+                } else {
+                    console.log(yellow(`\n  ℹ  Manual login instructions:`));
+                    console.log(`     Run: ${bold(`npx @mariozechner/pi-ai /login ${catKey}`)}`);
+                }
+            } else if (catKey === 'azure-openai-responses') {
+                const { endpoint } = await inquirer.prompt([{
+                    type: 'input', name: 'endpoint',
+                    message: `Enter Azure OpenAI Endpoint URL (e.g. https://NAME.openai.azure.com/):`,
+                    default: agent.config.get('azureEndpoint'),
+                }]);
+                if (endpoint?.trim()) agent.config.set('azureEndpoint', endpoint.trim());
+
                 const { keyVal } = await inquirer.prompt([{
                     type: 'input', name: 'keyVal',
-                    message: `Enter ${cat.label} API key:`,
+                    message: `Enter Azure OpenAI API Key:`,
+                    default: agent.config.get('openaiApiKey'),
                 }]);
-                if (keyVal?.trim()) {
-                    agent.config.set(cfgKey, keyVal.trim());
-                    console.log(green(`${cat.label} API key saved.`));
+                if (keyVal?.trim()) agent.config.set('openaiApiKey', keyVal.trim());
+
+                console.log(green(`Azure OpenAI credentials saved.`));
+            } else if (catKey === 'google-vertex') {
+                const { project } = await inquirer.prompt([{
+                    type: 'input', name: 'project',
+                    message: `Enter Google Cloud Project ID:`,
+                    default: agent.config.get('googleProjectId'),
+                }]);
+                if (project?.trim()) agent.config.set('googleProjectId', project.trim());
+
+                const { location } = await inquirer.prompt([{
+                    type: 'input', name: 'location',
+                    message: `Enter Vertex AI Location (e.g. us-central1):`,
+                    default: agent.config.get('googleLocation'),
+                }]);
+                if (location?.trim()) agent.config.set('googleLocation', location.trim());
+
+                console.log(green(`Google Vertex credentials saved.`));
+            } else {
+                const cfgKey = piConfigKey[catKey];
+                if (cfgKey) {
+                    const { keyVal } = await inquirer.prompt([{
+                        type: 'input', name: 'keyVal',
+                        message: `Enter ${cat.label} API key:`,
+                        default: agent.config.get(cfgKey),
+                    }]);
+                    if (keyVal?.trim()) {
+                        agent.config.set(cfgKey, keyVal.trim());
+                        console.log(green(`${cat.label} API key saved.`));
+                    }
                 }
             }
             await waitKeyPress();
@@ -3053,7 +3035,14 @@ async function showPiAIConfig() {
 
         agent.config.set('modelName', finalModel);
         // Sync llmProvider so the Active Model box reflects the real provider
-        const legacyProvider = PI_CAT_TO_LEGACY_PROVIDER[catKey];
+        const legacyMap = {
+            openai: 'openai',
+            google: 'google',
+            anthropic: 'anthropic',
+            openrouter: 'openrouter',
+            'amazon-bedrock': 'bedrock',
+        };
+        const legacyProvider = legacyMap[catKey];
         if (legacyProvider !== undefined) {
             agent.config.set('llmProvider', legacyProvider);
         } else {
@@ -3101,45 +3090,45 @@ async function showSetPrimaryProvider() {
     const hasNvidia = !!agent.config.get('nvidiaApiKey');
     const hasAnthropic = !!agent.config.get('anthropicApiKey');
     const hasBedrock = !!agent.config.get('bedrockAccessKeyId');
-    
+
     const choices = [
-        { 
-            name: `Auto (infer from model name)${!currentProvider ? ' ✓' : ''}`, 
-            value: 'auto' 
+        {
+            name: `Auto (infer from model name)${!currentProvider ? ' ✓' : ''}`,
+            value: 'auto'
         },
-        { 
-            name: `OpenAI${hasOpenAI ? '' : ' (no key configured)'}${currentProvider === 'openai' ? ' ✓' : ''}`, 
+        {
+            name: `OpenAI${hasOpenAI ? '' : ' (no key configured)'}${currentProvider === 'openai' ? ' ✓' : ''}`,
             value: 'openai',
             disabled: !hasOpenAI
         },
-        { 
-            name: `Google Gemini${hasGoogle ? '' : ' (no key configured)'}${currentProvider === 'google' ? ' ✓' : ''}`, 
+        {
+            name: `Google Gemini${hasGoogle ? '' : ' (no key configured)'}${currentProvider === 'google' ? ' ✓' : ''}`,
             value: 'google',
             disabled: !hasGoogle
         },
-        { 
-            name: `OpenRouter${hasOpenRouter ? '' : ' (no key configured)'}${currentProvider === 'openrouter' ? ' ✓' : ''}`, 
+        {
+            name: `OpenRouter${hasOpenRouter ? '' : ' (no key configured)'}${currentProvider === 'openrouter' ? ' ✓' : ''}`,
             value: 'openrouter',
             disabled: !hasOpenRouter
         },
-        { 
-            name: `NVIDIA${hasNvidia ? '' : ' (no key configured)'}${currentProvider === 'nvidia' ? ' ✓' : ''}`, 
+        {
+            name: `NVIDIA${hasNvidia ? '' : ' (no key configured)'}${currentProvider === 'nvidia' ? ' ✓' : ''}`,
             value: 'nvidia',
             disabled: !hasNvidia
         },
-        { 
-            name: `Anthropic (Claude)${hasAnthropic ? '' : ' (no key configured)'}${currentProvider === 'anthropic' ? ' ✓' : ''}`, 
+        {
+            name: `Anthropic (Claude)${hasAnthropic ? '' : ' (no key configured)'}${currentProvider === 'anthropic' ? ' ✓' : ''}`,
             value: 'anthropic',
             disabled: !hasAnthropic
         },
-        { 
-            name: `AWS Bedrock${hasBedrock ? '' : ' (no credentials configured)'}${currentProvider === 'bedrock' ? ' ✓' : ''}`, 
+        {
+            name: `AWS Bedrock${hasBedrock ? '' : ' (no credentials configured)'}${currentProvider === 'bedrock' ? ' ✓' : ''}`,
             value: 'bedrock',
             disabled: !hasBedrock
         },
         { name: 'Back', value: 'back' }
     ];
-    
+
     const { selected } = await inquirer.prompt([
         {
             type: 'list',
@@ -3148,9 +3137,9 @@ async function showSetPrimaryProvider() {
             choices
         }
     ]);
-    
+
     if (selected === 'back') return showModelsMenu();
-    
+
     if (selected === 'auto') {
         agent.config.set('llmProvider', undefined);
         console.log('Primary provider set to AUTO (will infer from model name)');
@@ -3158,7 +3147,7 @@ async function showSetPrimaryProvider() {
         agent.config.set('llmProvider', selected);
         console.log(`Primary provider set to: ${selected.toUpperCase()}`);
     }
-    
+
     await waitKeyPress();
     return showModelsMenu();
 }
@@ -3734,6 +3723,7 @@ async function showWhatsAppConfig() {
                 { name: statusReply ? 'Disable Status Interactions' : 'Enable Status Interactions', value: 'toggle_status' },
                 { name: autoReact ? 'Disable Auto-React' : 'Enable Auto-React', value: 'toggle_react' },
                 { name: contextProfiling ? 'Disable Context Profiling' : 'Enable Context Profiling', value: 'toggle_profile' },
+                { name: 'Run Context Profiling (Batch)', value: 'trigger_profiling' },
                 { name: 'Link Account / Show QR', value: 'link' },
                 { name: 'Back', value: 'back' }
             ]
@@ -3758,6 +3748,54 @@ async function showWhatsAppConfig() {
         case 'toggle_profile':
             agent.config.set('whatsappContextProfilingEnabled', !contextProfiling);
             break;
+        case 'trigger_profiling': {
+            if (!agent.whatsapp) {
+                console.log(red('\nWhatsApp is not connected.'));
+                await waitKeyPress();
+                break;
+            }
+
+            const contacts = agent.whatsapp.getRecentContacts();
+            if (contacts.length === 0) {
+                console.log(yellow('\nNo recent contacts found to profile.'));
+                await waitKeyPress();
+                break;
+            }
+
+            const duration = agent.estimateProfilingDuration(contacts.length);
+
+            console.log('\n' + c.bgYellow + c.black + ' ⚠️  HEAVY TASK WARNING ' + c.reset);
+            console.log(yellow('Context profiling reads past chat history and uses AI to build relationship context.'));
+            console.log(`${dim('contacts:')}      ${contacts.length}`);
+            console.log(`${dim('estimated duration:')} ~${duration} minutes`);
+            console.log(dim('costs: LLM tokens will be consumed for each contact.'));
+            console.log('');
+
+            const { confirm } = await inquirer.prompt([
+                { type: 'confirm', name: 'confirm', message: 'Do you want to proceed with profiling?', default: false }
+            ]);
+
+            if (!confirm) break;
+
+            console.log('\n' + cyan('Starting context profiling...'));
+
+            // Progress bar helper (simple)
+            const updateProgress = (processed: number, total: number, name: string) => {
+                const percent = Math.round((processed / total) * 100);
+                const barWidth = 20;
+                const filled = Math.round((processed / total) * barWidth);
+                const empty = barWidth - filled;
+                const bar = '█'.repeat(filled) + '░'.repeat(empty);
+                process.stdout.write(`\r[${bar}] ${percent}% | Analyzing: ${name.substring(0, 20).padEnd(20)}`);
+            };
+
+            const result = await agent.profileWhatsAppHistory(contacts, 20, updateProgress);
+
+            process.stdout.write('\r' + ' '.repeat(70) + '\r'); // Clear progress line
+            console.log(green(`\n\n✅ Profiling complete! ${result.updated} contacts updated.`));
+            await waitKeyPress();
+            break;
+        }
         case 'link':
             if (!agent.whatsapp) {
                 console.log('\nEnabling WhatsApp channel...');
@@ -4173,9 +4211,11 @@ async function showAgenticUserMenu() {
             message: cyan('Agentic User Options:'),
             choices: [
                 new inquirer.Separator(gradient('  ─── Control ──────────────────────', [c.cyan, c.gray])),
-                { name: settings.enabled
-                    ? `  ${red('○')} ${bold('Disable')} Agentic User`
-                    : `  ${green('●')} ${bold('Enable')} Agentic User`, value: 'toggle' },
+                {
+                    name: settings.enabled
+                        ? `  ${red('○')} ${bold('Disable')} Agentic User`
+                        : `  ${green('●')} ${bold('Enable')} Agentic User`, value: 'toggle'
+                },
                 new inquirer.Separator(gradient('  ─── Settings ─────────────────────', [c.yellow, c.gray])),
                 { name: `  ⏱️  Response Delay ${dim(`(${settings.responseDelay}s)`)}`, value: 'response_delay' },
                 { name: `  📊 Confidence Threshold ${dim(`(${settings.confidenceThreshold}%)`)}`, value: 'confidence' },
@@ -4287,7 +4327,7 @@ async function showAgenticUserMenu() {
                     const appliedTag = entry.applied ? green(bold('APPLIED')) : yellow('SKIPPED');
                     const typeTag = entry.type === 'question-answer' ? cyan('Q&A')
                         : entry.type === 'direction-guidance' ? magenta('GUIDE')
-                        : yellow('STUCK');
+                            : yellow('STUCK');
                     console.log(`  ${dim(entry.timestamp.slice(0, 19))}  ${typeTag}  ${appliedTag}  ${dim('conf:')}${entry.confidence}%`);
                     console.log(`    ${dim('Action:')} ${entry.actionId}`);
                     console.log(`    ${dim('Trigger:')} ${entry.trigger.slice(0, 80)}${entry.trigger.length > 80 ? '…' : ''}`);
@@ -4838,12 +4878,12 @@ async function showSecurityMenu() {
                 console.log(red(bold('  ╔══════════════════════════════════════════════════╗')));
                 console.log(red(bold('  ║         ☠️  BEHAVIORAL OVERRIDE WARNING ☠️         ║')));
                 console.log(red(bold('  ╠══════════════════════════════════════════════════╣')));
-                console.log(red(     '  ║  This removes ALL persona safety boundaries.     ║'));
-                console.log(red(     '  ║  The agent will comply with ANY request —         ║'));
-                console.log(red(     '  ║  including rude, offensive, or unhinged content.  ║'));
-                console.log(red(     '  ║                                                  ║'));
-                console.log(red(     '  ║  SOUL.md rules, tone restrictions, and refusal    ║'));
-                console.log(red(     '  ║  behaviors are fully suspended while active.      ║'));
+                console.log(red('  ║  This removes ALL persona safety boundaries.     ║'));
+                console.log(red('  ║  The agent will comply with ANY request —         ║'));
+                console.log(red('  ║  including rude, offensive, or unhinged content.  ║'));
+                console.log(red('  ║                                                  ║'));
+                console.log(red('  ║  SOUL.md rules, tone restrictions, and refusal    ║'));
+                console.log(red('  ║  behaviors are fully suspended while active.      ║'));
                 console.log(red(bold('  ╚══════════════════════════════════════════════════╝')));
                 console.log('');
                 const { confirm: c1 } = await inquirer.prompt([
@@ -5480,46 +5520,66 @@ async function showSkillsMenu() {
     return showSkillsMenu();
 }
 
+async function performPiAIUpdate() {
+    const { execSync } = require('child_process');
+    const orcbotDir = path.resolve(__dirname, '..', '..');
+
+    console.log('\n🔄 Checking for PI AI Catalog updates...');
+    console.log(dim('   This will update the @mariozechner/pi-ai library to get the newest models.\n'));
+
+    try {
+        console.log('📡 Fetching latest catalog metadata via npm...');
+        execSync('npm update @mariozechner/pi-ai', { cwd: orcbotDir, stdio: 'inherit' });
+
+        console.log(green('\n✅ Catalog update complete!'));
+        console.log(dim('   The model list will be refreshed the next time you open the browser.'));
+    } catch (e) {
+        console.log(red(`\n❌ Failed to update catalog: ${e.message}`));
+    }
+
+    await waitKeyPress();
+}
+
 async function performUpdate() {
     const { execSync, spawn } = require('child_process');
     const fs = require('fs');
-    
+
     // Determine install location
     const orcbotDir = path.resolve(__dirname, '..', '..');
     const isGlobalInstall = orcbotDir.includes('node_modules');
-    
+
     console.log('\n🔄 Checking for OrcBot updates...\n');
-    
+
     try {
         // Check if we're in a git repo
         const gitDir = path.join(orcbotDir, '.git');
         const isGitRepo = fs.existsSync(gitDir);
-        
+
         if (isGitRepo) {
             console.log(`📁 OrcBot directory: ${orcbotDir}`);
-            
+
             // Fetch latest changes
             console.log('📡 Fetching latest changes from remote...');
             execSync('git fetch origin', { cwd: orcbotDir, stdio: 'inherit' });
-            
+
             // Check if updates are available
             const localHash = execSync('git rev-parse HEAD', { cwd: orcbotDir, encoding: 'utf8' }).trim();
             const remoteHash = execSync('git rev-parse origin/main', { cwd: orcbotDir, encoding: 'utf8' }).trim();
-            
+
             if (localHash === remoteHash) {
                 console.log('\n✅ OrcBot is already up to date!');
                 console.log(`   Current version: ${localHash.substring(0, 7)}`);
                 return;
             }
-            
+
             console.log(`\n📦 Update available!`);
             console.log(`   Current: ${localHash.substring(0, 7)}`);
             console.log(`   Latest:  ${remoteHash.substring(0, 7)}`);
-            
+
             // Show what's changing
             console.log('\n📋 Changes to be applied:');
             execSync('git log --oneline HEAD..origin/main', { cwd: orcbotDir, stdio: 'inherit' });
-            
+
             // Force update: discard local changes and sync to origin/main
             console.log('\n⬇️  Applying latest changes (force update)...');
             try {
@@ -5532,7 +5592,7 @@ async function performUpdate() {
             }
             execSync('git reset --hard origin/main', { cwd: orcbotDir, stdio: 'inherit' });
             execSync('git clean -fd', { cwd: orcbotDir, stdio: 'inherit' });
-            
+
             // Install dependencies
             console.log('\n📦 Installing dependencies...');
             execSync('npm install', { cwd: orcbotDir, stdio: 'inherit' });
@@ -5550,7 +5610,7 @@ async function performUpdate() {
                 console.log('🎨 Installing @mariozechner/pi-tui (new dependency)...');
                 execSync('npm install @mariozechner/pi-tui --legacy-peer-deps', { cwd: orcbotDir, stdio: 'inherit' });
             }
-            
+
             // Install dependencies for subdirectories (apps/www, apps/dashboard)
             const appsDir = path.join(orcbotDir, 'apps');
             if (fs.existsSync(appsDir)) {
@@ -5568,7 +5628,7 @@ async function performUpdate() {
                     }
                 }
             }
-            
+
             // Rebuild (use fast build if available, fallback to tsc)
             console.log('\n🔨 Rebuilding OrcBot...');
             try {
@@ -5577,7 +5637,7 @@ async function performUpdate() {
                 console.log('⚠️  Fast build unavailable, using standard build...');
                 execSync('npm run build', { cwd: orcbotDir, stdio: 'inherit' });
             }
-            
+
             // Re-link globally if needed
             const packageJson = JSON.parse(fs.readFileSync(path.join(orcbotDir, 'package.json'), 'utf8'));
             if (packageJson.bin) {
@@ -5592,11 +5652,11 @@ async function performUpdate() {
                     }
                 }
             }
-            
+
             console.log('\n✅ OrcBot updated successfully!');
             console.log('   Please restart OrcBot to apply changes.');
             console.log('\n   Run: orcbot run');
-            
+
         } else {
             // Not a git repo - might be npm installed
             console.log('⚠️  OrcBot was not installed from git.');

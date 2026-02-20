@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { TokenTracker } from './TokenTracker';
-import { piAiCall, piAiCallWithTools, type PiAIAdapterOptions } from './PiAIAdapter';
+import { piAiCall, piAiCallWithTools, getPiProviders, getPiModels, piAiLogin, isPiAiLinked, type PiAIAdapterOptions } from './PiAIAdapter';
 import { convertToWhisperCompatible, getMimeType as getAudioHelperMimeType, isAudioFile } from '../utils/AudioHelper';
 
 export type LLMProvider = 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia' | 'anthropic';
@@ -60,12 +60,30 @@ export class MultiLLM {
     private mistralKey?: string;
     private cerebrasKey?: string;
     private xaiKey?: string;
+    private huggingfaceKey?: string;
+    private kimiKey?: string;
+    private minimaxKey?: string;
+    private zaiKey?: string;
+    private perplexityKey?: string;
+    private deepseekKey?: string;
+    private opencodeKey?: string;
+    private azureEndpoint?: string;
+    private googleProjectId?: string;
+    private googleLocation?: string;
     private tokenTracker?: TokenTracker;
     private preferredProvider?: LLMProvider;
     /** When true, route call() and callWithTools() through @mariozechner/pi-ai */
     private usePiAI: boolean = false;
 
-    constructor(config?: { apiKey?: string, googleApiKey?: string, nvidiaApiKey?: string, anthropicApiKey?: string, modelName?: string, bedrockRegion?: string, bedrockAccessKeyId?: string, bedrockSecretAccessKey?: string, bedrockSessionToken?: string, tokenTracker?: TokenTracker, openrouterApiKey?: string, openrouterBaseUrl?: string, openrouterReferer?: string, openrouterAppName?: string, llmProvider?: LLMProvider, usePiAI?: boolean, groqApiKey?: string, mistralApiKey?: string, cerebrasApiKey?: string, xaiApiKey?: string }) {
+    constructor(config?: {
+        apiKey?: string, googleApiKey?: string, nvidiaApiKey?: string, anthropicApiKey?: string, modelName?: string,
+        bedrockRegion?: string, bedrockAccessKeyId?: string, bedrockSecretAccessKey?: string, bedrockSessionToken?: string,
+        tokenTracker?: TokenTracker, openrouterApiKey?: string, openrouterBaseUrl?: string, openrouterReferer?: string,
+        openrouterAppName?: string, llmProvider?: LLMProvider, usePiAI?: boolean, groqApiKey?: string, mistralApiKey?: string,
+        cerebrasApiKey?: string, xaiApiKey?: string, huggingfaceApiKey?: string, kimiApiKey?: string, minimaxApiKey?: string,
+        zaiApiKey?: string, perplexityApiKey?: string, deepseekApiKey?: string, opencodeApiKey?: string,
+        azureEndpoint?: string, googleProjectId?: string, googleLocation?: string
+    }) {
         this.openaiKey = config?.apiKey || process.env.OPENAI_API_KEY;
         this.openrouterKey = config?.openrouterApiKey || process.env.OPENROUTER_API_KEY;
         this.openrouterBaseUrl = config?.openrouterBaseUrl || process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
@@ -83,6 +101,16 @@ export class MultiLLM {
         this.mistralKey = config?.mistralApiKey || process.env.MISTRAL_API_KEY;
         this.cerebrasKey = config?.cerebrasApiKey || process.env.CEREBRAS_API_KEY;
         this.xaiKey = config?.xaiApiKey || process.env.XAI_API_KEY;
+        this.huggingfaceKey = config?.huggingfaceApiKey || process.env.HUGGINGFACE_API_KEY;
+        this.kimiKey = config?.kimiApiKey || process.env.KIMI_API_KEY;
+        this.minimaxKey = config?.minimaxApiKey || process.env.MINIMAX_API_KEY;
+        this.zaiKey = config?.zaiApiKey || process.env.ZAI_API_KEY;
+        this.perplexityKey = config?.perplexityApiKey || process.env.PERPLEXITY_API_KEY;
+        this.deepseekKey = config?.deepseekApiKey || process.env.DEEPSEEK_API_KEY;
+        this.opencodeKey = config?.opencodeApiKey || process.env.OPENCODE_API_KEY;
+        this.azureEndpoint = config?.azureEndpoint || process.env.AZURE_OPENAI_ENDPOINT;
+        this.googleProjectId = config?.googleProjectId || process.env.GOOGLE_PROJECT_ID;
+        this.googleLocation = config?.googleLocation || process.env.GOOGLE_LOCATION;
         this.tokenTracker = config?.tokenTracker;
         this.preferredProvider = config?.llmProvider;
         this.usePiAI = config?.usePiAI ?? false;
@@ -147,7 +175,7 @@ export class MultiLLM {
     private getFastModelForProvider(provider: LLMProvider): string {
         switch (provider) {
             case 'openai': return 'gpt-4o-mini';
-            case 'google': return 'gemini-2.0-flash-lite';
+            case 'google': return 'gemini-flash-lite-latest';
             case 'anthropic': return 'claude-3-5-haiku-latest';
             case 'nvidia': return 'meta/llama-3.3-70b-instruct';
             case 'openrouter': return 'openai/gpt-oss-120b:free';
@@ -595,7 +623,7 @@ export class MultiLLM {
     private getDefaultModelForProvider(provider: LLMProvider): string {
         switch (provider) {
             case 'openai': return 'gpt-4o';
-            case 'google': return 'gemini-2.0-flash';
+            case 'google': return 'gemini-flash-lite-latest';
             case 'nvidia': return 'moonshotai/kimi-k2.5';
             case 'openrouter': return 'google/gemini-2.0-flash-exp:free';
             case 'anthropic': return 'claude-sonnet-4-5';
@@ -996,6 +1024,16 @@ export class MultiLLM {
                 mistral: this.mistralKey,
                 cerebras: this.cerebrasKey,
                 xai: this.xaiKey,
+                huggingface: this.huggingfaceKey,
+                kimi: this.kimiKey,
+                minimax: this.minimaxKey,
+                zai: this.zaiKey,
+                perplexity: this.perplexityKey,
+                deepseek: this.deepseekKey,
+                opencode: this.opencodeKey,
+                azureEndpoint: this.azureEndpoint,
+                googleProjectId: this.googleProjectId,
+                googleLocation: this.googleLocation,
             },
         };
     }
@@ -1600,11 +1638,70 @@ export class MultiLLM {
         fs.writeFileSync(finalPath, Buffer.from(imageB64, 'base64'));
 
         logger.info(`MultiLLM: Google image generated → ${finalPath} (model: ${imageModel})`);
-
         return {
             success: true,
             filePath: finalPath,
             revisedPrompt: textResponse,
         };
+    }
+
+    /** Trigger interactive OAuth login via pi-ai. */
+    public async piAiLogin(providerKey: string): Promise<void> {
+        await piAiLogin(providerKey);
+    }
+
+    /** Check if an OAuth provider is linked. */
+    public isPiAiLinked(providerKey: string): boolean {
+        return isPiAiLinked(providerKey);
+    }
+
+    /**
+     * Dynamically fetch the PI AI model catalogue from the underlying library.
+     */
+    public async getPiAICatalogue(): Promise<Record<string, { label: string; models: { id: string; note: string }[] }>> {
+        const providers = await getPiProviders();
+        const catalogue: Record<string, { label: string; models: { id: string; note: string }[] }> = {};
+
+        const providerLabels: Record<string, string> = {
+            'openai': 'OpenAI',
+            'google': 'Google Gemini',
+            'google-vertex': 'Google Vertex AI',
+            'anthropic': 'Anthropic (Claude)',
+            'openrouter': 'OpenRouter (Multi-model)',
+            'amazon-bedrock': 'AWS Bedrock',
+            'groq': 'Groq (Ultra-fast)',
+            'mistral': 'Mistral AI',
+            'cerebras': 'Cerebras (Wafer-speed)',
+            'xai': 'xAI (Grok)',
+            'kimi-coding': 'Kimi (Moonshot)',
+            'minimax': 'MiniMax',
+            'github-copilot': 'GitHub Copilot',
+            'huggingface': 'Hugging Face',
+        };
+
+        for (const pId of providers) {
+            const models = await getPiModels(pId);
+            if (!models || models.length === 0) continue;
+
+            catalogue[pId] = {
+                label: providerLabels[pId] || pId.charAt(0).toUpperCase() + pId.slice(1),
+                models: models.map(m => {
+                    const features: string[] = [];
+                    if (m.reasoning) features.push('Reasoning');
+                    if (m.input?.includes('image')) features.push('Vision');
+                    if (m.contextWindow) {
+                        const k = Math.round(m.contextWindow / 1024);
+                        features.push(`${k}k ctx`);
+                    }
+
+                    return {
+                        id: m.id,
+                        note: features.join(', ') || (m.name !== m.id ? m.name : '')
+                    };
+                })
+            };
+        }
+
+        return catalogue;
     }
 }

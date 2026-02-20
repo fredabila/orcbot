@@ -57,6 +57,23 @@ OrcBot is built around **strategic autonomy**: it plans, executes, and repairs i
 
 ---
 
+## 📊 Benchmarks & Performance
+
+OrcBot v2.1 is engineered for peak reliability and strategic depth. Our latest benchmark testing shows superior performance across conversational, web, and system tasks.
+
+<div align="center">
+<img src="assets/benchmarks_v21.png" width="600" alt="OrcBot v2.1 Benchmarks">
+
+**[View Detailed Benchmark Methodology & Data](docs/BENCHMARKS.md)**
+</div>
+
+*   **Conversational IQ (9.5/10)**: State-of-the-art context management and complex reasoning.
+*   **Task Planning (8.9/10)**: Dynamic simulation that anticipates and bypasses errors.
+*   **Web Autonomy (9.2/10)**: Resilient browsing with multi-provider search fallback.
+*   **System Resilience (9.7/10)**: Background self-repair and daemon stability.
+
+---
+
 ## Architecture
 
 The system is designed to run locally while integrating with external channels and providers. This diagram covers the full v2.1 infrastructure — from inbound channels through the decision stack, memory layers, skills, and external providers.

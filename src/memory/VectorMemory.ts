@@ -72,15 +72,18 @@ export class VectorMemory {
         // Otherwise default to whichever key is available (OpenAI first as it has
         // better batch embedding support).
         const preferGoogle = config.preferredProvider === 'google';
-        if (preferGoogle && config.googleApiKey) {
+        const openaiKey = (config.openaiApiKey && !config.openaiApiKey.includes('_key_here')) ? config.openaiApiKey : undefined;
+        const googleKey = (config.googleApiKey && !config.googleApiKey.includes('_key_here')) ? config.googleApiKey : undefined;
+
+        if (preferGoogle && googleKey) {
             this.provider = 'google';
-            this.apiKey = config.googleApiKey;
-        } else if (config.openaiApiKey) {
+            this.apiKey = googleKey;
+        } else if (openaiKey) {
             this.provider = 'openai';
-            this.apiKey = config.openaiApiKey;
-        } else if (config.googleApiKey) {
+            this.apiKey = openaiKey;
+        } else if (googleKey) {
             this.provider = 'google';
-            this.apiKey = config.googleApiKey;
+            this.apiKey = googleKey;
         } else {
             this.provider = 'none';
             this.apiKey = '';

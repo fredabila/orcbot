@@ -102,6 +102,23 @@ export class WhatsAppChannel implements IChannel {
     }
 
     /**
+     * Get recent contacts that have been synced or interacted with.
+     */
+    public getRecentContacts(): Array<{ jid: string, name: string }> {
+        const results: Array<{ jid: string, name: string }> = [];
+        for (const [jid, name] of this.contactNames.entries()) {
+            results.push({ jid, name });
+        }
+        // If we have JIDs without names, include them too
+        for (const jid of this.contactJids) {
+            if (!this.contactNames.has(jid)) {
+                results.push({ jid, name: jid.split('@')[0] });
+            }
+        }
+        return results;
+    }
+
+    /**
      * Search the synced contacts by name.
      */
     public searchContacts(query: string): Array<{ jid: string, name: string }> {
@@ -533,11 +550,42 @@ CRITICAL: You MUST use 'send_whatsapp' to reply. Do NOT send cross-channel Teleg
     }
 
     /**
-     * Get chat history (last N messages)
+     * Get chat history (last N messages) from WhatsApp servers.
      */
     public async getHistory(jid: string, count: number = 20): Promise<any[]> {
-        // Basic history stub since makeInMemoryStore is currently unavailable
-        return [];
+        if (!this.sock) throw new Error('WhatsApp socket not connected');
+
+        try {
+            // Ensure JID formatting
+            let targetJid = jid;
+            if (!targetJid.includes('@')) {
+                targetJid = `${targetJid}@s.whatsapp.net`;
+            }
+
+            logger.info(`WhatsApp: Fetching ${count} messages of history for ${targetJid}...`);
+
+            // fetchMessagesFromChat is the standard Baileys method for history retrieval
+            const result = await this.sock.fetchMessagesFromChat(targetJid, count);
+
+            // Normalize messages for the agent
+            return (result || []).map((msg: any) => {
+                const isFromMe = msg.key.fromMe;
+                const text = msg.message?.conversation ||
+                    msg.message?.extendedTextMessage?.text ||
+                    msg.message?.imageMessage?.caption ||
+                    '[Media]';
+
+                return {
+                    id: msg.key.id,
+                    fromMe: isFromMe,
+                    text: text,
+                    timestamp: msg.messageTimestamp ? new Date(msg.messageTimestamp * 1000).toISOString() : new Date().toISOString()
+                };
+            });
+        } catch (error) {
+            logger.error(`WhatsAppChannel: Error fetching history for ${jid}: ${error}`);
+            return [];
+        }
     }
 
     /**

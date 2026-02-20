@@ -12,6 +12,10 @@
  *  - Abort signal support
  */
 
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import { exec } from 'child_process';
 import { logger } from '../utils/logger';
 import type { LLMToolDefinition, LLMToolResponse } from './MultiLLM';
 
@@ -21,6 +25,13 @@ import type { LLMToolDefinition, LLMToolResponse } from './MultiLLM';
 let piAiLoaded = false;
 let getModel: any = null;
 let complete: any = null;
+let getProviders: any = null;
+let getModels: any = null;
+let loginAnthropic: any = null;
+let loginAntigravity: any = null;
+let loginGeminiCli: any = null;
+let loginGitHubCopilot: any = null;
+let loginOpenAICodex: any = null;
 
 async function ensurePiAi(): Promise<boolean> {
     if (piAiLoaded) return true;
@@ -28,6 +39,13 @@ async function ensurePiAi(): Promise<boolean> {
         const mod = await import('@mariozechner/pi-ai');
         getModel = mod.getModel;
         complete = mod.complete;
+        getProviders = mod.getProviders;
+        getModels = mod.getModels;
+        loginAnthropic = mod.loginAnthropic;
+        loginAntigravity = mod.loginAntigravity;
+        loginGeminiCli = mod.loginGeminiCli;
+        loginGitHubCopilot = mod.loginGitHubCopilot;
+        loginOpenAICodex = mod.loginOpenAICodex;
         piAiLoaded = true;
         return true;
     } catch (e) {
@@ -102,6 +120,16 @@ export interface PiAIAdapterOptions {
         mistral?: string;
         cerebras?: string;
         xai?: string;
+        huggingface?: string;
+        kimi?: string;
+        minimax?: string;
+        zai?: string;
+        perplexity?: string;
+        deepseek?: string;
+        opencode?: string;
+        azureEndpoint?: string;
+        googleProjectId?: string;
+        googleLocation?: string;
     };
 }
 
@@ -120,7 +148,7 @@ export async function piAiCall(
 
     const piProvider = toPiProvider(opts.provider, opts.model);
     const piModel = normalizePiModel(opts.model);
-    const apiKey = resolveApiKey(piProvider, opts.apiKeys);
+    const apiCreds = resolveApiCredentials(piProvider, opts.apiKeys);
 
     let model: any;
     try {
@@ -138,18 +166,13 @@ export async function piAiCall(
     };
 
     const callOpts: any = {};
-    if (apiKey) callOpts.apiKey = apiKey;
+    if (apiCreds.apiKey) callOpts.apiKey = apiCreds.apiKey;
+    if (apiCreds.baseUrl) callOpts.baseUrl = apiCreds.baseUrl;
+    if (apiCreds.project) callOpts.project = apiCreds.project;
+    if (apiCreds.location) callOpts.location = apiCreds.location;
 
     const response = await complete(model, context, callOpts);
-
-    // Extract text from response content blocks
-    const text = response.content
-        .filter((b: any) => b.type === 'text')
-        .map((b: any) => b.text)
-        .join('');
-
-    logger.debug(`PiAIAdapter: call() → ${piProvider}/${piModel} — ${response.usage?.output ?? '?'} tokens out`);
-    return text;
+    return extractPiAiText(response);
 }
 
 /**
@@ -168,7 +191,7 @@ export async function piAiCallWithTools(
 
     const piProvider = toPiProvider(opts.provider, opts.model);
     const piModel = normalizePiModel(opts.model);
-    const apiKey = resolveApiKey(piProvider, opts.apiKeys);
+    const apiCreds = resolveApiCredentials(piProvider, opts.apiKeys);
 
     let model: any;
     try {
@@ -186,45 +209,189 @@ export async function piAiCallWithTools(
     };
 
     const callOpts: any = {};
-    if (apiKey) callOpts.apiKey = apiKey;
+    if (apiCreds.apiKey) callOpts.apiKey = apiCreds.apiKey;
+    if (apiCreds.baseUrl) callOpts.baseUrl = apiCreds.baseUrl;
+    if (apiCreds.project) callOpts.project = apiCreds.project;
+    if (apiCreds.location) callOpts.location = apiCreds.location;
 
     const response = await complete(model, context, callOpts);
 
-    // Separate text blocks from tool-call blocks
-    const textContent = response.content
-        .filter((b: any) => b.type === 'text')
-        .map((b: any) => b.text)
-        .join('');
-
-    const toolCalls = response.content
-        .filter((b: any) => b.type === 'toolCall')
-        .map((b: any) => ({
-            name: b.name,
-            arguments: b.arguments ?? {},
-            id: b.id,
-        }));
-
-    logger.debug(`PiAIAdapter: callWithTools() → ${piProvider}/${piModel} — ${toolCalls.length} tool calls`);
-
     return {
-        content: textContent,
-        toolCalls,
+        content: extractPiAiText(response),
+        toolCalls: extractPiAiToolCalls(response),
         raw: response,
     };
 }
 
-/** Resolve the right API key for a pi-ai provider name */
-function resolveApiKey(piProvider: string, keys: PiAIAdapterOptions['apiKeys']): string | undefined {
+/** Centralized text extraction from PI AI response, handling text, thinking, and errors. */
+function extractPiAiText(response: any): string {
+    if (response.errorMessage) {
+        throw new Error(`PiAI Model Error: ${response.errorMessage}`);
+    }
+
+    const content = response.content || [];
+
+    // Combine text and thinking blocks. 
+    // We wrap thinking in tags to preserve the model's reasoning for OrcBot's internal processing.
+    const parts = content.map((block: any) => {
+        if (block.type === 'text') return block.text;
+        if (block.type === 'thinking') return `\n<thinking>\n${block.thinking}\n</thinking>\n`;
+        return '';
+    });
+
+    const text = parts.join('').trim();
+
+    if (!text && !content.some((b: any) => b.type === 'toolCall')) {
+        if (response.stopReason === 'length') {
+            logger.warn('PiAIAdapter: Model response truncated due to length.');
+        } else if (response.stopReason === 'error') {
+            logger.error('PiAIAdapter: Model reported an unspecified error.');
+        } else {
+            logger.debug(`PiAIAdapter: Empty response received (stopReason: ${response.stopReason})`);
+        }
+    }
+
+    return text;
+}
+
+/** Standardized tool call extraction from PI AI response. */
+function extractPiAiToolCalls(response: any): LLMToolResponse['toolCalls'] {
+    const content = response.content || [];
+    return content
+        .filter((b: any) => b.type === 'toolCall')
+        .map((b: any) => ({
+            id: b.id,
+            name: b.name,
+            arguments: b.arguments,
+        }));
+}
+
+/** Resolve the right API key or credentials for a pi-ai provider name */
+function resolveApiCredentials(piProvider: string, keys: PiAIAdapterOptions['apiKeys']): { apiKey?: string; baseUrl?: string; project?: string; location?: string } {
     switch (piProvider) {
-        case 'openai': return keys.openai;
-        case 'google': return keys.google;
-        case 'anthropic': return keys.anthropic;
-        case 'openrouter': return keys.openrouter || keys.nvidia;
-        case 'amazon-bedrock': return undefined; // Bedrock uses env-based AWS credentials
-        case 'groq': return keys.groq;
-        case 'mistral': return keys.mistral;
-        case 'cerebras': return keys.cerebras;
-        case 'xai': return keys.xai;
-        default: return keys.openai;
+        case 'openai': return { apiKey: keys.openai };
+        case 'google': return { apiKey: keys.google };
+        case 'anthropic': return { apiKey: keys.anthropic };
+        case 'openrouter': return { apiKey: keys.openrouter || keys.nvidia };
+        case 'amazon-bedrock': return {}; // Bedrock uses env-based AWS credentials
+        case 'groq': return { apiKey: keys.groq };
+        case 'mistral': return { apiKey: keys.mistral };
+        case 'cerebras': return { apiKey: keys.cerebras };
+        case 'xai': return { apiKey: keys.xai };
+        case 'huggingface': return { apiKey: keys.huggingface };
+        case 'kimi-coding': return { apiKey: keys.kimi };
+        case 'minimax':
+        case 'minimax-cn':
+            return { apiKey: keys.minimax };
+        case 'zai': return { apiKey: keys.zai };
+        case 'perplexity': return { apiKey: keys.perplexity };
+        case 'deepseek': return { apiKey: keys.deepseek };
+        case 'opencode': return { apiKey: keys.opencode };
+        case 'azure-openai-responses':
+            return { apiKey: keys.openai, baseUrl: keys.azureEndpoint };
+        case 'google-vertex':
+            return { project: keys.googleProjectId, location: keys.googleLocation };
+        case 'google-antigravity':
+        case 'google-gemini-cli':
+        case 'github-copilot':
+        case 'openai-codex':
+            return { apiKey: (keys as any)[piProvider] }; // No fallback for OAuth providers
+        default: return { apiKey: keys.openai };
+    }
+}
+
+export async function getPiProviders(): Promise<string[]> {
+    if (!(await ensurePiAi())) return [];
+    return getProviders();
+}
+
+export async function getPiModels(provider: string): Promise<any[]> {
+    if (!(await ensurePiAi())) return [];
+    return getModels(provider);
+}
+
+/** Triggers an interactive OAuth login flow for certain providers. */
+export async function piAiLogin(providerKey: string): Promise<void> {
+    if (!(await ensurePiAi())) return;
+
+    logger.info(`PiAIAdapter: Triggering login for ${providerKey}`);
+
+    const onAuth = (opts: any) => {
+        const url = typeof opts === 'string' ? opts : opts.url;
+        console.log('\n\n' + '  '.repeat(1) + '🔑 Authorization Required');
+        console.log('  '.repeat(1) + `URL: ${url}`);
+        if (opts.devCode) console.log('  '.repeat(1) + `Device Code: ${opts.devCode}`);
+        if (opts.instructions) console.log('  '.repeat(1) + `Instructions: ${opts.instructions}`);
+        console.log('\n  Opening browser for authorization...\n');
+
+        const cmd = process.platform === 'win32' ? 'start' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+        exec(`${cmd} "${url}"`);
+    };
+
+    const onProgress = (msg: string) => logger.info(`PiAIAdapter: ${msg}`);
+
+    try {
+        let creds: any = null;
+        switch (providerKey) {
+            case 'anthropic':
+                if (loginAnthropic) creds = await loginAnthropic((url: string) => onAuth(url), () => Promise.resolve(''));
+                break;
+            case 'google-antigravity':
+                if (loginAntigravity) creds = await loginAntigravity(onAuth, onProgress);
+                break;
+            case 'google-gemini-cli':
+                if (loginGeminiCli) creds = await loginGeminiCli({ onAuth, onProgress });
+                break;
+            case 'github-copilot':
+                if (loginGitHubCopilot) creds = await loginGitHubCopilot({ onAuth, onProgress });
+                break;
+            case 'openai-codex':
+                if (loginOpenAICodex) creds = await loginOpenAICodex({ onAuth, onProgress });
+                break;
+            default:
+                logger.warn(`PiAIAdapter: No login handler for ${providerKey}`);
+        }
+
+        if (creds) {
+            savePiAiAuth(providerKey, creds);
+            logger.info(`PiAIAdapter: Saved credentials for ${providerKey}`);
+        }
+    } catch (e) {
+        logger.error(`PiAIAdapter: Login failed — ${(e as Error).message}`);
+    }
+}
+
+const PI_AI_DIR = path.join(os.homedir(), '.pi-ai');
+const PI_AI_AUTH = path.join(PI_AI_DIR, 'auth.json');
+
+function savePiAiAuth(providerKey: string, credentialsJson: string) {
+    try {
+        let existing: Record<string, any> = {};
+        if (fs.existsSync(PI_AI_AUTH)) {
+            existing = JSON.parse(fs.readFileSync(PI_AI_AUTH, 'utf8'));
+        }
+
+        // Some login functions return a JSON string, others might return an object
+        const creds = typeof credentialsJson === 'string' ? JSON.parse(credentialsJson) : credentialsJson;
+
+        existing[providerKey] = creds;
+
+        if (!fs.existsSync(PI_AI_DIR)) {
+            fs.mkdirSync(PI_AI_DIR, { recursive: true });
+        }
+        fs.writeFileSync(PI_AI_AUTH, JSON.stringify(existing, null, 2), 'utf8');
+    } catch (e) {
+        logger.error(`PiAIAdapter: Failed to save auth — ${(e as Error).message}`);
+    }
+}
+
+/** Check if a provider has active credentials in the pi-ai cache. */
+export function isPiAiLinked(providerKey: string): boolean {
+    try {
+        if (!fs.existsSync(PI_AI_AUTH)) return false;
+        const auth = JSON.parse(fs.readFileSync(PI_AI_AUTH, 'utf8'));
+        return !!auth[providerKey];
+    } catch (e) {
+        return false;
     }
 }
