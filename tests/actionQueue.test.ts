@@ -235,6 +235,18 @@ describe('ActionQueue', () => {
         expect(retried!.retry!.nextRetryAt).toBeDefined();
     });
 
+
+    it('should default to no auto-retry when retry policy is not provided', () => {
+        queue.push(makeAction({ id: 'default-no-retry' }));
+
+        queue.updateStatus('default-no-retry', 'in-progress');
+        queue.updateStatus('default-no-retry', 'failed');
+
+        const action = queue.getAction('default-no-retry');
+        expect(action!.retry!.maxAttempts).toBe(0);
+        expect(action!.status).toBe('failed');
+        expect(action!.expiresAt).toBeDefined();
+    });
     it('should not retry when max attempts exhausted', () => {
         const action = makeAction({ id: 'noretry' });
         // maxAttempts: 0 means no retries at all — fail immediately

@@ -160,7 +160,15 @@ export class ActionQueue {
     public push(action: Action) {
         // Ensure retry defaults for new actions
         if (!action.retry) {
-            action.retry = { maxAttempts: 1, attempts: 0, baseDelay: 60 };
+            // Default to NO automatic retries.
+            //
+            // Why: user-facing tasks can be intentionally marked failed by guardrails
+            // (e.g. completion audit blocks, exhausted no-tool retries). When retries are
+            // enabled by default, those terminal failures silently re-queue the exact same
+            // task and the agent appears to "redo" completed work. Callers that genuinely
+            // want auto-retry should set an explicit policy via `action.retry` or
+            // `setRetryPolicy(...)`.
+            action.retry = { maxAttempts: 0, attempts: 0, baseDelay: 60 };
         }
         this.cache.push(action);
         this.cache.sort((a, b) => b.priority - a.priority);
