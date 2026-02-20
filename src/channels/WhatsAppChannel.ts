@@ -31,6 +31,8 @@ export class WhatsAppChannel implements IChannel {
     // Cache of recent status message keys so we can reply to them properly
     // Key: participant JID, Value: the latest status messageKey from Baileys
     private statusMessageKeys: Map<string, any> = new Map();
+    // Cache of recent status message keys by message ID for reactions
+    private statusMessageKeysById: Map<string, any> = new Map();
     // Prefix used to identify agent-sent messages (for self-chat distinction)
     private readonly AGENT_MESSAGE_PREFIX = '🤖 ';
     // Cache config values to avoid repeated lookups
@@ -275,12 +277,10 @@ export class WhatsAppChannel implements IChannel {
 
                         // Special handling for Status Updates
                         if (isStatus && text) {
-                            const participant = msg.key.participant || msg.participant;
-                            logger.info(`WhatsApp Status: ${participant} posted: ${text} | statusReplyEnabled=${this.statusReplyEnabled}`);
-                            this.recordContactJid(participant);
-
                             // Cache the full message key so we can send a proper status reply later
+                            const participant = msg.key.participant || msg.participant;
                             this.statusMessageKeys.set(participant, msg.key);
+                            this.statusMessageKeysById.set(messageId, msg.key);
 
                             // Record it in memory so the agent knows.
                             this.agent.memory.saveMemory({
@@ -446,14 +446,18 @@ CRITICAL: You MUST use 'send_whatsapp' to reply. Do NOT send cross-channel Teleg
                 targetJid = `${targetJid}@s.whatsapp.net`;
             }
 
+            // If this is a reaction to a status message, we need to handle it specially
+            const statusKey = this.statusMessageKeysById.get(messageId);
+            const key = statusKey || {
+                remoteJid: targetJid,
+                id: messageId,
+                fromMe: false // Usually reacting to others
+            };
+
             await this.sock.sendMessage(targetJid, {
                 react: {
                     text: emoji,
-                    key: {
-                        remoteJid: targetJid,
-                        id: messageId,
-                        fromMe: false // Usually reacting to others
-                    }
+                    key
                 }
             });
             logger.info(`WhatsAppChannel: Reacted with ${emoji} to ${messageId}`);
@@ -563,13 +567,11 @@ CRITICAL: You MUST use 'send_whatsapp' to reply. Do NOT send cross-channel Teleg
         const ownerJid = this.sock.user?.id;
 
         try {
-            // The correct Baileys method to reply to a status:
-            // - Send to 'status@broadcast'
+            // The correct Baileys method to reply to a status so it appears as a DM reply:
+            // - Send to the participantJid (the DM thread)
             // - Provide `quoted` pointing to the original status message
-            // - Provide `statusJidPair` with the participant's JID so WhatsApp
-            //   knows whose status this reply is for
             await this.sock.sendMessage(
-                'status@broadcast',
+                participantJid,
                 {
                     text: message,
                     // `quoted` creates the contextual reply bubble referencing the original status
@@ -577,9 +579,6 @@ CRITICAL: You MUST use 'send_whatsapp' to reply. Do NOT send cross-channel Teleg
                         key: originalKey,
                         message: {}
                     }
-                },
-                {
-                    statusJidList: [participantJid, ownerJid].filter(Boolean)
                 }
             );
             logger.info(`WhatsAppChannel: Sent status reply to ${participantJid}'s status`);
