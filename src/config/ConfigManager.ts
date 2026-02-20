@@ -209,6 +209,10 @@ export interface AgentConfig {
         whatsapp?: string[];   // WhatsApp JIDs (e.g., ["5511999998888@s.whatsapp.net"])
         slack?: string[];      // Slack user IDs (e.g., ["U012ABCDEF"])
     };
+    telegramCommands?: Array<{
+        command: string;
+        description: string;
+    }>;
 }
 
 export class ConfigManager {
@@ -458,10 +462,10 @@ export class ConfigManager {
             delete (config as any).slackAppToken;
             repaired = true;
         }
-            if ((config as any).slackSigningSecret === '') {
-                delete (config as any).slackSigningSecret;
-                repaired = true;
-            }
+        if ((config as any).slackSigningSecret === '') {
+            delete (config as any).slackSigningSecret;
+            repaired = true;
+        }
 
         if (repaired) {
             if (!silent) logger.info('ConfigManager: Worker-corruption repair complete. Saving corrected config.');
@@ -790,6 +794,12 @@ export class ConfigManager {
             processedMessagesCacheSize: 1000,
             // pi-ai (on by default — old per-provider code is automatic fallback)
             usePiAI: true,
+            telegramCommands: [
+                { command: 'status', description: 'Check agent health and queue status' },
+                { command: 'reset', description: 'Reset conversation context (clears short-term memory)' },
+                { command: 'help', description: 'Show all available commands' },
+                { command: 'search', description: 'Trigger a web search task' }
+            ]
         };
     }
 

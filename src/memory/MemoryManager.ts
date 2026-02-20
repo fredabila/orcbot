@@ -26,7 +26,7 @@ export class MemoryManager {
     private lastMemoryFlushAt: number = 0;
     private memoryFlushEnabled: boolean = true;
     public vectorMemory: VectorMemory | null = null;
-    
+
     // Configurable limits (can be updated via setLimits)
     private contextLimit: number = 20;
     private episodicLimit: number = 5;
@@ -174,7 +174,7 @@ export class MemoryManager {
         if (!this.memoryFlushEnabled) return false;
 
         const shortMemories = this.searchMemory('short');
-        
+
         // Check if we're approaching consolidation threshold
         if (shortMemories.length < this.memoryFlushSoftThreshold) {
             return false;
@@ -220,7 +220,7 @@ Otherwise, write the important information to memory and confirm.
             );
 
             logger.info(`Memory flush response: ${response.substring(0, 100)}...`);
-            
+
             // Store the flush event in daily log
             this.dailyMemory.appendToDaily(
                 `Memory flush triggered. Response: ${response.substring(0, 200)}...`,
@@ -305,28 +305,51 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
         return memories.find((m: MemoryEntry) => m.id === id) || null;
     }
 
-    public searchMemory(type: 'short' | 'long' | 'episodic'): MemoryEntry[] {
+    public searchMemory(type: 'short' | 'long' | 'episodic', sessionScopeId?: string): MemoryEntry[] {
         const memories = this.storage.get('memories') || [];
-        return memories.filter((m: MemoryEntry) => m.type === type);
+        return memories.filter((m: MemoryEntry) => {
+            if (m.type !== type) return false;
+            if (sessionScopeId && m.metadata?.sessionScopeId !== sessionScopeId) return false;
+            return true;
+        });
+    }
+
+    /**
+     * Delete a specific memory by its ID.
+     */
+    public deleteMemory(id: string): boolean {
+        const allMemories = this.storage.get('memories') || [];
+        const before = allMemories.length;
+        const filtered = allMemories.filter((m: MemoryEntry) => m.id !== id);
+
+        if (filtered.length < before) {
+            this.storage.save('memories', filtered);
+            // Also remove from vector store if enabled
+            if (this.vectorMemory?.isEnabled()) {
+                this.vectorMemory.remove([id]);
+            }
+            return true;
+        }
+        return false;
     }
 
     public getRecentContext(limit?: number): MemoryEntry[] {
         const effectiveLimit = limit ?? this.contextLimit;
         const episodic = this.searchMemory('episodic').slice(-this.episodicLimit);
         const short = this.searchMemory('short');
-        
+
         // Sort all by timestamp (most recent first)
         const sorted = [...short].sort((a, b) => {
             const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
             const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
             return tb - ta; // Descending (newest first)
         });
-        
+
         // Take the most recent N
         const recentShort = sorted.slice(0, effectiveLimit);
         const qualityShort = this.filterContextMemories(recentShort);
         const qualityEpisodic = this.filterContextMemories(episodic);
-        
+
         // Return episodic summaries + recent short memories, with recent first
         return [...qualityShort, ...qualityEpisodic];
     }
@@ -389,14 +412,14 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
                 // If not JSON, wrap it in a simple structure
                 profileData = { notes: content };
             }
-            
+
             // Add/update metadata
             profileData.jid = jid;
             profileData.lastUpdated = new Date().toISOString();
             if (!profileData.createdAt) {
                 profileData.createdAt = new Date().toISOString();
             }
-            
+
             // Save as formatted JSON
             fs.writeFileSync(profilePath, JSON.stringify(profileData, null, 2));
             logger.info(`Contact profile saved for ${jid}`);
@@ -552,7 +575,7 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
             // Cross-reference with actual memory entries to get full metadata
             const allEpisodic = this.searchMemory('episodic');
             const episodicById = new Map(allEpisodic.map(m => [m.id, m]));
-            
+
             const relevant = semanticHits
                 .map(h => episodicById.get(h.id))
                 .filter(Boolean) as MemoryEntry[];

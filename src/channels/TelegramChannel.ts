@@ -33,6 +33,62 @@ export class TelegramChannel implements IChannel {
             ctx.reply(`Status:\n- Short-term Memories: ${memoryCount}\n- Pending Actions: ${queueCount}`);
         });
 
+        this.bot.command('reset', async (ctx) => {
+            const userId = ctx.from.id.toString();
+            const chatId = ctx.chat.id.toString();
+            const sessionScopeId = this.agent.resolveSessionScopeId('telegram', { sourceId: chatId, userId, chatId });
+
+            // Clear short-term memory for this session
+            const memories = this.agent.memory.searchMemory('short', sessionScopeId);
+            memories.forEach(m => this.agent.memory.deleteMemory(m.id));
+
+            logger.info(`Telegram: User ${userId} reset session ${sessionScopeId}`);
+            await ctx.reply(`Context reset. Short-term memory for this session has been cleared.`);
+        });
+
+        this.bot.command('help', async (ctx) => {
+            const commands = this.agent.config.get('telegramCommands') || [];
+            if (commands.length === 0) {
+                return ctx.reply("No specific commands configured.");
+            }
+            const helpText = "Available commands:\n" + commands.map((c: any) => `/${c.command} - ${c.description}`).join('\n');
+            await ctx.reply(helpText);
+        });
+
+        // Register other dynamic commands as high-priority tasks
+        const configuredCommands = this.agent.config.get('telegramCommands') || [];
+        for (const cmdCfg of configuredCommands) {
+            const cmd = cmdCfg.command;
+            // Skip built-ins already handled explicitly
+            if (['start', 'status', 'reset', 'help'].includes(cmd)) continue;
+
+            this.bot.command(cmd, async (ctx) => {
+                const userId = ctx.from.id.toString();
+                const chatId = ctx.chat.id.toString();
+                const userName = ctx.from.first_name;
+                const text = ctx.message.text || '';
+                const sessionScopeId = this.agent.resolveSessionScopeId('telegram', { sourceId: chatId, userId, chatId });
+
+                logger.info(`Telegram: Command /${cmd} from ${userName} (${userId})`);
+
+                await this.agent.pushTask(
+                    `Telegram command /${cmd}: "${text}"`,
+                    20, // Higher priority for explicit commands
+                    {
+                        source: 'telegram',
+                        sourceId: chatId,
+                        sessionScopeId,
+                        senderName: userName,
+                        chatId,
+                        userId,
+                        messageId: ctx.message.message_id,
+                        isCommand: true,
+                        command: cmd
+                    }
+                );
+            });
+        }
+
         this.bot.on(['text', 'photo', 'document', 'audio', 'voice', 'video'], async (ctx) => {
             const message = ctx.message as any;
             const userId = ctx.from.id.toString();
@@ -261,6 +317,7 @@ export class TelegramChannel implements IChannel {
     public async start(): Promise<void> {
         logger.info('TelegramChannel: Starting bot...');
         try {
+            await this.registerCommands();
             await this.bot.launch(() => {
                 logger.info('TelegramChannel: Bot started successfully');
             });
@@ -603,6 +660,21 @@ export class TelegramChannel implements IChannel {
             const replyMsg = replyErr?.response?.description || replyErr?.message || String(replyErr);
             logger.error(`TelegramChannel: react() fallback reply also failed: ${replyMsg}`);
             throw new Error(replyMsg);
+        }
+    }
+
+    /**
+     * Register commands with Telegram for the / command menu.
+     */
+    private async registerCommands() {
+        try {
+            const commands = this.agent.config.get('telegramCommands') || [];
+            if (commands.length > 0) {
+                await this.bot.telegram.setMyCommands(commands);
+                logger.info(`TelegramChannel: Registered ${commands.length} commands with Telegram API`);
+            }
+        } catch (error) {
+            logger.error(`TelegramChannel: Failed to register commands: ${error}`);
         }
     }
 }
