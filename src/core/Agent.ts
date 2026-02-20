@@ -7857,7 +7857,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
         const id = scheduleDef.id;
         if (this.heartbeatJobs.has(id)) return;
 
-        const cron = new Cron(scheduleDef.schedule, () => {
+        let cron: Cron;
+        try {
+            cron = new Cron(scheduleDef.schedule, () => {
             // Guard: skip if agent is busy, another heartbeat just fired, or pending heartbeat tasks exist
             if (this.isBusy) {
                 logger.debug(`Heartbeat Schedule ${id}: Skipped - agent is busy`);
@@ -7890,7 +7892,10 @@ Respond with a single actionable task description (one sentence). Be specific ab
             logger.info(`Heartbeat Schedule Triggered: ${scheduleDef.task}`);
             this.pushTask(`Heartbeat Task: ${scheduleDef.task}`, scheduleDef.priority || 6, { isHeartbeat: true, heartbeatId: id }, 'autonomy');
             this.lastHeartbeatPushAt = Date.now();
-        });
+            });
+        } catch (e) {
+            throw new Error(`Invalid heartbeat schedule "${scheduleDef.schedule}": ${e}`);
+        }
 
         this.heartbeatJobs.set(id, cron);
         this.heartbeatJobMeta.set(id, scheduleDef);
@@ -7910,6 +7915,23 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
     private normalizeHeartbeatSchedule(input: string): string {
         const raw = input.trim();
+        const normalized = raw.toLowerCase();
+
+        if (normalized === 'hourly' || normalized === 'every hour') return '0 * * * *';
+        if (normalized === 'daily' || normalized === 'every day') return '0 9 * * *';
+        if (normalized === 'weekly' || normalized === 'every week') return '0 9 * * 1';
+        if (normalized === 'monthly' || normalized === 'every month') return '0 9 1 * *';
+        if (normalized === 'every morning') return '0 9 * * *';
+        if (normalized === 'every afternoon') return '0 14 * * *';
+        if (normalized === 'every evening') return '0 18 * * *';
+        if (normalized === 'every night') return '0 21 * * *';
+
+        const everySecondMatch = raw.match(/every\s+(\d+)\s+seconds?/i);
+        if (everySecondMatch) {
+            const amount = parseInt(everySecondMatch[1]);
+            if (amount > 0) return `*/${amount} * * * * *`;
+        }
+
         const everyMatch = raw.match(/every\s+(\d+)\s+(minute|hour|day)s?/i);
         if (everyMatch) {
             const amount = parseInt(everyMatch[1]);
