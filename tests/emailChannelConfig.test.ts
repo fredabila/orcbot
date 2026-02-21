@@ -47,6 +47,13 @@ describe('EmailChannel configuration checks', () => {
         expect(message).toContain('imap.badhost.local:993');
     });
 
+
+    it('rethrows poll failures during explicit IMAP tests', async () => {
+        const channel = new EmailChannel({ config: { get: () => undefined } });
+        (channel as any).fetchUnreadEmails = async () => { throw new Error('imap boom'); };
+        await expect((channel as any).pollOnce(true)).rejects.toThrow('imap boom');
+    });
+
     it('uses minimum timeout floor when timeout is too low', () => {
         const channel = new EmailChannel({ config: { get: (k: string) => (k === 'emailSocketTimeoutMs' ? 100 : undefined) } });
         expect((channel as any).getSocketTimeoutMs()).toBe(3000);
