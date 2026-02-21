@@ -97,9 +97,11 @@ export interface AgentConfig {
     emailFromName?: string;
     emailDefaultSubject?: string;
     emailPollIntervalSeconds?: number;
+    emailSocketTimeoutMs?: number;
     smtpHost?: string;
     smtpPort?: number;
     smtpSecure?: boolean;
+    smtpStartTls?: boolean;
     smtpUsername?: string;
     smtpPassword?: string;
     imapHost?: string;
@@ -363,6 +365,7 @@ export class ConfigManager {
             smtpHost: process.env.SMTP_HOST,
             smtpPort: process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : undefined,
             smtpSecure: process.env.SMTP_SECURE ? String(process.env.SMTP_SECURE).toLowerCase() === 'true' : undefined,
+            smtpStartTls: process.env.SMTP_STARTTLS ? String(process.env.SMTP_STARTTLS).toLowerCase() === 'true' : undefined,
             smtpUsername: process.env.SMTP_USERNAME,
             smtpPassword: process.env.SMTP_PASSWORD,
             imapHost: process.env.IMAP_HOST,
@@ -370,6 +373,7 @@ export class ConfigManager {
             imapSecure: process.env.IMAP_SECURE ? String(process.env.IMAP_SECURE).toLowerCase() === 'true' : undefined,
             imapUsername: process.env.IMAP_USERNAME,
             imapPassword: process.env.IMAP_PASSWORD,
+            emailSocketTimeoutMs: process.env.EMAIL_SOCKET_TIMEOUT_MS ? Number(process.env.EMAIL_SOCKET_TIMEOUT_MS) : undefined,
             bedrockRegion: process.env.BEDROCK_REGION || process.env.AWS_REGION,
             bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
             bedrockSecretAccessKey: process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY,
@@ -729,9 +733,11 @@ export class ConfigManager {
             emailFromName: undefined,
             emailDefaultSubject: 'OrcBot response',
             emailPollIntervalSeconds: 30,
+            emailSocketTimeoutMs: 15000,
             smtpHost: undefined,
             smtpPort: 587,
             smtpSecure: false,
+            smtpStartTls: true,
             smtpUsername: undefined,
             smtpPassword: undefined,
             imapHost: undefined,
@@ -1059,6 +1065,7 @@ export class ConfigManager {
             smtpHost: 'SMTP_HOST',
             smtpPort: 'SMTP_PORT',
             smtpSecure: 'SMTP_SECURE',
+            smtpStartTls: 'SMTP_STARTTLS',
             smtpUsername: 'SMTP_USERNAME',
             smtpPassword: 'SMTP_PASSWORD',
             imapHost: 'IMAP_HOST',
@@ -1066,6 +1073,7 @@ export class ConfigManager {
             imapSecure: 'IMAP_SECURE',
             imapUsername: 'IMAP_USERNAME',
             imapPassword: 'IMAP_PASSWORD',
+            emailSocketTimeoutMs: 'EMAIL_SOCKET_TIMEOUT_MS',
             bedrockRegion: 'BEDROCK_REGION',
             bedrockAccessKeyId: 'BEDROCK_ACCESS_KEY_ID',
             bedrockSecretAccessKey: 'BEDROCK_SECRET_ACCESS_KEY',

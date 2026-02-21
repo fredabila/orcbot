@@ -267,6 +267,13 @@ export async function runSetup() {
             when: (ans) => ans.emailEnabled
         },
         {
+            type: 'confirm',
+            name: 'smtpStartTls',
+            message: 'Use STARTTLS upgrade for SMTP (recommended for port 587)?',
+            default: currentConfig.smtpStartTls ?? true,
+            when: (ans) => ans.emailEnabled && !ans.smtpSecure
+        },
+        {
             type: 'input',
             name: 'smtpUsername',
             message: `SMTP Username ${maskHint('SMTP_USERNAME')}:`,
@@ -310,6 +317,13 @@ export async function runSetup() {
             name: 'imapPassword',
             message: `IMAP Password ${maskHint('IMAP_PASSWORD')}:`,
             mask: '*',
+            when: (ans) => ans.emailEnabled
+        },
+        {
+            type: 'number',
+            name: 'emailSocketTimeoutMs',
+            message: 'Email socket timeout (ms):',
+            default: currentConfig.emailSocketTimeoutMs || 15000,
             when: (ans) => ans.emailEnabled
         },
         {
@@ -387,10 +401,12 @@ export async function runSetup() {
         smtpHost: answers.smtpHost || undefined,
         smtpPort: answers.smtpPort || undefined,
         smtpSecure: answers.smtpSecure ?? undefined,
+        smtpStartTls: answers.smtpStartTls ?? undefined,
         imapHost: answers.imapHost || undefined,
         imapPort: answers.imapPort || undefined,
         imapSecure: answers.imapSecure ?? undefined,
         emailAutoReplyEnabled: answers.emailAutoReplyEnabled || false,
+        emailSocketTimeoutMs: answers.emailSocketTimeoutMs ? Number(answers.emailSocketTimeoutMs) : undefined,
         // Autonomy
         autonomyEnabled: answers.autonomyEnabled !== false,
         autonomyInterval: answers.autonomyInterval ?? 15,
@@ -431,6 +447,7 @@ export async function runSetup() {
         emailAddress: 'EMAIL_ADDRESS',
         smtpUsername: 'SMTP_USERNAME',
         smtpPassword: 'SMTP_PASSWORD',
+        smtpStartTls: 'SMTP_STARTTLS',
         imapUsername: 'IMAP_USERNAME',
         imapPassword: 'IMAP_PASSWORD'
     };

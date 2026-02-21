@@ -3941,6 +3941,9 @@ async function showEmailConfig() {
     const emailAddress = agent.config.get('emailAddress') || agent.config.get('smtpUsername') || 'Not Set';
     const smtpHost = agent.config.get('smtpHost') || 'Not Set';
     const imapHost = agent.config.get('imapHost') || 'Not Set';
+    const smtpSecure = agent.config.get('smtpSecure') === true;
+    const smtpStartTls = agent.config.get('smtpStartTls') !== false;
+    const timeoutMs = Number(agent.config.get('emailSocketTimeoutMs') || 15000);
 
     console.clear();
     banner();
@@ -3951,6 +3954,8 @@ async function showEmailConfig() {
         `${dim('Address')}      ${emailAddress === 'Not Set' ? gray('Not Set') : green(emailAddress)}`,
         `${dim('SMTP')}         ${smtpHost}`,
         `${dim('IMAP')}         ${imapHost}`,
+        `${dim('SMTP Security')} ${smtpSecure ? green('Direct TLS (SMTPS)') : (smtpStartTls ? green('STARTTLS') : yellow('Plain (not recommended)') )}`,
+        `${dim('Socket Timeout')} ${timeoutMs}ms`,
         `${dim('Auto-Reply')}   ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
     ];
     box(lines, { title: '📧 EMAIL', width: 58, color: c.yellow });
@@ -3990,11 +3995,13 @@ async function showEmailConfig() {
             { type: 'input', name: 'emailFromName', message: 'From Name:', default: agent.config.get('emailFromName') || agent.config.get('agentName') || 'OrcBot' },
             { type: 'input', name: 'emailDefaultSubject', message: 'Default Subject:', default: agent.config.get('emailDefaultSubject') || 'OrcBot response' },
             { type: 'number', name: 'emailPollIntervalSeconds', message: 'Poll Interval Seconds:', default: agent.config.get('emailPollIntervalSeconds') || 30 },
+            { type: 'number', name: 'emailSocketTimeoutMs', message: 'Socket Timeout (ms):', default: agent.config.get('emailSocketTimeoutMs') || 15000 },
         ]);
         agent.config.set('emailAddress', ans.emailAddress);
         agent.config.set('emailFromName', ans.emailFromName);
         agent.config.set('emailDefaultSubject', ans.emailDefaultSubject);
         agent.config.set('emailPollIntervalSeconds', Number(ans.emailPollIntervalSeconds) || 30);
+        agent.config.set('emailSocketTimeoutMs', Math.max(3000, Number(ans.emailSocketTimeoutMs) || 15000));
         return showEmailConfig();
     }
 
@@ -4003,12 +4010,14 @@ async function showEmailConfig() {
             { type: 'input', name: 'smtpHost', message: 'SMTP Host:', default: agent.config.get('smtpHost') || '' },
             { type: 'number', name: 'smtpPort', message: 'SMTP Port:', default: agent.config.get('smtpPort') || 587 },
             { type: 'confirm', name: 'smtpSecure', message: 'Use TLS (SMTPS)?', default: agent.config.get('smtpSecure') === true },
+            { type: 'confirm', name: 'smtpStartTls', message: 'Use STARTTLS upgrade (recommended for port 587)?', default: agent.config.get('smtpStartTls') !== false, when: (a) => !a.smtpSecure },
             { type: 'input', name: 'smtpUsername', message: 'SMTP Username:', default: agent.config.get('smtpUsername') || '' },
             { type: 'password', name: 'smtpPassword', message: 'SMTP Password (leave blank to keep current):' },
         ]);
         agent.config.set('smtpHost', ans.smtpHost);
         agent.config.set('smtpPort', Number(ans.smtpPort) || 587);
         agent.config.set('smtpSecure', !!ans.smtpSecure);
+        if (!ans.smtpSecure) agent.config.set('smtpStartTls', ans.smtpStartTls !== false);
         agent.config.set('smtpUsername', ans.smtpUsername);
         if (ans.smtpPassword) agent.config.set('smtpPassword', ans.smtpPassword);
         return showEmailConfig();
