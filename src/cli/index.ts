@@ -3964,6 +3964,8 @@ async function showEmailConfig() {
     box(lines, { title: '📧 EMAIL', width: 58, color: c.yellow });
     console.log(dim('SMTP = sending outbound mail.'));
     console.log(dim('IMAP = reading inbound inbox (auto-reply/tasks). Not required for SMTP-only sending/tests.'));
+    console.log(yellow('Note: On first connect, OrcBot processes existing UNREAD (UNSEEN) inbox emails as inbound messages.'));
+    console.log(dim('Tip: mark/archive old mail before enabling email if you only want brand-new messages.'));
     console.log('');
 
     const { action } = await inquirer.prompt([

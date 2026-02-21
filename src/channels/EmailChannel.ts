@@ -366,14 +366,34 @@ export class EmailChannel implements IChannel {
 
     private openSocket(host: string, port: number, secure: boolean): Promise<tls.TLSSocket | net.Socket> {
         return new Promise((resolve, reject) => {
-            const onError = (err: any) => reject(err);
-            if (secure) {
-                const socket = tls.connect({ host, port, servername: host }, () => resolve(socket));
-                socket.once('error', onError);
-            } else {
-                const socket = net.connect({ host, port }, () => resolve(socket));
-                socket.once('error', onError);
-            }
+            const timeoutMs = this.getSocketTimeoutMs();
+            const socket = secure
+                ? tls.connect({ host, port, servername: host })
+                : net.connect({ host, port });
+
+            let settled = false;
+            const cleanup = () => {
+                socket.off('connect', onConnect);
+                socket.off('secureConnect', onConnect);
+                socket.off('error', onError);
+                socket.off('timeout', onTimeout);
+                socket.setTimeout(0);
+            };
+            const finish = (fn: () => void) => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                fn();
+            };
+            const onConnect = () => finish(() => resolve(socket));
+            const onError = (err: any) => finish(() => reject(err));
+            const onTimeout = () => finish(() => reject(new Error(`Socket connection timeout after ${timeoutMs}ms`)));
+
+            socket.setTimeout(timeoutMs);
+            socket.once('connect', onConnect);
+            socket.once('secureConnect', onConnect);
+            socket.once('error', onError);
+            socket.once('timeout', onTimeout);
         });
     }
 
