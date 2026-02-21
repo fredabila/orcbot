@@ -53,6 +53,8 @@ export class AgentOrchestrator extends EventEmitter {
     private tasksFilePath: string;
     private primaryAgentId: string;
     private workerScriptPath: string;
+    private readyWorkers: Set<string> = new Set();
+    private pendingTaskDispatch: Map<string, string[]> = new Map();
 
     constructor(dataDir?: string, primaryAgentId?: string) {
         super();
@@ -212,6 +214,10 @@ export class AgentOrchestrator extends EventEmitter {
 
             agent.pid = child.pid;
             this.workerProcesses.set(agent.id, child);
+            this.readyWorkers.delete(agent.id);
+            if (!this.pendingTaskDispatch.has(agent.id)) {
+                this.pendingTaskDispatch.set(agent.id, []);
+            }
 
             // Setup IPC message handling
             child.on('message', (message: IPCResponse) => {
@@ -294,7 +300,11 @@ export class AgentOrchestrator extends EventEmitter {
         switch (message.type) {
             case 'ready':
                 logger.info(`Orchestrator: Worker ${agentId} is ready`);
-                agent.status = 'idle';
+                this.readyWorkers.add(agentId);
+                if (!agent.currentTask) {
+                    agent.status = 'idle';
+                }
+                this.flushPendingDispatch(agentId);
                 this.emit('worker:ready', { agentId, ...message.payload });
                 break;
 
@@ -379,12 +389,32 @@ export class AgentOrchestrator extends EventEmitter {
      */
     private handleWorkerExit(agentId: string, exitCode: number): void {
         this.workerProcesses.delete(agentId);
-        
+        this.readyWorkers.delete(agentId);
+        this.pendingTaskDispatch.delete(agentId);
+
         const agent = this.agents.get(agentId);
         if (agent) {
+            const strandedTaskId = agent.currentTask;
             agent.pid = undefined;
             agent.status = exitCode === 0 ? 'idle' : 'paused';
             agent.currentTask = null;
+
+            if (strandedTaskId) {
+                const task = this.tasks.get(strandedTaskId);
+                if (task && task.status !== 'completed' && task.status !== 'failed') {
+                    task.status = 'pending';
+                    task.assignedTo = null;
+                    task.error = `Worker ${agentId} exited unexpectedly with code ${exitCode}`;
+                    logger.warn(`Orchestrator: Re-queued task ${strandedTaskId} after worker ${agentId} exit`);
+                    this.emit('task:requeued', {
+                        taskId: strandedTaskId,
+                        previousAgentId: agentId,
+                        reason: 'worker-exit',
+                        exitCode
+                    });
+                }
+            }
+
             this.save();
         }
 
@@ -555,6 +585,57 @@ export class AgentOrchestrator extends EventEmitter {
         return task;
     }
 
+
+    private queueTaskDispatch(agentId: string, taskId: string): void {
+        const queue = this.pendingTaskDispatch.get(agentId) || [];
+        queue.push(taskId);
+        this.pendingTaskDispatch.set(agentId, queue);
+    }
+
+    private dispatchTaskToWorker(agentId: string, task: OrchestratorTask): boolean {
+        const sent = this.sendToWorker(agentId, {
+            type: 'task',
+            taskId: task.id,
+            payload: task.description
+        });
+
+        if (!sent) {
+            const agent = this.agents.get(agentId);
+            if (agent) {
+                logger.warn(`Orchestrator: Failed to send task ${task.id} to worker ${agentId}; reverting assignment`);
+                task.assignedTo = null;
+                task.status = 'pending';
+                agent.status = 'idle';
+                agent.currentTask = null;
+                this.save();
+            }
+            return false;
+        }
+
+        logger.info(`Orchestrator: Sent task "${task.description.slice(0, 50)}..." to worker "${this.agents.get(agentId)?.name || agentId}"`);
+        return true;
+    }
+
+    private flushPendingDispatch(agentId: string): void {
+        const queue = this.pendingTaskDispatch.get(agentId);
+        if (!queue || queue.length === 0) return;
+
+        const nextTaskId = queue.shift();
+        if (queue.length === 0) {
+            this.pendingTaskDispatch.delete(agentId);
+        } else {
+            this.pendingTaskDispatch.set(agentId, queue);
+        }
+
+        if (!nextTaskId) return;
+        const task = this.tasks.get(nextTaskId);
+        if (!task || task.assignedTo !== agentId || (task.status !== 'assigned' && task.status !== 'in-progress')) {
+            return;
+        }
+
+        this.dispatchTaskToWorker(agentId, task);
+    }
+
     /**
      * Assign a task to an agent and send it to the worker process
      */
@@ -577,34 +658,30 @@ export class AgentOrchestrator extends EventEmitter {
         this.save();
         this.emit('task:assigned', { task, agent });
 
-        // Send task to worker process if it's running
-        if (this.isWorkerRunning(agentId)) {
-            this.sendToWorker(agentId, {
-                type: 'task',
-                taskId: task.id,
-                payload: task.description
-            });
-            logger.info(`Orchestrator: Sent task "${task.description.slice(0, 50)}..." to worker "${agent.name}"`);
-        } else {
-            // Try to start the worker if not running
-            logger.info(`Orchestrator: Worker not running for agent ${agentId}, starting...`);
-            if (this.startWorkerProcess(agent)) {
-                // Wait a bit for worker to initialize, then send task
-                setTimeout(() => {
-                    this.sendToWorker(agentId, {
-                        type: 'task',
-                        taskId: task.id,
-                        payload: task.description
-                    });
-                }, 2000);
-            } else {
-                logger.error(`Orchestrator: Failed to start worker for task assignment`);
-                task.status = 'pending';
-                agent.status = 'idle';
-                agent.currentTask = null;
-                this.save();
+        // Send task to worker process if it's running and ready
+        if (this.isWorkerRunning(agentId) && this.readyWorkers.has(agentId)) {
+            if (!this.dispatchTaskToWorker(agentId, task)) {
                 return false;
             }
+        } else {
+            this.queueTaskDispatch(agentId, task.id);
+
+            // Try to start the worker if not running
+            if (!this.isWorkerRunning(agentId)) {
+                logger.info(`Orchestrator: Worker not running for agent ${agentId}, starting...`);
+                if (!this.startWorkerProcess(agent)) {
+                    logger.error(`Orchestrator: Failed to start worker for task assignment`);
+                    task.status = 'pending';
+                    task.assignedTo = null;
+                    agent.status = 'idle';
+                    agent.currentTask = null;
+                    this.pendingTaskDispatch.delete(agentId);
+                    this.save();
+                    return false;
+                }
+            }
+
+            logger.info(`Orchestrator: Queued task ${task.id} for worker ${agentId} until it is ready`);
         }
 
         logger.info(`Orchestrator: Assigned task "${task.description.slice(0, 50)}..." to agent "${agent.name}"`);
