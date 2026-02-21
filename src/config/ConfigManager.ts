@@ -34,6 +34,7 @@ export interface AgentConfig {
     autonomyPostUserCooldownSeconds?: number; // Delay heartbeat after inbound user activity (default 90)
     autonomyBacklogLimit?: number;
     autonomyAllowedChannels?: string[]; // Channels autonomous tasks/heartbeats may message
+    workerPoolAllowAutonomyDuringUserWork?: boolean; // Allow autonomy lane to run even while user lane is busy
     maxActionRunMinutes?: number;
     maxStaleActionMinutes?: number;
     memoryPath?: string;
@@ -591,6 +592,7 @@ export class ConfigManager {
             autonomyPostUserCooldownSeconds: 90,
             autonomyBacklogLimit: 3,
             autonomyAllowedChannels: [],
+            workerPoolAllowAutonomyDuringUserWork: false,
             maxActionRunMinutes: 10,
             maxStaleActionMinutes: 30,
             memoryPath: path.join(this.dataHome, 'memory.json'),

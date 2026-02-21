@@ -8783,8 +8783,10 @@ Respond with a single actionable task description (one sentence). Be specific ab
         const runAutonomyLane = async () => {
             while (true) {
                 try {
-                    // Only run autonomy work when user lane is idle, to avoid competing for LLM quota
-                    if (!this.busyLanes.has('user')) {
+                    const allowDuringUserWork = this.config.get('workerPoolAllowAutonomyDuringUserWork') === true;
+                    // Default behavior keeps autonomy lane yielding while user lane is busy to preserve responsiveness and quota.
+                    // When enabled, autonomy can continue in parallel so a slow user-lane task doesn't stall background work.
+                    if (allowDuringUserWork || !this.busyLanes.has('user')) {
                         await this.runOnceLane('autonomy');
                     }
                 } catch (e) {

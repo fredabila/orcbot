@@ -235,6 +235,13 @@ export class ConfigPolicy {
             reason: 'Autonomy settings affect system behavior significantly',
             validation: (value: any) => typeof value === 'number' && value >= 1
         }],
+        ['workerPoolAllowAutonomyDuringUserWork', {
+            key: 'workerPoolAllowAutonomyDuringUserWork',
+            level: ConfigChangeLevel.APPROVAL,
+            description: 'Allow autonomy lane to keep running while user lane is busy',
+            reason: 'Parallel autonomy can increase throughput but may compete for LLM/tool resources',
+            validation: (value: any) => typeof value === 'boolean'
+        }],
         ['skillRoutingRules', {
             key: 'skillRoutingRules',
             level: ConfigChangeLevel.APPROVAL,
