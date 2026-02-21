@@ -867,39 +867,71 @@ ${this.repoContext}`,
             const first = actionMemories.slice(0, preserveFirst);
             const last = actionMemories.slice(-preserveLast);
             const middle = actionMemories.slice(preserveFirst, -preserveLast);
+            const expandOnDemand = this.config?.get('stepCompactionExpandOnDemand') !== false;
 
-            // Compress middle: group by tool, count successes/failures
-            const middleSummary: string[] = [];
-            let currentTool = '';
-            let toolCount = 0;
-            let toolSuccesses = 0;
-            let toolFailures = 0;
-            const flushGroup = () => {
-                if (currentTool && toolCount > 0) {
-                    middleSummary.push(`  ... ${currentTool} x${toolCount} (${toolSuccesses} ok, ${toolFailures} err)`);
+            // Expand middle context for continuity-heavy prompts ("continue", "where were we", "recap", etc.)
+            const normalizedTask = taskDescription.toLowerCase();
+            const continuityHintRegex = /(continue|pick up|picked up|resume|where (were|did) (we|i) (left off|leave off)|recap|summary|summarize|context|remember|what have (we|you) done|status|so far|previous|prior|last time|thread|history|refresh)/i;
+            const shouldExpandMiddle = expandOnDemand && continuityHintRegex.test(normalizedTask);
+
+            if (shouldExpandMiddle && middle.length > 0) {
+                const maxMiddleSteps = Math.max(1, Number(this.config?.get('stepCompactionExpansionMaxMiddleSteps') ?? 12));
+                const maxChars = Math.max(400, Number(this.config?.get('stepCompactionExpansionMaxChars') ?? 2400));
+                const expandedMiddle = middle.slice(-maxMiddleSteps);
+                const expandedLines: string[] = [];
+                let usedChars = 0;
+
+                for (const entry of expandedMiddle) {
+                    const stepId = entry.id?.replace(actionPrefix, '').split('-')[0] || '?';
+                    const content = (entry.content || '').toString();
+                    const remaining = maxChars - usedChars;
+                    if (remaining <= 0) break;
+
+                    const clipped = content.length > remaining ? `${content.slice(0, Math.max(0, remaining - 1))}…` : content;
+                    const line = `[Step ${stepId}] ${clipped}`;
+                    expandedLines.push(line);
+                    usedChars += line.length + 1;
                 }
-            };
-            for (const m of middle) {
-                const content = m.content || '';
-                // Detect tool name from observation
-                const toolMatch = content.match(/Tool (\S+) (?:succeeded|returned|FAILED)/);
-                const tool = toolMatch ? toolMatch[1] : (content.startsWith('[SYSTEM:') ? '[SYSTEM]' : 'other');
-                if (tool !== currentTool) {
-                    flushGroup();
-                    currentTool = tool;
-                    toolCount = 0;
-                    toolSuccesses = 0;
-                    toolFailures = 0;
+
+                const firstStr = first.map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${c.content}`).join('\n');
+                const lastStr = last.map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${c.content}`).join('\n');
+                const omittedCount = Math.max(0, middle.length - expandedLines.length);
+
+                stepHistoryString = `${firstStr}\n  --- [expanded continuity context: ${expandedLines.length}/${middle.length} middle steps shown] ---\n${expandedLines.join('\n')}${omittedCount > 0 ? `\n  ... [${omittedCount} older middle steps omitted to stay within context budget]` : ''}\n  --- [recent steps below] ---\n${lastStr}`;
+            } else {
+                // Compress middle: group by tool, count successes/failures
+                const middleSummary: string[] = [];
+                let currentTool = '';
+                let toolCount = 0;
+                let toolSuccesses = 0;
+                let toolFailures = 0;
+                const flushGroup = () => {
+                    if (currentTool && toolCount > 0) {
+                        middleSummary.push(`  ... ${currentTool} x${toolCount} (${toolSuccesses} ok, ${toolFailures} err)`);
+                    }
+                };
+                for (const m of middle) {
+                    const content = m.content || '';
+                    // Detect tool name from observation
+                    const toolMatch = content.match(/Tool (\S+) (?:succeeded|returned|FAILED)/);
+                    const tool = toolMatch ? toolMatch[1] : (content.startsWith('[SYSTEM:') ? '[SYSTEM]' : 'other');
+                    if (tool !== currentTool) {
+                        flushGroup();
+                        currentTool = tool;
+                        toolCount = 0;
+                        toolSuccesses = 0;
+                        toolFailures = 0;
+                    }
+                    toolCount++;
+                    if (content.includes('succeeded') || content.includes('returned')) toolSuccesses++;
+                    if (content.includes('FAILED') || content.includes('ERROR')) toolFailures++;
                 }
-                toolCount++;
-                if (content.includes('succeeded') || content.includes('returned')) toolSuccesses++;
-                if (content.includes('FAILED') || content.includes('ERROR')) toolFailures++;
+                flushGroup();
+
+                const firstStr = first.map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${c.content}`).join('\n');
+                const lastStr = last.map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${c.content}`).join('\n');
+                stepHistoryString = `${firstStr}\n  --- [${middle.length} middle steps compacted] ---\n${middleSummary.join('\n')}\n  --- [recent steps below] ---\n${lastStr}`;
             }
-            flushGroup();
-
-            const firstStr = first.map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${c.content}`).join('\n');
-            const lastStr = last.map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${c.content}`).join('\n');
-            stepHistoryString = `${firstStr}\n  --- [${middle.length} middle steps compacted] ---\n${middleSummary.join('\n')}\n  --- [recent steps below] ---\n${lastStr}`;
         }
         
         // Include limited other context for background awareness
@@ -968,7 +1000,51 @@ ${this.repoContext}`,
         let channelInstructions = '';
         let contactProfile: string | undefined;
         let profilingEnabled = false;
+        let platformContextString = '';
+        let userExchangeString = '';
+        let unresolvedThreadString = '';
+        let warmMemoryString = '';
+        const activePlatform = (metadata.source || '').toString().toLowerCase();
+        const activeContact = (metadata.sourceId || metadata.senderId || metadata.userId || '').toString();
+        const conversationContext = {
+            platform: activePlatform,
+            contactId: activeContact,
+            username: metadata.senderName,
+            sessionScopeId: metadata.sessionScopeId,
+            messageType: metadata.messageType,
+            statusContext: metadata.statusContext || metadata.replyContext,
+            threadId: metadata.chatId || metadata.channelId
+        };
+
         if (!isHeartbeat) {
+        try {
+            const recentExchanges = this.memory.getUserRecentExchanges(conversationContext as any, 10);
+            if (recentExchanges.length > 0) {
+                userExchangeString = recentExchanges.map((m) => {
+                    const md = m.metadata || {};
+                    const role = (md.role || 'event').toString();
+                    const mt = (md.messageType || md.type || 'text').toString();
+                    return `[${m.timestamp || ''}] (${role}/${mt}) ${(m.content || '').toString().slice(0, 260)}`;
+                }).join('\n');
+            }
+
+            const unresolvedThreads = this.memory.getUnresolvedThreads(conversationContext as any, 6);
+            if (unresolvedThreads.length > 0) {
+                unresolvedThreadString = unresolvedThreads
+                    .map((m) => `- ${m.timestamp || ''}: ${(m.content || '').toString().slice(0, 220)}`)
+                    .join('\n');
+            }
+
+            const warmMemories = await this.memory.warmConversationCache(conversationContext as any, taskDescription, 6);
+            if (warmMemories.length > 0) {
+                warmMemoryString = warmMemories
+                    .map(m => `[${m.timestamp || ''}] ${(m.metadata?.source || 'memory')} ${(m.score * 100).toFixed(0)}% ${(m.content || '').toString().slice(0, 220)}`)
+                    .join('\n');
+            }
+        } catch (e) {
+            logger.debug(`DecisionEngine: scoped memory enrichment failed: ${e}`);
+        }
+
         if (metadata.source === 'telegram') {
             channelInstructions = `
 ACTIVE CHANNEL CONTEXT:
@@ -978,7 +1054,16 @@ ACTIVE CHANNEL CONTEXT:
 `;
         } else if (metadata.source === 'whatsapp') {
             profilingEnabled = !!this.memory.getUserContext().raw?.includes('whatsappContextProfilingEnabled: true');
-            contactProfile = this.memory.getContactProfile(metadata.sourceId) || undefined;
+            contactProfile = this.memory.getContactProfile(`whatsapp:${metadata.sourceId}`)
+                || this.memory.getContactProfile(metadata.sourceId)
+                || undefined;
+
+            platformContextString = `
+WHATSAPP TRIGGER METADATA:
+- Trigger type: ${(metadata.messageType || metadata.type || 'message').toString()}
+- Is status interaction: ${Boolean(metadata.type === 'status' || metadata.statusReplyTo || metadata.statusContext)}
+- Quoted/status context: ${(metadata.statusContext || metadata.replyContext || metadata.statusReplyTo || 'none').toString().slice(0, 240)}
+- Message ID: ${(metadata.messageId || 'n/a').toString()}`;
 
             channelInstructions = `
 ACTIVE CHANNEL CONTEXT:
@@ -1125,6 +1210,14 @@ ${safeJournal ? `Agent Journal (Recent Reflections):\n${safeJournal}` : ''}
 ${safeLearning ? `Agent Learning Base (Knowledge):\n${safeLearning}` : ''}
 
 ${threadContextString ? `THREAD CONTEXT (Same Chat):\n${threadContextString}` : ''}
+
+${userExchangeString ? `LAST USER EXCHANGES (scoped to active contact):\n${userExchangeString}` : ''}
+
+${unresolvedThreadString ? `UNRESOLVED THREADS (carry-over items):\n${unresolvedThreadString}` : ''}
+
+${warmMemoryString ? `PREFETCHED MEMORY CANDIDATES (hybrid semantic+recency):\n${warmMemoryString}` : ''}
+
+${platformContextString ? `${platformContextString}` : ''}
 
 ${objectiveContextString ? `ACTIVE OBJECTIVES (Same Session):\n${objectiveContextString}` : ''}
 
