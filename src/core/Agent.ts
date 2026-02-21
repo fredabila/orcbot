@@ -12,6 +12,7 @@ import { TelegramChannel } from '../channels/TelegramChannel';
 import { WhatsAppChannel } from '../channels/WhatsAppChannel';
 import { DiscordChannel } from '../channels/DiscordChannel';
 import { SlackChannel } from '../channels/SlackChannel';
+import { EmailChannel } from '../channels/EmailChannel';
 import { configManagementSkill } from '../skills/configManagement';
 import { WebBrowser } from '../tools/WebBrowser';
 import { ComputerUse } from '../tools/ComputerUse';
@@ -64,7 +65,7 @@ export const ELEVATED_SKILLS = new Set([
 export interface KnownUser {
     id: string;           // channel-specific user ID
     name: string;         // display name
-    channel: 'telegram' | 'discord' | 'whatsapp' | 'slack';
+    channel: 'telegram' | 'discord' | 'whatsapp' | 'slack' | 'email';
     username?: string;    // @username if available
     lastSeen: string;     // ISO timestamp
     messageCount: number;
@@ -86,6 +87,7 @@ export class Agent {
     public whatsapp: WhatsAppChannel | undefined;
     public discord: DiscordChannel | undefined;
     public slack: SlackChannel | undefined;
+    public email: EmailChannel | undefined;
     public browser: WebBrowser;
     public computerUse: ComputerUse;
     public workerProfile: WorkerProfileManager;
@@ -135,7 +137,7 @@ export class Agent {
     private recentTaskFingerprints: Map<string, number> = new Map();
     private readonly recentTaskDedupWindowMs: number = 60_000;
 
-    private readonly TOOL_CHANNEL_MAP: Record<string, 'telegram' | 'whatsapp' | 'discord' | 'slack' | 'gateway-chat'> = {
+    private readonly TOOL_CHANNEL_MAP: Record<string, 'telegram' | 'whatsapp' | 'discord' | 'slack' | 'email' | 'gateway-chat'> = {
         send_telegram: 'telegram',
         telegram_send_buttons: 'telegram',
         telegram_send_poll: 'telegram',
@@ -147,8 +149,14 @@ export class Agent {
         send_discord_file: 'discord',
         send_slack: 'slack',
         send_slack_file: 'slack',
+        send_email: 'email',
         send_gateway_chat: 'gateway-chat',
     };
+    private readonly CROSS_CHANNEL_EXEMPT_TOOLS: Set<string> = new Set([
+        // Email delivery is intentionally cross-channel so users can request
+        // "email this" from Telegram/WhatsApp/Discord/Slack.
+        'send_email',
+    ]);
 
     // Known users tracker — populated from inbound channel messages
     private knownUsers: Map<string, KnownUser> = new Map();
@@ -448,6 +456,13 @@ export class Agent {
             this.slack = new SlackChannel(slackBotToken, slackAppToken, this);
             logger.info('Agent: Slack channel configured');
         }
+
+
+        const emailEnabled = this.config.get('emailEnabled') === true;
+        if (emailEnabled) {
+            this.email = new EmailChannel(this);
+            logger.info('Agent: Email channel configured');
+        }
     }
 
     /**
@@ -557,12 +572,30 @@ export class Agent {
 
 
 
-    private isChannelConfigured(channel: 'telegram' | 'whatsapp' | 'discord' | 'slack' | 'gateway-chat'): boolean {
+    private hasEmailDeliveryConfig(): boolean {
+        const smtpHost = String(this.config.get('smtpHost') || '').trim();
+        const smtpUser = String(this.config.get('smtpUsername') || '').trim();
+        const smtpPass = String(this.config.get('smtpPassword') || '').trim();
+        const fromAddress = String(this.config.get('emailAddress') || smtpUser || '').trim();
+        return !!(smtpHost && smtpUser && smtpPass && fromAddress);
+    }
+
+    private getOrCreateEmailChannel(): EmailChannel | null {
+        if (this.email) return this.email;
+        if (!this.hasEmailDeliveryConfig()) return null;
+        // Allow outbound email skill usage even when inbound polling is disabled.
+        this.email = new EmailChannel(this);
+        return this.email;
+    }
+
+    private isChannelConfigured(channel: 'telegram' | 'whatsapp' | 'discord' | 'slack' | 'email' | 'gateway-chat'): boolean {
+
         if (channel === 'gateway-chat') return true;
         if (channel === 'telegram') return !!this.config.get('telegramToken') && !!this.telegram;
         if (channel === 'whatsapp') return this.config.get('whatsappEnabled') !== false && !!this.whatsapp;
         if (channel === 'discord') return !!this.config.get('discordToken') && !!this.discord;
         if (channel === 'slack') return !!this.config.get('slackBotToken') && !!this.slack;
+        if (channel === 'email') return !!this.getOrCreateEmailChannel();
         return false;
     }
 
@@ -575,8 +608,9 @@ export class Agent {
         }
 
         const source = String(action.payload?.source || '').trim();
-        const isSourceChannelTask = ['telegram', 'whatsapp', 'discord', 'slack', 'gateway-chat'].includes(source);
-        if (isSourceChannelTask && source !== targetChannel) {
+        const isSourceChannelTask = ['telegram', 'whatsapp', 'discord', 'slack', 'email', 'gateway-chat'].includes(source);
+        const isCrossChannelExempt = this.CROSS_CHANNEL_EXEMPT_TOOLS.has(toolName);
+        if (isSourceChannelTask && source !== targetChannel && !isCrossChannelExempt) {
             return { allowed: false, reason: `Cross-channel send blocked. Action source is '${source}' but tool targets '${targetChannel}'.` };
         }
 
@@ -874,6 +908,44 @@ export class Agent {
                         return `Message sent to Discord channel ${channel_id}`;
                     }
                     return 'Discord channel not available';
+                }
+            });
+
+            // Skill: Send Email
+            this.skills.registerSkill({
+                name: 'send_email',
+                description: 'Send an email via configured SMTP account',
+                usage: 'send_email(to, subject, message, inReplyTo?, references?)',
+                handler: async (args: any) => {
+                    const to = args.to || args.email || args.recipient;
+                    const subject = args.subject || this.config.get('emailDefaultSubject') || 'OrcBot response';
+                    const message = args.message || args.content || args.text || args.body;
+                    const inReplyTo = args.inReplyTo;
+                    const references = args.references;
+
+                    if (!to) return 'Error: Missing recipient email address (to).';
+                    if (!message) return 'Error: Missing message content.';
+                    const emailChannel = this.getOrCreateEmailChannel();
+                    if (!emailChannel) return 'Email channel not available. Configure SMTP first.';
+
+                    await emailChannel.sendEmail(String(to), String(subject), String(message), inReplyTo, references);
+
+                    this.memory.saveMemory({
+                        id: `email-out-${Date.now()}`,
+                        type: 'short',
+                        content: `Assistant sent email to ${to} with subject "${subject}"`,
+                        timestamp: new Date().toISOString(),
+                        metadata: {
+                            source: 'email',
+                            role: 'assistant',
+                            sourceId: String(to),
+                            subject: String(subject),
+                            inReplyTo,
+                            references
+                        }
+                    });
+
+                    return `Email sent to ${to}`;
                 }
             });
 
@@ -6111,6 +6183,8 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 } else if (source === 'slack' && this.slack) {
                     await this.slack.sendTypingIndicator(sourceId);
                     return false;
+                } else if (source === 'email') {
+                    return false;
                 }
                 // gateway-chat has no typing indicator; fall back to status text below.
             } catch {
@@ -6151,6 +6225,12 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 sentMessage = true;
             } else if (source === 'slack' && this.slack) {
                 await this.slack.sendMessage(sourceId, message);
+                sentMessage = true;
+            } else if (source === 'email') {
+                const emailChannel = this.getOrCreateEmailChannel();
+                if (!emailChannel) return false;
+                const subject = action.payload?.subject ? `Re: ${action.payload.subject}` : 'OrcBot update';
+                await emailChannel.sendEmail(sourceId, subject, message, action.payload?.inReplyTo, action.payload?.references);
                 sentMessage = true;
             } else if (source === 'gateway-chat') {
                 eventBus.emit('gateway:chat:response', {
@@ -6458,7 +6538,7 @@ Respond with ONLY valid JSON:
     ): Promise<{ ok: boolean; issues: string[] }> {
         try {
             const source = action.payload?.source;
-            const isChannelTask = source === 'telegram' || source === 'whatsapp' || source === 'discord' || source === 'slack' || source === 'gateway-chat';
+            const isChannelTask = source === 'telegram' || source === 'whatsapp' || source === 'discord' || source === 'slack' || source === 'email' || source === 'gateway-chat';
             if (!isChannelTask) {
                 return { ok: true, issues: [] };
             }
@@ -7012,7 +7092,7 @@ REFLECTION: <1-2 sentences>`;
         const sourceId = action.payload.sourceId;
 
         // Never send internal execution checklists to end-user channels.
-        const userFacingSources = new Set(['telegram', 'whatsapp', 'discord', 'slack', 'gateway-chat']);
+        const userFacingSources = new Set(['telegram', 'whatsapp', 'discord', 'slack', 'email', 'gateway-chat']);
         if (userFacingSources.has(String(source).toLowerCase())) {
             logger.debug(`Checklist preview suppressed for user-facing source: ${source}`);
             return false;
@@ -7035,6 +7115,12 @@ REFLECTION: <1-2 sentences>`;
             }
             if (source === 'slack' && this.slack) {
                 await this.slack.sendMessage(sourceId, message);
+                return true;
+            }
+            if (source === 'email') {
+                const emailChannel = this.getOrCreateEmailChannel();
+                if (!emailChannel) return false;
+                await emailChannel.sendEmail(sourceId, action.payload?.subject ? `Re: ${action.payload.subject}` : 'OrcBot response', message, action.payload?.inReplyTo, action.payload?.references);
                 return true;
             }
             if (source === 'gateway-chat') {
@@ -7099,7 +7185,7 @@ REFLECTION: <1-2 sentences>`;
             ? Number((actionRuntimeSec / context.currentStep).toFixed(1))
             : 0;
 
-        const isUserFacing = ['telegram', 'whatsapp', 'discord', 'slack', 'gateway-chat'].includes(String(action.payload?.source || '').toLowerCase());
+        const isUserFacing = ['telegram', 'whatsapp', 'discord', 'slack', 'email', 'gateway-chat'].includes(String(action.payload?.source || '').toLowerCase());
         const taskIntent = action.payload?.isHeartbeat
             ? 'heartbeat'
             : action.payload?.requiresResponse === true
@@ -7446,6 +7532,11 @@ REFLECTION: <1-2 sentences>`;
                 } else if (source === 'slack' && this.slack) {
                     await this.slack.sendMessage(sourceId, notification);
                     logger.info(`Agent: Sent AgenticUser notification to Slack ${sourceId}`);
+                } else if (source === 'email') {
+                    const emailChannel = this.getOrCreateEmailChannel();
+                    if (!emailChannel) return;
+                    await emailChannel.sendEmail(sourceId, 'OrcBot intervention', notification);
+                    logger.info(`Agent: Sent AgenticUser notification to Email ${sourceId}`);
                 } else if (source === 'gateway' || source === 'gateway-chat') {
                     eventBus.emit('gateway:chat:response', {
                         type: 'chat:message',
@@ -8823,6 +8914,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
         if (this.slack) {
             startupTasks.push({ name: 'slack', promise: this.slack.start() });
         }
+        if (this.email) {
+            startupTasks.push({ name: 'email', promise: this.email.start() });
+        }
 
         const results = await Promise.allSettled(startupTasks.map(t => t.promise));
         results.forEach((result, index) => {
@@ -8854,6 +8948,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
         }
         if (this.slack) {
             await this.slack.stop();
+        }
+        if (this.email) {
+            await this.email.stop();
         }
         await this.browser.close();
         if (this.knowledgeStore) {
@@ -8977,7 +9074,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
      */
     private trackKnownUser(metadata: any): void {
         const source = metadata?.source;
-        if (!source || !['telegram', 'discord', 'whatsapp', 'slack'].includes(source)) return;
+        if (!source || !['telegram', 'discord', 'whatsapp', 'slack', 'email'].includes(source)) return;
 
         let userId: string | undefined;
         let name: string = metadata.senderName || 'Unknown';
@@ -8993,6 +9090,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
         } else if (source === 'slack') {
             userId = metadata.userId || metadata.sourceId;
             username = metadata.username;
+        } else if (source === 'email') {
+            userId = metadata.sourceId || metadata.from || metadata.email;
+            username = metadata.fromName;
         }
 
         if (!userId) return;
@@ -9009,7 +9109,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             this.knownUsers.set(key, {
                 id: userId,
                 name,
-                channel: source as 'telegram' | 'discord' | 'whatsapp' | 'slack',
+                channel: source as 'telegram' | 'discord' | 'whatsapp' | 'slack' | 'email',
                 username,
                 lastSeen: new Date().toISOString(),
                 messageCount: 1
@@ -9032,6 +9132,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
             identifier = String(metadata?.userId || metadata?.sourceId || metadata?.chatId || '').trim();
         } else if (source === 'discord' || source === 'slack') {
             identifier = String(metadata?.userId || metadata?.sourceId || '').trim();
+        } else if (source === 'email') {
+            identifier = String(metadata?.sourceId || metadata?.from || '').trim().toLowerCase();
         } else if (source === 'whatsapp') {
             identifier = String(metadata?.sourceId || '').trim();
         } else if (source === 'gateway-chat') {
@@ -9475,7 +9577,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
     /**
      * Get all known users, optionally filtered by channel.
      */
-    public getKnownUsers(channel?: 'telegram' | 'discord' | 'whatsapp' | 'slack'): KnownUser[] {
+    public getKnownUsers(channel?: 'telegram' | 'discord' | 'whatsapp' | 'slack' | 'email'): KnownUser[] {
         const users = Array.from(this.knownUsers.values());
         if (channel) return users.filter(u => u.channel === channel);
         return users.sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime());
@@ -9517,6 +9619,12 @@ Respond with a single actionable task description (one sentence). Be specific ab
             const list: string[] = adminUsers.slack || [];
             if (list.length === 0) return true;
             return list.includes(String(payload.userId)) || list.includes(String(payload.sourceId));
+        }
+        if (source === 'email') {
+            const list: string[] = adminUsers.email || [];
+            if (list.length === 0) return true;
+            const identity = String(payload.sourceId || payload.from || '').trim().toLowerCase();
+            return list.map((x: string) => String(x).trim().toLowerCase()).includes(identity);
         }
         return true; // Unknown source = admin
     }
@@ -9829,7 +9937,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
         const to = action.payload?.sourceId;
         if (!source || !to || action.payload?.isHeartbeat) return;
         // Only fire for real inbound-message channels
-        const channelSources = ['telegram', 'whatsapp', 'discord', 'slack', 'gateway-chat'];
+        const channelSources = ['telegram', 'whatsapp', 'discord', 'slack', 'email', 'gateway-chat'];
         if (!channelSources.includes(source)) return;
 
         const fire = async () => {
@@ -11203,7 +11311,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                     // Case 3: goals_met=true or undefined with no tools - legitimate termination
                     // BUT: catch silent termination — if from a channel and never sent a message, force a retry
                     const isChannelTask = action.payload.source === 'telegram' || action.payload.source === 'whatsapp' ||
-                        action.payload.source === 'discord' || action.payload.source === 'slack' || action.payload.source === 'gateway-chat';
+                        action.payload.source === 'discord' || action.payload.source === 'slack' || action.payload.source === 'email' || action.payload.source === 'gateway-chat';
                     if (isChannelTask && messagesSent > 0 && substantiveDeliveriesSent === 0 && currentStep < MAX_STEPS) {
                         noToolsRetryCount++;
                         if (noToolsRetryCount < MAX_NO_TOOLS_RETRIES) {
@@ -11442,7 +11550,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
             }
 
             const isUserFacingAction = action.payload?.source === 'telegram' || action.payload?.source === 'whatsapp' ||
-                action.payload?.source === 'discord' || action.payload?.source === 'slack' || action.payload?.source === 'gateway-chat';
+                action.payload?.source === 'discord' || action.payload?.source === 'slack' || action.payload?.source === 'email' || action.payload?.source === 'gateway-chat';
             if (!goalsMet && isUserFacingAction && anyUserDeliverySuccess) {
                 logger.warn(`Agent: Reconciled final status to completed for ${action.id} because user delivery succeeded.`);
                 this.memory.saveMemory({
@@ -11656,6 +11764,11 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                 await this.whatsapp.sendMessage(action.payload.sourceId, sosMessage);
             } else if (this.slack && action.payload.source === 'slack') {
                 await this.slack.sendMessage(action.payload.sourceId, sosMessage);
+            } else if (action.payload.source === 'email') {
+                const emailChannel = this.getOrCreateEmailChannel();
+                if (emailChannel) {
+                    await emailChannel.sendEmail(action.payload.sourceId, action.payload?.subject ? `Re: ${action.payload.subject}` : 'OrcBot action failure', sosMessage, action.payload?.inReplyTo, action.payload?.references);
+                }
             }
         } finally {
             this.stopPersistentTypingIndicator();

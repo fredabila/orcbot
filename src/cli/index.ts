@@ -2137,7 +2137,8 @@ async function showMainMenu() {
     const hasWhatsapp = !!agent.config.get('whatsappEnabled');
     const hasDiscord = !!agent.config.get('discordToken');
     const hasSlack = !!agent.config.get('slackBotToken');
-    const channelCount = [hasTelegram, hasWhatsapp, hasDiscord, hasSlack].filter(Boolean).length;
+    const hasEmail = !!agent.config.get('emailEnabled');
+    const channelCount = [hasTelegram, hasWhatsapp, hasDiscord, hasSlack, hasEmail].filter(Boolean).length;
     const agentName = agent.config.get('agentName') || 'OrcBot';
     const sudoMode = agent.config.get('sudoMode');
 
@@ -2155,7 +2156,7 @@ async function showMainMenu() {
     box([
         `${c.white}Agent${c.reset}    ${c.bold}${c.brightWhite}${agentName}${c.reset}${sudoMode ? `  ${c.bgRed}${c.bold}${c.white} SUDO ${c.reset}` : ''}${agent.config.get('overrideMode') ? `  ${c.bgRed}${c.bold}${c.white} OVERRIDE ${c.reset}` : ''}`,
         `${c.white}Model${c.reset}    ${brightCyan(bold(model))} ${dim('via')} ${c.white}${provider}${c.reset}`,
-        `${c.white}Channels${c.reset} ${channelDots}  ${dim(`(${channelCount}/4 active)`)}`,
+        `${c.white}Channels${c.reset} ${channelDots} ${hasEmail ? '📧 ' : ''} ${dim(`(${channelCount}/5 active)`)}`,
         `${c.white}HITL${c.reset}     ${auActive ? `${c.brightGreen}${c.bold}● Active${c.reset}` : auEnabled ? `${c.yellow}● Standby${c.reset}` : `${c.gray}○ Off${c.reset}`}`,
         `${c.gray}${'─'.repeat(52)}${c.reset}`,
         `${c.white}Queue${c.reset}    ${pendingCount > 0 ? `${c.yellow}${c.bold}${String(pendingCount)}${c.reset} ${c.white}active${c.reset}` : `${c.brightGreen}● idle${c.reset}`}${queueLen > pendingCount ? `  ${dim(`${queueLen - pendingCount} completed`)}` : ''}`,
@@ -3600,10 +3601,12 @@ async function showConnectionsMenu() {
     const hasWhatsapp = !!agent.config.get('whatsappEnabled');
     const hasDiscord = !!agent.config.get('discordToken');
     const hasSlack = !!agent.config.get('slackBotToken');
+    const hasEmail = !!agent.config.get('emailEnabled');
     const tgAuto = agent.config.get('telegramAutoReplyEnabled');
     const waAuto = agent.config.get('whatsappAutoReplyEnabled');
     const dcAuto = agent.config.get('discordAutoReplyEnabled');
     const slAuto = agent.config.get('slackAutoReplyEnabled');
+    const emAuto = agent.config.get('emailAutoReplyEnabled');
 
     console.log('');
     const channelLines = [
@@ -3611,6 +3614,7 @@ async function showConnectionsMenu() {
         `${statusDot(hasWhatsapp, '')} ${bold('WhatsApp')}    ${hasWhatsapp ? green('Enabled') : gray('Disabled')}        ${waAuto ? dim('auto-reply ✓') : ''}`,
         `${statusDot(hasDiscord, '')} ${bold('Discord')}     ${hasDiscord ? green('Connected') : gray('Not configured')}  ${dcAuto ? dim('auto-reply ✓') : ''}`,
         `${statusDot(hasSlack, '')} ${bold('Slack')}       ${hasSlack ? green('Connected') : gray('Not configured')}  ${slAuto ? dim('auto-reply ✓') : ''}`,
+        `${statusDot(hasEmail, '')} ${bold('Email')}       ${hasEmail ? green('Enabled') : gray('Not configured')}  ${emAuto ? dim('auto-reply ✓') : ''}`,
     ];
     box(channelLines, { title: '📡 CHANNEL STATUS', width: 58, color: c.cyan });
     console.log('');
@@ -3625,6 +3629,7 @@ async function showConnectionsMenu() {
                 { name: `  ${hasWhatsapp ? '💬' : '  '} ${bold('WhatsApp (Baileys)')} ${hasWhatsapp ? green('●') : gray('○')}`, value: 'whatsapp' },
                 { name: `  ${hasDiscord ? '🎮' : '  '} ${bold('Discord Bot')}       ${hasDiscord ? green('●') : gray('○')}`, value: 'discord' },
                 { name: `  ${hasSlack ? '💼' : '  '} ${bold('Slack Bot')}         ${hasSlack ? green('●') : gray('○')}`, value: 'slack' },
+                { name: `  ${hasEmail ? '📧' : '  '} ${bold('Email (SMTP/IMAP)')}  ${hasEmail ? green('●') : gray('○')}`, value: 'email' },
                 new inquirer.Separator(gradient('  ─────────────────────────────────', [c.cyan, c.gray])),
                 { name: dim('  ← Back'), value: 'back' },
             ]
@@ -3641,6 +3646,8 @@ async function showConnectionsMenu() {
         await showDiscordConfig();
     } else if (channel === 'slack') {
         await showSlackConfig();
+    } else if (channel === 'email') {
+        await showEmailConfig();
     }
 }
 
@@ -3924,6 +3931,127 @@ async function showSlackConfig() {
         }
         await waitKeyPress();
         return showSlackConfig();
+    }
+}
+
+
+async function showEmailConfig() {
+    const enabled = agent.config.get('emailEnabled') === true;
+    const autoReply = agent.config.get('emailAutoReplyEnabled') === true;
+    const emailAddress = agent.config.get('emailAddress') || agent.config.get('smtpUsername') || 'Not Set';
+    const smtpHost = agent.config.get('smtpHost') || 'Not Set';
+    const imapHost = agent.config.get('imapHost') || 'Not Set';
+
+    console.clear();
+    banner();
+    sectionHeader('📧', 'Email Settings');
+    console.log('');
+    const lines = [
+        `${dim('Enabled')}      ${enabled ? green(bold('● ON')) : gray('○ OFF')}`,
+        `${dim('Address')}      ${emailAddress === 'Not Set' ? gray('Not Set') : green(emailAddress)}`,
+        `${dim('SMTP')}         ${smtpHost}`,
+        `${dim('IMAP')}         ${imapHost}`,
+        `${dim('Auto-Reply')}   ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
+    ];
+    box(lines, { title: '📧 EMAIL', width: 58, color: c.yellow });
+    console.log('');
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: 'Email Options:',
+            choices: [
+                { name: enabled ? 'Disable Email Channel' : 'Enable Email Channel', value: 'toggle_enabled' },
+                { name: 'Set Email Address', value: 'set_email' },
+                { name: 'Set SMTP Settings', value: 'set_smtp' },
+                { name: 'Set IMAP Settings', value: 'set_imap' },
+                { name: autoReply ? 'Disable Auto-Reply' : 'Enable Auto-Reply', value: 'toggle_auto' },
+                { name: 'Test SMTP + IMAP Connection', value: 'test' },
+                { name: 'Back', value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showConnectionsMenu();
+
+    if (action === 'toggle_enabled') {
+        const next = !enabled;
+        agent.config.set('emailEnabled', next);
+        if (next && !agent.email) {
+            agent.setupChannels();
+        }
+        return showEmailConfig();
+    }
+
+    if (action === 'set_email') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'emailAddress', message: 'Email Address (From):', default: agent.config.get('emailAddress') || '' },
+            { type: 'input', name: 'emailFromName', message: 'From Name:', default: agent.config.get('emailFromName') || agent.config.get('agentName') || 'OrcBot' },
+            { type: 'input', name: 'emailDefaultSubject', message: 'Default Subject:', default: agent.config.get('emailDefaultSubject') || 'OrcBot response' },
+            { type: 'number', name: 'emailPollIntervalSeconds', message: 'Poll Interval Seconds:', default: agent.config.get('emailPollIntervalSeconds') || 30 },
+        ]);
+        agent.config.set('emailAddress', ans.emailAddress);
+        agent.config.set('emailFromName', ans.emailFromName);
+        agent.config.set('emailDefaultSubject', ans.emailDefaultSubject);
+        agent.config.set('emailPollIntervalSeconds', Number(ans.emailPollIntervalSeconds) || 30);
+        return showEmailConfig();
+    }
+
+    if (action === 'set_smtp') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'smtpHost', message: 'SMTP Host:', default: agent.config.get('smtpHost') || '' },
+            { type: 'number', name: 'smtpPort', message: 'SMTP Port:', default: agent.config.get('smtpPort') || 587 },
+            { type: 'confirm', name: 'smtpSecure', message: 'Use TLS (SMTPS)?', default: agent.config.get('smtpSecure') === true },
+            { type: 'input', name: 'smtpUsername', message: 'SMTP Username:', default: agent.config.get('smtpUsername') || '' },
+            { type: 'password', name: 'smtpPassword', message: 'SMTP Password (leave blank to keep current):' },
+        ]);
+        agent.config.set('smtpHost', ans.smtpHost);
+        agent.config.set('smtpPort', Number(ans.smtpPort) || 587);
+        agent.config.set('smtpSecure', !!ans.smtpSecure);
+        agent.config.set('smtpUsername', ans.smtpUsername);
+        if (ans.smtpPassword) agent.config.set('smtpPassword', ans.smtpPassword);
+        return showEmailConfig();
+    }
+
+    if (action === 'set_imap') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'imapHost', message: 'IMAP Host:', default: agent.config.get('imapHost') || '' },
+            { type: 'number', name: 'imapPort', message: 'IMAP Port:', default: agent.config.get('imapPort') || 993 },
+            { type: 'confirm', name: 'imapSecure', message: 'Use TLS?', default: agent.config.get('imapSecure') !== false },
+            { type: 'input', name: 'imapUsername', message: 'IMAP Username:', default: agent.config.get('imapUsername') || '' },
+            { type: 'password', name: 'imapPassword', message: 'IMAP Password (leave blank to keep current):' },
+        ]);
+        agent.config.set('imapHost', ans.imapHost);
+        agent.config.set('imapPort', Number(ans.imapPort) || 993);
+        agent.config.set('imapSecure', !!ans.imapSecure);
+        agent.config.set('imapUsername', ans.imapUsername);
+        if (ans.imapPassword) agent.config.set('imapPassword', ans.imapPassword);
+        return showEmailConfig();
+    }
+
+    if (action === 'toggle_auto') {
+        agent.config.set('emailAutoReplyEnabled', !autoReply);
+        return showEmailConfig();
+    }
+
+    if (action === 'test') {
+        if (!agent.email) {
+            agent.setupChannels();
+        }
+        if (!agent.email) {
+            console.log('Email channel not available. Configure SMTP/IMAP credentials first.');
+        } else {
+            console.log('Testing Email SMTP + IMAP...');
+            try {
+                await agent.email.testConnections();
+                console.log(green('  ✓ Email connection test successful (SMTP send + IMAP access).'));
+            } catch (error: any) {
+                console.log(red(`  ✗ Connection test failed: ${error.message}`));
+            }
+        }
+        await waitKeyPress();
+        return showEmailConfig();
     }
 }
 
