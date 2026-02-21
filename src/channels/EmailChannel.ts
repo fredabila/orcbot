@@ -60,17 +60,26 @@ export class EmailChannel implements IChannel {
     public async sendEmail(to: string, subject: string, message: string, inReplyTo?: string, references?: string): Promise<void> {
         const smtpHost = this.agent.config.get('smtpHost');
         const smtpPort = Number(this.agent.config.get('smtpPort') || 587);
-        const smtpSecure = !!this.agent.config.get('smtpSecure');
+        const smtpSecure = this.agent.config.get('smtpSecure') === true;
+        const smtpStartTls = this.agent.config.get('smtpStartTls') !== false;
         const smtpUsername = this.agent.config.get('smtpUsername');
         const smtpPassword = this.agent.config.get('smtpPassword');
         const fromAddress = this.agent.config.get('emailAddress') || smtpUsername;
         const fromName = this.agent.config.get('emailFromName') || this.agent.config.get('agentName') || 'OrcBot';
 
-        const socket = await this.openSocket(smtpHost, smtpPort, smtpSecure);
+        let socket = await this.openSocket(smtpHost, smtpPort, smtpSecure);
         try {
             await this.readSmtp(socket, [220]);
             await this.sendSmtp(socket, `EHLO orcbot.local`);
             await this.readSmtp(socket, [250]);
+
+            if (!smtpSecure && smtpStartTls) {
+                await this.sendSmtp(socket, 'STARTTLS');
+                await this.readSmtp(socket, [220]);
+                socket = await this.upgradeToTls(socket, smtpHost);
+                await this.sendSmtp(socket, `EHLO orcbot.local`);
+                await this.readSmtp(socket, [250]);
+            }
 
             if (smtpUsername && smtpPassword) {
                 await this.sendSmtp(socket, 'AUTH LOGIN');
@@ -109,6 +118,11 @@ export class EmailChannel implements IChannel {
     }
 
     public async testConnections(): Promise<void> {
+        const missing = this.getMissingConfiguration();
+        if (missing.length > 0) {
+            throw new Error(`Email is missing required settings: ${missing.join(', ')}`);
+        }
+
         const testTo = this.agent.config.get('emailAddress') || this.agent.config.get('smtpUsername');
         if (testTo) {
             await this.sendEmail(testTo, 'OrcBot email connection test', '✅ SMTP test successful.');
@@ -117,13 +131,23 @@ export class EmailChannel implements IChannel {
     }
 
     private isConfigured(): boolean {
-        return !!(this.agent.config.get('emailEnabled')
-            && this.agent.config.get('smtpHost')
-            && this.agent.config.get('smtpUsername')
-            && this.agent.config.get('smtpPassword')
-            && this.agent.config.get('imapHost')
-            && this.agent.config.get('imapUsername')
-            && this.agent.config.get('imapPassword'));
+        return this.getMissingConfiguration().length === 0;
+    }
+
+    private getMissingConfiguration(): string[] {
+        const required: Array<[string, any]> = [
+            ['emailEnabled=true', this.agent.config.get('emailEnabled') === true],
+            ['smtpHost', this.agent.config.get('smtpHost')],
+            ['smtpUsername', this.agent.config.get('smtpUsername')],
+            ['smtpPassword', this.agent.config.get('smtpPassword')],
+            ['imapHost', this.agent.config.get('imapHost')],
+            ['imapUsername', this.agent.config.get('imapUsername')],
+            ['imapPassword', this.agent.config.get('imapPassword')],
+        ];
+
+        return required
+            .filter(([_, value]) => !value)
+            .map(([key]) => key);
     }
 
     private async pollOnce(testOnly = false): Promise<void> {
@@ -281,6 +305,7 @@ export class EmailChannel implements IChannel {
     private async readImapGreeting(socket: tls.TLSSocket | net.Socket): Promise<string> {
         return new Promise((resolve, reject) => {
             let data = '';
+            const timeoutMs = this.getSocketTimeoutMs();
             const onData = (chunk: Buffer) => {
                 data += chunk.toString('utf8');
                 if (data.includes('\r\n')) {
@@ -289,18 +314,24 @@ export class EmailChannel implements IChannel {
                 }
             };
             const onError = (err: any) => { cleanup(); reject(err); };
+            const onTimeout = () => { cleanup(); reject(new Error(`IMAP greeting timeout after ${timeoutMs}ms`)); };
             const cleanup = () => {
                 socket.off('data', onData);
                 socket.off('error', onError);
+                socket.off('timeout', onTimeout);
+                socket.setTimeout(0);
             };
+            socket.setTimeout(timeoutMs);
             socket.on('data', onData);
             socket.on('error', onError);
+            socket.on('timeout', onTimeout);
         });
     }
 
     private async readImapUntilTag(socket: tls.TLSSocket | net.Socket, tag: string): Promise<string> {
         return new Promise((resolve, reject) => {
             let data = '';
+            const timeoutMs = this.getSocketTimeoutMs();
             const regex = new RegExp(`\\r?\\n${tag} (OK|NO|BAD)`, 'i');
             const onData = (chunk: Buffer) => {
                 data += chunk.toString('utf8');
@@ -310,12 +341,17 @@ export class EmailChannel implements IChannel {
                 }
             };
             const onError = (err: any) => { cleanup(); reject(err); };
+            const onTimeout = () => { cleanup(); reject(new Error(`IMAP command timeout after ${timeoutMs}ms (${tag})`)); };
             const cleanup = () => {
                 socket.off('data', onData);
                 socket.off('error', onError);
+                socket.off('timeout', onTimeout);
+                socket.setTimeout(0);
             };
+            socket.setTimeout(timeoutMs);
             socket.on('data', onData);
             socket.on('error', onError);
+            socket.on('timeout', onTimeout);
         });
     }
 
@@ -326,6 +362,7 @@ export class EmailChannel implements IChannel {
     private async readSmtp(socket: tls.TLSSocket | net.Socket, expectedCodes: number[]): Promise<string> {
         return new Promise((resolve, reject) => {
             let data = '';
+            const timeoutMs = this.getSocketTimeoutMs();
             const onData = (chunk: Buffer) => {
                 data += chunk.toString('utf8');
                 const lines = data.split(/\r?\n/).filter(Boolean);
@@ -342,12 +379,30 @@ export class EmailChannel implements IChannel {
                 }
             };
             const onError = (err: any) => { cleanup(); reject(err); };
+            const onTimeout = () => { cleanup(); reject(new Error(`SMTP response timeout after ${timeoutMs}ms`)); };
             const cleanup = () => {
                 socket.off('data', onData);
                 socket.off('error', onError);
+                socket.off('timeout', onTimeout);
+                socket.setTimeout(0);
             };
+            socket.setTimeout(timeoutMs);
             socket.on('data', onData);
             socket.on('error', onError);
+            socket.on('timeout', onTimeout);
+        });
+    }
+
+    private getSocketTimeoutMs(): number {
+        const configured = Number(this.agent.config.get('emailSocketTimeoutMs'));
+        if (!Number.isFinite(configured) || configured <= 0) return 15000;
+        return Math.max(3000, configured);
+    }
+
+    private async upgradeToTls(socket: tls.TLSSocket | net.Socket, host: string): Promise<tls.TLSSocket> {
+        return new Promise((resolve, reject) => {
+            const secureSocket = tls.connect({ socket, servername: host }, () => resolve(secureSocket));
+            secureSocket.once('error', reject);
         });
     }
 }
