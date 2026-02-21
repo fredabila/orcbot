@@ -345,6 +345,13 @@ export class EmailChannel implements IChannel {
             return;
         }
 
+        // Run fast AI classifier to check if the email actually needs a response (filters newsletters, pure info emails, etc.)
+        const aiSkipReason = await this.classifyEmailNeed(email);
+        if (aiSkipReason) {
+            logger.info(`EmailChannel: AI Classifier skipped auto-reply for "${email.subject}" - Reason: ${aiSkipReason}`);
+            return;
+        }
+
         await this.agent.pushTask(
             `Respond to email from ${email.from} with subject "${email.subject}": "${(email.text || '').slice(0, 1000)}"`,
             10,
@@ -396,5 +403,121 @@ export class EmailChannel implements IChannel {
         }
 
         return false;
+    }
+
+    private async classifyEmailNeed(email: ParsedEmail): Promise<string | false> {
+        // Fast LLM call to classify if the email genuinely requires a response from the user/agent.
+        const preview = (email.text || '').slice(0, 1000);
+
+        const systemPrompt = `You are an intelligent email triage assistant.
+Your job is to determine if an incoming email requires a reply.
+
+You should IGNORE and DO NOT REPLY TO:
+- Newsletters, marketing blasts, or promotional material
+- System notifications, alerts, or receipts
+- Purely informational updates where no question is asked
+- Auto-generated reports or status updates
+
+You SHOULD reply to:
+- Direct inquiries or questions directed at the user
+- Conversational emails from real humans expecting a response
+- Requests for action or information
+
+Analyze the email and return a JSON object with this exact schema:
+{
+  "requiresReply": boolean,
+  "reason": "Brief string explaining why"
+}
+Output ONLY valid JSON.`;
+
+        const userPrompt = `From: ${email.from}\nSubject: ${email.subject}\n\nBody Preview:\n${preview}`;
+
+        try {
+            const responseText = await this.agent.llm.callFast(userPrompt, systemPrompt);
+
+            // Extract JSON block if the model included markdown formatting
+            let jsonString = responseText.trim();
+            if (jsonString.startsWith('\`\`\`json')) {
+                jsonString = jsonString.replace(/^\`\`\`json/i, '').replace(/\`\`\`$/, '').trim();
+            } else if (jsonString.startsWith('\`\`\`')) {
+                jsonString = jsonString.replace(/^\`\`\`/i, '').replace(/\`\`\`$/, '').trim();
+            }
+
+            const result = JSON.parse(jsonString);
+
+            if (result.requiresReply === false) {
+                return result.reason || 'AI classified as not requiring a reply';
+            }
+            return false;
+        } catch (error: any) {
+            logger.warn(`EmailChannel: AI Classification failed for "${email.subject}": ${error.message}. Defaulting to process email.`);
+            // Fail open: if the classifier fails, we let the main agent handle it so we don't drop important emails
+            return false;
+        }
+    }
+
+    public async searchEmails(params: { sender?: string, subject?: string, daysAgo?: number, unreadOnly?: boolean, limit?: number }): Promise<ParsedEmail[]> {
+        if (!this.imapClient || !this.started) {
+            throw new Error('IMAP is not connected');
+        }
+
+        let lock = await this.imapClient.getMailboxLock('INBOX');
+        try {
+            const searchObj: any = {};
+            if (params.unreadOnly) {
+                searchObj.seen = false;
+            }
+            if (params.sender) {
+                searchObj.from = params.sender;
+            }
+            if (params.subject) {
+                searchObj.subject = params.subject;
+            }
+            if (params.daysAgo) {
+                searchObj.since = new Date(Date.now() - params.daysAgo * 24 * 60 * 60 * 1000);
+            }
+
+            // If no search criteria passed, get all
+            if (Object.keys(searchObj).length === 0) {
+                searchObj.all = true;
+            }
+
+            const uids = await this.imapClient.search(searchObj, { uid: true });
+
+            if (!uids || uids.length === 0) {
+                return [];
+            }
+
+            // Sort uids descending to get newest first. Note: IMAP sequence numbers aren't strictly chronological
+            // but UIDs generally monotonic increase for a given mailbox session
+            uids.sort((a, b) => b - a);
+
+            const limit = Math.min(params.limit || 5, 20);
+            const targetUids = uids.slice(0, limit);
+
+            const results: ParsedEmail[] = [];
+            for (const uid of targetUids) {
+                try {
+                    const message = await this.imapClient.fetchOne(uid, { source: true, uid: true });
+                    if (message && message.source) {
+                        const parsed = await simpleParser(message.source);
+                        const from = parsed.from?.value[0]?.address || 'Unknown';
+                        const subject = parsed.subject || '(no subject)';
+                        // Don't log full content length in case it's huge, limit the text length for the AI
+                        const text = parsed.text ? parsed.text.trim().substring(0, 4000) : '(no text content)';
+                        results.push({ from, subject, messageId: parsed.messageId, inReplyTo: parsed.inReplyTo, text, uid: String(message.uid) });
+                    }
+                } catch (fetchErr: any) {
+                    logger.error(`EmailChannel: Failed to fetch message UID ${uid} in search: ${fetchErr.message}`);
+                }
+            }
+            return results;
+
+        } catch (error: any) {
+            logger.error(`EmailChannel: Error searching emails: ${error.message}`);
+            throw error;
+        } finally {
+            if (lock) lock.release();
+        }
     }
 }

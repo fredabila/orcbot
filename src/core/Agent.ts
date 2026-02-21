@@ -949,6 +949,42 @@ export class Agent {
                 }
             });
 
+            // Skill: Search Emails
+            this.skills.registerSkill({
+                name: 'search_emails',
+                description: 'Search through your connected email inbox for recent or specific messages',
+                usage: 'search_emails(sender?, subject?, daysAgo?, unreadOnly?, limit?)',
+                handler: async (args: any) => {
+                    const emailChannel = this.getOrCreateEmailChannel();
+                    if (!emailChannel) return 'Email channel not available. Configure SMTP + IMAP first.';
+
+                    try {
+                        const results = await emailChannel.searchEmails({
+                            sender: args.sender,
+                            subject: args.subject,
+                            daysAgo: args.daysAgo ? Number(args.daysAgo) : undefined,
+                            unreadOnly: args.unreadOnly === true || args.unreadOnly === 'true',
+                            limit: args.limit ? Number(args.limit) : 5
+                        });
+
+                        if (!results || results.length === 0) {
+                            return 'No emails found matching those criteria.';
+                        }
+
+                        let summary = `Found ${results.length} email(s):\n\n`;
+                        for (const email of results) {
+                            summary += `From: ${email.from}\n`;
+                            summary += `Subject: ${email.subject}\n`;
+                            summary += `Snippet: ${email.text.slice(0, 500)}...\n`;
+                            summary += `---\n`;
+                        }
+                        return summary;
+                    } catch (error: any) {
+                        return `Error searching emails: ${error.message}`;
+                    }
+                }
+            });
+
             // Skill: Send Slack
             this.skills.registerSkill({
                 name: 'send_slack',
