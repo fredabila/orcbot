@@ -142,6 +142,10 @@ export interface AgentConfig {
     reconnectBriefingMaxCompletions?: number;     // Max completed tasks to surface in briefing (default 5)
     reconnectBriefingMaxPending?: number;         // Max pending tasks to surface in briefing (default 3)
     recoveryDedupWindowHours?: number;            // Hours window for deduplicating recovery tasks (default 6)
+    usagePingEnabled?: boolean;                   // Send anonymous startup usage ping (default true)
+    usagePingUrl?: string;                        // Endpoint that receives usage pings (set to your own webhook/server URL)
+    usagePingTimeoutMs?: number;                  // Timeout for usage ping request in ms (default 4000)
+    usagePingToken?: string;                      // Optional bearer token/header secret for your usage endpoint
     // Memory content limits
     memoryContentMaxLength?: number;             // Hard truncation limit for stored memory content (default 500)
     memoryFlushSoftThreshold?: number;           // Short memories count before triggering pre-consolidation flush (default 25)
@@ -753,6 +757,10 @@ export class ConfigManager {
             reconnectBriefingMaxCompletions: 5,
             reconnectBriefingMaxPending: 3,
             recoveryDedupWindowHours: 6,
+            usagePingEnabled: true,
+            usagePingUrl: '',
+            usagePingTimeoutMs: 4000,
+            usagePingToken: '',
             memoryContentMaxLength: 500,
             memoryFlushSoftThreshold: 25,
             memoryFlushCooldownMinutes: 30,

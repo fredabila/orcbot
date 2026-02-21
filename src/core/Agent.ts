@@ -19,6 +19,7 @@ import { WorkerProfileManager } from './WorkerProfile';
 import { AgentOrchestrator } from './AgentOrchestrator';
 import { RuntimeTuner } from './RuntimeTuner';
 import { BootstrapManager } from './BootstrapManager';
+import { UsagePing } from './UsagePing';
 import { AgenticUser } from './AgenticUser';
 import { KnowledgeStore } from '../memory/KnowledgeStore';
 import { memoryToolsSkills } from '../skills/memoryTools';
@@ -79,6 +80,7 @@ export class Agent {
     public actionQueue: ActionQueue;
     public scheduler: Scheduler;
     public pollingManager: PollingManager;
+    public usagePing: UsagePing;
     public config: ConfigManager;
     public telegram: TelegramChannel | undefined;
     public whatsapp: WhatsAppChannel | undefined;
@@ -268,6 +270,7 @@ export class Agent {
         });
         this.scheduler = new Scheduler();
         this.pollingManager = new PollingManager();
+        this.usagePing = new UsagePing(this.config);
 
         // Initialize RuntimeTuner for self-tuning capabilities
         this.tuner = new RuntimeTuner(path.dirname(this.config.get('memoryPath')));
@@ -8791,6 +8794,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
         logger.info('Agent is starting...');
         this.scheduler.start();
         this.pollingManager.start();
+        void this.usagePing.sendStartupPing();
 
         const startupTasks: Array<{ name: string; promise: Promise<void> }> = [];
         if (this.telegram) {
