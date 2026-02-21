@@ -107,6 +107,13 @@ export class ConfigPolicy {
             reason: 'Agents can adjust complexity limits based on task needs',
             validation: (value: any) => typeof value === 'number' && value >= 5 && value <= 100
         }],
+        ['maxMessagesPerAction', {
+            key: 'maxMessagesPerAction',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Maximum user-facing messages per action',
+            reason: 'Agents can adjust delivery budget for long-running tasks and verbose progress updates',
+            validation: (value: any) => typeof value === 'number' && value >= 3 && value <= 100
+        }],
         ['progressFeedbackEnabled', {
             key: 'progressFeedbackEnabled',
             level: ConfigChangeLevel.SAFE,

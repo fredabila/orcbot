@@ -119,6 +119,7 @@ POLICY EXAMPLES:
 │ • memoryContextLimit     → Adjust context window size                       │
 │ • memoryEpisodicLimit    → Tune episodic memory                             │
 │ • maxStepsPerAction      → Increase/decrease step budget                    │
+│ • maxMessagesPerAction   → Increase/decrease message budget                 │
 │ • progressFeedbackEnabled → Toggle feedback verbosity                       │
 │ • searchProviderOrder    → Optimize search provider selection               │
 └─────────────────────────────────────────────────────────────────────────────┘

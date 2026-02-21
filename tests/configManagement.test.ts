@@ -25,6 +25,7 @@ describe('ConfigPolicy', () => {
         expect(ConfigPolicy.canAutoModify('llmProvider')).toBe(true);
         expect(ConfigPolicy.canAutoModify('memoryContextLimit')).toBe(true);
         expect(ConfigPolicy.canAutoModify('maxStepsPerAction')).toBe(true);
+        expect(ConfigPolicy.canAutoModify('maxMessagesPerAction')).toBe(true);
     });
 
     it('identifies locked configuration keys correctly', () => {
@@ -71,6 +72,7 @@ describe('ConfigPolicy', () => {
         const safeKeys = ConfigPolicy.getSafeKeys();
         expect(safeKeys).toContain('modelName');
         expect(safeKeys).toContain('llmProvider');
+        expect(safeKeys).toContain('maxMessagesPerAction');
         expect(safeKeys).not.toContain('telegramToken');
 
         const lockedKeys = ConfigPolicy.getLockedKeys();
@@ -191,7 +193,8 @@ describe('ConfigManagementService', () => {
         const stubConfig = new StubConfig({ 
             modelName: 'gpt-3.5-turbo',
             memoryContextLimit: 15,
-            maxStepsPerAction: 20
+            maxStepsPerAction: 20,
+            maxMessagesPerAction: 5
         });
         const context = { config: stubConfig, logger: console } as any;
 
@@ -210,5 +213,6 @@ describe('ConfigManagementService', () => {
         // Test multi-step task
         const workflowSuggestions = service.suggestOptimizations('Execute a multi-step workflow', context);
         expect(workflowSuggestions.suggestions.some(s => s.key === 'maxStepsPerAction')).toBe(true);
+        expect(workflowSuggestions.suggestions.some(s => s.key === 'maxMessagesPerAction')).toBe(true);
     });
 });
