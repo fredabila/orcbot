@@ -207,6 +207,9 @@ export class EmailChannel implements IChannel {
             }
         } catch (e: any) {
             logger.warn(`Email poll failed: ${e?.message || e}. Tip: run \"Test IMAP Connection\" in Email Settings to validate inbound config.`);
+            if (testOnly) {
+                throw e;
+            }
         } finally {
             this.processing = false;
         }
@@ -255,6 +258,7 @@ export class EmailChannel implements IChannel {
         const imapHost = this.agent.config.get('imapHost');
         const imapPort = Number(this.agent.config.get('imapPort') || 993);
         const imapSecure = this.agent.config.get('imapSecure') !== false;
+        const imapStartTls = this.agent.config.get('imapStartTls') !== false;
         const imapUsername = this.agent.config.get('imapUsername');
         const imapPassword = this.agent.config.get('imapPassword');
 
@@ -279,6 +283,10 @@ export class EmailChannel implements IChannel {
 
         try {
             await this.readImapGreeting(socket);
+            if (!imapSecure && imapStartTls) {
+                await run('STARTTLS');
+                socket = await this.upgradeToTls(socket, imapHost);
+            }
             await run(`LOGIN "${this.escapeImap(imapUsername)}" "${this.escapeImap(imapPassword)}"`);
             await run('SELECT INBOX');
             const searchOut = await run('SEARCH UNSEEN');

@@ -3943,6 +3943,8 @@ async function showEmailConfig() {
     const imapHost = agent.config.get('imapHost') || 'Not Set';
     const smtpSecure = agent.config.get('smtpSecure') === true;
     const smtpStartTls = agent.config.get('smtpStartTls') !== false;
+    const imapSecure = agent.config.get('imapSecure') !== false;
+    const imapStartTls = agent.config.get('imapStartTls') !== false;
     const timeoutMs = Number(agent.config.get('emailSocketTimeoutMs') || 15000);
 
     console.clear();
@@ -3955,6 +3957,7 @@ async function showEmailConfig() {
         `${dim('SMTP')}         ${smtpHost}`,
         `${dim('IMAP')}         ${imapHost}`,
         `${dim('SMTP Security')} ${smtpSecure ? green('Direct TLS (SMTPS)') : (smtpStartTls ? green('STARTTLS') : yellow('Plain (not recommended)') )}`,
+        `${dim('IMAP Security')} ${imapSecure ? green('Direct TLS (IMAPS)') : (imapStartTls ? green('STARTTLS') : yellow('Plain (not recommended)') )}`,
         `${dim('Socket Timeout')} ${timeoutMs}ms`,
         `${dim('Auto-Reply')}   ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
     ];
@@ -4031,13 +4034,15 @@ async function showEmailConfig() {
         const ans = await inquirer.prompt([
             { type: 'input', name: 'imapHost', message: 'IMAP Host:', default: agent.config.get('imapHost') || '' },
             { type: 'number', name: 'imapPort', message: 'IMAP Port:', default: agent.config.get('imapPort') || 993 },
-            { type: 'confirm', name: 'imapSecure', message: 'Use TLS?', default: agent.config.get('imapSecure') !== false },
+            { type: 'confirm', name: 'imapSecure', message: 'Use TLS (IMAPS)?', default: agent.config.get('imapSecure') !== false },
+            { type: 'confirm', name: 'imapStartTls', message: 'Use STARTTLS upgrade (recommended for port 143)?', default: agent.config.get('imapStartTls') !== false, when: (a) => !a.imapSecure },
             { type: 'input', name: 'imapUsername', message: 'IMAP Username:', default: agent.config.get('imapUsername') || '' },
             { type: 'password', name: 'imapPassword', message: 'IMAP Password (leave blank to keep current):' },
         ]);
         agent.config.set('imapHost', ans.imapHost);
         agent.config.set('imapPort', Number(ans.imapPort) || 993);
         agent.config.set('imapSecure', !!ans.imapSecure);
+        if (!ans.imapSecure) agent.config.set('imapStartTls', ans.imapStartTls !== false);
         agent.config.set('imapUsername', ans.imapUsername);
         if (ans.imapPassword) agent.config.set('imapPassword', ans.imapPassword);
         return showEmailConfig();
