@@ -67,7 +67,12 @@ export class EmailChannel implements IChannel {
         const fromAddress = this.agent.config.get('emailAddress') || smtpUsername;
         const fromName = this.agent.config.get('emailFromName') || this.agent.config.get('agentName') || 'OrcBot';
 
-        let socket = await this.openSocket(smtpHost, smtpPort, smtpSecure);
+        let socket: tls.TLSSocket | net.Socket;
+        try {
+            socket = await this.openSocket(smtpHost, smtpPort, smtpSecure);
+        } catch (error: any) {
+            throw new Error(this.describeSocketError('SMTP', smtpHost, smtpPort, error));
+        }
         try {
             await this.readSmtp(socket, [220]);
             await this.sendSmtp(socket, `EHLO orcbot.local`);
@@ -123,11 +128,34 @@ export class EmailChannel implements IChannel {
             throw new Error(`Email is missing required settings: ${missing.join(', ')}`);
         }
 
+        await this.testSmtpConnection();
+        await this.testImapConnection();
+    }
+
+    public async testSmtpConnection(): Promise<void> {
+        logger.info('Email test: starting SMTP validation');
+        const missing = this.getMissingSmtpConfiguration();
+        if (missing.length > 0) {
+            throw new Error(`SMTP is missing required settings: ${missing.join(', ')}`);
+        }
+
         const testTo = this.agent.config.get('emailAddress') || this.agent.config.get('smtpUsername');
+        logger.info(`Email test: SMTP target mailbox ${testTo ? 'resolved' : 'not set (send skipped)'}`);
         if (testTo) {
             await this.sendEmail(testTo, 'OrcBot email connection test', '✅ SMTP test successful.');
+            logger.info('Email test: SMTP send successful');
         }
+    }
+
+    public async testImapConnection(): Promise<void> {
+        logger.info('Email test: starting IMAP validation');
+        const missing = this.getMissingImapConfiguration();
+        if (missing.length > 0) {
+            throw new Error(`IMAP is missing required settings: ${missing.join(', ')}`);
+        }
+
         await this.pollOnce(true);
+        logger.info('Email test: IMAP poll successful');
     }
 
     private isConfigured(): boolean {
@@ -135,11 +163,27 @@ export class EmailChannel implements IChannel {
     }
 
     private getMissingConfiguration(): string[] {
+        return [
+            ...this.getMissingSmtpConfiguration(),
+            ...this.getMissingImapConfiguration(),
+        ];
+    }
+
+    private getMissingSmtpConfiguration(): string[] {
         const required: Array<[string, any]> = [
             ['emailEnabled=true', this.agent.config.get('emailEnabled') === true],
             ['smtpHost', this.agent.config.get('smtpHost')],
             ['smtpUsername', this.agent.config.get('smtpUsername')],
             ['smtpPassword', this.agent.config.get('smtpPassword')],
+        ];
+
+        return required
+            .filter(([_, value]) => !value)
+            .map(([key]) => key);
+    }
+
+    private getMissingImapConfiguration(): string[] {
+        const required: Array<[string, any]> = [
             ['imapHost', this.agent.config.get('imapHost')],
             ['imapUsername', this.agent.config.get('imapUsername')],
             ['imapPassword', this.agent.config.get('imapPassword')],
@@ -162,7 +206,7 @@ export class EmailChannel implements IChannel {
                 }
             }
         } catch (e: any) {
-            logger.warn(`Email poll failed: ${e?.message || e}`);
+            logger.warn(`Email poll failed: ${e?.message || e}. Tip: run \"Test IMAP Connection\" in Email Settings to validate inbound config.`);
         } finally {
             this.processing = false;
         }
@@ -214,7 +258,12 @@ export class EmailChannel implements IChannel {
         const imapUsername = this.agent.config.get('imapUsername');
         const imapPassword = this.agent.config.get('imapPassword');
 
-        const socket = await this.openSocket(imapHost, imapPort, imapSecure);
+        let socket: tls.TLSSocket | net.Socket;
+        try {
+            socket = await this.openSocket(imapHost, imapPort, imapSecure);
+        } catch (error: any) {
+            throw new Error(this.describeSocketError('IMAP', imapHost, imapPort, error));
+        }
         const unread: ParsedEmail[] = [];
         let tagId = 1;
 
@@ -287,6 +336,24 @@ export class EmailChannel implements IChannel {
 
     private escapeImap(value: string): string {
         return String(value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    }
+
+    private describeSocketError(protocol: 'SMTP' | 'IMAP', host: string, port: number, error: any): string {
+        const endpoint = `${String(host || '(missing-host)')}:${Number(port) || 0}`;
+        const code = String(error?.code || '').trim();
+        const msg = String(error?.message || error || 'Unknown socket error');
+
+        if (code === 'ENOTFOUND') {
+            return `${protocol} connection failed: DNS lookup failed for ${endpoint}. Check ${protocol.toLowerCase()} host value.`;
+        }
+        if (code === 'ECONNREFUSED') {
+            return `${protocol} connection failed: ${endpoint} refused the connection. Check port/security mode and firewall rules.`;
+        }
+        if (code === 'ETIMEDOUT') {
+            return `${protocol} connection failed: timeout reaching ${endpoint}. Check network access and server reachability.`;
+        }
+
+        return `${protocol} connection failed for ${endpoint}: ${msg}`;
     }
 
     private openSocket(host: string, port: number, secure: boolean): Promise<tls.TLSSocket | net.Socket> {
