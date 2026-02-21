@@ -215,7 +215,9 @@ export class AgentOrchestrator extends EventEmitter {
             agent.pid = child.pid;
             this.workerProcesses.set(agent.id, child);
             this.readyWorkers.delete(agent.id);
-            this.pendingTaskDispatch.set(agent.id, []);
+            if (!this.pendingTaskDispatch.has(agent.id)) {
+                this.pendingTaskDispatch.set(agent.id, []);
+            }
 
             // Setup IPC message handling
             child.on('message', (message: IPCResponse) => {
