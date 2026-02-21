@@ -186,19 +186,31 @@ export class MemoryManager {
 
     private isDuplicateMemory(entry: MemoryEntry, existingMemories: MemoryEntry[]): boolean {
         const md = entry.metadata || {};
-        const dedupKey = md.messageId || md.eventId || md.statusMessageId;
+        const dedupKey = this.getStableEventId(md);
         const cutoff = Date.now() - (this.memoryDedupWindowMinutes * 60 * 1000);
         return existingMemories.some((candidate: MemoryEntry) => {
             const ts = candidate.timestamp ? new Date(candidate.timestamp).getTime() : 0;
             if (ts < cutoff) return false;
             const cmd = candidate.metadata || {};
-            if (dedupKey && (cmd.messageId === dedupKey || cmd.eventId === dedupKey || cmd.statusMessageId === dedupKey)) {
+            const candidateDedupKey = this.getStableEventId(cmd);
+            if (dedupKey && candidateDedupKey && dedupKey === candidateDedupKey) {
                 return true;
             }
+
+            // Content-based fallback should only run when neither side has a stable event identifier.
+            if (dedupKey || candidateDedupKey) {
+                return false;
+            }
+
             const sameSource = (cmd.source || '') === (md.source || '');
             const sameContact = (cmd.sourceId || cmd.senderId || '') === (md.sourceId || md.senderId || '');
             return sameSource && sameContact && (candidate.content || '') === (entry.content || '');
         });
+    }
+
+    private getStableEventId(metadata: Record<string, unknown>): string {
+        const stableId = metadata.messageId || metadata.eventId || metadata.statusMessageId;
+        return typeof stableId === 'string' ? stableId : '';
     }
 
     private buildInteractionKey(entry: MemoryEntry): string | null {
