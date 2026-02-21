@@ -10797,7 +10797,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             // PROGRESS FEEDBACK: Let user know we hit an error but are recovering.
                             // Do NOT fire for channel send skills — you can't tell the user
                             // "send_telegram failed" by calling send_telegram again.
-                            const sendSkillNames = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat', 'telegram_send_buttons', 'telegram_send_poll'];
+                            const sendSkillNames = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat', 'telegram_send_buttons', 'telegram_send_poll', 'send_email'];
                             if (!sendSkillNames.includes(toolCall.name)) {
                                 await this.sendProgressFeedback(action, 'error', `${toolCall.name} failed`);
                                 lastUserDeliveryAtMs = Date.now();
@@ -10866,7 +10866,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         // and the LLM needs to retry with adjusted content/params.
                         const isChannelSendSkill = [
                             'send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat',
-                            'telegram_send_buttons', 'telegram_send_poll', 'telegram_edit_message', 'send_file', 'send_image'
+                            'telegram_send_buttons', 'telegram_send_poll', 'telegram_edit_message', 'send_file', 'send_image', 'send_email'
                         ].includes(toolCall.name);
 
                         if (!nonDeepSkills.includes(toolCall.name) && !resultIndicatesError) {
@@ -10982,7 +10982,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             observation = `Observation: Tool ${toolCall.name} returned: ${resultString.slice(0, obsLimit)}`;
                         }
                         if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_gateway_chat' || toolCall.name === 'send_discord' || toolCall.name === 'send_slack' ||
-                            toolCall.name === 'telegram_send_buttons' || toolCall.name === 'telegram_send_poll') {
+                            toolCall.name === 'telegram_send_buttons' || toolCall.name === 'telegram_send_poll' || toolCall.name === 'send_email') {
                             messagesSent++;
                             const sentMessage = (toolCall.metadata?.message || toolCall.metadata?.text || toolCall.metadata?.question || '').toString();
                             if (!resultIndicatesError && this.isSubstantiveDeliveryMessage(sentMessage)) {

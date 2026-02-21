@@ -96,7 +96,6 @@ export interface AgentConfig {
     emailAddress?: string;
     emailFromName?: string;
     emailDefaultSubject?: string;
-    emailPollIntervalSeconds?: number;
     emailSocketTimeoutMs?: number;
     smtpHost?: string;
     smtpPort?: number;
@@ -732,7 +731,6 @@ export class ConfigManager {
             emailAddress: undefined,
             emailFromName: undefined,
             emailDefaultSubject: 'OrcBot response',
-            emailPollIntervalSeconds: 30,
             emailSocketTimeoutMs: 15000,
             smtpHost: undefined,
             smtpPort: 587,

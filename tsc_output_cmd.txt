@@ -1,0 +1,5 @@
+src/channels/EmailChannel.ts(276,22): error TS2339: Property 'length' does not exist on type 'false | number[]'.
+  Property 'length' does not exist on type 'false'.
+src/channels/EmailChannel.ts(277,58): error TS2339: Property 'length' does not exist on type 'false | number[]'.
+  Property 'length' does not exist on type 'false'.
+src/channels/EmailChannel.ts(278,35): error TS2488: Type 'false | number[]' must have a '[Symbol.iterator]()' method that returns an iterator.

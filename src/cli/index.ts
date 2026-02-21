@@ -3956,8 +3956,8 @@ async function showEmailConfig() {
         `${dim('Address')}      ${emailAddress === 'Not Set' ? gray('Not Set') : green(emailAddress)}`,
         `${dim('SMTP')}         ${smtpHost}`,
         `${dim('IMAP')}         ${imapHost}`,
-        `${dim('SMTP Security')} ${smtpSecure ? green('Direct TLS (SMTPS)') : (smtpStartTls ? green('STARTTLS') : yellow('Plain (not recommended)') )}`,
-        `${dim('IMAP Security')} ${imapSecure ? green('Direct TLS (IMAPS)') : (imapStartTls ? green('STARTTLS') : yellow('Plain (not recommended)') )}`,
+        `${dim('SMTP Security')} ${smtpSecure ? green('Direct TLS (SMTPS)') : (smtpStartTls ? green('STARTTLS') : yellow('Plain (not recommended)'))}`,
+        `${dim('IMAP Security')} ${imapSecure ? green('Direct TLS (IMAPS)') : (imapStartTls ? green('STARTTLS') : yellow('Plain (not recommended)'))}`,
         `${dim('Socket Timeout')} ${timeoutMs}ms`,
         `${dim('Auto-Reply')}   ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
     ];
@@ -4003,13 +4003,11 @@ async function showEmailConfig() {
             { type: 'input', name: 'emailAddress', message: 'Email Address (From):', default: agent.config.get('emailAddress') || '' },
             { type: 'input', name: 'emailFromName', message: 'From Name:', default: agent.config.get('emailFromName') || agent.config.get('agentName') || 'OrcBot' },
             { type: 'input', name: 'emailDefaultSubject', message: 'Default Subject:', default: agent.config.get('emailDefaultSubject') || 'OrcBot response' },
-            { type: 'number', name: 'emailPollIntervalSeconds', message: 'Poll Interval Seconds:', default: agent.config.get('emailPollIntervalSeconds') || 30 },
             { type: 'number', name: 'emailSocketTimeoutMs', message: 'Socket Timeout (ms):', default: agent.config.get('emailSocketTimeoutMs') || 15000 },
         ]);
         agent.config.set('emailAddress', ans.emailAddress);
         agent.config.set('emailFromName', ans.emailFromName);
         agent.config.set('emailDefaultSubject', ans.emailDefaultSubject);
-        agent.config.set('emailPollIntervalSeconds', Number(ans.emailPollIntervalSeconds) || 30);
         agent.config.set('emailSocketTimeoutMs', Math.max(3000, Number(ans.emailSocketTimeoutMs) || 15000));
         return showEmailConfig();
     }
