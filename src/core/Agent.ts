@@ -152,6 +152,11 @@ export class Agent {
         send_email: 'email',
         send_gateway_chat: 'gateway-chat',
     };
+    private readonly CROSS_CHANNEL_EXEMPT_TOOLS: Set<string> = new Set([
+        // Email delivery is intentionally cross-channel so users can request
+        // "email this" from Telegram/WhatsApp/Discord/Slack.
+        'send_email',
+    ]);
 
     // Known users tracker — populated from inbound channel messages
     private knownUsers: Map<string, KnownUser> = new Map();
@@ -604,7 +609,8 @@ export class Agent {
 
         const source = String(action.payload?.source || '').trim();
         const isSourceChannelTask = ['telegram', 'whatsapp', 'discord', 'slack', 'email', 'gateway-chat'].includes(source);
-        if (isSourceChannelTask && source !== targetChannel) {
+        const isCrossChannelExempt = this.CROSS_CHANNEL_EXEMPT_TOOLS.has(toolName);
+        if (isSourceChannelTask && source !== targetChannel && !isCrossChannelExempt) {
             return { allowed: false, reason: `Cross-channel send blocked. Action source is '${source}' but tool targets '${targetChannel}'.` };
         }
 

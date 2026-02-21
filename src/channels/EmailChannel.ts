@@ -222,8 +222,7 @@ export class EmailChannel implements IChannel {
                 const subject = fetchOut.match(/\nSubject:\s*(.+)/i)?.[1]?.trim() || '(no subject)';
                 const messageId = fetchOut.match(/\nMessage-ID:\s*(.+)/i)?.[1]?.trim();
                 const inReplyTo = fetchOut.match(/\nIn-Reply-To:\s*(.+)/i)?.[1]?.trim();
-                const bodyStart = fetchOut.toLowerCase().lastIndexOf('in-reply-to:');
-                const text = fetchOut.slice(Math.max(bodyStart, 0)).split('\r\n').slice(6).join('\n').trim();
+                const text = this.extractFetchBodyText(fetchOut);
 
                 unread.push({ from, subject, messageId, inReplyTo, text, uid });
                 await run(`STORE ${id} +FLAGS (\\Seen)`);
@@ -240,6 +239,26 @@ export class EmailChannel implements IChannel {
     private extractEmailAddress(input: string): string {
         const match = input.match(/<([^>]+)>/);
         return (match?.[1] || input || '').trim().toLowerCase();
+    }
+
+    private extractFetchBodyText(fetchOut: string): string {
+        const marker = 'BODY[TEXT]';
+        const markerIndex = fetchOut.toUpperCase().indexOf(marker);
+        if (markerIndex < 0) return '';
+
+        const afterMarker = fetchOut.slice(markerIndex + marker.length);
+        const firstNewline = afterMarker.search(/\r?\n/);
+        const bodySection = firstNewline >= 0 ? afterMarker.slice(firstNewline + 1) : afterMarker;
+
+        const taggedResultMatch = bodySection.match(/\r?\nA\d+\s+(OK|NO|BAD)\b/i);
+        const withoutTaggedResult = taggedResultMatch
+            ? bodySection.slice(0, taggedResultMatch.index)
+            : bodySection;
+
+        return withoutTaggedResult
+            .replace(/^\s*\)\s*/m, '')
+            .replace(/\r\n/g, '\n')
+            .trim();
     }
 
     private escapeImap(value: string): string {
