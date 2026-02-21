@@ -69,18 +69,23 @@ export class EmailChannel implements IChannel {
         const fromAddress = this.agent.config.get('emailAddress') || this.agent.config.get('smtpUsername');
         const fromName = this.agent.config.get('emailFromName') || this.agent.config.get('agentName') || 'OrcBot';
 
+        let finalSubject = subject;
+        if ((inReplyTo || references) && !finalSubject.toLowerCase().startsWith('re:')) {
+            finalSubject = `Re: ${finalSubject}`;
+        }
+
         const mailOptions: any = {
             from: `"${fromName}" <${fromAddress}>`,
             to,
-            subject,
+            subject: finalSubject,
             text: message
         };
 
         if (inReplyTo) {
-            mailOptions.inReplyTo = inReplyTo;
+            mailOptions.inReplyTo = inReplyTo.startsWith('<') ? inReplyTo : `<${inReplyTo}>`;
         }
         if (references) {
-            mailOptions.references = references;
+            mailOptions.references = references.startsWith('<') ? references : `<${references}>`;
         }
 
         try {
@@ -234,7 +239,7 @@ export class EmailChannel implements IChannel {
             // Listen for mail events
             this.imapClient.on('exists', (data) => {
                 logger.info(`EmailChannel: New message detected in mailbox (Total: ${data.count})`);
-                void this.fetchUnreadEmails();
+                this.fetchUnreadEmails().catch(err => logger.error(`EmailChannel: Error in exists handler: ${err.message}`));
             });
 
             this.imapClient.on('error', (err: any) => {
@@ -271,17 +276,26 @@ export class EmailChannel implements IChannel {
     }
 
     private async fetchUnreadEmails(): Promise<void> {
-        if (!this.imapClient || this.processing || !this.started) return;
+        if (!this.imapClient || !this.started) return;
+        if (this.processing) {
+            logger.debug('EmailChannel: Already processing emails, skipping concurrent fetch.');
+            return;
+        }
+
+        logger.debug('EmailChannel: Scanning for unread messages...');
         this.processing = true;
 
-        let lock = await this.imapClient.getMailboxLock('INBOX');
+        let lock: any;
         try {
+            logger.debug('EmailChannel: Acquiring mailbox lock for INBOX...');
+            lock = await this.imapClient.getMailboxLock('INBOX');
+
             // Search for unread messages
             const searchObj = { seen: false };
             const uids = await this.imapClient.search(searchObj, { uid: true });
 
             if (uids && uids.length > 0) {
-                logger.debug(`EmailChannel: Found ${uids.length} unread messages.`);
+                logger.info(`EmailChannel: Found ${uids.length} unread messages.`);
                 for (const uid of uids) {
                     try {
                         const message = await this.imapClient.fetchOne(uid, { source: true, uid: true });
@@ -307,6 +321,8 @@ export class EmailChannel implements IChannel {
                         logger.error(`EmailChannel: Failed to process message UID ${uid}: ${fetchErr.message}`);
                     }
                 }
+            } else {
+                logger.debug('EmailChannel: No unread messages found in INBOX.');
             }
         } catch (error: any) {
             logger.error(`EmailChannel: Error fetching emails: ${error.message}`);
@@ -337,7 +353,10 @@ export class EmailChannel implements IChannel {
             }
         });
 
-        if (!autoReplyEnabled) return;
+        if (!autoReplyEnabled) {
+            logger.info(`EmailChannel: Auto-reply is disabled. Email from ${email.from} ("${email.subject}") recorded in memory but no task pushed.`);
+            return;
+        }
 
         const skipReason = this.shouldSkipAutoReply(email);
         if (skipReason) {
@@ -353,7 +372,7 @@ export class EmailChannel implements IChannel {
         }
 
         await this.agent.pushTask(
-            `Respond to email from ${email.from} with subject "${email.subject}": "${(email.text || '').slice(0, 1000)}"`,
+            `Respond to email from ${email.from} with subject "${email.subject}" (MsgID: ${email.messageId}): "${(email.text || '').slice(0, 1000)}"`,
             10,
             {
                 source: 'email',

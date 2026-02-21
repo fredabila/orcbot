@@ -1,4 +1,4 @@
-# OrcBot Comprehensive Test Prompts
+ # OrcBot Comprehensive Test Prompts
 
 A structured prompt bank covering every major OrcBot capability. Use these in any connected channel (Telegram, Discord, WhatsApp, Gateway) and verify outcomes against the expected behaviour notes.
 
@@ -688,3 +688,168 @@ Apply my stored preferences for tone and detail level.
 
 **Expected**: 8–15 decision steps; all 9 requirements addressed; file delivered; task scheduled; single final summary message; no loops.
 
+
+---
+
+## 29) Advanced Email Operations
+
+### Prompt 29.1
+"Search my inbox for emails from 'Stripe' received in the last 3 days about 'disputes'."
+
+**Expected**: `search_emails` called with `sender="Stripe", daysAgo=3, subject="dispute"`; results summarized or "No emails found" returned.
+
+### Prompt 29.2
+"Find the most recent unread email from my boss (boss@example.com) and give me a 2-sentence summary of what it requires."
+
+**Expected**: `search_emails` with `unreadOnly=true, sender="boss@example.com"`; returns summary; no loop.
+
+### Prompt 29.3
+"Check for any new emails. If you find an invoice, classify if it needs a reply or just archiving."
+
+**Expected**: `search_emails` called; AI classifier (`classifyEmailNeed`) logic triggered in `EmailChannel`; summary explains why it does or does not need a reply.
+
+### Prompt 29.4
+"Send an email to support@github.com regarding my ticket #1234. Attach the `smoke-test.md` file from our workspace."
+
+**Expected**: `send_email` called; file attached correctly; SMTP delivery successful.
+
+---
+
+## 30) Computer Use & Vision-Guided UI
+
+### Prompt 30.1
+"Open the browser and go to a site without a clear DOM (e.g., a canvas-heavy dashboard). Use vision to describe the layout."
+
+**Expected**: `browser_navigate` → `browser_vision` or `computer_describe(context="browser")`; description includes spatial positions of visual elements.
+
+### Prompt 30.2
+"Find the 'Login' button on this screen visually and click it."
+
+**Expected**: `computer_vision_click(description="Login button")` or `computer_locate` followed by `computer_click`.
+
+### Prompt 30.3
+"Type 'admin' into the username field using vision-guided targeting, then press Enter."
+
+**Expected**: `computer_type(text="admin", field="username field")` → `computer_key("Enter")`.
+
+### Prompt 30.4
+"Demonstrate a screen drag: move the slider at (200, 300) to (400, 300) in the browser."
+
+**Expected**: `computer_drag(fromX=200, fromY=300, toX=400, toY=300, context="browser")`.
+
+---
+
+## 31) Multi-Agent Orchestration
+
+### Prompt 31.1
+"Spawn a worker agent named 'researcher' specialized in market analysis."
+
+**Expected**: `spawn_agent(name="researcher", role="worker")`; confirmation with Agent ID.
+
+### Prompt 31.2
+"Delegate a task to the 'researcher' agent: 'Summarize the top 3 competitors in the AI agent space'."
+
+**Expected**: `delegate_task` called with correct Agent ID and description.
+
+### Prompt 31.3
+"Show me the current status of all spawned agents and their aggregate token usage."
+**Expected**: `list_agents` and `get_worker_token_usage` called; accurate status and token counts shown.
+
+### Prompt 31.4
+"Broadcast a message to all agents: 'Priority shift: focus on security analysis for the next 4 hours'."
+
+**Expected**: `broadcast_to_agents` message delivered to all active workers.
+
+### Prompt 31.5
+"Clone yourself as 'OrcBot-Clone' to help with parallel file processing."
+
+**Expected**: `clone_self` called; new agent ID generated.
+
+---
+
+## 32) Dynamic Self-Tuning & Performance
+
+### Prompt 32.1
+"Show me which browser settings can be tuned for specific domains."
+
+**Expected**: `get_tuning_options` returns JSON schema of tunable parameters (timeouts, headful mode, etc.).
+
+### Prompt 32.2
+"A site is blocking our headless browser. Tune our settings for 'protected-site.com' to use headful mode and slow typing."
+
+**Expected**: `tune_browser_domain` or `mark_headful` called for the domain.
+
+### Prompt 32.3
+"Our current workflow is timing out on large tasks. Increase `maxStepsPerAction` to 50 and `skillTimeoutMs` to 60000."
+
+**Expected**: `tune_workflow` updates settings; confirmation returned.
+
+### Prompt 32.4
+"Show me a history of all tuning changes made in this session."
+
+**Expected**: `get_tuning_history` or `get_tuning_state` shows the audit log of adjustments.
+
+---
+
+## 33) Multi-Media & Social
+
+### Prompt 33.1
+"Post a status update to WhatsApp: 'OrcBot is now fully operational with event-driven email support! 🚀'"
+
+**Expected**: `whatsapp_post_status` called; success confirmation.
+
+### Prompt 33.2
+"Read my most recent WhatsApp status and tell me who has viewed it."
+
+**Expected**: `whatsapp_get_context` or similar; status details returned.
+
+### Prompt 33.3
+"Generate an AI voice note reading the incident brief and send it to this chat."
+
+**Expected**: `text_to_speech` → `send_voice_note`.
+
+---
+
+## 34) System Repair & Autonomy
+
+### Prompt 34.1
+"Assume the `search_emails` skill is failing with a 'socket timeout'. Use your self-repair capability to diagnose and propose a fix."
+
+**Expected**: `self_repair_skill` called; analysis of failure; patch proposed or applied to `EmailChannel.ts`.
+
+### Prompt 34.2
+"If you get stuck in a loop during a task, explain how your internal loop detection would trigger a self-improvement task."
+
+**Expected**: references `triggerSkillCreationForFailure` logic; describes the analysis → `create_custom_skill` workflow.
+
+### Prompt 34.3
+"Run a full system check and verify all channel connections (Telegram, Discord, Email)."
+
+**Expected**: `system_check` or `get_system_info`; status of each channel reported.
+
+---
+
+## 35) Notes Template (v2.0)
+
+Copy per test run:
+
+```
+Date:
+Channel:
+Model / provider:
+Config profile:
+OrcBot version:
+
+Section results (score 0–5):
+  0-28. [Existing results]
+  29. Advanced Email:
+  30. Computer Use/Vision:
+  31. Orchestration:
+  32. Self-Tuning:
+  33. Multi-Media/Social:
+  34. System Repair:
+
+Critical Failures:
+Loop Occurrences:
+Performance Wins:
+```
