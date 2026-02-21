@@ -133,6 +133,21 @@ export class Agent {
     private recentTaskFingerprints: Map<string, number> = new Map();
     private readonly recentTaskDedupWindowMs: number = 60_000;
 
+    private readonly TOOL_CHANNEL_MAP: Record<string, 'telegram' | 'whatsapp' | 'discord' | 'slack' | 'gateway-chat'> = {
+        send_telegram: 'telegram',
+        telegram_send_buttons: 'telegram',
+        telegram_send_poll: 'telegram',
+        send_whatsapp: 'whatsapp',
+        react_whatsapp: 'whatsapp',
+        reply_whatsapp_status: 'whatsapp',
+        post_whatsapp_status: 'whatsapp',
+        send_discord: 'discord',
+        send_discord_file: 'discord',
+        send_slack: 'slack',
+        send_slack_file: 'slack',
+        send_gateway_chat: 'gateway-chat',
+    };
+
     // Known users tracker — populated from inbound channel messages
     private knownUsers: Map<string, KnownUser> = new Map();
     private knownUsersPath: string = '';
@@ -208,6 +223,7 @@ export class Agent {
             mistralApiKey: this.config.get('mistralApiKey'),
             cerebrasApiKey: this.config.get('cerebrasApiKey'),
             xaiApiKey: this.config.get('xaiApiKey'),
+            fallbackModelNames: this.config.get('fallbackModelNames'),
         });
 
         // Configure fast model for internal reasoning (reviews, reflections, classification)
@@ -530,6 +546,44 @@ export class Agent {
             return path.resolve(raw);
         }
         return path.resolve(this.getBuildWorkspacePath(), raw);
+    }
+
+
+
+    private isChannelConfigured(channel: 'telegram' | 'whatsapp' | 'discord' | 'slack' | 'gateway-chat'): boolean {
+        if (channel === 'gateway-chat') return true;
+        if (channel === 'telegram') return !!this.config.get('telegramToken') && !!this.telegram;
+        if (channel === 'whatsapp') return this.config.get('whatsappEnabled') !== false && !!this.whatsapp;
+        if (channel === 'discord') return !!this.config.get('discordToken') && !!this.discord;
+        if (channel === 'slack') return !!this.config.get('slackBotToken') && !!this.slack;
+        return false;
+    }
+
+    private evaluateChannelToolPolicy(action: Action, toolName: string): { allowed: boolean; reason?: string } {
+        const targetChannel = this.TOOL_CHANNEL_MAP[toolName];
+        if (!targetChannel) return { allowed: true };
+
+        if (!this.isChannelConfigured(targetChannel)) {
+            return { allowed: false, reason: `Channel '${targetChannel}' is disabled or not configured.` };
+        }
+
+        const source = String(action.payload?.source || '').trim();
+        const isSourceChannelTask = ['telegram', 'whatsapp', 'discord', 'slack', 'gateway-chat'].includes(source);
+        if (isSourceChannelTask && source !== targetChannel) {
+            return { allowed: false, reason: `Cross-channel send blocked. Action source is '${source}' but tool targets '${targetChannel}'.` };
+        }
+
+        const isAutonomous = action.lane === 'autonomy' || !!action.payload?.isHeartbeat || source.includes('heartbeat');
+        if (isAutonomous) {
+            const allowedChannels = Array.isArray(this.config.get('autonomyAllowedChannels'))
+                ? this.config.get('autonomyAllowedChannels')
+                : [];
+            if (!allowedChannels.includes(targetChannel)) {
+                return { allowed: false, reason: `Autonomous/channel heartbeat sends to '${targetChannel}' are disabled by config (autonomyAllowedChannels).` };
+            }
+        }
+
+        return { allowed: true };
     }
 
     private registerInternalSkills() {
@@ -1746,6 +1800,42 @@ export class Agent {
                     }
                 }
                 return 'WhatsApp channel not available';
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'list_available_models',
+            description: 'List models available based on configured API keys and current settings.',
+            usage: 'list_available_models()',
+            handler: async () => {
+                return this.llm.getModelAvailabilitySummary();
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'switch_model',
+            description: 'Switch active LLM model/provider to one that has configured credentials. Optionally set provider-specific fallback models.',
+            usage: 'switch_model(model, provider?, fallback_model?, fallback_provider?)',
+            handler: async (args: any) => {
+                const model = String(args.model || args.modelName || '').trim();
+                const provider = String(args.provider || args.llmProvider || '').trim();
+                const fallbackModel = String(args.fallback_model || args.fallbackModel || '').trim();
+                const fallbackProvider = String(args.fallback_provider || args.fallbackProvider || '').trim();
+
+                if (!model) return 'Error: Missing model.';
+
+                if (provider) this.config.set('llmProvider', provider as any);
+                this.config.set('modelName', model);
+
+                if (fallbackModel) {
+                    const activeProvider = (provider || this.llm.inferProvider(model)) as any;
+                    const key = fallbackProvider || activeProvider;
+                    const existing = this.config.get('fallbackModelNames') || {};
+                    this.config.set('fallbackModelNames', { ...existing, [key]: fallbackModel });
+                }
+
+                this.llm.setModel(model);
+                return `Model switched to ${model}${provider ? ` (provider: ${provider})` : ''}${fallbackModel ? `; fallback ${fallbackProvider || this.llm.inferProvider(model)} => ${fallbackModel}` : ''}.`;
             }
         });
 
@@ -10532,6 +10622,17 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
 
 
                         // logger.info(`Executing skill: ${toolCall.name}`); // Redundant, SkillsManager logs this
+                        const channelPolicy = this.evaluateChannelToolPolicy(action, toolCall.name);
+                        if (!channelPolicy.allowed) {
+                            logger.warn(`Agent: Blocked channel tool '${toolCall.name}' for action ${action.id}: ${channelPolicy.reason}`);
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-${toolCall.name}-channel-policy-blocked`,
+                                type: 'short',
+                                content: `[SYSTEM: CHANNEL POLICY BLOCKED '${toolCall.name}'. Reason: ${channelPolicy.reason}. Config-level channel policy takes precedence over context/heartbeat/tool suggestions. Use only tools that match the action source channel and enabled channels.]`,
+                                metadata: { actionId: action.id, step: currentStep, skill: toolCall.name, denied: true }
+                            });
+                            continue;
+                        }
 
                         // HARD BLOCK: Prevent duplicate generate_image calls within the same action.
                         // If an image was already generated (and optionally delivered), skip this call entirely.
@@ -11445,6 +11546,15 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
 
             if (!goalsMet) {
                 logger.warn(`Agent: Action ${action.id} terminated without achieving goals (guard rail or exhaustion). Marked as failed.`);
+            }
+            if (isUserFacingAction && messagesSent === 0) {
+                logger.error(`Agent: No user-visible response was delivered for action ${action.id}. source=${action.payload?.source} step=${currentStep}`);
+                this.memory.saveMemory({
+                    id: `${action.id}-no-response-diagnostic`,
+                    type: 'short',
+                    content: `[SYSTEM: RESPONSE DIAGNOSTIC — no user-visible message was sent for this channel task. Investigate blocked/suppressed send tools, channel policy, and tool failures for action ${action.id}.`,
+                    metadata: { actionId: action.id, source: action.payload?.source, noResponse: true, steps: currentStep }
+                });
             }
 
             // Record Final Response/Reasoning in Memory upon completion

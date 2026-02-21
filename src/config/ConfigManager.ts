@@ -9,6 +9,7 @@ export interface AgentConfig {
     agentName: string;
     llmProvider?: 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia' | 'anthropic';
     providerModelNames?: Record<string, string>; // Per-provider remembered model names
+    fallbackModelNames?: Record<string, string>; // Optional per-provider fallback model overrides
     telegramToken?: string;
     openaiApiKey?: string;
     openrouterApiKey?: string;
@@ -32,6 +33,7 @@ export interface AgentConfig {
     autonomyInterval?: number; // In minutes, default 0 (disabled)
     autonomyPostUserCooldownSeconds?: number; // Delay heartbeat after inbound user activity (default 90)
     autonomyBacklogLimit?: number;
+    autonomyAllowedChannels?: string[]; // Channels autonomous tasks/heartbeats may message
     maxActionRunMinutes?: number;
     maxStaleActionMinutes?: number;
     memoryPath?: string;
@@ -571,11 +573,13 @@ export class ConfigManager {
                 anthropic: 'claude-3-5-sonnet-latest',
                 bedrock: 'anthropic.claude-3-5-sonnet-20240620-v1:0'
             },
+            fallbackModelNames: {},
             searchProviderOrder: ['serper', 'brave', 'searxng', 'google', 'bing', 'duckduckgo'],
             autonomyEnabled: true,
             autonomyInterval: 15,
             autonomyPostUserCooldownSeconds: 90,
             autonomyBacklogLimit: 3,
+            autonomyAllowedChannels: [],
             maxActionRunMinutes: 10,
             maxStaleActionMinutes: 30,
             memoryPath: path.join(this.dataHome, 'memory.json'),
