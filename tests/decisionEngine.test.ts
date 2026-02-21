@@ -275,3 +275,144 @@ describe('DecisionEngine - Thread Context Grounding', () => {
     expect(systemPrompt).not.toContain('Observation: Tool web_search returned');
   });
 });
+
+describe('DecisionEngine - Scoped Memory Injection', () => {
+  it('injects active user exchanges, unresolved thread markers, and platform metadata', async () => {
+    const llmCalls: Array<{ systemMessage?: string }> = [];
+    const mockLLM = {
+      supportsNativeToolCalling: () => false,
+      call: vi.fn(async (_prompt: string, systemMessage?: string) => {
+        llmCalls.push({ systemMessage });
+        return JSON.stringify({ verification: { goals_met: true, analysis: 'ok' }, tools: [] });
+      })
+    } as any;
+
+    const mockMemory = {
+      getUserContext: () => ({ raw: 'whatsappContextProfilingEnabled: true' }),
+      getRecentContext: () => [],
+      getContactProfile: () => '{"displayName":"Alice"}',
+      getUserRecentExchanges: () => [
+        {
+          id: 'm1', type: 'short', timestamp: '2026-01-01T00:00:00Z',
+          content: 'User asked for a follow up tomorrow',
+          metadata: { role: 'user', messageType: 'text', source: 'whatsapp', sourceId: '123' }
+        }
+      ],
+      getUnresolvedThreads: () => [
+        { id: 'u1', type: 'short', timestamp: '2026-01-01T00:01:00Z', content: 'pending: send the invoice', metadata: {} }
+      ],
+      warmConversationCache: async () => [
+        { id: 'v1', score: 0.91, content: 'Previous invoice discussion', type: 'short', vector: [], timestamp: '2026-01-01T00:01:00Z', metadata: { source: 'whatsapp' } }
+      ],
+      searchMemory: () => []
+    } as any;
+
+    const mockSkills = {
+      getSkillsPrompt: () => 'Available Skills:\n- send_whatsapp',
+      getAllSkills: () => [{ name: 'send_whatsapp' }],
+      matchSkillsForTask: () => [],
+      getAgentSkillsPrompt: () => '',
+      getActivatedSkillsContext: () => '',
+      getAgentSkills: () => [],
+      activateAgentSkill: () => {},
+      deactivateNonStickySkills: () => {}
+    } as any;
+
+    const mockConfig = { get: () => undefined } as any;
+    const engine = new DecisionEngine(mockMemory, mockLLM, mockSkills, '', '', mockConfig);
+
+    await engine.decide({
+      id: 'a1',
+      payload: {
+        description: 'continue our whatsapp discussion',
+        source: 'whatsapp',
+        sourceId: '123',
+        senderName: 'Alice',
+        messageType: 'status_reply',
+        statusContext: 'Replied to my travel status',
+        currentStep: 1,
+        messagesSent: 0
+      }
+    });
+
+    const prompt = llmCalls[0].systemMessage || '';
+    expect(prompt).toContain('LAST USER EXCHANGES (scoped to active contact)');
+    expect(prompt).toContain('UNRESOLVED THREADS (carry-over items)');
+    expect(prompt).toContain('PREFETCHED MEMORY CANDIDATES (hybrid semantic+recency)');
+    expect(prompt).toContain('WHATSAPP TRIGGER METADATA');
+  });
+});
+
+
+describe('DecisionEngine - Step compaction expansion', () => {
+  it('expands middle step history when continuity intent is detected', async () => {
+    const llmCalls: Array<{ systemMessage?: string }> = [];
+
+    const mockLLM = {
+      supportsNativeToolCalling: () => false,
+      call: vi.fn(async (_prompt: string, systemMessage?: string) => {
+        llmCalls.push({ systemMessage });
+        return JSON.stringify({ verification: { goals_met: true, analysis: 'Done' }, tools: [] });
+      })
+    } as any;
+
+    const actionId = 'action-expand';
+    const memories = Array.from({ length: 14 }).map((_, i) => ({
+      id: `${actionId}-step-${i + 1}`,
+      type: 'short',
+      content: `Tool web_search returned detail from step ${i + 1}`,
+      timestamp: `2026-02-05T10:${String(i).padStart(2, '0')}:00.000Z`,
+      metadata: {}
+    }));
+
+    const mockMemory = {
+      getUserContext: () => ({ raw: '' }),
+      getRecentContext: () => memories,
+      getContactProfile: () => null,
+      getRelevantEpisodicMemories: async () => [],
+      semanticRecall: async () => [],
+      vectorMemory: { isEnabled: () => false }
+    } as any;
+
+    const mockSkills = {
+      getSkillsPrompt: () => 'Available Skills\n- send_telegram',
+      getAllSkills: () => [{ name: 'send_telegram' }],
+      matchSkillsForTask: () => [],
+      getAgentSkillsPrompt: () => '',
+      getActivatedSkillsContext: () => '',
+      getAgentSkills: () => [],
+      activateAgentSkill: () => {},
+      deactivateNonStickySkills: () => {}
+    } as any;
+
+    const mockConfig = {
+      get: (key: string) => {
+        if (key === 'stepCompactionThreshold') return 6;
+        if (key === 'stepCompactionPreserveFirst') return 2;
+        if (key === 'stepCompactionPreserveLast') return 2;
+        if (key === 'stepCompactionExpandOnDemand') return true;
+        if (key === 'stepCompactionExpansionMaxMiddleSteps') return 4;
+        if (key === 'stepCompactionExpansionMaxChars') return 4000;
+        return undefined;
+      }
+    } as any;
+
+    const engine = new DecisionEngine(mockMemory, mockLLM, mockSkills, '', '', mockConfig);
+
+    await engine.decide({
+      id: actionId,
+      payload: {
+        description: 'Can you recap where we left off and continue?',
+        messagesSent: 0,
+        currentStep: 1,
+        source: 'telegram',
+        sourceId: '12345'
+      }
+    });
+
+    const systemPrompt = llmCalls[0].systemMessage || '';
+    expect(systemPrompt).toContain('expanded continuity context');
+    expect(systemPrompt).toContain('[Step 9] Tool web_search returned detail from step 9');
+    expect(systemPrompt).not.toContain('middle steps compacted');
+  });
+});

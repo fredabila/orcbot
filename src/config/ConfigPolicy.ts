@@ -51,6 +51,55 @@ export class ConfigPolicy {
             reason: 'Agents can adjust episodic memory for better context',
             validation: (value: any) => typeof value === 'number' && value > 0 && value <= 20
         }],
+        ['stepCompactionExpandOnDemand', {
+            key: 'stepCompactionExpandOnDemand',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Expand compacted middle step history for continuity-heavy tasks',
+            reason: 'Non-sensitive context shaping behavior',
+            validation: (value: any) => typeof value === 'boolean'
+        }],
+        ['stepCompactionExpansionMaxMiddleSteps', {
+            key: 'stepCompactionExpansionMaxMiddleSteps',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Maximum number of middle steps to expand on continuity intent',
+            reason: 'Non-sensitive context sizing control',
+            validation: (value: any) => typeof value === 'number' && value >= 1 && value <= 50
+        }],
+        ['stepCompactionExpansionMaxChars', {
+            key: 'stepCompactionExpansionMaxChars',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Maximum characters reserved for expanded middle-step context',
+            reason: 'Non-sensitive context sizing control',
+            validation: (value: any) => typeof value === 'number' && value >= 400 && value <= 20000
+        }],
+        ['memoryInteractionBatchSize', {
+            key: 'memoryInteractionBatchSize',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Batch size for scoped short→episodic interaction consolidation',
+            reason: 'Non-sensitive memory quality tuning',
+            validation: (value: any) => typeof value === 'number' && value >= 4 && value <= 100
+        }],
+        ['memoryInteractionStaleMinutes', {
+            key: 'memoryInteractionStaleMinutes',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Max stale minutes before pending interaction batch is consolidated',
+            reason: 'Non-sensitive memory durability tuning',
+            validation: (value: any) => typeof value === 'number' && value >= 1 && value <= 180
+        }],
+        ['memoryDedupWindowMinutes', {
+            key: 'memoryDedupWindowMinutes',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Deduplication window for duplicate inbound memory events',
+            reason: 'Non-sensitive reliability tuning for webhook retries',
+            validation: (value: any) => typeof value === 'number' && value >= 1 && value <= 120
+        }],
+        ['userExchangeContextLimit', {
+            key: 'userExchangeContextLimit',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Scoped user exchange count injected into decisions',
+            reason: 'Non-sensitive context sizing control',
+            validation: (value: any) => typeof value === 'number' && value >= 3 && value <= 30
+        }],
         ['maxStepsPerAction', {
             key: 'maxStepsPerAction',
             level: ConfigChangeLevel.SAFE,

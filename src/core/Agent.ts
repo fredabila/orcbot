@@ -182,7 +182,11 @@ export class Agent {
             memoryFlushSoftThreshold: this.config.get('memoryFlushSoftThreshold'),
             memoryFlushCooldownMinutes: this.config.get('memoryFlushCooldownMinutes'),
             memoryContentMaxLength: this.config.get('memoryContentMaxLength'),
-            memoryExtendedContextLimit: this.config.get('memoryExtendedContextLimit')
+            memoryExtendedContextLimit: this.config.get('memoryExtendedContextLimit'),
+            interactionBatchSize: this.config.get('memoryInteractionBatchSize'),
+            interactionStaleMinutes: this.config.get('memoryInteractionStaleMinutes'),
+            memoryDedupWindowMinutes: this.config.get('memoryDedupWindowMinutes'),
+            userExchangeDefaultLimit: this.config.get('userExchangeContextLimit')
         });
 
         // Wire processed-messages cache size from config (supports serverMode override)
@@ -7361,7 +7365,11 @@ REFLECTION: <1-2 sentences>`;
                     oldConfig.memoryFlushSoftThreshold !== newConfig.memoryFlushSoftThreshold ||
                     oldConfig.memoryFlushCooldownMinutes !== newConfig.memoryFlushCooldownMinutes ||
                     oldConfig.memoryContentMaxLength !== newConfig.memoryContentMaxLength ||
-                    oldConfig.memoryExtendedContextLimit !== newConfig.memoryExtendedContextLimit;
+                    oldConfig.memoryExtendedContextLimit !== newConfig.memoryExtendedContextLimit ||
+                    oldConfig.memoryInteractionBatchSize !== newConfig.memoryInteractionBatchSize ||
+                    oldConfig.memoryInteractionStaleMinutes !== newConfig.memoryInteractionStaleMinutes ||
+                    oldConfig.memoryDedupWindowMinutes !== newConfig.memoryDedupWindowMinutes ||
+                    oldConfig.userExchangeContextLimit !== newConfig.userExchangeContextLimit;
 
                 if (memoryChanged) {
                     this.memory.setLimits({
@@ -7372,7 +7380,11 @@ REFLECTION: <1-2 sentences>`;
                         memoryFlushSoftThreshold: newConfig.memoryFlushSoftThreshold,
                         memoryFlushCooldownMinutes: newConfig.memoryFlushCooldownMinutes,
                         memoryContentMaxLength: newConfig.memoryContentMaxLength,
-                        memoryExtendedContextLimit: newConfig.memoryExtendedContextLimit
+                        memoryExtendedContextLimit: newConfig.memoryExtendedContextLimit,
+                        interactionBatchSize: newConfig.memoryInteractionBatchSize,
+                        interactionStaleMinutes: newConfig.memoryInteractionStaleMinutes,
+                        memoryDedupWindowMinutes: newConfig.memoryDedupWindowMinutes,
+                        userExchangeDefaultLimit: newConfig.userExchangeContextLimit
                     });
                     logger.info('Agent: Memory limits reloaded');
                 }
@@ -11657,6 +11669,9 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
             // to prevent blocking the next task.
             this.memory.consolidate(this.llm).catch(e => {
                 logger.error(`Background Memory Consolidation Error: ${e}`);
+            });
+            this.memory.consolidateInteractions(this.llm, 'session_end').catch(e => {
+                logger.error(`Background Interaction Consolidation Error: ${e}`);
             });
         }
     }

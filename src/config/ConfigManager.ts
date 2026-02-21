@@ -162,6 +162,13 @@ export interface AgentConfig {
     stepCompactionThreshold?: number;            // Step count above which middle steps get compacted (default 10)
     stepCompactionPreserveFirst?: number;        // Steps at start to always preserve verbatim (default 2)
     stepCompactionPreserveLast?: number;         // Steps at end to always preserve verbatim (default 5)
+    stepCompactionExpandOnDemand?: boolean;      // Expand compacted middle steps when continuity/context intent is detected (default true)
+    stepCompactionExpansionMaxMiddleSteps?: number; // Max middle steps to rehydrate when expansion mode is active (default 12)
+    stepCompactionExpansionMaxChars?: number;    // Max chars allocated to expanded middle-step context (default 2400)
+    memoryInteractionBatchSize?: number;         // Number of short interaction events before forced scoped consolidation (default 12)
+    memoryInteractionStaleMinutes?: number;      // Max age of pending scoped interactions before consolidation (default 10)
+    memoryDedupWindowMinutes?: number;           // Recent time window for duplicate event suppression (default 5)
+    userExchangeContextLimit?: number;           // Number of scoped user exchanges injected into DecisionEngine (default 8)
     timeSignalHighRiskNoMessageSeconds?: number; // High delay risk threshold when no message has been sent yet
     timeSignalMediumRiskSilentSteps?: number; // Medium delay risk threshold for silent steps
     timeSignalMediumRiskSinceDeliverySeconds?: number; // Medium delay risk threshold since last user-visible delivery
@@ -775,6 +782,13 @@ export class ConfigManager {
             stepCompactionThreshold: 10,
             stepCompactionPreserveFirst: 2,
             stepCompactionPreserveLast: 5,
+            stepCompactionExpandOnDemand: true,
+            stepCompactionExpansionMaxMiddleSteps: 12,
+            stepCompactionExpansionMaxChars: 2400,
+            memoryInteractionBatchSize: 12,
+            memoryInteractionStaleMinutes: 10,
+            memoryDedupWindowMinutes: 5,
+            userExchangeContextLimit: 8,
             timeSignalHighRiskNoMessageSeconds: 25,
             timeSignalMediumRiskSilentSteps: 4,
             timeSignalMediumRiskSinceDeliverySeconds: 45,
