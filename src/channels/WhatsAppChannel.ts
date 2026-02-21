@@ -28,11 +28,11 @@ export class WhatsAppChannel implements IChannel {
     private store: any;
     private contactJids: Set<string> = new Set();
     private contactNames: Map<string, string> = new Map();
-    // Cache of recent status message keys so we can reply to them properly
-    // Key: participant JID, Value: the latest status messageKey from Baileys
-    private statusMessageKeys: Map<string, any> = new Map();
-    // Cache of recent status message keys by message ID for reactions
-    private statusMessageKeysById: Map<string, any> = new Map();
+    // Cache of recent status metadata so replies can preserve WhatsApp quote preview context
+    // Key: participant JID, Value: latest status metadata
+    private statusRepliesByParticipant: Map<string, { key: any; message: any; timestamp?: number; contentType: string; hasMedia: boolean }> = new Map();
+    // Cache of recent status metadata by status message ID for reactions and context propagation
+    private statusRepliesById: Map<string, { key: any; message: any; timestamp?: number; contentType: string; hasMedia: boolean }> = new Map();
     // Prefix used to identify agent-sent messages (for self-chat distinction)
     private readonly AGENT_MESSAGE_PREFIX = '🤖 ';
     // Cache config values to avoid repeated lookups
@@ -85,6 +85,20 @@ export class WhatsAppChannel implements IChannel {
         if (jid === 'status@broadcast') return;
         if (!jid.endsWith('@s.whatsapp.net')) return;
         this.contactJids.add(jid);
+    }
+
+    private detectStatusContentType(message: any): string {
+        if (!message) return 'unknown';
+        if (message.conversation || message.extendedTextMessage?.text) return 'text';
+        if (message.imageMessage) return 'image';
+        if (message.videoMessage) return 'video';
+        if (message.audioMessage) return 'audio';
+        if (message.documentMessage) return 'document';
+        return 'unknown';
+    }
+
+    private hasStatusMedia(message: any): boolean {
+        return Boolean(message?.imageMessage || message?.videoMessage || message?.audioMessage || message?.documentMessage);
     }
 
     private recordContacts(contacts: Array<any>) {
@@ -296,8 +310,15 @@ export class WhatsAppChannel implements IChannel {
                         if (isStatus && text) {
                             // Cache the full message key so we can send a proper status reply later
                             const participant = msg.key.participant || msg.participant;
-                            this.statusMessageKeys.set(participant, msg.key);
-                            this.statusMessageKeysById.set(messageId, msg.key);
+                            const statusMetadata = {
+                                key: msg.key,
+                                message: msg.message,
+                                timestamp: typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : undefined,
+                                contentType: this.detectStatusContentType(msg.message),
+                                hasMedia: this.hasStatusMedia(msg.message)
+                            };
+                            this.statusRepliesByParticipant.set(participant, statusMetadata);
+                            this.statusRepliesById.set(messageId, statusMetadata);
 
                             // Record it in memory so the agent knows.
                             this.agent.memory.saveMemory({
@@ -305,7 +326,15 @@ export class WhatsAppChannel implements IChannel {
                                 type: 'short',
                                 content: `WhatsApp STATUS from ${participant}: ${text}`,
                                 timestamp: new Date().toISOString(),
-                                metadata: { source: 'whatsapp', type: 'status', messageId, senderId: participant }
+                                metadata: {
+                                    source: 'whatsapp',
+                                    type: 'status',
+                                    messageId,
+                                    senderId: participant,
+                                    statusContentType: statusMetadata.contentType,
+                                    statusHasMedia: statusMetadata.hasMedia,
+                                    statusTimestamp: statusMetadata.timestamp
+                                }
                             });
 
                             // Only trigger a task if Status Interactions are enabled
@@ -313,7 +342,16 @@ export class WhatsAppChannel implements IChannel {
                                 await this.agent.pushTask(
                                     `WhatsApp STATUS update from ${participant} (ID: ${messageId}): "${text}". \n\nGoal: Decide if you should reply to this status. If yes, use 'reply_whatsapp_status' with the JID '${participant}' and a short, conversational reply message. The reply will appear as a proper status reply to the person, not as a regular DM.`,
                                     3,
-                                    { source: 'whatsapp', sourceId: participant, senderName: participant, type: 'status', messageId }
+                                    {
+                                        source: 'whatsapp',
+                                        sourceId: participant,
+                                        senderName: participant,
+                                        type: 'status',
+                                        messageId,
+                                        statusContentType: statusMetadata.contentType,
+                                        statusHasMedia: statusMetadata.hasMedia,
+                                        statusTimestamp: statusMetadata.timestamp
+                                    }
                                 );
                             } else {
                                 logger.info(`WhatsApp: Status reply skipped - statusReplyEnabled is false`);
@@ -464,8 +502,8 @@ CRITICAL: You MUST use 'send_whatsapp' to reply. Do NOT send cross-channel Teleg
             }
 
             // If this is a reaction to a status message, we need to handle it specially
-            const statusKey = this.statusMessageKeysById.get(messageId);
-            const key = statusKey || {
+            const statusMetadata = this.statusRepliesById.get(messageId);
+            const key = statusMetadata?.key || {
                 remoteJid: targetJid,
                 id: messageId,
                 fromMe: false // Usually reacting to others
@@ -604,8 +642,8 @@ CRITICAL: You MUST use 'send_whatsapp' to reply. Do NOT send cross-channel Teleg
         }
 
         // Look up the cached message key for this participant's latest status
-        const originalKey = this.statusMessageKeys.get(participantJid);
-        if (!originalKey) {
+        const statusMetadata = this.statusRepliesByParticipant.get(participantJid);
+        if (!statusMetadata) {
             logger.warn(`WhatsAppChannel: No cached status key for ${participantJid}. Falling back to regular DM.`);
             // Graceful degradation: send as a DM with context prefix so user knows it's related to their status
             await this.sendMessage(participantJid, `[Re: your status] ${message}`);
@@ -624,8 +662,8 @@ CRITICAL: You MUST use 'send_whatsapp' to reply. Do NOT send cross-channel Teleg
                     text: message,
                     // `quoted` creates the contextual reply bubble referencing the original status
                     quoted: {
-                        key: originalKey,
-                        message: {}
+                        key: statusMetadata.key,
+                        message: statusMetadata.message
                     }
                 }
             );
