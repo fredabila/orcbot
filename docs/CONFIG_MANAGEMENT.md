@@ -95,6 +95,7 @@ These settings can be safely modified by agents to optimize performance:
 - `memoryContextLimit` - Adjust memory context for complex tasks
 - `memoryEpisodicLimit` - Tune episodic memory summaries
 - `maxStepsPerAction` - Increase step budget for multi-step workflows
+- `maxMessagesPerAction` - Increase per-action delivery/message budget
 - `progressFeedbackEnabled` - Toggle progress feedback
 - `searchProviderOrder` - Optimize search provider selection
 

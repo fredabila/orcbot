@@ -262,7 +262,7 @@ export class ConfigManagementService {
             }
         }
 
-        // Suggest step budget adjustments
+        // Suggest step/message budget adjustments
         if (taskDescription.toLowerCase().includes('multi-step') ||
             taskDescription.toLowerCase().includes('workflow')) {
             const currentSteps = context.config.get('maxStepsPerAction');
@@ -271,6 +271,15 @@ export class ConfigManagementService {
                     key: 'maxStepsPerAction',
                     value: 50,
                     reason: 'Multi-step workflows need higher step budgets'
+                });
+            }
+
+            const currentMessages = Number(context.config.get('maxMessagesPerAction') || 0);
+            if (currentMessages < 15) {
+                suggestions.push({
+                    key: 'maxMessagesPerAction',
+                    value: 15,
+                    reason: 'Multi-step workflows with progress updates need a higher message budget'
                 });
             }
         }
