@@ -38,6 +38,7 @@ describe('ConfigPolicy', () => {
         expect(ConfigPolicy.requiresApproval('openaiApiKey')).toBe(true);
         expect(ConfigPolicy.requiresApproval('googleApiKey')).toBe(true);
         expect(ConfigPolicy.requiresApproval('autonomyEnabled')).toBe(true);
+        expect(ConfigPolicy.requiresApproval('workerPoolAllowAutonomyDuringUserWork')).toBe(true);
     });
 
     it('validates configuration values correctly', () => {
