@@ -9412,6 +9412,14 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
         const profileKey = this.getOnboardingProfileKey(metadata);
         if (!profileKey) return;
+        // Only send onboarding questionnaire to admin users (prevent spamming regular contacts)
+        try {
+            if (!this.isUserAdmin(metadata)) return;
+        } catch (e) {
+            // Be conservative: if admin check fails, don't send
+            return;
+        }
+
         if (this.hasOnboardingQuestionnaireBeenSent(profileKey)) return;
 
         const agentName = String(this.config.get('agentName') || 'OrcBot');

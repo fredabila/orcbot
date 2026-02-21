@@ -40,6 +40,8 @@ export class WhatsAppChannel implements IChannel {
     private statusReplyEnabled: boolean = false;
     private autoReactEnabled: boolean = false;
     private profilingEnabled: boolean = false;
+    // Track last user message timestamps for suppressing agent replies when user is active
+    private lastUserMessageTimestamps: Map<string, number> = new Map();
 
     constructor(agent: Agent) {
         this.agent = agent;
@@ -442,16 +444,24 @@ export class WhatsAppChannel implements IChannel {
 
                         if (isSelfChat && this.autoReplyEnabled) {
                             await this.agent.pushTask(
-                                `WhatsApp command from yourself (ID: ${messageId}): \"${displayText}\"${mediaContext}${replyNote}${mediaNote}${profileInstruction}
+                                `WhatsApp command from yourself (ID: ${messageId}): "${displayText}"${mediaContext}${replyNote}${mediaNote}${profileInstruction}
                                 
 CRITICAL: You MUST use 'send_whatsapp' to reply. Do NOT send cross-channel Telegram notifications.`,
                                 10,
                                 { source: 'whatsapp', sourceId: senderId, sessionScopeId, senderName: senderName, isOwner: true, messageId, quotedMessageId, replyContext: replyContext || undefined, mediaPath: mediaPath || undefined }
                             );
                         } else if (this.autoReplyEnabled) {
+                            // Suppress agent reply if user is active in chat
+                            const lastUserTs = this.lastUserMessageTimestamps.get(senderId) || 0;
+                            const now = Date.now();
+                            const userActiveWindowMs = 60 * 1000; // 1 minute window
+                            if (now - lastUserTs < userActiveWindowMs) {
+                                logger.info(`WhatsAppChannel: User is active in chat (${senderId}), suppressing agent reply.`);
+                                return;
+                            }
                             // Treat as External Interaction for AI to decide on
                             await this.agent.pushTask(
-                                `EXTERNAL WHATSAPP MESSAGE from ${senderName} (ID: ${messageId}): \"${displayText}\"${mediaContext}${replyNote}${mediaNote}. \n\nGoal: Decide if you should respond${reactInstruction} to this person on my behalf based on our history and my persona. If yes, use 'send_whatsapp'${reactInstruction}.${profileInstruction}`,
+                                `EXTERNAL WHATSAPP MESSAGE from ${senderName} (ID: ${messageId}): "${displayText}"${mediaContext}${replyNote}${mediaNote}. \n\nGoal: Decide if you should respond${reactInstruction} to this person on my behalf based on our history and my persona. If yes, use 'send_whatsapp'${reactInstruction}.${profileInstruction}`,
                                 5,
                                 { source: 'whatsapp', sourceId: senderId, sessionScopeId, senderName: senderName, isExternal: true, messageId, quotedMessageId, replyContext: replyContext || undefined, mediaPath: mediaPath || undefined }
                             );

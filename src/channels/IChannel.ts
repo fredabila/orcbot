@@ -2,7 +2,10 @@ export interface IChannel {
     name: string;
     start(): Promise<void>;
     stop(): Promise<void>;
-    sendMessage(to: string, message: string): Promise<void>;
+    // Returns `true` if the message was actually sent, or `false` if the channel
+    // chose to defer delivery (e.g. user is active). Channels may also return
+    // nothing (void) for backward compatibility.
+    sendMessage(to: string, message: string): Promise<boolean | void>;
     sendFile(to: string, filePath: string, caption?: string): Promise<void>;
     sendTypingIndicator(to: string): Promise<void>;
     /**
