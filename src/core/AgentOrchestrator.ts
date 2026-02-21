@@ -55,6 +55,7 @@ export class AgentOrchestrator extends EventEmitter {
     private workerScriptPath: string;
     private readyWorkers: Set<string> = new Set();
     private pendingTaskDispatch: Map<string, string[]> = new Map();
+    private cancelledTaskReasons: Map<string, string> = new Map();
 
     constructor(dataDir?: string, primaryAgentId?: string) {
         super();
@@ -401,18 +402,31 @@ export class AgentOrchestrator extends EventEmitter {
 
             if (strandedTaskId) {
                 const task = this.tasks.get(strandedTaskId);
+                const cancellationReason = this.cancelledTaskReasons.get(strandedTaskId);
+
                 if (task && task.status !== 'completed' && task.status !== 'failed') {
-                    task.status = 'pending';
-                    task.assignedTo = null;
-                    task.error = `Worker ${agentId} exited unexpectedly with code ${exitCode}`;
-                    logger.warn(`Orchestrator: Re-queued task ${strandedTaskId} after worker ${agentId} exit`);
-                    this.emit('task:requeued', {
-                        taskId: strandedTaskId,
-                        previousAgentId: agentId,
-                        reason: 'worker-exit',
-                        exitCode
-                    });
+                    if (cancellationReason) {
+                        task.status = 'failed';
+                        task.assignedTo = null;
+                        task.error = cancellationReason;
+                        task.completedAt = new Date().toISOString();
+                        logger.info(`Orchestrator: Marked cancelled task ${strandedTaskId} as failed after worker ${agentId} exit`);
+                        this.emit('task:failed', task);
+                    } else {
+                        task.status = 'pending';
+                        task.assignedTo = null;
+                        task.error = `Worker ${agentId} exited unexpectedly with code ${exitCode}`;
+                        logger.warn(`Orchestrator: Re-queued task ${strandedTaskId} after worker ${agentId} exit`);
+                        this.emit('task:requeued', {
+                            taskId: strandedTaskId,
+                            previousAgentId: agentId,
+                            reason: 'worker-exit',
+                            exitCode
+                        });
+                    }
                 }
+
+                this.cancelledTaskReasons.delete(strandedTaskId);
             }
 
             this.save();
@@ -592,6 +606,19 @@ export class AgentOrchestrator extends EventEmitter {
         this.pendingTaskDispatch.set(agentId, queue);
     }
 
+    private removePendingTaskDispatch(agentId: string, taskId: string): void {
+        const queue = this.pendingTaskDispatch.get(agentId);
+        if (!queue || queue.length === 0) return;
+
+        const filtered = queue.filter(id => id !== taskId);
+        if (filtered.length === 0) {
+            this.pendingTaskDispatch.delete(agentId);
+            return;
+        }
+
+        this.pendingTaskDispatch.set(agentId, filtered);
+    }
+
     private dispatchTaskToWorker(agentId: string, task: OrchestratorTask): boolean {
         const sent = this.sendToWorker(agentId, {
             type: 'task',
@@ -767,6 +794,21 @@ export class AgentOrchestrator extends EventEmitter {
      * Cancel task (marks as failed with reason)
      */
     public cancelTask(taskId: string, reason: string = 'Cancelled by user'): boolean {
+        const task = this.tasks.get(taskId);
+        if (!task) return false;
+
+        this.cancelledTaskReasons.set(taskId, reason);
+
+        const assignedAgentId = task.assignedTo;
+        if (assignedAgentId) {
+            this.removePendingTaskDispatch(assignedAgentId, taskId);
+
+            const assignedAgent = this.agents.get(assignedAgentId);
+            if (assignedAgent?.currentTask === taskId && this.isWorkerRunning(assignedAgentId)) {
+                this.stopWorkerProcess(assignedAgentId);
+            }
+        }
+
         return this.failTask(taskId, reason);
     }
 
