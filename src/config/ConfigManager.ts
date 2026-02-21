@@ -90,6 +90,23 @@ export interface AgentConfig {
     slackAppToken?: string;               // Slack app token (xapp-...) for Socket Mode
     slackSigningSecret?: string;          // Slack signing secret (for events API)
     slackAutoReplyEnabled?: boolean;      // Auto-reply in Slack (default false)
+    // Email
+    emailEnabled?: boolean;
+    emailAutoReplyEnabled?: boolean;
+    emailAddress?: string;
+    emailFromName?: string;
+    emailDefaultSubject?: string;
+    emailPollIntervalSeconds?: number;
+    smtpHost?: string;
+    smtpPort?: number;
+    smtpSecure?: boolean;
+    smtpUsername?: string;
+    smtpPassword?: string;
+    imapHost?: string;
+    imapPort?: number;
+    imapSecure?: boolean;
+    imapUsername?: string;
+    imapPassword?: string;
     // World events
     worldEventsSources?: string[];        // e.g. ['gdelt', 'usgs', 'opensky']
     worldEventsRefreshSeconds?: number;   // Live view refresh (default 60)
@@ -224,6 +241,7 @@ export interface AgentConfig {
         discord?: string[];    // Discord snowflake user IDs (e.g., ["876513738667229184"])
         whatsapp?: string[];   // WhatsApp JIDs (e.g., ["5511999998888@s.whatsapp.net"])
         slack?: string[];      // Slack user IDs (e.g., ["U012ABCDEF"])
+        email?: string[];      // Email addresses (e.g., ["user@example.com"])
     };
     telegramCommands?: Array<{
         command: string;
@@ -341,6 +359,17 @@ export class ConfigManager {
             slackBotToken: process.env.SLACK_BOT_TOKEN,
             slackAppToken: process.env.SLACK_APP_TOKEN,
             slackSigningSecret: process.env.SLACK_SIGNING_SECRET,
+            emailAddress: process.env.EMAIL_ADDRESS,
+            smtpHost: process.env.SMTP_HOST,
+            smtpPort: process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : undefined,
+            smtpSecure: process.env.SMTP_SECURE ? String(process.env.SMTP_SECURE).toLowerCase() === 'true' : undefined,
+            smtpUsername: process.env.SMTP_USERNAME,
+            smtpPassword: process.env.SMTP_PASSWORD,
+            imapHost: process.env.IMAP_HOST,
+            imapPort: process.env.IMAP_PORT ? Number(process.env.IMAP_PORT) : undefined,
+            imapSecure: process.env.IMAP_SECURE ? String(process.env.IMAP_SECURE).toLowerCase() === 'true' : undefined,
+            imapUsername: process.env.IMAP_USERNAME,
+            imapPassword: process.env.IMAP_PASSWORD,
             bedrockRegion: process.env.BEDROCK_REGION || process.env.AWS_REGION,
             bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
             bedrockSecretAccessKey: process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY,
@@ -694,6 +723,22 @@ export class ConfigManager {
             slackAutoReplyEnabled: false,
             slackAppToken: undefined,
             slackSigningSecret: undefined,
+            emailEnabled: false,
+            emailAutoReplyEnabled: false,
+            emailAddress: undefined,
+            emailFromName: undefined,
+            emailDefaultSubject: 'OrcBot response',
+            emailPollIntervalSeconds: 30,
+            smtpHost: undefined,
+            smtpPort: 587,
+            smtpSecure: false,
+            smtpUsername: undefined,
+            smtpPassword: undefined,
+            imapHost: undefined,
+            imapPort: 993,
+            imapSecure: true,
+            imapUsername: undefined,
+            imapPassword: undefined,
             worldEventsSources: ['gdelt', 'usgs'],
             worldEventsRefreshSeconds: 60,
             worldEventsLookbackMinutes: 60,
@@ -964,7 +1009,7 @@ export class ConfigManager {
 
                     // Critical keys that should never be blanked by a sync
                     const protectedKeys = [
-                        'telegramToken', 'discordToken', 'slackBotToken', 'slackAppToken', 'slackSigningSecret', 'openaiApiKey', 'googleApiKey',
+                        'telegramToken', 'discordToken', 'slackBotToken', 'slackAppToken', 'slackSigningSecret', 'smtpPassword', 'imapPassword', 'openaiApiKey', 'googleApiKey',
                         'nvidiaApiKey', 'anthropicApiKey', 'openrouterApiKey', 'serperApiKey',
                         'captchaApiKey', 'braveSearchApiKey', 'bedrockAccessKeyId',
                         'bedrockSecretAccessKey', 'bedrockSessionToken'
@@ -1010,6 +1055,17 @@ export class ConfigManager {
             slackBotToken: 'SLACK_BOT_TOKEN',
             slackAppToken: 'SLACK_APP_TOKEN',
             slackSigningSecret: 'SLACK_SIGNING_SECRET',
+            emailAddress: 'EMAIL_ADDRESS',
+            smtpHost: 'SMTP_HOST',
+            smtpPort: 'SMTP_PORT',
+            smtpSecure: 'SMTP_SECURE',
+            smtpUsername: 'SMTP_USERNAME',
+            smtpPassword: 'SMTP_PASSWORD',
+            imapHost: 'IMAP_HOST',
+            imapPort: 'IMAP_PORT',
+            imapSecure: 'IMAP_SECURE',
+            imapUsername: 'IMAP_USERNAME',
+            imapPassword: 'IMAP_PASSWORD',
             bedrockRegion: 'BEDROCK_REGION',
             bedrockAccessKeyId: 'BEDROCK_ACCESS_KEY_ID',
             bedrockSecretAccessKey: 'BEDROCK_SECRET_ACCESS_KEY',

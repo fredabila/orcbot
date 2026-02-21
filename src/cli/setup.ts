@@ -233,6 +233,91 @@ export async function runSetup() {
             message: 'Enable Slack AI Auto-Reply?',
             default: currentConfig.slackAutoReplyEnabled || false,
             when: (ans) => !!ans.slackBotToken || !!existingEnv['SLACK_BOT_TOKEN']
+        },
+        {
+            type: 'confirm',
+            name: 'emailEnabled',
+            message: 'Enable Email Channel (SMTP + IMAP)?',
+            default: currentConfig.emailEnabled || false
+        },
+        {
+            type: 'input',
+            name: 'emailAddress',
+            message: `Email Address ${maskHint('EMAIL_ADDRESS')}:`,
+            when: (ans) => ans.emailEnabled
+        },
+        {
+            type: 'input',
+            name: 'smtpHost',
+            message: `SMTP Host ${maskHint('SMTP_HOST')}:`,
+            when: (ans) => ans.emailEnabled
+        },
+        {
+            type: 'number',
+            name: 'smtpPort',
+            message: 'SMTP Port:',
+            default: currentConfig.smtpPort || 587,
+            when: (ans) => ans.emailEnabled
+        },
+        {
+            type: 'confirm',
+            name: 'smtpSecure',
+            message: 'Use TLS for SMTP?',
+            default: currentConfig.smtpSecure ?? false,
+            when: (ans) => ans.emailEnabled
+        },
+        {
+            type: 'input',
+            name: 'smtpUsername',
+            message: `SMTP Username ${maskHint('SMTP_USERNAME')}:`,
+            when: (ans) => ans.emailEnabled
+        },
+        {
+            type: 'input',
+            name: 'smtpPassword',
+            message: `SMTP Password ${maskHint('SMTP_PASSWORD')}:`,
+            mask: '*',
+            when: (ans) => ans.emailEnabled
+        },
+        {
+            type: 'input',
+            name: 'imapHost',
+            message: `IMAP Host ${maskHint('IMAP_HOST')}:`,
+            when: (ans) => ans.emailEnabled
+        },
+        {
+            type: 'number',
+            name: 'imapPort',
+            message: 'IMAP Port:',
+            default: currentConfig.imapPort || 993,
+            when: (ans) => ans.emailEnabled
+        },
+        {
+            type: 'confirm',
+            name: 'imapSecure',
+            message: 'Use TLS for IMAP?',
+            default: currentConfig.imapSecure ?? true,
+            when: (ans) => ans.emailEnabled
+        },
+        {
+            type: 'input',
+            name: 'imapUsername',
+            message: `IMAP Username ${maskHint('IMAP_USERNAME')}:`,
+            when: (ans) => ans.emailEnabled
+        },
+        {
+            type: 'input',
+            name: 'imapPassword',
+            message: `IMAP Password ${maskHint('IMAP_PASSWORD')}:`,
+            mask: '*',
+            when: (ans) => ans.emailEnabled
+        },
+        {
+            type: 'confirm',
+            name: 'emailAutoReplyEnabled',
+            message: 'Enable Email AI Auto-Reply?',
+            default: currentConfig.emailAutoReplyEnabled || false,
+            when: (ans) => ans.emailEnabled
         }
     ]);
 
@@ -297,6 +382,15 @@ export async function runSetup() {
         whatsappAutoReplyEnabled: answers.whatsappAutoReplyEnabled || false,
         discordAutoReplyEnabled: answers.discordAutoReplyEnabled || false,
         slackAutoReplyEnabled: answers.slackAutoReplyEnabled || false,
+        emailEnabled: answers.emailEnabled || false,
+        emailAddress: answers.emailAddress || undefined,
+        smtpHost: answers.smtpHost || undefined,
+        smtpPort: answers.smtpPort || undefined,
+        smtpSecure: answers.smtpSecure ?? undefined,
+        imapHost: answers.imapHost || undefined,
+        imapPort: answers.imapPort || undefined,
+        imapSecure: answers.imapSecure ?? undefined,
+        emailAutoReplyEnabled: answers.emailAutoReplyEnabled || false,
         // Autonomy
         autonomyEnabled: answers.autonomyEnabled !== false,
         autonomyInterval: answers.autonomyInterval ?? 15,
@@ -333,7 +427,12 @@ export async function runSetup() {
         discordToken: 'DISCORD_TOKEN',
         slackBotToken: 'SLACK_BOT_TOKEN',
         slackAppToken: 'SLACK_APP_TOKEN',
-        slackSigningSecret: 'SLACK_SIGNING_SECRET'
+        slackSigningSecret: 'SLACK_SIGNING_SECRET',
+        emailAddress: 'EMAIL_ADDRESS',
+        smtpUsername: 'SMTP_USERNAME',
+        smtpPassword: 'SMTP_PASSWORD',
+        imapUsername: 'IMAP_USERNAME',
+        imapPassword: 'IMAP_PASSWORD'
     };
 
     for (const [field, envKey] of Object.entries(envMap)) {
