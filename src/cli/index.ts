@@ -3959,6 +3959,8 @@ async function showEmailConfig() {
         `${dim('Auto-Reply')}   ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
     ];
     box(lines, { title: '📧 EMAIL', width: 58, color: c.yellow });
+    console.log(dim('SMTP = sending outbound mail.'));
+    console.log(dim('IMAP = reading inbound inbox (auto-reply/tasks). Not required for SMTP-only sending/tests.'));
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -3972,6 +3974,8 @@ async function showEmailConfig() {
                 { name: 'Set SMTP Settings', value: 'set_smtp' },
                 { name: 'Set IMAP Settings', value: 'set_imap' },
                 { name: autoReply ? 'Disable Auto-Reply' : 'Enable Auto-Reply', value: 'toggle_auto' },
+                { name: 'Test SMTP Connection', value: 'test_smtp' },
+                { name: 'Test IMAP Connection', value: 'test_imap' },
                 { name: 'Test SMTP + IMAP Connection', value: 'test' },
                 { name: 'Back', value: 'back' }
             ]
@@ -4044,19 +4048,28 @@ async function showEmailConfig() {
         return showEmailConfig();
     }
 
-    if (action === 'test') {
+    if (action === 'test_smtp' || action === 'test_imap' || action === 'test') {
         if (!agent.email) {
             agent.setupChannels();
         }
         if (!agent.email) {
             console.log('Email channel not available. Configure SMTP/IMAP credentials first.');
         } else {
-            console.log('Testing Email SMTP + IMAP...');
+            const label = action === 'test_smtp' ? 'SMTP' : action === 'test_imap' ? 'IMAP' : 'SMTP + IMAP';
+            console.log(`Testing Email ${label}...`);
             try {
-                await agent.email.testConnections();
-                console.log(green('  ✓ Email connection test successful (SMTP send + IMAP access).'));
+                if (action === 'test_smtp') {
+                    await agent.email.testSmtpConnection();
+                    console.log(green('  ✓ SMTP connection test successful (outbound send).'));
+                } else if (action === 'test_imap') {
+                    await agent.email.testImapConnection();
+                    console.log(green('  ✓ IMAP connection test successful (inbox access).'));
+                } else {
+                    await agent.email.testConnections();
+                    console.log(green('  ✓ Email connection test successful (SMTP send + IMAP access).'));
+                }
             } catch (error: any) {
-                console.log(red(`  ✗ Connection test failed: ${error.message}`));
+                console.log(red(`  ✗ ${label} connection test failed: ${error.message}`));
             }
         }
         await waitKeyPress();
