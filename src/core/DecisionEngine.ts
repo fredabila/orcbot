@@ -6,6 +6,7 @@ import { ELEVATED_SKILLS } from './Agent';
 import { logger } from '../utils/logger';
 import fs from 'fs';
 import os from 'os';
+import path from 'path';
 import { ConfigManager } from '../config/ConfigManager';
 import { DecisionPipeline } from './DecisionPipeline';
 import { ErrorClassifier, ErrorType } from './ErrorClassifier';
@@ -29,6 +30,7 @@ export class DecisionEngine {
     private bootstrap?: BootstrapManager;
     private knowledgeStore?: KnowledgeStore;
     private tools?: ToolsManager;
+    private repoContext: string;
 
     // ── Per-action prompt cache ──
     // The core instructions (bootstrap + identity + skills + helpers) are ~80% identical
@@ -52,6 +54,7 @@ export class DecisionEngine {
         this.tools = tools;
         this.pipeline = new DecisionPipeline(this.config || new ConfigManager());
         this.systemContext = this.buildSystemContext();
+        this.repoContext = this.buildRepoContext();
         this.executionStateManager = new ExecutionStateManager();
         this.contextCompactor = new ContextCompactor(this.llm);
         this.maxRetries = this.config?.get('decisionEngineMaxRetries') || 3;
@@ -160,6 +163,43 @@ The user appreciates knowing what's happening, especially during complex tasks. 
 - Command chaining: Use && or ;
 - Standard Unix commands available (ls, cat, mkdir, echo, etc.)
 - Path format: /path/to/file`;
+        }
+    }
+
+
+    private buildRepoContext(): string {
+        try {
+            const cwd = process.cwd();
+            const packagePath = path.join(cwd, 'package.json');
+            const tsConfigPath = path.join(cwd, 'tsconfig.json');
+            const srcPath = path.join(cwd, 'src');
+            const testsPath = path.join(cwd, 'tests');
+
+            let packageName = path.basename(cwd);
+            let packageVersion = 'unknown';
+            const scripts: string[] = [];
+
+            if (fs.existsSync(packagePath)) {
+                const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf-8'));
+                packageName = pkg.name || packageName;
+                packageVersion = pkg.version || packageVersion;
+                const scriptKeys = Object.keys(pkg.scripts || {});
+                scripts.push(...scriptKeys.filter(key => ['build', 'dev', 'start', 'test'].includes(key)));
+            }
+
+            const traits: string[] = [];
+            if (fs.existsSync(tsConfigPath)) traits.push('typescript');
+            if (fs.existsSync(srcPath)) traits.push('src-tree');
+            if (fs.existsSync(testsPath)) traits.push('tests');
+
+            return `- Repo: ${packageName}@${packageVersion}
+- CWD: ${cwd}
+- Traits: ${traits.join(', ') || 'unknown'}
+- Common scripts: ${scripts.join(', ') || 'none detected'}
+- Reminder: prefer edits aligned with existing architecture and keep changes scoped.`;
+        } catch (error) {
+            logger.debug(`DecisionEngine: Failed to build repo context: ${error}`);
+            return '- Repo context unavailable';
         }
     }
 
@@ -309,7 +349,9 @@ If the user asks for an opinion, explanation, summary, or normal chat response, 
             availableSkills,
             agentIdentity,
             isFirstStep,
-            systemContext: this.getSystemContext(),
+            systemContext: `${this.getSystemContext()}
+REPOSITORY CONTEXT:
+${this.repoContext}`,
             bootstrapContext,
             contactProfile,
             profilingEnabled,
