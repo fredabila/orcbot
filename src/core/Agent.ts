@@ -9766,7 +9766,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             // If this is a new chat and user is admin/owner, let agent decide onboarding
             const isAdmin = this.isUserAdmin(metadata);
             const isOwner = metadata?.isOwner === true;
-            const isNewChat = !this.memory.hasOnboardingQuestionnaireBeenSent(this.getOnboardingProfileKey(metadata));
+            const isNewChat = !this.hasOnboardingQuestionnaireBeenSent(this.getOnboardingProfileKey(metadata));
             if ((isAdmin || isOwner) && isNewChat) {
                 await this.sendOnboardingQuestionnaireIfNeeded(metadata);
             }
