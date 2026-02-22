@@ -685,7 +685,7 @@ export class Agent {
             this.skills.registerSkill({
                 name: 'telegram_send_buttons',
                 description: 'Send a Telegram message with inline keyboard buttons. Use this to ask the user to choose an option, confirm an action, or provide navigation. buttons is a 2-D array of rows; each cell has text and an optional callback_data (payload sent back when pressed) or url.',
-                usage: 'telegram_send_buttons(chatId, message, buttons)',
+                usage: 'telegram_send_buttons(chatId, message, buttons:array)',
                 handler: async (args: any) => {
                     let chat_id = args.chat_id || args.chatId || args.id;
                     const message = args.message || args.content || args.text;
@@ -693,14 +693,26 @@ export class Agent {
 
                     if (!chat_id) return 'Error: Missing chatId.';
                     if (!message) return 'Error: Missing message content.';
-                    if (!Array.isArray(buttons) || buttons.length === 0) return 'Error: buttons must be a non-empty 2-D array, e.g. [[{text:"Yes",callback_data:"yes"},{text:"No",callback_data:"no"}]]';
+
+                    // Robust parsing: if buttons is a string (common when LLM thinks it should be a string), try to parse it as JSON
+                    if (typeof buttons === 'string' && buttons.trim().startsWith('[')) {
+                        try {
+                            buttons = JSON.parse(buttons);
+                        } catch (e) {
+                            return `Error: Failed to parse buttons JSON string: ${e}. Expected a 2-D array of button objects.`;
+                        }
+                    }
+
+                    if (!Array.isArray(buttons) || buttons.length === 0) {
+                        return 'Error: buttons must be a non-empty 2-D array, e.g. [[{"text":"Yes","callback_data":"yes"},{"text":"No","callback_data":"no"}]]';
+                    }
 
                     // Auto-coerce: if the LLM passed a flat 1-D array of button objects,
                     // wrap each object into its own row so the call still works.
-                    // e.g. [{text:"A"},{text:"B"}] → [[{text:"A"},{text:"B"}]]
-                    // e.g. [{text:"A",callback_data:"a"}] → [[{text:"A",callback_data:"a"}]]
                     if (buttons.every((item: any) => item && typeof item === 'object' && !Array.isArray(item))) {
-                        buttons = [buttons];
+                        // If all items are objects, assume it was meant to be one row or multiple rows of 1 button each.
+                        // Standard Telegram UX prefers each button on its own row for 1-D arrays.
+                        buttons = (buttons as any[]).map(btn => [btn]);
                     }
 
                     const resolved = this.resolveTelegramChatId(String(chat_id));
@@ -735,7 +747,7 @@ export class Agent {
             this.skills.registerSkill({
                 name: 'telegram_edit_message',
                 description: 'Edit the text of a previously-sent Telegram message in-place. Ideal for live progress updates (e.g. "Searching… → Found 5 results") without spamming new messages. Requires the message_id returned by send_telegram or telegram_send_buttons.',
-                usage: 'telegram_edit_message(chatId, messageId, newText)',
+                usage: 'telegram_edit_message(chatId, messageId:number, newText)',
                 handler: async (args: any) => {
                     let chat_id = args.chat_id || args.chatId;
                     const messageId = parseInt(String(args.message_id || args.messageId || args.id), 10);
@@ -761,16 +773,26 @@ export class Agent {
             this.skills.registerSkill({
                 name: 'telegram_send_poll',
                 description: 'Create a native Telegram poll in a chat. Great for gathering structured user input. options is an array of 2–10 strings.',
-                usage: 'telegram_send_poll(chatId, question, options, isAnonymous?)',
+                usage: 'telegram_send_poll(chatId, question, options:array, isAnonymous:boolean?)',
                 handler: async (args: any) => {
                     let chat_id = args.chat_id || args.chatId || args.id;
                     const question = args.question;
-                    const options = args.options;
+                    let options = args.options;
                     const isAnonymous = args.is_anonymous ?? args.isAnonymous ?? true;
                     const allowsMultiple = args.allows_multiple_answers ?? args.allowsMultipleAnswers ?? false;
 
                     if (!chat_id) return 'Error: Missing chatId.';
                     if (!question) return 'Error: Missing question.';
+
+                    // Robust parsing: if options is a string, try to parse it as JSON
+                    if (typeof options === 'string' && options.trim().startsWith('[')) {
+                        try {
+                            options = JSON.parse(options);
+                        } catch (e) {
+                            return `Error: Failed to parse options JSON string: ${e}. Expected an array of 2-10 strings.`;
+                        }
+                    }
+
                     if (!Array.isArray(options) || options.length < 2) return 'Error: options must be an array of at least 2 strings.';
                     if (options.length > 10) return 'Error: Telegram polls support at most 10 options.';
 
@@ -960,7 +982,7 @@ export class Agent {
             this.skills.registerSkill({
                 name: 'search_emails',
                 description: 'Search for and read emails from the inbox. Useful for checking if a specific email arrived or reading recent history.',
-                usage: 'search_emails(params: { sender?: string, subject?: string, daysAgo?: number, unreadOnly?: boolean, limit?: number })',
+                usage: 'search_emails({ sender?, subject?, daysAgo:number?, unreadOnly:boolean?, limit:number? })',
                 handler: async (args: any) => {
                     const emailChannel = this.getOrCreateEmailChannel();
                     if (!emailChannel) return 'Email channel not available. Configure IMAP first.';
@@ -2849,7 +2871,7 @@ ${commandGuidance}`;
         this.skills.registerSkill({
             name: 'system_check',
             description: 'Verify system dependencies like commands, shared libraries, and file paths. Useful to confirm installs after manual changes.',
-            usage: 'system_check(commands?, libraries?, paths?)',
+            usage: 'system_check(commands:array?, libraries:array?, paths:array?)',
             handler: async (args: any) => {
                 const commands: string[] = Array.isArray(args?.commands) ? args.commands : (args?.commands ? String(args.commands).split(',') : []);
                 const libraries: string[] = Array.isArray(args?.libraries) ? args.libraries : (args?.libraries ? String(args.libraries).split(',') : []);
@@ -6830,6 +6852,19 @@ Respond with ONLY valid JSON:
         });
     }
 
+    private clearRecoveryTasksForAction(actionId: string): void {
+        const queue = this.actionQueue.getQueue();
+        for (const a of queue) {
+            const trigger = a.payload?.trigger;
+            if ((trigger === 'completion_audit_recovery' || trigger === 'empty_promise_recovery') && 
+                a.payload?.originalActionId === actionId && 
+                a.status === 'pending') {
+                this.actionQueue.updateStatus(a.id, 'failed');
+                logger.debug(`Cleared stale recovery task ${a.id} for action ${actionId}`);
+            }
+        }
+    }
+
     private async detectAndResumeIncompleteWork(
         action: Action,
         sentMessages: string[],
@@ -7845,7 +7880,8 @@ REFLECTION: <1-2 sentences>`;
     private isSubstantiveDeliveryMessage(message: string): boolean {
         const normalized = (message || '').toLowerCase().trim();
         if (!normalized) return false;
-        if (normalized.length < 40) return false;
+        // Reduced threshold from 40 to 20 to catch concise but useful answers
+        if (normalized.length < 20) return false;
 
         const lowValuePatterns = this.getGuidanceRegexList('guidanceLowValuePatterns', [
             '^(got it|on it|working on it|one moment|hang tight|be right back|still working)[.!]?$',
@@ -9231,6 +9267,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 });
             }
             this.actionQueue.updateStatus(action.id, 'failed');
+            this.clearRecoveryTasksForAction(action.id);
             return `Error: ${err.message}`;
         } finally {
             this.isBusy = false;
@@ -9369,6 +9406,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 });
             }
             this.actionQueue.updateStatus(action.id, 'failed');
+            this.clearRecoveryTasksForAction(action.id);
             return `Error: ${err.message}`;
         } finally {
             this.busyLanes.delete(lane);
@@ -11561,7 +11599,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 anyUserDeliverySuccess = true;
                                 lastUserDeliveryAtMs = Date.now();
 
-                                if (this.isSubstantiveDeliveryMessage(sentMessage)) {
+                                if (this.isSubstantiveDeliveryMessage(sentMessage) || isStructuredSend) {
                                     substantiveDeliveriesSent++;
                                 }
                             }

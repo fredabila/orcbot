@@ -1147,7 +1147,16 @@ main().catch(console.error);
     }
 
     public getAllSkills(): Skill[] {
-        return Array.from(this.skills.values());
+        const core = Array.from(this.skills.values());
+        const activatedAgent = Array.from(this.agentSkills.values())
+            .filter(as => as.activated)
+            .map(as => ({
+                name: as.meta.name,
+                description: as.meta.description,
+                usage: as.meta.name, // Placeholder usage for agent skills
+                handler: async () => `Agent skill ${as.meta.name} is instructions-only. Use its internal tools.`
+            }));
+        return [...core, ...activatedAgent];
     }
 
     /**
@@ -1320,8 +1329,9 @@ main().catch(console.error);
 
     /**
      * Parse a usage string like "skill_name(param1, param2, optional?)" into a JSON Schema.
+     * Supports basic type hints: "param:array", "param:object", "param:number", "param:boolean".
      * Parameters with `?` suffix are optional; all others are required.
-     * All parameters default to type "string" since we don't have type info in usage strings.
+     * All parameters default to type "string" if no hint is provided.
      */
     public static parseUsageToSchema(usage: string): {
         properties: Record<string, { type: string; description?: string }>;
@@ -1330,22 +1340,64 @@ main().catch(console.error);
         const properties: Record<string, { type: string; description?: string }> = {};
         const required: string[] = [];
 
-        // Extract params from "name(p1, p2?, p3)" — handle no-arg case "name()"
+        // Extract contents of first set of parentheses
         const match = usage.match(/\(([^)]*)\)/);
         if (!match || !match[1].trim()) {
             return { properties, required };
         }
 
-        const params = match[1].split(',').map(p => p.trim()).filter(Boolean);
+        const rawParams = match[1].trim();
+
+        // Handle Object notation: skill({ name, description, usage, code })
+        if (rawParams.startsWith('{') && rawParams.endsWith('}')) {
+            const inner = rawParams.slice(1, -1).trim();
+            const fields = inner.split(',').map(f => f.trim()).filter(Boolean);
+            
+            for (const field of fields) {
+                const isOptional = field.endsWith('?');
+                let cleanName = field.replace(/\?$/, '').trim();
+                let type = 'string';
+
+                if (cleanName.includes(':')) {
+                    const parts = cleanName.split(':');
+                    cleanName = parts[0].trim();
+                    const hint = parts[1].trim().toLowerCase();
+                    if (hint === 'array') type = 'array';
+                    else if (hint === 'object') type = 'object';
+                    else if (hint === 'number') type = 'number';
+                    else if (hint === 'boolean') type = 'boolean';
+                }
+
+                properties[cleanName] = { type };
+                if (!isOptional) required.push(cleanName);
+            }
+            return { properties, required };
+        }
+
+        // Standard comma-separated params
+        const params = rawParams.split(',').map(p => p.trim()).filter(Boolean);
 
         for (const param of params) {
             const isOptional = param.endsWith('?');
-            const cleanName = param.replace(/\?$/, '').trim();
+            let cleanName = param.replace(/\?$/, '').trim();
+            let type = 'string';
+
+            // Support type hints like "name:array"
+            if (cleanName.includes(':')) {
+                const parts = cleanName.split(':');
+                cleanName = parts[0].trim();
+                const hint = parts[1].trim().toLowerCase();
+                
+                if (hint === 'array') type = 'array';
+                else if (hint === 'object') type = 'object';
+                else if (hint === 'number') type = 'number';
+                else if (hint === 'boolean') type = 'boolean';
+            }
 
             if (!cleanName) continue;
 
             // Use the canonical param name for the property
-            properties[cleanName] = { type: 'string' };
+            properties[cleanName] = { type };
 
             if (!isOptional) {
                 required.push(cleanName);

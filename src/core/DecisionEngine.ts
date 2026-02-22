@@ -568,7 +568,28 @@ ${this.repoContext}`,
         const isAdmin = metadata.isAdmin !== false; // undefined = admin (backwards compatible)
         const excludeSkills = !isAdmin ? ELEVATED_SKILLS : undefined;
 
-        const availableSkills = this.skills.getSkillsPrompt(excludeSkills);
+
+        // Declare isFirstStep before usage
+        const isFirstStep = (metadata.currentStep || 1) === 1;
+
+        // TOKEN OPTIMIZATION: Progressive Skill Disclosure
+        // 1. On first step, try to find only RELEVANT skills based on keywords.
+        // 2. On subsequent steps, use COMPACT skills (names + usage only).
+        // 3. Fallback to full list only if needed.
+        let availableSkills: string;
+        const useCompactSkills = this.config?.get('compactSkillsPrompt') === true || (metadata.currentStep || 1) > 1;
+        const skipSim = this.config?.get('skipSimulationForSimpleTasks') !== false;
+
+        if (useCompactSkills) {
+            availableSkills = this.skills.getCompactSkillsPrompt();
+        } else if (isFirstStep) {
+            const stopwords = ['to','the','a','and','of','for','in','on','at','with','about','from'];
+            const keywords = taskDescription.toLowerCase().split(/\W+/).filter(k => k.length > 2 && !stopwords.includes(k));
+            availableSkills = this.skills.getRelevantSkillsPrompt(keywords);
+        } else {
+            availableSkills = this.skills.getSkillsPrompt(excludeSkills);
+        }
+
         const allowedToolNames = this.skills.getAllSkills()
             .filter(s => !excludeSkills || !excludeSkills.has(s.name))
             .map(s => s.name);
@@ -589,13 +610,18 @@ ${this.repoContext}`,
 
         // Load Journal and Learning - configurable context window sizes
         // Skip for heartbeats — the heartbeat prompt already includes journal/learning tails
-        const isFirstStep = (metadata.currentStep || 1) === 1;
+        // (isFirstStep already declared above)
         const journalLimit  = Number(this.config?.get('journalContextLimit')  ?? 1500);
         const learningLimit = Number(this.config?.get('learningContextLimit') ?? 1500);
         
+        // TOKEN OPTIMIZATION: Omit journal/learning tail if we are deep into an action.
+        // It was likely already included in Step 1 and is now in the model's KV cache
+        // or short-term memory. Including it every step wastes tokens.
+        const omitRedundantContext = (metadata.currentStep || 1) > 2;
+        
         let journalContent = '';
         let learningContent = '';
-        if (!isHeartbeat) {
+        if (!isHeartbeat && !omitRedundantContext) {
             try {
                 if (fs.existsSync(this.journalPath)) {
                     const full = fs.readFileSync(this.journalPath, 'utf-8');
@@ -858,12 +884,28 @@ ${this.repoContext}`,
         const preserveFirst      = Number(this.config?.get('stepCompactionPreserveFirst') ?? 2);
         const preserveLast       = Number(this.config?.get('stepCompactionPreserveLast')  ?? 5);
         let stepHistoryString: string;
+        
+        // TOKEN OPTIMIZATION: Aggressive pruning of large tool outputs in history
+        const pruneMemoryContent = (content: string): string => {
+            if (content.length < 800) return content;
+            // If it looks like a large tool result, keep the head and tail
+            if (content.includes('Tool') && (content.includes('succeeded') || content.includes('returned') || content.includes('FAILED'))) {
+                const total = content.length;
+                if (total > 10000) {
+                    // Extremely large — take even less
+                    return `${content.slice(0, 200)}\n... [CRITICAL: ${total - 400} chars of raw output omitted for token safety] ...\n${content.slice(-200)}`;
+                }
+                return `${content.slice(0, 400)}\n... [large output truncated, ${total - 800} chars omitted] ...\n${content.slice(-400)}`;
+            }
+            return content.length > 1200 ? content.slice(0, 1200) + '... [truncated]' : content;
+        };
+
         if (actionMemories.length === 0) {
             stepHistoryString = 'No previous steps taken yet.';
         } else if (actionMemories.length <= compactionThreshold) {
-            // Small enough — include everything
+            // Small enough — include everything but prune large individual outputs
             stepHistoryString = actionMemories
-                .map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${c.content}`)
+                .map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${pruneMemoryContent(c.content)}`)
                 .join('\n');
         } else {
             // COMPACTION: preserve first N + last M, summarize middle
@@ -886,7 +928,7 @@ ${this.repoContext}`,
 
                 for (const entry of expandedMiddle) {
                     const stepId = entry.id?.replace(actionPrefix, '').split('-')[0] || '?';
-                    const content = (entry.content || '').toString();
+                    const content = pruneMemoryContent((entry.content || '').toString());
                     const remaining = maxChars - usedChars;
                     if (remaining <= 0) break;
 
@@ -896,8 +938,8 @@ ${this.repoContext}`,
                     usedChars += line.length + 1;
                 }
 
-                const firstStr = first.map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${c.content}`).join('\n');
-                const lastStr = last.map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${c.content}`).join('\n');
+                const firstStr = first.map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${pruneMemoryContent(c.content)}`).join('\n');
+                const lastStr = last.map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${pruneMemoryContent(c.content)}`).join('\n');
                 const omittedCount = Math.max(0, middle.length - expandedLines.length);
 
                 stepHistoryString = `${firstStr}\n  --- [expanded continuity context: ${expandedLines.length}/${middle.length} middle steps shown] ---\n${expandedLines.join('\n')}${omittedCount > 0 ? `\n  ... [${omittedCount} older middle steps omitted to stay within context budget]` : ''}\n  --- [recent steps below] ---\n${lastStr}`;
@@ -931,8 +973,8 @@ ${this.repoContext}`,
                 }
                 flushGroup();
 
-                const firstStr = first.map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${c.content}`).join('\n');
-                const lastStr = last.map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${c.content}`).join('\n');
+                const firstStr = first.map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${pruneMemoryContent(c.content)}`).join('\n');
+                const lastStr = last.map(c => `[Step ${c.id?.replace(actionPrefix, '').split('-')[0] || '?'}] ${pruneMemoryContent(c.content)}`).join('\n');
                 stepHistoryString = `${firstStr}\n  --- [${middle.length} middle steps compacted] ---\n${middleSummary.join('\n')}\n  --- [recent steps below] ---\n${lastStr}`;
             }
         }
