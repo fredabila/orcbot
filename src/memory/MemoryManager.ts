@@ -28,6 +28,10 @@ interface ConversationContext {
 }
 
 export class MemoryManager {
+        // Caches for episodic, long-term, and daily context
+        private episodicCache: { entries: MemoryEntry[]; expiresAt: number } | null = null;
+        private dailyCache: { context: string; expiresAt: number } | null = null;
+        private longTermCache: { context: string; expiresAt: number } | null = null;
     private storage: JSONAdapter;
     private userContext: any = {};
     private profilesDir: string;
@@ -52,6 +56,7 @@ export class MemoryManager {
     private userExchangeDefaultLimit: number = 8;
     private pendingConsolidation: Map<string, MemoryEntry[]> = new Map();
     private interactionCache: Map<string, { expiresAt: number; entries: ScoredVectorEntry[] }> = new Map();
+    private recentContextCache: { entries: MemoryEntry[]; expiresAt: number } | null = null;
 
     constructor(dbPath: string = './memory.json', userPath: string = './USER.md') {
         this.storage = new JSONAdapter(dbPath);
@@ -476,23 +481,24 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
 
     public getRecentContext(limit?: number): MemoryEntry[] {
         const effectiveLimit = limit ?? this.contextLimit;
+        const now = Date.now();
+        // Cache for 5 seconds
+        if (this.recentContextCache && this.recentContextCache.expiresAt > now) {
+            return this.recentContextCache.entries;
+        }
         const episodic = this.searchMemory('episodic').slice(-this.episodicLimit);
         const short = this.searchMemory('short');
-
-        // Sort all by timestamp (most recent first)
         const sorted = [...short].sort((a, b) => {
             const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
             const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-            return tb - ta; // Descending (newest first)
+            return tb - ta;
         });
-
-        // Take the most recent N
         const recentShort = sorted.slice(0, effectiveLimit);
         const qualityShort = this.filterContextMemories(recentShort);
         const qualityEpisodic = this.filterContextMemories(episodic);
-
-        // Return episodic summaries + recent short memories, with recent first
-        return [...qualityShort, ...qualityEpisodic];
+        const result = [...qualityShort, ...qualityEpisodic];
+        this.recentContextCache = { entries: result, expiresAt: now + 5000 };
+        return result;
     }
 
     /**
@@ -757,10 +763,19 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
         filter?: { type?: string; source?: string; excludeIds?: Set<string> }
     ): Promise<ScoredVectorEntry[]> {
         if (!this.vectorMemory?.isEnabled()) return [];
+        const cacheKey = JSON.stringify({ query, limit, filter });
+        const now = Date.now();
+        // Cache for 10 seconds
+        if (this.interactionCache.has(cacheKey)) {
+            const cached = this.interactionCache.get(cacheKey)!;
+            if (cached.expiresAt > now) return cached.entries;
+        }
         const hits = await this.vectorMemory.search(query, limit, filter);
-        return hits
+        const scored = hits
             .map(h => ({ ...h, score: this.applyRecencyBoost(h.score, h.timestamp) }))
             .sort((a, b) => b.score - a.score);
+        this.interactionCache.set(cacheKey, { entries: scored, expiresAt: now + 10000 });
+        return scored;
     }
 
     /**
@@ -797,27 +812,28 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
         query: string,
         limit: number = 5
     ): Promise<MemoryEntry[]> {
-        if (!this.vectorMemory?.isEnabled()) {
-            // Fallback: return most recent episodic memories
-            return this.searchMemory('episodic').slice(-limit);
+        const now = Date.now();
+        // Cache for 10 seconds
+        if (this.episodicCache && this.episodicCache.expiresAt > now) {
+            return this.episodicCache.entries.slice(0, limit);
         }
-
+        if (!this.vectorMemory?.isEnabled()) {
+            const episodic = this.searchMemory('episodic').slice(-limit);
+            this.episodicCache = { entries: episodic, expiresAt: now + 10000 };
+            return episodic;
+        }
         try {
             const semanticHits = await this.vectorMemory.search(query, limit * 2, { type: 'episodic' });
             if (semanticHits.length < 2) {
-                // Not enough semantic hits — fall back to recency
-                return this.searchMemory('episodic').slice(-limit);
+                const episodic = this.searchMemory('episodic').slice(-limit);
+                this.episodicCache = { entries: episodic, expiresAt: now + 10000 };
+                return episodic;
             }
-
-            // Cross-reference with actual memory entries to get full metadata
             const allEpisodic = this.searchMemory('episodic');
             const episodicById = new Map(allEpisodic.map(m => [m.id, m]));
-
             const relevant = semanticHits
                 .map(h => episodicById.get(h.id))
                 .filter(Boolean) as MemoryEntry[];
-
-            // Always include the most recent episodic memory for continuity
             const mostRecent = allEpisodic.slice(-1);
             const merged: MemoryEntry[] = [];
             const seen = new Set<string>();
@@ -827,11 +843,13 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
                     merged.push(m);
                 }
             }
-
+            this.episodicCache = { entries: merged, expiresAt: now + 10000 };
             return merged.slice(0, limit);
         } catch (e) {
             logger.warn(`MemoryManager: getRelevantEpisodicMemories failed: ${e}`);
-            return this.searchMemory('episodic').slice(-limit);
+            const episodic = this.searchMemory('episodic').slice(-limit);
+            this.episodicCache = { entries: episodic, expiresAt: now + 10000 };
+            return episodic;
         }
     }
 
@@ -839,20 +857,41 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
      * Get context including daily memory for agent prompts
      */
     public getExtendedContext(): string {
+        const now = Date.now();
+        // Cache daily context for 30 seconds
+        let dailyContext = '';
+        if (this.dailyCache && this.dailyCache.expiresAt > now) {
+            dailyContext = this.dailyCache.context;
+        } else {
+            dailyContext = this.dailyMemory.readRecentContext();
+            this.dailyCache = { context: dailyContext, expiresAt: now + 30000 };
+        }
+        // Cache long-term context for 30 seconds
+        let longTerm = '';
+        if (this.longTermCache && this.longTermCache.expiresAt > now) {
+            longTerm = this.longTermCache.context;
+        } else {
+            longTerm = this.dailyMemory.readLongTerm();
+            this.longTermCache = { context: longTerm, expiresAt: now + 30000 };
+        }
         const parts: string[] = [];
-
-        // Add recent daily memory context
-        const dailyContext = this.dailyMemory.readRecentContext();
         if (dailyContext) {
             parts.push('## Recent Daily Memory\n\n' + dailyContext);
         }
-
-        // Add long-term memory
-        const longTerm = this.dailyMemory.readLongTerm();
         if (longTerm) {
             parts.push('## Long-Term Memory\n\n' + longTerm.substring(0, this.memoryExtendedContextLimit));
         }
-
         return parts.length > 0 ? parts.join('\n\n---\n\n') : '';
+    }
+    // Parallel context assembly for agent prompt
+    public async assemblePromptContext(query: string): Promise<{ recent: MemoryEntry[]; episodic: MemoryEntry[]; semantic: ScoredVectorEntry[]; extended: string }> {
+        // Prefetch in parallel
+        const [recent, episodic, semantic, extended] = await Promise.all([
+            Promise.resolve(this.getRecentContext()),
+            this.getRelevantEpisodicMemories(query),
+            this.semanticSearch(query, 8),
+            Promise.resolve(this.getExtendedContext())
+        ]);
+        return { recent, episodic, semantic, extended };
     }
 }

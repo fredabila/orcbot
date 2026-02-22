@@ -9414,6 +9414,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
         if (!profileKey) return;
         // Only send onboarding questionnaire to admin users (prevent spamming regular contacts)
         try {
+            // For WhatsApp, only send onboarding if user is owner
+            if (source === 'whatsapp' && !metadata?.isOwner) return;
             if (!this.isUserAdmin(metadata)) return;
         } catch (e) {
             // Be conservative: if admin check fails, don't send
@@ -9759,8 +9761,15 @@ Respond with a single actionable task description (one sentence). Be specific ab
         // (dedup and waiting-action resume both return before the end of pushTask)
         this.trackKnownUser(metadata);
 
+        // Only trigger onboarding for admin/owner users in new chats, based on agent prompt/context
         if (lane === 'user' && metadata?.source && !metadata?.isHeartbeat) {
-            await this.sendOnboardingQuestionnaireIfNeeded(metadata);
+            // If this is a new chat and user is admin/owner, let agent decide onboarding
+            const isAdmin = this.isUserAdmin(metadata);
+            const isOwner = metadata?.isOwner === true;
+            const isNewChat = !this.memory.hasOnboardingQuestionnaireBeenSent(this.getOnboardingProfileKey(metadata));
+            if ((isAdmin || isOwner) && isNewChat) {
+                await this.sendOnboardingQuestionnaireIfNeeded(metadata);
+            }
             await this.maybeReconnectBriefing(metadata);
             const onboardingCapture = await this.maybeCaptureOnboardingQuestionnaireResponse(description, metadata);
             if (onboardingCapture.captured && onboardingCapture.onboardingOnly) {
