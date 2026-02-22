@@ -11522,18 +11522,26 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         });
                     }
 
-                    // SIDE-EFFECT DEDUP COMPLETION: if every side-effect tool in this step was blocked
-                    // as a duplicate of already-successful work, stop the loop instead of redoing work.
+                    // SIDE-EFFECT DEDUP GUIDANCE: if every side-effect tool in this step was blocked
+                    // as a duplicate of already-successful work, guide the next step instead of hard-stopping.
                     if (totalSideEffectToolsInStep > 0 && duplicateSideEffectsBlockedInStep >= totalSideEffectToolsInStep && successfulSideEffectKeys.size > 0) {
-                        logger.info(`Agent: All ${totalSideEffectToolsInStep} side-effect tool(s) in step ${currentStep} were duplicate replays. Completing action ${action.id}.`);
+                        const hasDeliveredSubstantiveAnswer = substantiveDeliveriesSent > 0;
+                        logger.info(`Agent: All ${totalSideEffectToolsInStep} side-effect tool(s) in step ${currentStep} were duplicate replays (action ${action.id}).`);
                         this.memory.saveMemory({
-                            id: `${action.id}-step-${currentStep}-duplicate-sideeffects-complete`,
+                            id: `${action.id}-step-${currentStep}-duplicate-sideeffects-guidance`,
                             type: 'short',
-                            content: `[SYSTEM: All side-effect operations in this step were blocked as duplicates of already successful actions. Do NOT redo completed operations. Conclude the task unless new unmet work exists.]`,
+                            content: `[SYSTEM: Duplicate side-effect replays were blocked this step (${duplicateSideEffectsBlockedInStep}/${totalSideEffectToolsInStep}). Do NOT resend completed operations. If user still needs an answer, send ONE fresh substantive message. If all goals are already met, conclude.]`,
                             metadata: { actionId: action.id, step: currentStep, duplicateSideEffectsBlockedInStep, totalSideEffectToolsInStep }
                         });
-                        goalsMet = true;
-                        break;
+
+                        if (hasDeliveredSubstantiveAnswer) {
+                            logger.info(`Agent: Duplicate-only side-effect step occurred after substantive delivery. Completing action ${action.id}.`);
+                            goalsMet = true;
+                            break;
+                        }
+
+                        logger.warn(`Agent: Duplicate-only side-effect step before substantive delivery. Continuing action ${action.id} for one fresh response.`);
+                        continue;
                     }
 
                     if (forceBreak) break;
