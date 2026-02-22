@@ -2699,6 +2699,7 @@ async function showGatewayMenu() {
                 { name: `  📌 Set Port ${dim(`(current: ${currentPort})`)}`, value: 'port' },
                 { name: `  🏠 Set Host ${dim(`(current: ${currentHost})`)}`, value: 'host' },
                 { name: `  🔑 ${apiKey ? 'Update' : 'Set'} API Key`, value: 'apikey' },
+                { name: `  🔐 ${bold('Tailscale Setup & Status Guide')}`, value: 'tailscale' },
                 new inquirer.Separator(gradient('  ──────────────────────────────────', [c.cyan, c.gray])),
                 { name: dim('  ← Back'), value: 'back' }
             ]
@@ -2753,6 +2754,50 @@ async function showGatewayMenu() {
         ]);
         agent.config.set('gatewayApiKey', val || undefined);
         console.log(val ? 'API key set!' : 'Authentication disabled.');
+    } else if (action === 'tailscale') {
+        console.log('');
+        const { execSync } = require('child_process');
+        let tailscaleInstalled = false;
+        let statusLine = yellow('not installed');
+        let tailscaleIp = dim('n/a');
+
+        try {
+            const ver = String(execSync('tailscale version', { stdio: ['ignore', 'pipe', 'pipe'] })).split('\n')[0].trim();
+            tailscaleInstalled = true;
+            statusLine = green(`installed (${ver})`);
+            try {
+                const ip = String(execSync('tailscale ip -4', { stdio: ['ignore', 'pipe', 'pipe'] })).split('\n').find((l: string) => l.trim()) || '';
+                if (ip.trim()) tailscaleIp = brightCyan(ip.trim());
+            } catch {}
+        } catch {
+            tailscaleInstalled = false;
+        }
+
+        const tailscaleLines = [
+            `${dim('Tailscale')}   ${statusLine}`,
+            `${dim('Tailnet IP')}  ${tailscaleIp}`,
+            `${dim('Gateway')}     ${bold(String(currentHost))}:${brightCyan(bold(String(currentPort)))}`,
+            `${dim('Auth Key')}    ${apiKey ? green('set') : yellow('not set (recommended)')}`,
+        ];
+        box(tailscaleLines, { title: '🔐 PRIVATE REMOTE ACCESS', width: 60, color: c.brightCyan });
+
+        console.log('');
+        console.log(bold('Recommended setup (official pattern):'));
+        console.log(`  1) ${dim('Install + login')} Tailscale on this OrcBot host and your operator device.`);
+        console.log(`  2) ${dim('Keep gateway auth on')} by setting ${cyan('gatewayApiKey')} in this menu.`);
+        console.log(`  3) ${dim('Prefer private networking')} expose gateway only to Tailnet users/devices.`);
+        console.log(`  4) ${dim('Use ACLs')} allow only your ops group to reach port ${currentPort}.`);
+        console.log('');
+        console.log(dim('Quick commands:'));
+        console.log(`  ${cyan('tailscale status')}`);
+        console.log(`  ${cyan('tailscale ip -4')}`);
+        console.log(`  ${cyan('orcbot gateway --with-agent -p ' + currentPort)}`);
+        console.log(`  ${dim('Then browse:')} ${cyan('http://<tailnet-ip>:' + currentPort)}`);
+        console.log('');
+
+        if (!tailscaleInstalled) {
+            console.log(yellow('Tip: Install tailscale first, then rerun this check to confirm status/IP.'));
+        }
     }
 
     await waitKeyPress();

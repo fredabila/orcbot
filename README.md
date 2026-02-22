@@ -333,6 +333,7 @@ orcbot ui
 ```
 - **Manage AI Models**: Dedicated menu for OpenAI and Google Gemini keys.
 - **Manage Connections**: Configure Telegram and other channels.
+- **Gateway + Tailscale Guidance**: `Web Gateway` menu now includes a `Tailscale Setup & Status Guide` flow with checks and recommended hardening steps.
 
 ### Direct Commands
 ```bash
@@ -447,6 +448,11 @@ gatewayPort: 3100
 gatewayHost: 0.0.0.0
 gatewayApiKey: your-secret-key
 ```
+
+**Recommended for remote access: Tailscale (private mesh network)**
+- Keep the gateway private to your Tailnet instead of exposing port 3100 publicly.
+- Still set `gatewayApiKey` for defense-in-depth.
+- Restrict access with Tailnet ACLs to trusted operators/devices only.
 
 ---
 
