@@ -183,6 +183,62 @@ export class EmailChannel implements IChannel {
             .map(([key]) => key);
     }
 
+    private getSocketTimeoutMs(): number {
+        const raw = Number(this.agent.config.get('emailSocketTimeoutMs') || 15000);
+        if (!Number.isFinite(raw)) {
+            return 15000;
+        }
+        return Math.max(3000, raw);
+    }
+
+    private describeSocketError(kind: 'SMTP' | 'IMAP', host: string, port: number, error: any): string {
+        const code = String(error?.code || '').toUpperCase();
+        const endpoint = `${host}:${port}`;
+        const base = `${kind} connection to ${endpoint} failed`;
+
+        if (code === 'ENOTFOUND') {
+            return `${base}. DNS lookup failed for ${endpoint}. Verify the host, port, and DNS/network settings.`;
+        }
+
+        if (code === 'ECONNREFUSED') {
+            return `${base}. Connection refused by remote endpoint ${endpoint}. Verify service availability and firewall rules.`;
+        }
+
+        return `${base}. ${error?.message || 'Unknown socket error.'}`;
+    }
+
+    private async pollOnce(isExplicitImapTest = false): Promise<void> {
+        try {
+            await this.fetchUnreadEmails();
+        } catch (error) {
+            if (isExplicitImapTest) {
+                throw error;
+            }
+            logger.error(`EmailChannel: Poll cycle failed: ${(error as any)?.message || error}`);
+        }
+    }
+
+    private extractFetchBodyText(fetchOutput: string): string {
+        const bodyTextIndex = fetchOutput.indexOf('BODY[TEXT]');
+        if (bodyTextIndex === -1) {
+            return '';
+        }
+
+        const afterToken = fetchOutput.slice(bodyTextIndex);
+        const literalMatch = afterToken.match(/BODY\[TEXT\]\s*\{(\d+)\}\r?\n/);
+        if (!literalMatch) {
+            return '';
+        }
+
+        const byteCount = Number(literalMatch[1]);
+        const start = bodyTextIndex + literalMatch[0].length;
+        if (!Number.isFinite(byteCount) || byteCount <= 0) {
+            return '';
+        }
+
+        return fetchOutput.slice(start, start + byteCount).trim();
+    }
+
     private createSmtpTransporter(): nodemailer.Transporter {
         const host = this.agent.config.get('smtpHost');
         const port = Number(this.agent.config.get('smtpPort') || 587);
@@ -190,7 +246,7 @@ export class EmailChannel implements IChannel {
         const requireTLS = this.agent.config.get('smtpStartTls') !== false && !secure;
         const user = String(this.agent.config.get('smtpUsername') || '');
         const pass = String(this.agent.config.get('smtpPassword') || '');
-        const timeoutMs = Number(this.agent.config.get('emailSocketTimeoutMs') || 15000);
+        const timeoutMs = this.getSocketTimeoutMs();
 
         return nodemailer.createTransport({
             host,
