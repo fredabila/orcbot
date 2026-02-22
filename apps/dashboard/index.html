@@ -854,6 +854,48 @@
             color: var(--red);
         }
 
+        .helper-card {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: rgba(255,255,255,0.02);
+            padding: 12px;
+            margin-top: 10px;
+        }
+
+        .helper-card h4 {
+            font-size: 13px;
+            margin-bottom: 6px;
+            color: var(--text);
+        }
+
+        .helper-list {
+            margin: 0;
+            padding-left: 18px;
+            color: var(--text-muted);
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .code-block-mini {
+            margin-top: 8px;
+            background: #0b0f14;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 11px;
+            color: #93c5fd;
+            padding: 10px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+
+        .skill-guidance {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
         /* Chat Interface */
         .chat-container {
             display: flex;
@@ -1288,6 +1330,30 @@
             <div class="page" id="page-skills">
                 <div class="card" style="margin-bottom: 16px;">
                     <div class="card-header">
+                        <h3><i class="fas fa-circle-info"></i> Skill Run Guidance</h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="skill-guidance">
+                            <div class="helper-card" style="margin-top:0;">
+                                <h4><i class="fas fa-compass"></i> How to choose args</h4>
+                                <ul class="helper-list">
+                                    <li>Check each skill card's <strong>usage</strong> hint first.</li>
+                                    <li>Use an object payload by default: <code>{}</code> or <code>{"key":"value"}</code>.</li>
+                                    <li>If no params are documented, run with <code>{}</code> and inspect output/errors.</li>
+                                </ul>
+                            </div>
+                            <div class="helper-card" style="margin-top:0;">
+                                <h4><i class="fas fa-code"></i> Common payload shapes</h4>
+                                <div class="code-block-mini">{"query":"latest GPU pricing"}
+{"url":"https://example.com"}
+{"path":"/tmp/report.md","content":"hello"}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-bottom: 16px;">
+                    <div class="card-header">
                         <h3><i class="fas fa-download"></i> Install Skill</h3>
                     </div>
                     <div class="card-body">
@@ -1478,6 +1544,26 @@
                             <div style="margin-top: 16px; padding: 12px 14px; background: var(--bg-hover); border-radius: 8px; font-size: 12px; color: var(--text-muted); line-height: 1.6;">
                                 <strong style="color: var(--text-dim);">How to use:</strong> Pass via <code>X-Api-Key</code> header or <code>?apiKey=…</code> query param, or store in the browser using "Change" in the Config page.
                             </div>
+                        </div>
+                    </div>
+
+                    <div class="card" style="margin-top: 16px;">
+                        <div class="card-header">
+                            <h3><i class="fas fa-network-wired"></i> Private Access (Tailscale Quick Start)</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="security-alert success" style="margin-bottom: 10px;">
+                                <i class="fas fa-lock"></i>
+                                <span>Recommended: keep dashboard/gateway off the public internet and access it only over your Tailnet.</span>
+                            </div>
+                            <ol class="helper-list" style="padding-left: 20px; margin-bottom: 8px;">
+                                <li>Install Tailscale on the OrcBot host and admin devices.</li>
+                                <li>Set a gateway token (<code>Rotate Token</code>) and keep <code>safeMode</code> on.</li>
+                                <li>Limit access in Tailnet ACLs to trusted operators and this host's gateway port.</li>
+                            </ol>
+                            <div class="code-block-mini"># Example: run gateway locally and access via Tailnet IP
+orcbot gateway --with-agent -p 3100
+# Then open: http://100.x.y.z:3100</div>
                         </div>
                     </div>
 
@@ -1831,7 +1917,21 @@
                 <div class="form-group">
                     <label>Arguments (JSON)</label>
                     <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px;" id="skillExecUsageHint"></div>
-                    <textarea class="form-input" id="skillExecArgs" rows="4" placeholder='{"arg1": "value"}'>{}</textarea>
+                    <textarea class="form-input" id="skillExecArgs" rows="6" placeholder='{"arg1": "value"}'>{}</textarea>
+                    <div class="helper-card" style="margin-top:8px;">
+                        <h4 style="margin-bottom:4px;"><i class="fas fa-lightbulb"></i> Tips</h4>
+                        <ul class="helper-list">
+                            <li>Use strict JSON (double quotes).</li>
+                            <li>Start with the template button below when usage details are limited.</li>
+                            <li>Skill execution sends this JSON body directly to <code>/api/skills/:name/execute</code>.</li>
+                        </ul>
+                        <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
+                            <button class="btn btn-secondary" type="button" onclick="useSkillTemplate('empty')"><i class="fas fa-square"></i> Empty</button>
+                            <button class="btn btn-secondary" type="button" onclick="useSkillTemplate('query')"><i class="fas fa-magnifying-glass"></i> Query</button>
+                            <button class="btn btn-secondary" type="button" onclick="useSkillTemplate('url')"><i class="fas fa-link"></i> URL</button>
+                            <button class="btn btn-secondary" type="button" onclick="useSkillTemplate('file')"><i class="fas fa-file-lines"></i> File</button>
+                        </div>
+                    </div>
                 </div>
                 <button class="btn btn-primary" style="width: 100%; margin-bottom: 12px;" onclick="runSkillExecution()">
                     <i class="fas fa-play"></i> Run
@@ -2138,11 +2238,24 @@
 
         function openSkillExecute(name, usage) {
             document.getElementById('skillExecName').textContent = name;
-            document.getElementById('skillExecUsageHint').textContent = usage ? `Usage: ${usage}` : '';
+            document.getElementById('skillExecUsageHint').textContent = usage ? `Usage hint: ${usage}` : 'No formal usage hint provided by this skill. Start with a small JSON payload.';
             document.getElementById('skillExecArgs').value = '{}';
             document.getElementById('skillExecResult').style.display = 'none';
             document.getElementById('skillExecModal').classList.add('active');
             document.getElementById('execSkillName').value = name;
+        }
+
+        function useSkillTemplate(kind) {
+            const el = document.getElementById('skillExecArgs');
+            if (!el) return;
+            const templates = {
+                empty: {},
+                query: { query: 'replace me' },
+                url: { url: 'https://example.com' },
+                file: { path: '/tmp/file.txt', content: 'replace me' }
+            };
+            const payload = templates[kind] || templates.empty;
+            el.value = JSON.stringify(payload, null, 2);
         }
 
         async function runSkillExecution() {
