@@ -16,6 +16,11 @@ export class ToolingHelper implements PromptHelper {
         return true;
     }
 
+    getRelatedHelpers(ctx: PromptHelperContext): string[] {
+        // Core tooling often needs TForce for health monitoring
+        return ['tforce', 'task-checklist'];
+    }
+
     getPrompt(ctx: PromptHelperContext): string {
         return `STRATEGIC REASONING PROTOCOLS:
 1.  **TOOLING RULE**: You may ONLY call tools listed in "Available Skills". Do NOT invent or assume tools exist.

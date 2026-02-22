@@ -29,6 +29,11 @@ export class ResearchHelper implements PromptHelper {
         return ResearchHelper.RESEARCH_SIGNALS.some(kw => task.includes(kw));
     }
 
+    getRelatedHelpers(ctx: PromptHelperContext): string[] {
+        // Research almost always benefits from memory and browsing
+        return ['memory', 'browser'];
+    }
+
     getPrompt(ctx: PromptHelperContext): string {
         return `TASK PERSISTENCE & COMPLETION:
 - **Complete The Job**: If you started a multi-step task (account creation, file download, research), you MUST continue until genuine completion or a genuine blocker (not just "I've done a few steps").

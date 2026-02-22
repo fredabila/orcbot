@@ -27,7 +27,9 @@ export class TForceSystem {
             conscienceGuidance: conscience.guidance,
             recoveryPlan,
             memoryHighlights,
-            shouldEscalate: conscience.shouldEscalate
+            shouldEscalate: conscience.shouldEscalate,
+            riskLevel: conscience.riskLevel,
+            complexityScore: conscience.complexity
         };
     }
 }

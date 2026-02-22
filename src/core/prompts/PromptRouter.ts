@@ -23,6 +23,7 @@ import { PollingHelper } from './PollingHelper';
 import { PrivacyHelper } from './PrivacyHelper';
 import { ManagerHelper } from './ManagerHelper';
 import { MemoryHelper } from './MemoryHelper';
+import { TForceHelper } from './TForceHelper';
 import { logger } from '../../utils/logger';
 
 /** Minimal LLM interface — avoids importing the full MultiLLM dependency */
@@ -65,6 +66,7 @@ export class PromptRouter {
         this.register(new PollingHelper());
         this.register(new ManagerHelper());
         this.register(new MemoryHelper());
+        this.register(new TForceHelper());
     }
 
     /**
@@ -110,7 +112,7 @@ export class PromptRouter {
      *           Only fires when tier 1+2 produced zero domain helpers AND an LLM is available.
      */
     public async route(context: PromptHelperContext): Promise<RouteResult> {
-        const activeHelpers: string[] = [];
+        const activeHelpers = new Set<string>();
         const promptSections: string[] = [];
         let totalMonolithicSize = 0;
         let routingMethod: RouteResult['routingMethod'] = 'keywords';
@@ -125,9 +127,6 @@ export class PromptRouter {
             helperPrompts.set(helper.name, prompt);
 
             // Heartbeat tasks only need always-active helpers (core + tooling).
-            // Domain helpers (browser, media, scheduling, communication, etc.) are
-            // redundant because the heartbeat prompt is self-contained with its own
-            // context, skills, and decision framework.
             if (context.isHeartbeat && !helper.alwaysActive) {
                 continue;
             }
@@ -135,12 +134,9 @@ export class PromptRouter {
             const isActive = helper.alwaysActive || helper.shouldActivate(context);
 
             if (isActive) {
-                activeHelpers.push(helper.name);
+                activeHelpers.add(helper.name);
                 if (!helper.alwaysActive) {
                     activatedDomainHelpers.push(helper.name);
-                }
-                if (prompt.trim()) {
-                    promptSections.push(prompt);
                 }
             }
         }
@@ -149,8 +145,7 @@ export class PromptRouter {
         if (activatedDomainHelpers.length === 0) {
             const fallbacks = this.inferFallbackHelpers(context);
 
-            // TIER 3: LLM classifier — if heuristics are uncertain (only produced
-            // the universal "communication" fallback) and we have an LLM, ask it.
+            // TIER 3: LLM classifier — if heuristics are uncertain
             const heuristicsUncertain = fallbacks.length <= 1 && fallbacks[0] === 'communication';
             if (heuristicsUncertain && this.llm) {
                 try {
@@ -158,20 +153,13 @@ export class PromptRouter {
                     if (llmHelpers.length > 0) {
                         routingMethod = 'llm-classifier';
                         for (const name of llmHelpers) {
-                            if (!activeHelpers.includes(name)) {
-                                activeHelpers.push(name);
-                                activatedDomainHelpers.push(name);
-                                const prompt = helperPrompts.get(name);
-                                if (prompt?.trim()) {
-                                    promptSections.push(prompt);
-                                }
-                            }
+                            activeHelpers.add(name);
+                            activatedDomainHelpers.push(name);
                         }
                         logger.debug(`PromptRouter: LLM classifier activated → [${llmHelpers.join(', ')}]`);
                     }
                 } catch (err) {
                     logger.warn(`PromptRouter: LLM classification failed, using heuristic fallback: ${err}`);
-                    // Fall through to heuristic fallback below
                 }
             }
 
@@ -179,14 +167,8 @@ export class PromptRouter {
             if (activatedDomainHelpers.length === 0) {
                 routingMethod = 'fallback-heuristics';
                 for (const name of fallbacks) {
-                    if (!activeHelpers.includes(name)) {
-                        activeHelpers.push(name);
-                        activatedDomainHelpers.push(name);
-                        const prompt = helperPrompts.get(name);
-                        if (prompt?.trim()) {
-                            promptSections.push(prompt);
-                        }
-                    }
+                    activeHelpers.add(name);
+                    activatedDomainHelpers.push(name);
                 }
                 if (fallbacks.length > 0) {
                     logger.debug(`PromptRouter: Heuristic fallback activated → [${fallbacks.join(', ')}]`);
@@ -194,16 +176,45 @@ export class PromptRouter {
             }
         }
 
+        // TIER 4: Connectivity logic — expand active set via relationships
+        // Iterate up to 3 times to allow recursive relationships (A -> B -> C)
+        for (let iteration = 0; iteration < 3; iteration++) {
+            const currentSize = activeHelpers.size;
+            for (const helperName of Array.from(activeHelpers)) {
+                const helper = this.helpers.find(h => h.name === helperName);
+                if (helper?.getRelatedHelpers) {
+                    const related = helper.getRelatedHelpers(context);
+                    for (const rel of related) {
+                        if (!activeHelpers.has(rel)) {
+                            // Verify target helper exists
+                            if (this.helpers.some(h => h.name === rel)) {
+                                activeHelpers.add(rel);
+                                logger.debug(`PromptRouter: Connected helper activated [${rel}] via relationship from [${helperName}]`);
+                            }
+                        }
+                    }
+                }
+            }
+            if (activeHelpers.size === currentSize) break; // Stability reached
+        }
+
+        // Final assembly: Sort by priority and collect prompts
+        const sortedActive = this.helpers
+            .filter(h => activeHelpers.has(h.name))
+            .sort((a, b) => a.priority - b.priority);
+
+        for (const helper of sortedActive) {
+            const prompt = helperPrompts.get(helper.name) || helper.getPrompt(context);
+            if (prompt.trim()) {
+                promptSections.push(prompt);
+            }
+        }
+
         const composedPrompt = promptSections.join('\n\n');
         const estimatedSavings = Math.max(0, totalMonolithicSize - composedPrompt.length);
 
-        if (estimatedSavings > 500) {
-            logger.debug(`PromptRouter: Saved ~${estimatedSavings} chars by routing [${activeHelpers.join(', ')}]`);
-        }
-        logger.debug(`PromptRouter: Active helpers [${activeHelpers.join(', ')}] via ${routingMethod}`);
-
         return {
-            activeHelpers,
+            activeHelpers: Array.from(activeHelpers),
             composedPrompt,
             estimatedSavings,
             routingMethod
@@ -298,63 +309,73 @@ Rules:
      */
     private inferFallbackHelpers(context: PromptHelperContext): string[] {
         const task = context.taskDescription.toLowerCase();
-        const fallbacks: string[] = [];
+        const fallbacks = new Set<string>();
 
-        // Has a messaging channel active
+        // 1. Messaging Channel Inference
         const hasChannel = ['telegram', 'whatsapp', 'discord', 'slack', 'gateway-chat'].includes(context.metadata.source);
-        // Long description suggests complexity
-        const isComplex = task.length > 100;
-
         if (hasChannel) {
-            fallbacks.push('communication');
+            fallbacks.add('communication');
         }
 
-        // Broad action-verb detection (covers creative phrasings the keyword lists missed)
+        // 2. Skill-Based Persistence
+        // If we've already used certain tools, keep their helpers active even if the new
+        // task description is vague (e.g. "try again", "next", "continue").
+        if (context.skillsUsedInAction && context.skillsUsedInAction.length > 0) {
+            for (const skill of context.skillsUsedInAction) {
+                if (skill.startsWith('browser_') || skill.startsWith('computer_')) fallbacks.add('browser');
+                if (skill.includes('npm') || skill.includes('python') || skill.includes('write_file')) fallbacks.add('development');
+                if (skill.startsWith('rag_') || skill.includes('search')) fallbacks.add('research');
+                if (skill.startsWith('schedule_') || skill.startsWith('heartbeat_')) fallbacks.add('scheduling');
+                if (skill.includes('analyze_media') || skill.includes('image')) fallbacks.add('media');
+            }
+        }
+
+        // 3. Complexity & Intent Inference (Advanced Regex + Context)
+        const isComplex = task.length > 100 || (context.metadata.currentStep || 1) > 3;
+        if (isComplex) {
+            fallbacks.add('research');
+            fallbacks.add('task-checklist');
+        }
+
+        // Broad action-verb detection
         const hasActionIntent = /\b(make|do|get|give|help|put|show|figure|work|handle|take\s+care|sort\s+out|come\s+up\s+with|hook\s+.+up|throw|set|run|start|launch|open|try|spin\s+up|stand\s+up|wire\s+up|build\s+out)\b/.test(task);
+        if (hasActionIntent) {
+            fallbacks.add('development');
+            fallbacks.add('research');
+        }
+
         // Question/information-seeking intent
         const hasQuestionIntent = /\b(what|how|why|where|when|who|which|can\s+you|could\s+you|can\s+u|is\s+there|tell\s+me|explain|describe|any\s+idea|thoughts\s+on)\b/.test(task);
-        // Polling/monitoring intent — route to polling helper
+        if (hasQuestionIntent) {
+            fallbacks.add('research');
+            if (!hasChannel) fallbacks.add('communication');
+        }
+
+        // Monitoring/Retry intent
         const hasPollingIntent = /\b(wait\s+for|wait\s+until|monitor|watch\s+for|poll|check\s+if|check\s+whether|notify\s+me\s+when|let\s+me\s+know\s+when|alert\s+me|keep\s+checking|retry|try\s+again|is\s+it\s+ready|is\s+it\s+done|status\s+of|keep\s+an\s+eye\s+on)\b/.test(task);
-        // Multi-step/checklist intent — route to task-checklist helper
-        const hasChecklistIntent = /\b(step\s+by\s+step|break\s+down|checklist|multiple\s+steps|first.*then|plan\s+out|track\s+progress|walk\s+me\s+through|phased\s+approach|one\s+step\s+at\s+a\s+time)\b/.test(task);
+        if (hasPollingIntent) {
+            fallbacks.add('polling');
+            fallbacks.add('scheduling');
+        }
+
         // Memory/history intent
         const hasMemoryIntent = /\b(remember|recall|history|past|previous|earlier|look\s+up|search\s+for|do\s+you\s+know|what\s+was|who\s+is)\b/.test(task);
-
-        if (hasActionIntent) {
-            // Action tasks most often need dev or research guidance
-            fallbacks.push('development');
-            fallbacks.push('research');
+        if (hasMemoryIntent) {
+            fallbacks.add('memory');
         }
 
-        if (hasQuestionIntent && !hasActionIntent) {
-            // Pure questions benefit from research + communication
-            fallbacks.push('research');
-            if (!hasChannel) fallbacks.push('communication');
+        // 4. Tactical Health Inference
+        if (context.tforce?.riskLevel === 'high' || context.tforce?.riskLevel === 'critical') {
+            fallbacks.add('research'); // Research help for troubleshooting
+            fallbacks.add('task-checklist'); // Structure for recovery
         }
 
-        if (hasMemoryIntent && !fallbacks.includes('memory')) {
-            fallbacks.push('memory');
+        // 5. Universal Fallback
+        if (fallbacks.size === 0) {
+            fallbacks.add('communication');
         }
 
-        if (hasPollingIntent && !fallbacks.includes('polling')) {
-            fallbacks.push('polling');
-        }
-
-        if ((hasChecklistIntent || isComplex) && !fallbacks.includes('task-checklist')) {
-            fallbacks.push('task-checklist');
-        }
-
-        if (isComplex && !fallbacks.includes('research')) {
-            fallbacks.push('research');
-        }
-
-        // If STILL nothing matched, include communication as the universal fallback
-        // (every task involves some form of response to the user)
-        if (fallbacks.length === 0) {
-            fallbacks.push('communication');
-        }
-
-        return fallbacks;
+        return Array.from(fallbacks);
     }
 
     /**

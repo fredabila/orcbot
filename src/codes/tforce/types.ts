@@ -1,7 +1,7 @@
 export interface TForceIncident {
     actionId: string;
     step: number;
-    source: 'decision' | 'tool' | 'system';
+    source: 'decision' | 'tool' | 'system' | 'guardrail';
     summary: string;
     error?: string;
     metadata?: Record<string, any>;
@@ -15,6 +15,8 @@ export interface TForceSnapshot {
     recoveryPlan: string[];
     memoryHighlights: string[];
     shouldEscalate: boolean;
+    complexityScore?: number; // 0-100
+    riskLevel?: 'low' | 'medium' | 'high' | 'critical';
 }
 
 export interface TForceContext {
@@ -24,4 +26,7 @@ export interface TForceContext {
     noToolSteps: number;
     recentTools: string[];
     lastError?: string;
+    totalDurationMs?: number;
+    messagesSent?: number;
+    consecutiveFailures?: number;
 }

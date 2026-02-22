@@ -32,6 +32,20 @@ export class BrowserHelper implements PromptHelper {
         return false;
     }
 
+    getRelatedHelpers(ctx: PromptHelperContext): string[] {
+        const related: string[] = [];
+        const task = ctx.taskDescription.toLowerCase();
+        // Browsing often involves media (images, screenshots)
+        if (task.includes('image') || task.includes('screenshot') || task.includes('picture') || task.includes('video')) {
+            related.push('media');
+        }
+        // Browsing often involves research
+        if (task.includes('search') || task.includes('find') || task.includes('look up')) {
+            related.push('research');
+        }
+        return related;
+    }
+
     getPrompt(ctx: PromptHelperContext): string {
         return `BROWSER & WEB NAVIGATION:
 **BARE URL RULE (CRITICAL)**: When a user sends you a URL with no other instructions (or minimal context like "check this out", "look at this", "what's this"), you MUST:

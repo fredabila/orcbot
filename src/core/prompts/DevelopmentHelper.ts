@@ -61,6 +61,18 @@ export class DevelopmentHelper implements PromptHelper {
         return false;
     }
 
+    getRelatedHelpers(ctx: PromptHelperContext): string[] {
+        const related = ['tooling']; // Development always needs tooling
+        const task = ctx.taskDescription.toLowerCase();
+        if (task.includes('website') || task.includes('web') || task.includes('page')) {
+            related.push('browser');
+        }
+        if (task.includes('research') || task.includes('how to') || task.includes('best way')) {
+            related.push('research');
+        }
+        return related;
+    }
+
     getPrompt(ctx: PromptHelperContext): string {
         return `SOFTWARE DEVELOPMENT STANDARDS:
 

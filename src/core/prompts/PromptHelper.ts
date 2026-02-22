@@ -38,6 +38,8 @@ export interface PromptHelperContext {
     overrideMode?: boolean;
     /** The role of the agent instance (e.g. 'worker', 'browser_specialist', 'orchestrator') */
     agentRole?: string;
+    /** Tactical Force Multiplier data (health, recovery plans, conscience guidance) */
+    tforce?: any;
 }
 
 export interface PromptHelper {
@@ -61,4 +63,10 @@ export interface PromptHelper {
      * Should return a focused, self-contained instruction block.
      */
     getPrompt(context: PromptHelperContext): string;
+
+    /**
+     * Optional: List of other helper names that should also be activated if this one is.
+     * Creates connectivity between related domains (e.g. browser -> media).
+     */
+    getRelatedHelpers?(context: PromptHelperContext): string[];
 }

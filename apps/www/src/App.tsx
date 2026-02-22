@@ -8,11 +8,13 @@ const TERMINAL_LINES = [
   { delay: 1100, text: '✓ LLM provider: Gemini 2.0 Flash',               color: 'ok' },
   { delay: 1600, text: '✓ Telegram channel connected',                   color: 'ok' },
   { delay: 2100, text: '✓ Heartbeat scheduler active (15 min)',           color: 'ok' },
-  { delay: 2600, text: '● Agent is live — awaiting tasks',               color: 'live' },
+  { delay: 2400, text: '✓ TForce Tactical Monitor: Risk LOW',               color: 'ok' },
+  { delay: 2700, text: '● Agent is live — awaiting tasks',               color: 'live' },
   { delay: 3400, text: '[Heartbeat] Idle 18m — running proactive check',  color: 'info' },
-  { delay: 4000, text: '→ web_search("latest AI news")',                  color: 'tool' },
-  { delay: 4700, text: '→ send_telegram(userId, summary)',                color: 'tool' },
-  { delay: 5300, text: '✓ Task completed — goalsMet: true',              color: 'ok' },
+  { delay: 3800, text: '[TForce] Routing activated: [research, memory]',  color: 'info' },
+  { delay: 4200, text: '→ search_memory_logs("last status report")',      color: 'tool' },
+  { delay: 4800, text: '→ send_telegram(userId, summary)',                color: 'tool' },
+  { delay: 5400, text: '✓ Task completed — goalsMet: true',              color: 'ok' },
 ];
 
 function TerminalDemo() {
@@ -107,7 +109,7 @@ function App() {
           <div className="hero-copy">
             <div className="hero-badge">
               <span className="badge-dot" /><span className="badge-pulse" />
-              Open Source · v2.0
+              Open Source · v2.2
             </div>
 
             <h1 className="hero-title">
@@ -206,14 +208,14 @@ function App() {
             <div className="marquee-fade-wrap">
               <div className="marquee-track">
                 {[
+                  { icon: '🛡️', title: 'TForce Tactical Guard', desc: 'Real-time health monitor that detects loops, fatigue, and ghosting, injecting automated recovery plans into the reasoning loop.' },
+                  { icon: '🐙', title: 'Recursive Helper Routing', desc: 'A sophisticated PromptRouter that intelligently activates related domain helpers (Browser -> Media) for seamless task execution.' },
+                  { icon: '🔍', title: 'Deep Memory Recall', desc: 'Dual-layered search system combining metadata-filtered semantic embeddings with literal file-based log retrieval.' },
                   { icon: '🧠', title: 'Strategic Planning', desc: 'Simulates tasks before execution with roadmaps, contingencies, and loop protections built-in.' },
-                  { icon: '👥', title: 'Multi-Agent Orchestration', desc: 'Spawns worker processes for parallel tasks with IPC coordination and task chaining.' },
-                  { icon: '💓', title: 'Smart Heartbeat', desc: 'Context-aware autonomy with exponential backoff, productivity tracking, and cadence control.' },
-                  { icon: '🔍', title: 'Resilient Web Search', desc: 'Smart fallback chain — API providers → browser-based search when keys aren\'t configured.' },
+                  { icon: '🛡️', title: 'TForce Tactical Guard', desc: 'Real-time health monitor that detects loops, fatigue, and ghosting, injecting automated recovery plans into the reasoning loop.' },
+                  { icon: '🐙', title: 'Recursive Helper Routing', desc: 'A sophisticated PromptRouter that intelligently activates related domain helpers (Browser -> Media) for seamless task execution.' },
+                  { icon: '🔍', title: 'Deep Memory Recall', desc: 'Dual-layered search system combining metadata-filtered semantic embeddings with literal file-based log retrieval.' },
                   { icon: '🧠', title: 'Strategic Planning', desc: 'Simulates tasks before execution with roadmaps, contingencies, and loop protections built-in.' },
-                  { icon: '👥', title: 'Multi-Agent Orchestration', desc: 'Spawns worker processes for parallel tasks with IPC coordination and task chaining.' },
-                  { icon: '💓', title: 'Smart Heartbeat', desc: 'Context-aware autonomy with exponential backoff, productivity tracking, and cadence control.' },
-                  { icon: '🔍', title: 'Resilient Web Search', desc: 'Smart fallback chain — API providers → browser-based search when keys aren\'t configured.' },
                 ].map((cap, i) => (
                   <div className="marquee-card capability-card" key={i}>
                     <div className="capability-icon-wrap"><span className="capability-icon">{cap.icon}</span></div>

@@ -9132,16 +9132,19 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     return result;
                 }
 
+                let tforceSnapshot: any = undefined;
                 if (this.config.get('tforceEnabled') !== false) {
-                    const snapshot = this.tforce.getSnapshot({
+                    tforceSnapshot = this.tforce.getSnapshot({
                         actionId: action.id,
                         description: action.payload.description || '',
                         step: currentStep,
                         noToolSteps,
                         recentTools: [],
-                        lastError
+                        lastError,
+                        totalDurationMs: this.currentActionStartAt ? Date.now() - this.currentActionStartAt : 0,
+                        messagesSent: action.payload?.messagesSent || 0
                     });
-                    logger.debug(`TForce[runOnce]: ${snapshot.conscienceGuidance}`);
+                    logger.debug(`TForce[runOnce]: ${tforceSnapshot.conscienceGuidance}`);
                 }
 
                 const decision = await this.decisionEngine.decide({
@@ -9151,7 +9154,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         currentStep,
                         executionPlan,
                         robustReasoningMode,
-                        sessionContinuityHint
+                        sessionContinuityHint,
+                        tforce: tforceSnapshot
                     }
                 });
 
@@ -9288,16 +9292,19 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     return result;
                 }
 
+                let tforceSnapshot: any = undefined;
                 if (this.config.get('tforceEnabled') !== false) {
-                    const snapshot = this.tforce.getSnapshot({
+                    tforceSnapshot = this.tforce.getSnapshot({
                         actionId: action.id,
                         description: action.payload.description || '',
                         step: currentStep,
                         noToolSteps,
                         recentTools: [],
-                        lastError
+                        lastError,
+                        totalDurationMs: this.currentActionStartAt ? Date.now() - this.currentActionStartAt : 0,
+                        messagesSent: action.payload?.messagesSent || 0
                     });
-                    logger.debug(`TForce[${lane}]: ${snapshot.conscienceGuidance}`);
+                    logger.debug(`TForce[${lane}]: ${tforceSnapshot.conscienceGuidance}`);
                 }
 
                 const decision = await this.decisionEngine.decide({
@@ -9307,7 +9314,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         currentStep,
                         executionPlan,
                         robustReasoningMode,
-                        sessionContinuityHint
+                        sessionContinuityHint,
+                        tforce: tforceSnapshot
                     }
                 });
 

@@ -359,7 +359,8 @@ ${this.repoContext}`,
             skillsUsedInAction,
             overrideMode: !!this.config?.get('overrideMode'),
             // Inject agent role if available (from worker profile or config)
-            agentRole: this.config?.get('agentRole') // We will need to set this in AgentWorker
+            agentRole: this.config?.get('agentRole'), // We will need to set this in AgentWorker
+            tforce: metadata.tforce
         };
 
         const result = await this.promptRouter.route(helperContext);

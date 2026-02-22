@@ -29,6 +29,11 @@ export class SchedulingHelper implements PromptHelper {
         return SchedulingHelper.SCHEDULING_SIGNALS.some(kw => task.includes(kw));
     }
 
+    getRelatedHelpers(ctx: PromptHelperContext): string[] {
+        // Scheduling often involves communication (reminders)
+        return ['communication'];
+    }
+
     getPrompt(ctx: PromptHelperContext): string {
         return `SMART SCHEDULING:
 You have two scheduling skills — use them proactively:
