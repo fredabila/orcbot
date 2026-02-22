@@ -34,6 +34,7 @@ import { ErrorHandler } from '../utils/ErrorHandler';
 import { resolveEmoji, detectChannelFromMetadata } from '../utils/ReactionHelper';
 import { renderMarkdown, hasMarkdown } from '../utils/MarkdownRenderer';
 import { fetchWorldEvents, summarizeWorldEvents, WorldEventSource } from '../tools/WorldEvents';
+import { buildWorkflowSignalLog, buildWorkflowSignalMemory, shouldInjectWorkflowSignal, WorkflowSignalLevel } from './WorkflowReviewHelper';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -6318,6 +6319,63 @@ The plugin handles all logic internally. See the plugin source for implementatio
      * this method asks the LLM review layer whether the task is truly done or should continue.
      * Returns 'continue' if the task should keep going, 'terminate' if it should stop.
      */
+
+    /**
+     * Last-resort user-visible response for channel actions that otherwise produced no output.
+     * This bypasses progress-feedback toggles so users are never left with total silence.
+     */
+    private async sendNoResponseFallback(action: Action, reason?: string): Promise<boolean> {
+        const source = action.payload?.source;
+        const sourceId = action.payload?.sourceId;
+        if (!source) return false;
+        if (source !== 'gateway-chat' && !sourceId) return false;
+
+        const message = reason
+            ? `⚠️ I ran into an internal issue while handling that request (${reason.slice(0, 120)}). Please retry, or ask me to continue from the last successful step.`
+            : '⚠️ I hit an internal issue before I could send a full answer. Please retry, or ask me to continue from the last successful step.';
+
+        try {
+            if (source === 'telegram' && this.telegram) {
+                await this.telegram.sendMessage(sourceId, message);
+                return true;
+            }
+            if (source === 'whatsapp' && this.whatsapp) {
+                await this.whatsapp.sendMessage(sourceId, message);
+                return true;
+            }
+            if (source === 'discord' && this.discord) {
+                await this.discord.sendMessage(sourceId, message);
+                return true;
+            }
+            if (source === 'slack' && this.slack) {
+                await this.slack.sendMessage(sourceId, message);
+                return true;
+            }
+            if (source === 'email') {
+                const emailChannel = this.getOrCreateEmailChannel();
+                if (!emailChannel) return false;
+                const subject = action.payload?.subject ? `Re: ${action.payload.subject}` : 'OrcBot: request update';
+                await emailChannel.sendEmail(sourceId, subject, message, action.payload?.inReplyTo, action.payload?.references);
+                return true;
+            }
+            if (source === 'gateway-chat') {
+                eventBus.emit('gateway:chat:response', {
+                    type: 'chat:message',
+                    role: 'assistant',
+                    content: message,
+                    timestamp: new Date().toISOString(),
+                    messageId: `fallback-${Date.now()}`
+                });
+                return true;
+            }
+        } catch (e) {
+            logger.warn(`Agent: Failed to send no-response fallback for action ${action.id}: ${e}`);
+            return false;
+        }
+
+        return false;
+    }
+
     private async reviewForcedTermination(
         action: Action,
         reason: 'message_budget' | 'skill_frequency' | 'max_steps',
@@ -10623,13 +10681,17 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     let firstSentMessageInThisStep = '';
                     let toolsBlockedByCooldown = 0;
                     let totalSendToolsInStep = 0;
+                    let duplicateSideEffectsBlockedInStep = 0;
+                    let totalSideEffectToolsInStep = 0;
                     let remainingToolsInBatch = decision.tools.length;
 
                     for (const toolCall of decision.tools) {
                         remainingToolsInBatch--;
                         if (SIDE_EFFECT_TOOLS.has(toolCall.name)) {
+                            totalSideEffectToolsInStep++;
                             const sideEffectKey = buildSideEffectKey(toolCall.name, toolCall.metadata || {});
                             if (successfulSideEffectKeys.has(sideEffectKey)) {
+                                duplicateSideEffectsBlockedInStep++;
                                 logger.warn(`Agent: Blocked duplicate side-effect call '${toolCall.name}' with equivalent intent in action ${action.id}`);
                                 this.memory.saveMemory({
                                     id: `${action.id}-step-${currentStep}-${toolCall.name}-sideeffect-duplicate-blocked`,
@@ -10870,12 +10932,15 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             continue; // Skip execution, move to next tool
                         }
 
+                        const toolStartedAt = Date.now();
                         let toolResult;
+                        let executionError: unknown;
                         try {
                             toolResult = await this.skills.executeSkill(toolCall.name, toolCall.metadata || {});
                             // Reset failure counter on success
                             skillFailCounts[toolCall.name] = 0;
                         } catch (e) {
+                            executionError = e;
                             logger.error(`Skill execution failed: ${toolCall.name} - ${e}`);
                             toolResult = `Error executing skill ${toolCall.name}: ${e}`;
 
@@ -11134,6 +11199,58 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             metadata: { tool: toolCall.name, result: toolResult, input: toolCall.metadata }
                         });
 
+                        const toolDurationMs = Date.now() - toolStartedAt;
+                        const signalLevel: WorkflowSignalLevel = resultIndicatesError
+                            ? 'error'
+                            : toolDurationMs >= 12000
+                                ? 'warn'
+                                : 'info';
+
+                        if (shouldInjectWorkflowSignal({
+                            actionId: action.id,
+                            step: currentStep,
+                            toolName: toolCall.name,
+                            level: signalLevel,
+                            toolDurationMs,
+                            errorMessage: executionError ? String(executionError) : resultIndicatesError ? String(toolResult) : undefined,
+                            consecutiveFailures: skillFailCounts[toolCall.name] || 0,
+                            hasExistingErrorGuidance: resultIndicatesError,
+                        })) {
+                            const workflowSignal = buildWorkflowSignalMemory({
+                                actionId: action.id,
+                                step: currentStep,
+                                toolName: toolCall.name,
+                                level: signalLevel,
+                                toolDurationMs,
+                                errorMessage: executionError ? String(executionError) : resultIndicatesError ? String(toolResult) : undefined,
+                                consecutiveFailures: skillFailCounts[toolCall.name] || 0,
+                                hasExistingErrorGuidance: resultIndicatesError,
+                            });
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-${toolCall.name}-workflow-signal`,
+                                type: 'short',
+                                content: workflowSignal,
+                                metadata: {
+                                    actionId: action.id,
+                                    step: currentStep,
+                                    skill: toolCall.name,
+                                    signalLevel,
+                                    toolDurationMs,
+                                    consecutiveFailures: skillFailCounts[toolCall.name] || 0,
+                                }
+                            });
+
+                            logger.warn(buildWorkflowSignalLog({
+                                actionId: action.id,
+                                step: currentStep,
+                                toolName: toolCall.name,
+                                level: signalLevel,
+                                toolDurationMs,
+                                errorMessage: executionError ? String(executionError) : resultIndicatesError ? String(toolResult) : undefined,
+                                consecutiveFailures: skillFailCounts[toolCall.name] || 0,
+                            }));
+                        }
+
                         if (SIDE_EFFECT_TOOLS.has(toolCall.name) && !resultIndicatesError) {
                             const sideEffectKey = buildSideEffectKey(toolCall.name, toolCall.metadata || {});
                             successfulSideEffectKeys.add(sideEffectKey);
@@ -11154,6 +11271,41 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 content: `[SYSTEM: Paused tool batch after ${toolCall.name} failed. ${remainingToolsInBatch} queued tool(s) were skipped. Re-plan from this failure before continuing.]`,
                                 metadata: { actionId: action.id, step: currentStep, skill: toolCall.name, queuedToolsSkipped: remainingToolsInBatch }
                             });
+
+                            const batchPauseSignal = buildWorkflowSignalMemory({
+                                actionId: action.id,
+                                step: currentStep,
+                                toolName: toolCall.name,
+                                level: 'warn',
+                                toolDurationMs,
+                                errorMessage: executionError ? String(executionError) : String(toolResult),
+                                consecutiveFailures: skillFailCounts[toolCall.name] || 0,
+                                queuedToolsSkipped: remainingToolsInBatch,
+                            });
+
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-${toolCall.name}-batch-workflow-signal`,
+                                type: 'short',
+                                content: batchPauseSignal,
+                                metadata: {
+                                    actionId: action.id,
+                                    step: currentStep,
+                                    skill: toolCall.name,
+                                    queuedToolsSkipped: remainingToolsInBatch,
+                                    signalLevel: 'warn',
+                                }
+                            });
+
+                            logger.warn(buildWorkflowSignalLog({
+                                actionId: action.id,
+                                step: currentStep,
+                                toolName: toolCall.name,
+                                level: 'warn',
+                                toolDurationMs,
+                                errorMessage: executionError ? String(executionError) : String(toolResult),
+                                consecutiveFailures: skillFailCounts[toolCall.name] || 0,
+                                queuedToolsSkipped: remainingToolsInBatch,
+                            }));
                             logger.info(`Agent: Paused queued tools for action ${action.id} after '${toolCall.name}' failure (${remainingToolsInBatch} remaining).`);
                             break;
                         }
@@ -11368,6 +11520,28 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             content: `[SYSTEM: Your recent sends were suppressed, but you have NOT delivered a substantive answer yet. Send ONE concrete, content-rich response now (not an acknowledgment/status update). If needed, combine your acknowledgment and the actual content in a single message.]`,
                             metadata: { actionId: action.id, step: currentStep }
                         });
+                    }
+
+                    // SIDE-EFFECT DEDUP GUIDANCE: if every side-effect tool in this step was blocked
+                    // as a duplicate of already-successful work, guide the next step instead of hard-stopping.
+                    if (totalSideEffectToolsInStep > 0 && duplicateSideEffectsBlockedInStep >= totalSideEffectToolsInStep && successfulSideEffectKeys.size > 0) {
+                        const hasDeliveredSubstantiveAnswer = substantiveDeliveriesSent > 0;
+                        logger.info(`Agent: All ${totalSideEffectToolsInStep} side-effect tool(s) in step ${currentStep} were duplicate replays (action ${action.id}).`);
+                        this.memory.saveMemory({
+                            id: `${action.id}-step-${currentStep}-duplicate-sideeffects-guidance`,
+                            type: 'short',
+                            content: `[SYSTEM: Duplicate side-effect replays were blocked this step (${duplicateSideEffectsBlockedInStep}/${totalSideEffectToolsInStep}). Do NOT resend completed operations. If user still needs an answer, send ONE fresh substantive message. If all goals are already met, conclude.]`,
+                            metadata: { actionId: action.id, step: currentStep, duplicateSideEffectsBlockedInStep, totalSideEffectToolsInStep }
+                        });
+
+                        if (hasDeliveredSubstantiveAnswer) {
+                            logger.info(`Agent: Duplicate-only side-effect step occurred after substantive delivery. Completing action ${action.id}.`);
+                            goalsMet = true;
+                            break;
+                        }
+
+                        logger.warn(`Agent: Duplicate-only side-effect step before substantive delivery. Continuing action ${action.id} for one fresh response.`);
+                        continue;
                     }
 
                     if (forceBreak) break;
@@ -11799,11 +11973,17 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
             }
             if (isUserFacingAction && messagesSent === 0) {
                 logger.error(`Agent: No user-visible response was delivered for action ${action.id}. source=${action.payload?.source} step=${currentStep}`);
+                const fallbackSent = await this.sendNoResponseFallback(action, actionStatus === 'failed' ? 'action-failed' : undefined);
+                if (fallbackSent) {
+                    messagesSent++;
+                    anyUserDeliverySuccess = true;
+                    logger.warn(`Agent: Sent no-response fallback message for action ${action.id}.`);
+                }
                 this.memory.saveMemory({
                     id: `${action.id}-no-response-diagnostic`,
                     type: 'short',
-                    content: `[SYSTEM: RESPONSE DIAGNOSTIC — no user-visible message was sent for this channel task. Investigate blocked/suppressed send tools, channel policy, and tool failures for action ${action.id}.`,
-                    metadata: { actionId: action.id, source: action.payload?.source, noResponse: true, steps: currentStep }
+                    content: `[SYSTEM: RESPONSE DIAGNOSTIC — no user-visible message was sent for this channel task.${fallbackSent ? ' A last-resort fallback message WAS sent to the user.' : ' Last-resort fallback message ALSO failed.'} Investigate blocked/suppressed send tools, channel policy, and tool failures for action ${action.id}.`,
+                    metadata: { actionId: action.id, source: action.payload?.source, noResponse: true, steps: currentStep, fallbackSent }
                 });
             }
 
