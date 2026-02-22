@@ -237,6 +237,8 @@ export interface AgentConfig {
     cerebrasApiKey?: string;
     xaiApiKey?: string;
     // User Permissions
+    tforceEnabled?: boolean;                     // Enable TForce conscience/recovery support (default true)
+    tforceMaxIncidentsPerAction?: number;        // Max incidents stored per action for TForce (default 30)
     adminUsers?: {
         telegram?: string[];   // Telegram numeric user IDs (e.g., ["123456789"])
         discord?: string[];    // Discord snowflake user IDs (e.g., ["876513738667229184"])
@@ -751,6 +753,8 @@ export class ConfigManager {
             worldEventsStoreEnabled: true,
             worldEventsHeartbeatEnabled: true,
             worldEventsGdeltQuery: 'global',
+            tforceEnabled: true,
+            tforceMaxIncidentsPerAction: 30,
             worldEventsGlobeRenderer: 'mapscii',
             worldEventsGlobeCommand: 'mapscii',
             worldEventsGlobeArgs: [],
