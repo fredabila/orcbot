@@ -42,6 +42,8 @@ export class WebBrowser {
     private traceSnapshots: boolean;
     private tracePath?: string;
     public _blankUrlHistory: Map<string, number> = new Map(); // domain → consecutive blank count
+    private _consoleLogs: string[] = []; // Capture recent console logs
+    private _viewportMode: 'desktop' | 'mobile' = 'desktop';
 
     // API Interception: auto-discover XHR/fetch endpoints during navigation
     private _apiInterceptionEnabled: boolean = false;
@@ -50,6 +52,19 @@ export class WebBrowser {
 
     public get page(): Page | null {
         return this._page;
+    }
+
+    /**
+     * Set the viewport/device mode for the next browser launch.
+     * Restarts the browser to apply changes.
+     */
+    public async setViewportMode(mode: 'desktop' | 'mobile'): Promise<string> {
+        if (this._viewportMode === mode) return `Browser is already in ${mode} mode.`;
+        
+        this._viewportMode = mode;
+        await this.close();
+        // ensureBrowser will pick up the new mode
+        return `Browser set to ${mode} mode. Next navigation will use ${mode} user agent and viewport.`;
     }
 
     /**
@@ -120,6 +135,13 @@ export class WebBrowser {
             // Clean up stale Chromium lock files left by crashes / unclean shutdowns
             this.cleanStaleLockFiles(userDataDir);
 
+            // Configure viewport/UA based on mode
+            const isMobile = this._viewportMode === 'mobile';
+            const viewport = isMobile ? { width: 375, height: 812 } : { width: 1280, height: 720 };
+            const userAgent = isMobile 
+                ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
+                : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
             // Launch with retry — if first attempt fails due to lock race, clean up and retry once
             const launchOptions = {
                 headless: this.headlessMode,
@@ -179,14 +201,16 @@ export class WebBrowser {
 
                     // ── Window/display ──
                     ...(this.headlessMode ? [
-                        '--window-size=1280,720',
+                        `--window-size=${viewport.width},${viewport.height}`,
                         '--hide-scrollbars',
                         '--mute-audio',
                     ] : []),
                 ],
-                viewport: { width: 1280, height: 720 } as { width: number; height: number },
-                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                deviceScaleFactor: 1,
+                viewport,
+                userAgent,
+                deviceScaleFactor: isMobile ? 2 : 1,
+                isMobile,
+                hasTouch: isMobile,
                 timeout: 30000,                               // 30s launch timeout (default is sometimes too short)
                 ignoreDefaultArgs: ['--enable-automation'],    // Remove automation flag that sites detect
             };
@@ -292,6 +316,40 @@ export class WebBrowser {
             });
 
             this._page = await this.context.newPage();
+            
+            // Aggressive resource blocking for speed
+            await this._page.route('**/*', route => {
+                const type = route.request().resourceType();
+                // Block heavy media. Strictly allow scripts, styles, and data (fetch/xhr).
+                if (['image', 'media', 'font'].includes(type)) {
+                    return route.abort();
+                }
+                
+                // Allow everything else (script, stylesheet, document, xhr, fetch, other)
+                // "other" is often critical JSON data in SPAs.
+                
+                // Block known ad/tracking domains, but BE CAREFUL with "google" as it breaks Docs
+                const url = route.request().url();
+                if (
+                    (url.includes('google-analytics') || url.includes('doubleclick') || url.includes('facebook.com/tr')) &&
+                    !url.includes('docs.google.com') // Whitelist Docs just in case
+                ) {
+                    return route.abort();
+                }
+                route.continue();
+            });
+
+            // Capture console logs for debugging agent visibility
+            this._page.on('console', msg => {
+                const type = msg.type();
+                const text = msg.text();
+                // Only keep warnings and errors to reduce noise, unless it's explicitly logged info
+                if (['error', 'warning'].includes(type) || (text.length < 200)) {
+                    this._consoleLogs.push(`[Console ${type}] ${text.slice(0, 300)}`);
+                    if (this._consoleLogs.length > 50) this._consoleLogs.shift();
+                }
+            });
+
             await this.ensureTracing();
         }
     }
@@ -599,52 +657,80 @@ export class WebBrowser {
     private lastNavigateTimestamp: number = 0;
     private lastInteractionTimestamp: number = 0;
 
+    /**
+     * Wait for the DOM to settle (stop mutating) for a given debounce period.
+     * Uses MutationObserver to detect visual/structural changes.
+     * Much safer and faster than fixed sleeps or network idle.
+     */
+    private async waitForDomSettle(debounceMs: number = 300, maxWaitMs: number = 5000): Promise<void> {
+        if (!this._page) return;
+        try {
+            await this._page.evaluate(({ debounce, max }) => {
+                return new Promise<void>((resolve) => {
+                    let timer: any;
+                    const start = Date.now();
+                    
+                    const observer = new MutationObserver(() => {
+                        clearTimeout(timer);
+                        // Safety hatch: if we wait too long, just give up and proceed
+                        if (Date.now() - start > max) {
+                            observer.disconnect();
+                            resolve();
+                            return;
+                        }
+                        timer = setTimeout(() => {
+                            observer.disconnect();
+                            resolve();
+                        }, debounce);
+                    });
+                    
+                    if (document.body) {
+                        observer.observe(document.body, { 
+                            childList: true, 
+                            subtree: true, 
+                            attributes: true, 
+                            characterData: true 
+                        });
+                    }
+                    
+                    // Initial kick-off in case there are no mutations at all
+                    timer = setTimeout(() => {
+                        observer.disconnect();
+                        resolve();
+                    }, debounce);
+                });
+            }, { debounce: debounceMs, max: maxWaitMs });
+        } catch (e) {
+            // Ignore errors (e.g. navigation happened during wait)
+        }
+    }
+
     private async waitForStablePage(timeout = 10000) {
         if (!this._page) return;
         try {
-            // Phase 1: Wait for basic load events
+            // Phase 1: Wait for basic load events (fast failover)
             await Promise.all([
-                this._page.waitForLoadState('load', { timeout }),
-                this._page.waitForLoadState('networkidle', { timeout: Math.min(timeout, 8000) }).catch(() => { })
+                this._page.waitForLoadState('load', { timeout: Math.min(timeout, 5000) }),
+                this._page.waitForLoadState('domcontentloaded', { timeout: Math.min(timeout, 5000) }).catch(() => {})
             ]);
         } catch (e) {
-            logger.debug(`Stable page wait exceeded timeout: ${e}`);
+            // Ignore timeouts here, we rely on DOM settle next
         }
 
-        // Phase 2: SPA content polling — wait for meaningful DOM content to appear.
-        // SPAs (React, Vue, Svelte) fire 'load' on an empty shell, then JS renders.
-        // We poll until body has real text or interactive elements.
+        // Phase 2: Event-driven DOM Settle (The "Safer" Wait)
+        // Waits until the page actually stops changing.
+        await this.waitForDomSettle(400, Math.min(timeout, 8000));
+
+        // Phase 3: Final check for meaningful content (SPA empty shell detection)
+        // If DOM settled but page is still empty, wait a bit longer to see if it hydrates
         try {
-            const pollStart = Date.now();
-            const maxPollMs = Math.min(timeout, 10000);
-            const pollInterval = 500;
-            let attempt = 0;
-
-            while (Date.now() - pollStart < maxPollMs) {
-                const metrics = await this._page.evaluate(() => {
-                    const bodyText = document.body?.innerText?.trim() || '';
-                    const interactiveCount = document.querySelectorAll(
-                        'a, button, input, select, textarea, [role="button"], [role="link"]'
-                    ).length;
-                    return { textLength: bodyText.length, interactiveCount };
-                }).catch(() => ({ textLength: 0, interactiveCount: 0 }));
-
-                // Consider page rendered if we have meaningful content
-                if (metrics.textLength > 100 || metrics.interactiveCount > 3) {
-                    if (attempt > 0) {
-                        logger.debug(`Browser: SPA content appeared after ${Date.now() - pollStart}ms (${metrics.textLength} chars, ${metrics.interactiveCount} interactive elements)`);
-                    }
-                    return;
-                }
-
-                attempt++;
-                await new Promise(r => setTimeout(r, pollInterval));
+            const bodyLength = await this._page.evaluate(() => document.body?.innerText?.length || 0).catch(() => 0);
+            if (bodyLength < 50) {
+                // Page seems empty, give it one last chance (maybe a slow API call triggers render)
+                logger.debug('Browser: Page seems empty after settle, waiting extra...');
+                await this.waitForDomSettle(1000, 4000); 
             }
-
-            logger.debug(`Browser: SPA content poll timed out after ${maxPollMs}ms — page may still be loading`);
-        } catch {
-            // Best effort — don't fail the navigation over this
-        }
+        } catch {}
     }
 
     public async navigate(url: string, waitSelectors: string[] = [], allowHeadfulRetry: boolean = true): Promise<string> {
@@ -707,6 +793,7 @@ export class WebBrowser {
             }
 
             logger.info(`Browser: Navigating to ${targetUrl} (engine=${this.browserEngine}, headless=${this.headlessMode})`);
+            this._consoleLogs = []; // Clear logs for new navigation
             await this._page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
             await this.waitForStablePage(15000);
             this.lastNavigateTimestamp = Date.now();
@@ -1012,16 +1099,19 @@ export class WebBrowser {
         try {
             await this.ensureBrowser();
 
-            // Skip redundant stable-page wait only when:
-            // 1. We navigated very recently (within 15s), AND
-            // 2. No click/type happened after navigate (which could trigger SPA re-render), AND
-            // 3. The page URL isn't about:blank (SPA transition state).
+            // Skip redundant stable-page wait if we just interacted/navigated recently.
+            // We only need the heavy 'waitForStablePage' if the page has been sitting idle for a while
+            // (potential background updates) or if we're recovering from a blank state.
+            // Previous logic double-waited after every click, causing massive slowness.
             const timeSinceNavigate = Date.now() - this.lastNavigateTimestamp;
             const timeSinceInteraction = Date.now() - this.lastInteractionTimestamp;
             const currentUrl = this.page?.url() || '';
             const isBlankUrl = !currentUrl || currentUrl === 'about:blank';
-            const interactionAfterNavigate = this.lastInteractionTimestamp > this.lastNavigateTimestamp;
-            const needsStableWait = timeSinceNavigate > 15000 || interactionAfterNavigate || isBlankUrl;
+            
+            // Only wait if it's been >15s since nav AND >4s since last click/type.
+            // If we just clicked (e.g. 500ms ago), the click method already handled the immediate settle.
+            const needsStableWait = (timeSinceNavigate > 15000 && timeSinceInteraction > 4000) || isBlankUrl;
+            
             if (needsStableWait) {
                 await this.waitForStablePage(isBlankUrl ? 8000 : undefined);
             }
@@ -1058,6 +1148,11 @@ export class WebBrowser {
                         const style = window.getComputedStyle(el);
                         const isVisible = rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
                         if (!isVisible) return false;
+                        
+                        // Check if element is actually on screen
+                        if (rect.bottom < 0 || rect.right < 0 || rect.top > window.innerHeight || rect.left > window.innerWidth) {
+                            return false;
+                        }
                         return true;
                     });
 
@@ -1068,15 +1163,27 @@ export class WebBrowser {
                         const refId = refCounter++;
                         el.setAttribute('data-orcbot-ref', refId.toString());
 
+                        const rect = el.getBoundingClientRect();
+                        const centerX = rect.left + rect.width / 2;
+                        const centerY = rect.top + rect.height / 2;
+                        const vPos = centerY < window.innerHeight / 3 ? 'top' : centerY < (window.innerHeight * 2) / 3 ? 'middle' : 'bottom';
+                        const hPos = centerX < window.innerWidth / 3 ? 'left' : centerX < (window.innerWidth * 2) / 3 ? 'center' : 'right';
+                        const pos = `${vPos}-${hPos}`;
+
                         const role = el.getAttribute('role') || el.tagName.toLowerCase();
-                        const label = el.getAttribute('aria-label') ||
+                        let label = el.getAttribute('aria-label') ||
                             el.getAttribute('placeholder') ||
                             el.getAttribute('title') ||
                             (el as any).value ||
-                            el.innerText.trim().slice(0, 50);
+                            el.innerText.trim().slice(0, 60);
+
+                        if (!label || label.trim().length === 0) {
+                            // Try to derive label from ID or class if desperately needed
+                            label = el.id || el.className.toString().split(' ')[0] || '(no label)';
+                        }
 
                         const typeAttr = (el as HTMLInputElement).type ? ` (${(el as HTMLInputElement).type})` : '';
-                        result.push(`${role}${typeAttr} "${label || '(no label)'}" [ref=${refId}]`);
+                        result.push(`${role}${typeAttr} "${label.replace(/\n/g, ' ')}" [ref=${refId}] [pos=${pos}]`);
                     });
 
                     const headings = Array.from(document.querySelectorAll('h1, h2, h3')).slice(0, 10);
@@ -1089,11 +1196,15 @@ export class WebBrowser {
                 });
             };
 
+            // Execute snapshot build early so we have metrics for the vision check
             const snapshotStart = Date.now();
             let snapshot = await buildSnapshot();
             let title = await this.page!.title();
             let url = this.page!.url();
             let contentLength = (await this.page!.content()).length;
+            
+            // Calculate metrics for blank check
+            const interactiveLineCount = (snapshot || '').split('\n').filter(l => l.includes('[ref=')).length;
 
             // Track recovery reload attempts to prevent churn and repeated full reloads
             const maxRecoveryReloads = 1;
@@ -1132,30 +1243,41 @@ export class WebBrowser {
                 url = `${this.lastNavigatedUrl} (SPA state)`;
             }
 
-            // Only consider it "blank" if we have almost no content AND no snapshot elements
-            // SPAs like YouTube may have minimal HTML but rich snapshots
+            // Only consider it "blank" if we have almost no content AND no snapshot elements AND no title
+            // interactiveLineCount calculated at start of function
             const hasSnapshotContent = snapshot && snapshot.length > 50;
-            const looksBlank = (!title || title.trim().length === 0) && contentLength < 1200 && !hasSnapshotContent;
+            const hasTitle = title && title.trim().length > 0 && !title.includes('about:blank');
+            const looksBlank = !hasTitle && contentLength < 800 && !hasSnapshotContent;
             
-            if (looksBlank && recoveryReloadAttempts < maxRecoveryReloads) {
-                logger.warn('Semantic snapshot appears blank; attempting one recovery reload before returning diagnostics.');
-                recoveryReloadAttempts++;
-                await this.page!.reload({ waitUntil: 'load', timeout: 30000 }).catch(() => { });
-                await this.waitForStablePage();
-                snapshot = await buildSnapshot();
-                title = await this.page!.title();
-                url = this.page!.url();
-                contentLength = (await this.page!.content()).length;
-                
-                // Update URL display if still blank
-                if ((!url || url === 'about:blank') && this.lastNavigatedUrl) {
-                    url = `${this.lastNavigatedUrl} (SPA state)`;
+            // Vision Fallback: If page looks blank to the DOM (Canvas/SPA), trust the eyes (Vision).
+            // Do NOT reload. Reloading canvas apps like Google Docs just gives another blank DOM.
+            if (this._visionAnalyzer && (looksBlank || interactiveLineCount < 3)) {
+                try {
+                    logger.info(`Semantic snapshot thin (${interactiveLineCount} elements, ${contentLength} bytes) — triggering auto-vision`);
+                    const screenshotResult = await this.screenshot();
+                    if (!String(screenshotResult).startsWith('Failed')) {
+                        const screenshotPath = path.join(os.homedir(), '.orcbot', 'screenshot.png');
+                        if (fs.existsSync(screenshotPath)) {
+                            const visionDescription = await this._visionAnalyzer(
+                                screenshotPath,
+                                'Describe the visible page layout and content. List ALL interactive elements you can see: buttons, links, input fields, menus, tabs, icons, and any clickable areas. For each element, describe its position (top/center/bottom, left/center/right) and what it appears to do. Also describe any visible text, headings, images, or important content areas.'
+                            );
+                            
+                            // If vision sees something, return that instead of the "blank" DOM snapshot
+                            if (visionDescription && visionDescription.length > 50) {
+                                return `PAGE: "${title}"\nURL: ${url}\n\n[NOTE: DOM was empty, using Vision Analysis]\n\nVISION SNAPSHOT:\n${visionDescription}`;
+                            }
+                        }
+                    }
+                } catch (e) {
+                    logger.warn(`Auto-vision fallback failed: ${e}`);
                 }
             }
 
-            const interactiveLineCount = (snapshot || '').split('\n').filter(l => l.includes('[ref=')).length;
+            // interactiveLineCount calculated above
             const snapshotElapsed = Date.now() - snapshotStart;
-            logger.info(`Semantic snapshot: url="${url}" title="${title}" html=${contentLength} elements=${interactiveLineCount} in ${snapshotElapsed}ms`);
+            // Demote to debug to reduce log noise - users don't need to see this every time
+            logger.debug(`Semantic snapshot: url="${url}" title="${title}" html=${contentLength} elements=${interactiveLineCount} in ${snapshotElapsed}ms`);
             const diagnostics = `URL: ${url}\nHTML length: ${contentLength}`;
             const baseResult = `PAGE: "${title}"\n${diagnostics}\n\nSEMANTIC SNAPSHOT:\n${snapshot || '(No interactive elements found)'}`;
 
@@ -1196,6 +1318,14 @@ export class WebBrowser {
                 const debug = await this.saveDebugArtifacts('blank-snapshot', html).catch(() => null);
                 if (debug?.screenshotPath || debug?.htmlPath) {
                     logger.warn(`Semantic snapshot blank: saved diagnostics (${debug.screenshotPath || 'no screenshot'}, ${debug.htmlPath || 'no html'})`);
+                }
+            }
+
+            // Append console logs if any errors/warnings are present
+            if (this._consoleLogs.length > 0) {
+                const errors = this._consoleLogs.filter(l => l.includes('[Console error]'));
+                if (errors.length > 0) {
+                    return baseResult + `\n\nPAGE CONSOLE ERRORS:\n${errors.slice(-5).join('\n')}`;
                 }
             }
 
@@ -1272,6 +1402,8 @@ export class WebBrowser {
         }
 
         // Second fallback: refresh semantic snapshot to re-attach refs, then re-check
+        // DISABLED: This causes reload loops on "blank" SPAs. Let the agent fail and retry cleanly.
+        /*
         logger.warn(`Browser: Could not re-attach ref ${selector} — refreshing snapshot`);
         try {
             await this.getSemanticSnapshot();
@@ -1280,6 +1412,7 @@ export class WebBrowser {
         } catch (e) {
             logger.debug(`Browser: Snapshot refresh failed while re-attaching ref ${selector}: ${e}`);
         }
+        */
 
         logger.warn(`Browser: Ref ${selector} is stale — element may no longer exist`);
         return null;
@@ -1288,21 +1421,17 @@ export class WebBrowser {
     /**
      * Lightweight post-interaction wait — settles the page after a click/type/select
      * without the full SPA poll that waitForStablePage does.
-     * Just waits for network to quiet and a brief DOM settle.
+     * Uses DOM settle to catch micro-updates (dropdowns, validation messages).
      */
     private async waitAfterInteraction(maxMs: number = 2000): Promise<void> {
         if (!this._page) return;
         try {
-            await this._page.waitForLoadState('networkidle', { timeout: maxMs }).catch(() => {});
-            // Event-driven settle for animations/transitions without fixed sleeps.
-            await this._page.evaluate(() => new Promise<void>(resolve => {
-                const raf = () => requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-                if (document.readyState === 'complete' || document.readyState === 'interactive') {
-                    raf();
-                    return;
-                }
-                window.addEventListener('DOMContentLoaded', () => raf(), { once: true });
-            }));
+            // Wait for network to settle briefly
+            const networkTimeout = Math.min(maxMs, 600);
+            await this._page.waitForLoadState('networkidle', { timeout: networkTimeout }).catch(() => {});
+            
+            // Wait for visual updates to finish (150ms debounce)
+            await this.waitForDomSettle(150, 1500);
         } catch {
             // Best effort
         }
@@ -1397,7 +1526,8 @@ export class WebBrowser {
             let lastError: any;
 
             try {
-                await this.page!.click(finalSelector, { timeout: 5000 });
+                // Reduced timeout to failover to force-click faster (1.5s instead of 5s)
+                await this.page!.click(finalSelector, { timeout: 1500 });
                 clicked = true;
             } catch (e1) {
                 lastError = e1;
@@ -1721,22 +1851,124 @@ export class WebBrowser {
         }
     }
 
+    public async clickText(text: string, selectorHint: string = 'button, a, [role="button"], input[type="button"], input[type="submit"]'): Promise<string> {
+        try {
+            await this.ensureBrowser();
+            logger.info(`Browser: Click text "${text}" (hint=${selectorHint})`);
+
+            const clicked = await this.page!.evaluate(({ txt, sel }) => {
+                const elements = Array.from(document.querySelectorAll(sel)) as HTMLElement[];
+                const target = elements.find(el => 
+                    el.innerText?.toLowerCase().includes(txt.toLowerCase()) || 
+                    el.textContent?.toLowerCase().includes(txt.toLowerCase()) ||
+                    (el as HTMLInputElement).value?.toLowerCase().includes(txt.toLowerCase()) ||
+                    el.getAttribute('aria-label')?.toLowerCase().includes(txt.toLowerCase()) ||
+                    el.getAttribute('title')?.toLowerCase().includes(txt.toLowerCase())
+                );
+
+                if (target) {
+                    target.scrollIntoView({ block: 'center' });
+                    target.click();
+                    return true;
+                }
+                return false;
+            }, { txt: text, sel: selectorHint });
+
+            if (!clicked) {
+                // Fallback: try any element if hint failed
+                const anyClicked = await this.page!.evaluate(({ txt }) => {
+                    // Expanded fallback list
+                    const elements = Array.from(document.querySelectorAll('a, button, span, div, p, li, h1, h2, h3, h4, h5, h6')) as HTMLElement[];
+                    
+                    // Prioritize: 
+                    // 1. Exact-ish match (trimmed)
+                    // 2. Contains match
+                    const target = elements.find(el => {
+                        const inner = el.innerText?.trim().toLowerCase() || '';
+                        const text = txt.toLowerCase();
+                        if (inner === text) return true;
+                        if (inner.includes(text) && inner.length < 200) return true;
+                        return false;
+                    });
+
+                    if (target) {
+                        target.scrollIntoView({ block: 'center' });
+                        target.click();
+                        return true;
+                    }
+                    return false;
+                }, { txt: text });
+
+                if (!anyClicked) return `Error: Could not find any element containing text "${text}".`;
+            }
+
+            await this.waitAfterInteraction(1500);
+            this.lastInteractionTimestamp = Date.now();
+            return `Successfully clicked element with text: "${text}"`;
+        } catch (e) {
+            return `Failed to click text "${text}": ${e}`;
+        }
+    }
+
+    public async typeIntoLabel(label: string, text: string): Promise<string> {
+        try {
+            await this.ensureBrowser();
+            logger.info(`Browser: Type into label "${label}" -> "${text}"`);
+
+            const typed = await this.page!.evaluate(({ lbl, val }) => {
+                // Try to find input associated with a label
+                const labels = Array.from(document.querySelectorAll('label')) as HTMLLabelElement[];
+                const targetLabel = labels.find(l => l.innerText?.toLowerCase().includes(lbl.toLowerCase()));
+                
+                let input: HTMLInputElement | null = null;
+                if (targetLabel) {
+                    if (targetLabel.htmlFor) {
+                        input = document.getElementById(targetLabel.htmlFor) as HTMLInputElement;
+                    }
+                    if (!input) {
+                        input = targetLabel.querySelector('input, textarea, select');
+                    }
+                }
+
+                // If no label found, try placeholders or aria-labels
+                if (!input) {
+                    const inputs = Array.from(document.querySelectorAll('input, textarea, [role="textbox"]')) as HTMLInputElement[];
+                    input = inputs.find(i => 
+                        i.placeholder?.toLowerCase().includes(lbl.toLowerCase()) || 
+                        i.getAttribute('aria-label')?.toLowerCase().includes(lbl.toLowerCase()) ||
+                        i.name?.toLowerCase().includes(lbl.toLowerCase())
+                    ) || null;
+                }
+
+                if (input) {
+                    input.scrollIntoView({ block: 'center' });
+                    input.focus();
+                    input.value = val;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                    return true;
+                }
+                return false;
+            }, { lbl: label, val: text });
+
+            if (!typed) return `Error: Could not find input field associated with label/placeholder "${label}".`;
+
+            await this.waitAfterInteraction(1000);
+            this.lastInteractionTimestamp = Date.now();
+            return `Successfully typed into field "${label}": "${text}"`;
+        } catch (e) {
+            return `Failed to type into label "${label}": ${e}`;
+        }
+    }
+
     public async screenshot(): Promise<string> {
         try {
             await this.ensureBrowser();
 
-            // Recover from blank page before screenshotting — sites can die between steps
-            const currentUrl = this.page!.url();
-            const currentContent = (await this.page!.content().catch(() => '')).length;
-            if ((!currentUrl || currentUrl === 'about:blank') && currentContent < 500 && this.lastNavigatedUrl) {
-                logger.warn(`Browser: Page is blank before screenshot, reloading ${this.lastNavigatedUrl}`);
-                await this.page!.goto(this.lastNavigatedUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
-                await this.waitForStablePage(5000);
-            } else {
-                // Ensure visual stability before snapping
-                await this.page!.waitForLoadState('load').catch(() => {});
-                await this.page!.waitForTimeout(1000); // 1s "paint wait" to avoid white screens
-            }
+            // Ensure visual stability before snapping
+            // Reduced wait times for speed
+            await this.page!.waitForLoadState('load', { timeout: 2000 }).catch(() => {});
+            await this.page!.waitForTimeout(150); // Minimal paint wait
 
             const screenshotPath = path.join(os.homedir(), '.orcbot', 'screenshot.png');
             await this.page!.screenshot({ path: screenshotPath, type: 'png' });

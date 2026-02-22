@@ -357,7 +357,9 @@ ${this.repoContext}`,
             profilingEnabled,
             isHeartbeat,
             skillsUsedInAction,
-            overrideMode: !!this.config?.get('overrideMode')
+            overrideMode: !!this.config?.get('overrideMode'),
+            // Inject agent role if available (from worker profile or config)
+            agentRole: this.config?.get('agentRole') // We will need to set this in AgentWorker
         };
 
         const result = await this.promptRouter.route(helperContext);

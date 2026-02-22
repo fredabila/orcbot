@@ -184,6 +184,7 @@ class AgentWorkerProcess {
 
                 // ── Worker-specific paths ──
                 agentName: config.name,
+                agentRole: config.role, // Pass role to config so CoreHelper can see it
                 memoryPath: config.memoryPath,
                 actionQueuePath: path.join(workerDir, 'actions.json'),
                 journalPath: path.join(workerDir, 'JOURNAL.md'),

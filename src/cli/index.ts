@@ -819,6 +819,15 @@ program
             opts.profiles || opts.downloads || opts.bootstrap || opts.schedules;
         const isFullReset = opts.all || !hasSelectiveFlag;
 
+        // Check for running daemon before resetting
+        const daemon = DaemonManager.createDefault();
+        const daemonStatus = daemon.isRunning();
+        if (daemonStatus.running) {
+            console.error(`\n  ${c.red}${c.bold}❌ Cannot reset: OrcBot daemon is currently running (PID: ${daemonStatus.pid}).${c.reset}`);
+            console.error(`     Please stop it first: ${c.white}orcbot stop${c.reset}\n`);
+            return;
+        }
+
         if (isFullReset) {
             console.log('');
             box([
@@ -6064,7 +6073,7 @@ function showStatus() {
     // Action Queue Panel
     const completed = queueItems.filter((a: any) => a.status === 'completed').length;
     const failed = queueItems.filter((a: any) => a.status === 'failed').length;
-    const pending = queueItems.filter((a: any) => a.status === 'queued').length;
+    const pending = queueItems.filter((a: any) => a.status === 'pending').length;
     const inProgress = queueItems.filter((a: any) => a.status === 'in-progress').length;
     const waiting = queueItems.filter((a: any) => a.status === 'waiting').length;
     console.log('');

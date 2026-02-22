@@ -140,6 +140,7 @@ export class DailyMemory {
             const files = fs.readdirSync(this.memoryDir);
             return files
                 .filter(f => f.endsWith('.md') && /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
+                .map(f => f.replace('.md', ''))
                 .sort()
                 .reverse(); // Most recent first
         } catch (error) {

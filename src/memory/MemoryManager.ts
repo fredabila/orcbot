@@ -760,7 +760,7 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
     public async semanticSearch(
         query: string,
         limit: number = 10,
-        filter?: { type?: string; source?: string; excludeIds?: Set<string> }
+        filter?: { type?: string; source?: string; excludeIds?: Set<string>; metadata?: Record<string, any> }
     ): Promise<ScoredVectorEntry[]> {
         if (!this.vectorMemory?.isEnabled()) return [];
         const cacheKey = JSON.stringify({ query, limit, filter });

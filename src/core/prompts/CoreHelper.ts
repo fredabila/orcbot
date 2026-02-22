@@ -43,6 +43,23 @@ CURRENT DATE & TIME:
             ? `YOUR IDENTITY:\n${ctx.agentIdentity || 'You are a capable, direct autonomous agent with a natural conversational style.'}\n\n`
             : '';
 
+        // Specialized prompt for Browser Specialists (Delegated Workers)
+        if (ctx.agentRole === 'browser_specialist') {
+            return `You are a BROWSER AUTOMATION WORKER. Your goal is to execute web tasks efficiently.
+${identityBlock}
+ROLE: Browser Specialist
+- Focus on DOM manipulation, data extraction, and navigation.
+- Use 'browser_perform' for high-level goals.
+- Use 'browser_click_text', 'browser_type_into_label' for specific actions.
+- Use 'browser_cleanup' to handle overlays.
+- DO NOT engage in conversation. Your output is actions.
+- When done, report result via 'complete_delegated_task' or 'send_agent_message'.
+- If blocked, report error.
+
+SYSTEM ENVIRONMENT:
+${ctx.systemContext}`;
+        }
+
         return `You are a highly intelligent, autonomous AI Agent. Your persona and identity are defined below.
 ${identityBlock}CONVERSATIONAL BASELINE:
 - Talk like a sharp, competent person — not a customer service bot.

@@ -21,6 +21,8 @@ import { DevelopmentHelper } from './DevelopmentHelper';
 import { TaskChecklistHelper } from './TaskChecklistHelper';
 import { PollingHelper } from './PollingHelper';
 import { PrivacyHelper } from './PrivacyHelper';
+import { ManagerHelper } from './ManagerHelper';
+import { MemoryHelper } from './MemoryHelper';
 import { logger } from '../../utils/logger';
 
 /** Minimal LLM interface — avoids importing the full MultiLLM dependency */
@@ -61,6 +63,8 @@ export class PromptRouter {
         this.register(new DevelopmentHelper());
         this.register(new TaskChecklistHelper());
         this.register(new PollingHelper());
+        this.register(new ManagerHelper());
+        this.register(new MemoryHelper());
     }
 
     /**
@@ -313,6 +317,8 @@ Rules:
         const hasPollingIntent = /\b(wait\s+for|wait\s+until|monitor|watch\s+for|poll|check\s+if|check\s+whether|notify\s+me\s+when|let\s+me\s+know\s+when|alert\s+me|keep\s+checking|retry|try\s+again|is\s+it\s+ready|is\s+it\s+done|status\s+of|keep\s+an\s+eye\s+on)\b/.test(task);
         // Multi-step/checklist intent — route to task-checklist helper
         const hasChecklistIntent = /\b(step\s+by\s+step|break\s+down|checklist|multiple\s+steps|first.*then|plan\s+out|track\s+progress|walk\s+me\s+through|phased\s+approach|one\s+step\s+at\s+a\s+time)\b/.test(task);
+        // Memory/history intent
+        const hasMemoryIntent = /\b(remember|recall|history|past|previous|earlier|look\s+up|search\s+for|do\s+you\s+know|what\s+was|who\s+is)\b/.test(task);
 
         if (hasActionIntent) {
             // Action tasks most often need dev or research guidance
@@ -324,6 +330,10 @@ Rules:
             // Pure questions benefit from research + communication
             fallbacks.push('research');
             if (!hasChannel) fallbacks.push('communication');
+        }
+
+        if (hasMemoryIntent && !fallbacks.includes('memory')) {
+            fallbacks.push('memory');
         }
 
         if (hasPollingIntent && !fallbacks.includes('polling')) {

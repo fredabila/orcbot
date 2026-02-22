@@ -185,7 +185,12 @@ export class VectorMemory {
     public async search(
         query: string,
         limit: number = 10,
-        filter?: { type?: string; source?: string; excludeIds?: Set<string> }
+        filter?: { 
+            type?: string; 
+            source?: string; 
+            excludeIds?: Set<string>;
+            metadata?: Record<string, any>;
+        }
     ): Promise<ScoredVectorEntry[]> {
         if (this.provider === 'none' || this.entries.length === 0) return [];
 
@@ -217,6 +222,15 @@ export class VectorMemory {
                 candidates = candidates.filter(e =>
                     e.metadata?.source === filter.source
                 );
+            }
+            if (filter?.metadata) {
+                candidates = candidates.filter(e => {
+                    const emd = e.metadata || {};
+                    for (const [key, val] of Object.entries(filter.metadata!)) {
+                        if (emd[key] !== val) return false;
+                    }
+                    return true;
+                });
             }
             if (filter?.excludeIds) {
                 candidates = candidates.filter(e => !filter.excludeIds!.has(e.id));

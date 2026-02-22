@@ -36,6 +36,8 @@ export interface PromptHelperContext {
     skillsUsedInAction?: string[];
     /** When true, persona boundaries and behavioral restrictions are suspended (user-toggled override) */
     overrideMode?: boolean;
+    /** The role of the agent instance (e.g. 'worker', 'browser_specialist', 'orchestrator') */
+    agentRole?: string;
 }
 
 export interface PromptHelper {

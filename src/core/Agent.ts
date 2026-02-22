@@ -2134,7 +2134,7 @@ export class Agent {
         // Skill: Search Chat History
         this.skills.registerSkill({
             name: 'search_chat_history',
-            description: 'Search chat history with a specific contact. Supports semantic search (meaning-based) when vector memory is enabled, falling back to keyword/recency search. Works across WhatsApp, Telegram, and Discord.',
+            description: 'Search chat history with a specific contact. Supports semantic search (meaning-based) when vector memory is enabled, falling back to keyword/recency search across ALL memories (short and episodic). Works across WhatsApp, Telegram, and Discord.',
             usage: 'search_chat_history(jid, query?, limit?, source?)',
             handler: async (args: any) => {
                 const jid = args.jid || args.to || args.id;
@@ -2145,48 +2145,59 @@ export class Agent {
                 if (!jid) return 'Error: Missing jid/contact identifier.';
 
                 try {
-                    // Semantic search path: use vector memory for meaning-based retrieval
+                    // 1. Try semantic search with metadata filtering first (highest precision)
                     if (query && this.memory.vectorMemory?.isEnabled()) {
-                        const semanticHits = await this.memory.semanticSearch(query, limit * 2, { source });
+                        // Search for the query, but allow any field to match the jid
+                        // We use limit*3 and post-filter because jid might be in senderId OR chatId OR sourceId
+                        const semanticHits = await this.memory.semanticSearch(query, limit * 3, { source });
                         const contactHits = semanticHits.filter((h: any) => {
                             const md = h.metadata || {};
-                            return md.senderId === jid || md.sourceId === jid || md.chatId === jid;
+                            return md.senderId === jid || md.sourceId === jid || md.chatId === jid || md.userId === jid;
                         }).slice(0, limit);
 
                         if (contactHits.length > 0) {
                             const formatted = contactHits.map((m: any, i: number) =>
                                 `[${m.timestamp}] (relevance: ${(m.score * 100).toFixed(0)}%) ${m.content}`
                             ).join('\n\n');
-                            return `Chat history with ${jid} (${contactHits.length} results, semantic search):\n\n${formatted}`;
+                            return `Found ${contactHits.length} relevant messages for ${jid} via semantic search:\n\n${formatted}`;
                         }
                     }
 
-                    // Fallback: keyword/recency search
-                    const memories = this.memory.searchMemory('short');
-                    let chatHistory = memories.filter((m: any) =>
-                        m.metadata?.source === source &&
-                        (m.metadata?.senderId === jid || m.metadata?.sourceId === jid || m.metadata?.chatId === jid)
-                    );
+                    // 2. Fallback: search ALL memory types (short + episodic) for keywords + jid
+                    const queryLower = query.toLowerCase();
+                    const allMemories = [
+                        ...this.memory.searchMemory('short'),
+                        ...this.memory.searchMemory('episodic'),
+                    ];
 
-                    // Apply keyword filter if query provided
-                    if (query) {
-                        const queryLower = query.toLowerCase();
-                        chatHistory = chatHistory.filter((m: any) =>
-                            (m.content || '').toLowerCase().includes(queryLower)
-                        );
+                    const chatHistory = allMemories.filter((m: any) => {
+                        const md = m.metadata || {};
+                        // Match source/platform
+                        if (md.source !== source) return false;
+                        // Match contact JID across possible fields
+                        const isMatchJid = md.senderId === jid || md.sourceId === jid || md.chatId === jid || md.userId === jid;
+                        if (!isMatchJid) return false;
+                        // Match query if provided
+                        if (queryLower && !(m.content || '').toLowerCase().includes(queryLower)) return false;
+                        return true;
+                    });
+
+                    // Sort by timestamp (most recent first)
+                    const sortedHistory = chatHistory.sort((a, b) => {
+                        const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+                        const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+                        return tb - ta;
+                    }).slice(0, limit);
+
+                    if (sortedHistory.length === 0) {
+                        return `No chat history found for ${jid}${query ? ` matching "${query}"` : ''} on ${source}. Note: older history might be in Daily Memory files or episodic summaries.`;
                     }
 
-                    chatHistory = chatHistory.slice(-limit).reverse();
+                    const formatted = sortedHistory.map((m: any, i: number) =>
+                        `[${m.timestamp}] (${m.type}) ${m.content}`
+                    ).join('\n\n').slice(0, 15000); // Prevent wall of text
 
-                    if (chatHistory.length === 0) {
-                        return `No chat history found for ${jid}${query ? ` matching "${query}"` : ''}.`;
-                    }
-
-                    const formatted = chatHistory.map((m: any, i: number) =>
-                        `[${m.timestamp}] ${m.content}`
-                    ).join('\n\n');
-
-                    return `Chat history with ${jid} (${chatHistory.length} messages):\n\n${formatted}`;
+                    return `Found ${sortedHistory.length} messages for ${jid} on ${source}:\n\n${formatted}`;
                 } catch (e) {
                     return `Error searching chat history: ${e}`;
                 }
@@ -2291,6 +2302,108 @@ export class Agent {
                     return `Found ${matches.length} memories (keyword match):\n\n${formatted}`;
                 } catch (e) {
                     return `Error recalling memory: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Search Memory Logs (Literal File Search)
+        this.skills.registerSkill({
+            name: 'search_memory_logs',
+            description: 'Literal search across all daily memory log files, JOURNAL.md, and LEARNING.md. Use this for "deep" history search when semantic recall fails, or when you need to find exact technical details, dates, or specific names mentioned in the past. This is a very robust fallback.',
+            usage: 'search_memory_logs(query, limit?)',
+            handler: async (args: any) => {
+                const query = args.query || args.q || args.text;
+                const limit = parseInt(args.limit || '10', 10);
+
+                if (!query) return 'Error: Missing query string.';
+
+                try {
+                    const dailyMemory = this.memory.getDailyMemory();
+                    const logFiles = dailyMemory.listDailyMemories();
+                    const results: string[] = [];
+                    const queryLower = query.toLowerCase();
+
+                    // 1. Search daily logs (most recent first)
+                    for (const date of logFiles) {
+                        if (results.length >= limit) break;
+                        const content = dailyMemory.readDailyMemory(date);
+                        if (content && content.toLowerCase().includes(queryLower)) {
+                            // Extract snippet around the match
+                            const idx = content.toLowerCase().indexOf(queryLower);
+                            const start = Math.max(0, idx - 150);
+                            const end = Math.min(content.length, idx + queryLower.length + 250);
+                            results.push(`--- Log: ${date} ---\n...${content.slice(start, end)}...`);
+                        }
+                    }
+
+                    // 2. Search main identity files
+                    const identityFiles = ['JOURNAL.md', 'LEARNING.md', 'USER.md'];
+                    const dataHome = this.config.getDataHome();
+                    for (const file of identityFiles) {
+                        if (results.length >= limit) break;
+                        const filePath = path.join(dataHome, file);
+                        if (fs.existsSync(filePath)) {
+                            const content = fs.readFileSync(filePath, 'utf-8');
+                            if (content.toLowerCase().includes(queryLower)) {
+                                const idx = content.toLowerCase().indexOf(queryLower);
+                                const start = Math.max(0, idx - 150);
+                                const end = Math.min(content.length, idx + queryLower.length + 250);
+                                results.push(`--- File: ${file} ---\n...${content.slice(start, end)}...`);
+                            }
+                        }
+                    }
+
+                    if (results.length === 0) {
+                        return `No literal matches for "${query}" found in daily logs or identity files.`;
+                    }
+
+                    return `Found ${results.length} matches in memory logs:\n\n${results.join('\n\n')}`;
+                } catch (e) {
+                    return `Error searching memory logs: ${e}`;
+                }
+            }
+        });
+
+        // Skill: List Memory Logs
+        this.skills.registerSkill({
+            name: 'list_memory_logs',
+            description: 'List all available daily memory log dates. Useful to see how far back your history goes or to identify specific days to search.',
+            usage: 'list_memory_logs()',
+            handler: async () => {
+                try {
+                    const dailyMemory = this.memory.getDailyMemory();
+                    const logFiles = dailyMemory.listDailyMemories();
+                    if (logFiles.length === 0) return 'No daily memory logs found.';
+                    
+                    const stats = dailyMemory.getStats();
+                    return `Available memory logs (${logFiles.length} days):\n- Range: ${logFiles[logFiles.length - 1]} to ${logFiles[0]}\n- Data Dir: ${stats.memoryDir}\n\nRecent logs:\n${logFiles.slice(0, 15).join('\n')}${logFiles.length > 15 ? '\n...' : ''}`;
+                } catch (e) {
+                    return `Error listing memory logs: ${e}`;
+                }
+            }
+        });
+
+        // Skill: Read Memory Log
+        this.skills.registerSkill({
+            name: 'read_memory_log',
+            description: 'Read the full content of a specific daily memory log. Use list_memory_logs to see available dates and search_memory_logs to find relevant ones. Date format: YYYY-MM-DD.',
+            usage: 'read_memory_log(date)',
+            handler: async (args: any) => {
+                const date = args.date || args.text;
+                if (!date) return 'Error: Missing date string (YYYY-MM-DD).';
+
+                try {
+                    const dailyMemory = this.memory.getDailyMemory();
+                    const content = dailyMemory.readDailyMemory(date);
+                    if (!content) return `Error: No memory log found for date: ${date}`;
+
+                    const MAX_CHARS = 15000;
+                    if (content.length > MAX_CHARS) {
+                        return content.substring(0, MAX_CHARS) + `\n\n[...truncated. ${content.length} chars total. Use search_memory_logs to find specific snippets if needed.]`;
+                    }
+                    return `=== Memory Log: ${date} ===\n\n${content}`;
+                } catch (e) {
+                    return `Error reading memory log: ${e}`;
                 }
             }
         });
@@ -3404,6 +3517,27 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             }
         });
 
+        // Skill: Browser Set Mobile
+        this.skills.registerSkill({
+            name: 'browser_set_viewport',
+            description: 'Change the browser viewport and user agent to simulate a mobile device or reset to desktop. Useful when sites are broken on desktop or to bypass some desktop-only overlays.',
+            usage: 'browser_set_viewport(mode) where mode is "mobile" or "desktop"',
+            handler: async (args: any) => {
+                const mode = (args.mode || args.device || 'desktop').toLowerCase();
+                const isMobile = mode === 'mobile';
+                
+                await this.browser.close(); // Must restart to change context options cleanly
+                
+                // We need to pass these options to the next ensureBrowser call
+                // Since WebBrowser manages its own state, we'll update its internal config
+                // For now, we'll use a hack to toggle the internal state if we can't pass args directly
+                // Ideally WebBrowser should expose a setViewport method.
+                // Let's implement a clean method on WebBrowser instead.
+                
+                return this.browser.setViewportMode(isMobile ? 'mobile' : 'desktop');
+            }
+        });
+
         // Skill: Browser Navigate
         this.skills.registerSkill({
             name: 'browser_navigate',
@@ -3634,6 +3768,132 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                     logger.warn(`browser_press: Gemini Computer Use failed, falling back to Playwright. Result: ${cuResult}`);
                 }
                 return this.browser.press(key);
+            }
+        });
+
+        // Skill: Browser Click Text
+        this.skills.registerSkill({
+            name: 'browser_click_text',
+            description: 'Find an element containing specific text (like "Login", "Submit", "Accept Cookies") and click it. Much easier than finding refs or selectors. Example: browser_click_text("Sign In").',
+            usage: 'browser_click_text(text, type_hint?)',
+            handler: async (args: any) => {
+                const text = args.text || args.label || args.value;
+                if (!text) return 'Error: Missing text.';
+                const typeHint = args.type_hint || args.type;
+                
+                const res = await this.browser.clickText(String(text), typeHint);
+                if (res.startsWith('Error')) return res;
+
+                // Auto-snapshot for verification
+                try {
+                    const snapshot = await this.browser.getSemanticSnapshot();
+                    return `${res}\n\n--- Page after click ---\n${snapshot}`;
+                } catch {
+                    return res;
+                }
+            }
+        });
+
+        // Skill: Browser Type Into Label
+        this.skills.registerSkill({
+            name: 'browser_type_into_label',
+            description: 'Find an input field by its label, placeholder, or name and type text into it. Example: browser_type_into_label("Email", "user@example.com").',
+            usage: 'browser_type_into_label(label, text)',
+            handler: async (args: any) => {
+                const label = args.label || args.field || args.placeholder;
+                const text = args.text || args.value;
+                if (!label || !text) return 'Error: Missing label or text.';
+                
+                return this.browser.typeIntoLabel(String(label), String(text));
+            }
+        });
+
+        // Skill: Browser Cleanup (Remove overlays/banners)
+        this.skills.registerSkill({
+            name: 'browser_cleanup',
+            description: 'Remove sticky headers, cookie banners, and modal overlays that might be blocking the view or clicks. Use this if you get "element intercepted" errors.',
+            usage: 'browser_cleanup()',
+            handler: async () => {
+                const script = `
+                    (function() {
+                        const selectors = [
+                            '#onetrust-banner-sdk', '.onetrust-banner', '#cookie-banner', '.cookie-banner',
+                            '[class*="cookie"]', '[id*="cookie"]',
+                            '.fc-consent-root', '#CybotCookiebotDialog',
+                            '.modal', '.modal-backdrop', '.overlay', '.popup',
+                            '[class*="overlay"]', '[class*="popup"]',
+                            'header.sticky', 'div.sticky', 'nav.fixed'
+                        ];
+                        let removed = 0;
+                        selectors.forEach(sel => {
+                            document.querySelectorAll(sel).forEach(el => {
+                                // Only remove if it covers a significant part of the screen or is fixed/sticky
+                                const style = window.getComputedStyle(el);
+                                if (style.position === 'fixed' || style.position === 'sticky' || style.zIndex > 100) {
+                                    el.remove();
+                                    removed++;
+                                }
+                            });
+                        });
+                        return removed;
+                    })()
+                `;
+                const removedCount = await this.browser.evaluate(script);
+                return `Cleanup complete. Removed ${removedCount} potentially blocking elements (headers, cookie banners, overlays).`;
+            }
+        });
+
+        // Skill: Browser Perform (High-level goal)
+        this.skills.registerSkill({
+            name: 'browser_perform',
+            description: 'Perform a high-level task on the current page using natural language. It automatically identifies elements, clicks, types, and verifies results. Use this for complex sequences like "log in with credentials X and Y" or "find and click the first search result for Z". This is the most convenient way to browse.',
+            usage: 'browser_perform(goal)',
+            handler: async (args: any) => {
+                const goal = args.goal || args.task;
+                if (!goal) return 'Error: Missing goal.';
+
+                logger.info(`Browser: Performing goal: "${goal}"`);
+                
+                // We use a specialized internal reasoning loop for this skill
+                const snapshot = await this.browser.getSemanticSnapshot();
+                const prompt = `I need to achieve this goal on the current web page: "${goal}"
+
+CURRENT PAGE SNAPSHOT:
+${snapshot}
+
+Instructions:
+1. Break down the goal into 1-3 immediate tool calls.
+2. You can use: click(ref), type(ref, text), press(key), wait(ms), scroll(dir).
+3. Output ONLY a JSON array of actions to perform.
+Example: [{"tool": "type", "ref": "12", "text": "my search"}, {"tool": "press", "key": "Enter"}]
+
+Output JSON now:`;
+
+                try {
+                    const response = await this.llm.callFast(prompt, "You are a web automation expert. Execute the goal using the provided snapshot.");
+                    const jsonMatch = response.match(/\[[\s\S]*\]/);
+                    if (!jsonMatch) return `Could not plan actions for goal: "${goal}".\n\nPlan response: ${response}`;
+
+                    const actions = JSON.parse(jsonMatch[0]);
+                    const results: string[] = [];
+
+                    for (const action of actions) {
+                        let res = '';
+                        if (action.tool === 'click') res = await this.browser.click(action.ref);
+                        else if (action.tool === 'type') res = await this.browser.type(action.ref, action.text);
+                        else if (action.tool === 'press') res = await this.browser.press(action.key);
+                        else if (action.tool === 'wait') res = await this.browser.wait(action.ms || 1000);
+                        else if (action.tool === 'scroll') res = await this.browser.scrollPage(action.dir || 'down');
+                        
+                        results.push(`- ${action.tool}(${action.ref || action.key || ''}): ${res.split('\n')[0]}`);
+                        if (res.startsWith('Error') || res.startsWith('Failed')) break;
+                    }
+
+                    const finalSnapshot = await this.browser.getSemanticSnapshot();
+                    return `Performed actions for goal: "${goal}"\n\nResults:\n${results.join('\n')}\n\n--- Page after perform ---\n${finalSnapshot}`;
+                } catch (e) {
+                    return `Failed to perform goal "${goal}": ${e}`;
+                }
             }
         });
 
@@ -5373,6 +5633,59 @@ Be thorough and academic.`;
                     });
 
                     return `Created clone "${clone.name}" (${clone.id}) with full capabilities. Use delegate_task() to assign work to this clone.`;
+                }
+            });
+
+            // Skill: Async Browsing (Delegated)
+            this.skills.registerSkill({
+                name: 'browse_async',
+                description: 'Delegate a browsing task to a dedicated background worker. This is faster and more reliable than running browsing in the main loop. The worker will browse autonomously and report back when done. Use this for all complex browsing tasks.',
+                usage: 'browse_async(goal)',
+                handler: async (args: any) => {
+                    const goal = args.goal || args.task || args.url;
+                    if (!goal) return 'Error: Missing goal.';
+
+                    // 1. Check for existing browser worker
+                    const agents = this.orchestrator.getAgents();
+                    let browserAgent = agents.find(a => 
+                        a.status !== 'terminated' && 
+                        (a.role === 'browser_specialist' || a.name === 'BrowserWorker')
+                    );
+
+                    // 2. Spawn if needed
+                    if (!browserAgent) {
+                        logger.info('browse_async: Spawning new BrowserWorker...');
+                        try {
+                            browserAgent = this.orchestrator.spawnAgent({
+                                name: 'BrowserWorker',
+                                role: 'browser_specialist',
+                                capabilities: ['execute', 'browse', 'web_search', 'read_file'],
+                                autoStart: true
+                            });
+                            // Give it a moment to initialize
+                            await new Promise(r => setTimeout(r, 2000));
+                        } catch (e) {
+                            return `Error spawning browser worker: ${e}`;
+                        }
+                    }
+
+                    // 3. Delegate the task
+                    // We wrap the goal in a specific instruction for the worker
+                    const workerInstruction = `BROWSING TASK: ${goal}\n\nINSTRUCTIONS:\n1. Use browser tools to achieve this goal.\n2. Be efficient - use browser_perform or browser_click_text where possible.\n3. When finished, use send_agent_message to report the result back to the primary agent.\n4. If you fail, report the error.`;
+                    
+                    try {
+                        // Create task directly to get the ID
+                        const task = this.orchestrator.createTask(workerInstruction, 8); // High priority
+                        const assigned = this.orchestrator.assignTask(task.id, browserAgent.id);
+                        
+                        if (assigned) {
+                            return `Browsing task delegated to ${browserAgent.name} (Task ID: ${task.id}). I will notify you when the worker reports back. You can continue with other tasks.`;
+                        } else {
+                            return `Failed to assign task to ${browserAgent.name}. The worker might be busy or unresponsive.`;
+                        }
+                    } catch (e) {
+                        return `Error delegating task: ${e}`;
+                    }
                 }
             });
 
@@ -8586,9 +8899,15 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 }
             }
 
+            // Shutdown existing managers if they exist to stop timers/flushing
+            if (this.actionQueue) this.actionQueue.shutdown();
+            if (this.memory) this.memory.shutdown();
+
             // Reset in-memory runtime state so the agent starts fresh
-            this.lastHeartbeatAt = Date.now();
-            this.lastActionTime = Date.now();
+            this.lastHeartbeatAt = 0;
+            this.lastActionTime = 0;
+            this.lastHeartbeatPushAt = 0;
+            this.lastUserActivityAt = 0;
             this.consecutiveIdleHeartbeats = 0;
             this.lastHeartbeatProductive = true;
 
@@ -8722,8 +9041,10 @@ Respond with a single actionable task description (one sentence). Be specific ab
             }
 
             // Reset heartbeat tracking variables
-            this.lastHeartbeatAt = Date.now();
-            this.lastActionTime = Date.now();
+            this.lastHeartbeatAt = 0;
+            this.lastActionTime = 0;
+            this.lastHeartbeatPushAt = 0;
+            this.lastUserActivityAt = 0;
             this.consecutiveIdleHeartbeats = 0;
             this.lastHeartbeatProductive = true;
             logger.info('Agent: Cleared all schedules and heartbeat data');

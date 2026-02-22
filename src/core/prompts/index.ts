@@ -35,3 +35,4 @@ export { DevelopmentHelper } from './DevelopmentHelper';
 export { TaskChecklistHelper } from './TaskChecklistHelper';
 export { PollingHelper } from './PollingHelper';
 export { PrivacyHelper } from './PrivacyHelper';
+export { ManagerHelper } from './ManagerHelper';
