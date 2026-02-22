@@ -1689,10 +1689,10 @@ export class Agent {
                 try {
                     const downloadsDir = path.join(this.config.getDataHome(), 'downloads');
                     if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
-                    const outputPath = path.join(downloadsDir, `tts_${Date.now()}.ogg`);
+                    const requestedOutputPath = path.join(downloadsDir, `tts_${Date.now()}.ogg`);
 
-                    await this.llm.textToSpeech(text, outputPath, voice, speed);
-                    return `Audio generated successfully: ${outputPath} (voice: ${voice}, ${text.length} chars)`;
+                    const generatedAudioPath = await this.llm.textToSpeech(text, requestedOutputPath, voice, speed);
+                    return `Audio generated successfully: ${generatedAudioPath} (voice: ${voice}, ${text.length} chars)`;
                 } catch (e) {
                     return `Error generating speech: ${e}`;
                 }
@@ -1717,8 +1717,8 @@ export class Agent {
                     // Generate the audio
                     const downloadsDir = path.join(this.config.getDataHome(), 'downloads');
                     if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
-                    const audioPath = path.join(downloadsDir, `voice_${Date.now()}.ogg`);
-                    await this.llm.textToSpeech(text, audioPath, voice);
+                    const requestedAudioPath = path.join(downloadsDir, `voice_${Date.now()}.ogg`);
+                    const audioPath = await this.llm.textToSpeech(text, requestedAudioPath, voice);
 
                     // Send as voice note through the appropriate channel
                     // Resolve channel: explicit arg > action source > JID pattern
