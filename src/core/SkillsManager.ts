@@ -1368,7 +1368,9 @@ main().catch(console.error);
                     else if (hint === 'boolean') type = 'boolean';
                 }
 
-                properties[cleanName] = { type };
+                (properties[cleanName] as any) = { type };
+                if (type === 'array') (properties[cleanName] as any).items = { type: 'string' };
+                
                 if (!isOptional) required.push(cleanName);
             }
             return { properties, required };
@@ -1397,7 +1399,8 @@ main().catch(console.error);
             if (!cleanName) continue;
 
             // Use the canonical param name for the property
-            properties[cleanName] = { type };
+            (properties[cleanName] as any) = { type };
+            if (type === 'array') (properties[cleanName] as any).items = { type: 'string' };
 
             if (!isOptional) {
                 required.push(cleanName);

@@ -11580,14 +11580,17 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             observation = `Observation: Tool ${toolCall.name} returned: ${resultString.slice(0, obsLimit)}`;
                         }
                         if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_gateway_chat' || toolCall.name === 'send_discord' || toolCall.name === 'send_slack' ||
-                            toolCall.name === 'telegram_send_buttons' || toolCall.name === 'telegram_send_poll' || toolCall.name === 'send_email') {
+                            toolCall.name === 'telegram_send_buttons' || toolCall.name === 'telegram_send_poll' || toolCall.name === 'send_email' || 
+                            toolCall.name === 'send_image' || toolCall.name === 'send_file' || toolCall.name === 'send_discord_file' || toolCall.name === 'send_slack_file') {
 
                             const isStructuredSend = toolCall.name === 'telegram_send_buttons' || toolCall.name === 'telegram_send_poll';
+                            const isMediaSend = toolCall.name === 'send_image' || toolCall.name === 'send_file' || toolCall.name === 'send_discord_file' || toolCall.name === 'send_slack_file';
+                            
                             const structuredSuffix = isStructuredSend
                                 ? '|' + JSON.stringify(toolCall.metadata?.buttons ?? toolCall.metadata?.options ?? [])
                                 : '';
-                            const sentMessage = ((toolCall.metadata?.message || toolCall.metadata?.text || toolCall.metadata?.question || '').trim()).toString();
-                            const currentMessage = sentMessage + structuredSuffix;
+                            const sentMessage = ((toolCall.metadata?.message || toolCall.metadata?.text || toolCall.metadata?.question || toolCall.metadata?.caption || '').trim()).toString();
+                            const currentMessage = sentMessage + (isMediaSend ? ` [Media: ${toolCall.metadata?.path || toolCall.metadata?.prompt || 'attachment'}]` : '') + structuredSuffix;
 
                             if (!resultIndicatesError) {
                                 messagesSent++;
@@ -11599,7 +11602,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                 anyUserDeliverySuccess = true;
                                 lastUserDeliveryAtMs = Date.now();
 
-                                if (this.isSubstantiveDeliveryMessage(sentMessage) || isStructuredSend) {
+                                if (this.isSubstantiveDeliveryMessage(sentMessage) || isStructuredSend || isMediaSend) {
                                     substantiveDeliveriesSent++;
                                 }
                             }
