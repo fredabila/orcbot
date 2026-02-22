@@ -18,6 +18,7 @@ export class TaskChecklistHelper implements PromptHelper {
         'step by step', 'steps', 'checklist', 'todo', 'to-do', 'plan',
         'break down', 'breakdown', 'multi-step', 'multistep', 'phase',
         'track progress', 'track the', 'keep track', 'progress',
+        'walk me through', 'one step at a time',
         'multiple', 'several', 'all of', 'each of', 'one by one',
         'first', 'then', 'after that', 'finally', 'next',
         'set up', 'configure', 'install and', 'build and', 'create and',

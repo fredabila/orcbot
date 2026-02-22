@@ -608,10 +608,6 @@ export class Agent {
         const targetChannel = this.TOOL_CHANNEL_MAP[toolName];
         if (!targetChannel) return { allowed: true };
 
-        if (!this.isChannelConfigured(targetChannel)) {
-            return { allowed: false, reason: `Channel '${targetChannel}' is disabled or not configured.` };
-        }
-
         const source = String(action.payload?.source || '').trim();
         const isAdmin = action.payload?.isAdmin !== false;
         const isSourceChannelTask = ['telegram', 'whatsapp', 'discord', 'slack', 'email', 'gateway-chat'].includes(source);
@@ -619,6 +615,10 @@ export class Agent {
 
         if (!isAdmin && isSourceChannelTask && source !== targetChannel && !isCrossChannelExempt) {
             return { allowed: false, reason: `Cross-channel send blocked. Action source is '${source}' but tool targets '${targetChannel}'.` };
+        }
+
+        if (!this.isChannelConfigured(targetChannel)) {
+            return { allowed: false, reason: `Channel '${targetChannel}' is disabled or not configured.` };
         }
 
         const isAutonomous = action.lane === 'autonomy' || !!action.payload?.isHeartbeat || source.includes('heartbeat');
