@@ -39,6 +39,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { shellSessions } from '../utils/ShellSession';
+import { TForceSystem } from '../codes/tforce/TForceSystem';
 
 /**
  * Skills that require admin-level permissions.
@@ -97,6 +98,7 @@ export class Agent {
     public bootstrap: BootstrapManager;
     public agenticUser: AgenticUser;
     public knowledgeStore: KnowledgeStore;
+    public tforce: TForceSystem;
     private lastActionTime: number;
     private lastHeartbeatAt: number = 0;
     private consecutiveIdleHeartbeats: number = 0;
@@ -181,6 +183,8 @@ export class Agent {
             this.config.get('memoryPath'),
             this.config.get('userProfilePath')
         );
+
+        this.tforce = new TForceSystem(this.config.get('tforceMaxIncidentsPerAction') || 30);
 
         // Configure memory limits from config
         this.memory.setLimits({
@@ -8792,6 +8796,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             let currentStep = 0;
             let result = '';
             let noToolSteps = 0; // Track steps without tool execution
+            let lastError: string | undefined;
             const MAX_NO_TOOL_STEPS = 3; // Fail if 3 consecutive steps produce no tools
 
             while (currentStep < MAX_STEPS) {
@@ -8804,6 +8809,18 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     this.actionQueue.updateStatus(action.id, 'failed');
                     this.cancelledActions.delete(action.id);
                     return result;
+                }
+
+                if (this.config.get('tforceEnabled') !== false) {
+                    const snapshot = this.tforce.getSnapshot({
+                        actionId: action.id,
+                        description: action.payload.description || '',
+                        step: currentStep,
+                        noToolSteps,
+                        recentTools: [],
+                        lastError
+                    });
+                    logger.debug(`TForce[runOnce]: ${snapshot.conscienceGuidance}`);
                 }
 
                 const decision = await this.decisionEngine.decide({
@@ -8842,6 +8859,16 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     noToolSteps++;
                     logger.warn(`runOnce: Step ${currentStep} produced no tools (${noToolSteps}/${MAX_NO_TOOL_STEPS})`);
 
+                    if (this.config.get('tforceEnabled') !== false) {
+                        this.tforce.recordIncident({
+                            actionId: action.id,
+                            step: currentStep,
+                            source: 'decision',
+                            summary: `No tools produced (${noToolSteps}/${MAX_NO_TOOL_STEPS})`,
+                            timestamp: new Date().toISOString()
+                        });
+                    }
+
                     if (noToolSteps >= MAX_NO_TOOL_STEPS) {
                         logger.error(`runOnce: Aborting - ${MAX_NO_TOOL_STEPS} consecutive steps with no tools`);
                         result = 'Task aborted: Agent stuck without producing tools. May need clearer instructions.';
@@ -8868,6 +8895,16 @@ Respond with a single actionable task description (one sentence). Be specific ab
             return result;
         } catch (err: any) {
             logger.error(`Agent runOnce error: ${err.message}`);
+            if (this.config.get('tforceEnabled') !== false) {
+                this.tforce.recordIncident({
+                    actionId: action.id,
+                    step: 0,
+                    source: 'system',
+                    summary: 'Unhandled error in runOnce',
+                    error: err?.message || String(err),
+                    timestamp: new Date().toISOString()
+                });
+            }
             this.actionQueue.updateStatus(action.id, 'failed');
             return `Error: ${err.message}`;
         } finally {
@@ -8915,6 +8952,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             let currentStep = 0;
             let result = '';
             let noToolSteps = 0;
+            let lastError: string | undefined;
             const MAX_NO_TOOL_STEPS = 3;
 
             while (currentStep < MAX_STEPS) {
@@ -8927,6 +8965,18 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     this.actionQueue.updateStatus(action.id, 'failed');
                     this.cancelledActions.delete(action.id);
                     return result;
+                }
+
+                if (this.config.get('tforceEnabled') !== false) {
+                    const snapshot = this.tforce.getSnapshot({
+                        actionId: action.id,
+                        description: action.payload.description || '',
+                        step: currentStep,
+                        noToolSteps,
+                        recentTools: [],
+                        lastError
+                    });
+                    logger.debug(`TForce[${lane}]: ${snapshot.conscienceGuidance}`);
                 }
 
                 const decision = await this.decisionEngine.decide({
@@ -8952,6 +9002,15 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                 if (!decision.tools || decision.tools.length === 0) {
                     noToolSteps++;
+                    if (this.config.get('tforceEnabled') !== false) {
+                        this.tforce.recordIncident({
+                            actionId: action.id,
+                            step: currentStep,
+                            source: 'decision',
+                            summary: `No tools executed in lane ${lane} (${noToolSteps}/${MAX_NO_TOOL_STEPS})`,
+                            timestamp: new Date().toISOString()
+                        });
+                    }
                     if (noToolSteps >= MAX_NO_TOOL_STEPS) {
                         result = decision.content || 'No tools executed';
                         break;
@@ -8970,6 +9029,16 @@ Respond with a single actionable task description (one sentence). Be specific ab
             return result;
         } catch (err: any) {
             logger.error(`Agent runOnceLane[${lane}] error: ${err.message}`);
+            if (this.config.get('tforceEnabled') !== false) {
+                this.tforce.recordIncident({
+                    actionId: action.id,
+                    step: 0,
+                    source: 'system',
+                    summary: `Unhandled error in runOnceLane (${lane})`,
+                    error: err?.message || String(err),
+                    timestamp: new Date().toISOString()
+                });
+            }
             this.actionQueue.updateStatus(action.id, 'failed');
             return `Error: ${err.message}`;
         } finally {
