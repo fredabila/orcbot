@@ -6977,6 +6977,53 @@ REFLECTION: <1-2 sentences>`;
         return `SESSION CONTINUITY HINTS:\n${lines.join('\n')}`;
     }
 
+    private buildSimulationContext(payload: any, options?: { maxChars?: number }): string {
+        const maxChars = Math.max(1000, Number(options?.maxChars ?? 6000));
+        const source = String(payload?.source || '').toLowerCase();
+        const sourceId = String(payload?.sourceId || payload?.chatId || payload?.userId || payload?.senderId || '');
+        const sessionContinuityHint = this.buildSessionContinuityHint(payload);
+        const recentHist = this.memory.getRecentContext(20);
+        const recentContext = recentHist
+            .map(c => `[${c.type}] ${String(c.content || '').slice(0, 280)}`)
+            .join('\n');
+
+        const userSnapshot = String(this.memory.getUserContext()?.raw || '')
+            .split('\n')
+            .map(line => line.trim())
+            .filter(line => line && !line.startsWith('#'))
+            .slice(0, 8)
+            .join(' | ')
+            .slice(0, 500);
+
+        const bootstrapCtx = this.bootstrap?.loadBootstrapContext?.() || {};
+        const identitySnapshot = String(bootstrapCtx.IDENTITY || '').split('\n').slice(0, 10).join('\n').trim();
+        const soulSnapshot = String(bootstrapCtx.SOUL || '').split('\n').slice(0, 10).join('\n').trim();
+
+        const dataHome = this.config.getDataHome();
+        const learningPath = this.config.get('learningPath') || path.join(dataHome, 'LEARNING.md');
+        const learningTail = fs.existsSync(learningPath)
+            ? fs.readFileSync(learningPath, 'utf-8').slice(-1200)
+            : '';
+
+        const channelExchanges = (source && sourceId)
+            ? this.memory.getUserRecentExchanges({ platform: source, contactId: sourceId }, 6)
+                .map(m => `- ${String(m.content || '').slice(0, 180)}`)
+                .join('\n')
+            : '';
+
+        const raw = [
+            recentContext ? `RECENT MEMORY:\n${recentContext}` : '',
+            sessionContinuityHint,
+            userSnapshot ? `USER.md SNAPSHOT:\n${userSnapshot}` : '',
+            identitySnapshot ? `IDENTITY.md SNAPSHOT:\n${identitySnapshot}` : '',
+            soulSnapshot ? `SOUL.md SNAPSHOT:\n${soulSnapshot}` : '',
+            learningTail ? `LEARNING.md (recent tail):\n${learningTail}` : '',
+            channelExchanges ? `CHANNEL EXCHANGES (${source}:${sourceId}):\n${channelExchanges}` : ''
+        ].filter(Boolean).join('\n\n');
+
+        return raw.length > maxChars ? raw.slice(-maxChars) : raw;
+    }
+
     private saveSessionAnchorFromToolResult(action: Action, step: number, toolName: string, toolMetadata: any, toolResult: any, resultIndicatesError: boolean): void {
         try {
             if (!this.config.get('sessionAnchorEnabled')) return;
@@ -8674,12 +8721,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
             this.actionQueue.updateStatus(action.id, 'in-progress');
 
             // Run simulation and decision loop for this single action
-            const recentHist = this.memory.getRecentContext();
-            const contextStr = recentHist.map(c => `[${c.type}] ${c.content}`).join('\n');
+            const simulationContext = this.buildSimulationContext(action.payload, { maxChars: 7000 });
             const sessionContinuityHint = this.buildSessionContinuityHint(action.payload);
             const executionPlan = await this.simulationEngine.simulate(
                 action.payload.description,
-                `${contextStr}${sessionContinuityHint ? `\n\n${sessionContinuityHint}` : ''}`,
+                simulationContext,
                 this.skills.getSkillsPrompt()
             );
             const robustReasoningMode = this.isRobustReasoningEnabled();
@@ -8798,12 +8844,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
         try {
             this.actionQueue.updateStatus(action.id, 'in-progress');
 
-            const recentHist = this.memory.getRecentContext();
-            const contextStr = recentHist.map(c => `[${c.type}] ${c.content}`).join('\n');
+            const simulationContext = this.buildSimulationContext(action.payload, { maxChars: 7000 });
             const sessionContinuityHint = this.buildSessionContinuityHint(action.payload);
             const executionPlan = await this.simulationEngine.simulate(
                 action.payload.description,
-                `${contextStr}${sessionContinuityHint ? `\n\n${sessionContinuityHint}` : ''}`,
+                simulationContext,
                 this.skills.getSkillsPrompt()
             );
             const robustReasoningMode = this.isRobustReasoningEnabled();
@@ -10084,8 +10129,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
             // SIMULATION LAYER (New)
             // Run a quick mental simulation to plan the steps (executed once per action start)
-            const recentHist = this.memory.getRecentContext();
-            const contextStr = recentHist.map(c => `[${c.type}] ${c.content}`).join('\n');
+            const simulationContext = this.buildSimulationContext(action.payload, { maxChars: 4000 });
             const sessionContinuityHint = this.buildSessionContinuityHint(action.payload);
 
             // LLM-based task complexity classification — replaces brittle regex heuristics.
@@ -10131,7 +10175,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 ? 'Simple task: Respond directly and terminate. No multi-step planning needed.'
                 : await this.simulationEngine.simulate(
                     action.payload.description,
-                    `${contextStr.slice(-1000)}${sessionContinuityHint ? `\n\n${sessionContinuityHint}` : ''}`, // Limit context for simulation to save tokens
+                    simulationContext,
                     this.config.get('compactSkillsPrompt')
                         ? this.skills.getCompactSkillsPrompt()
                         : this.skills.getSkillsPrompt()
@@ -10579,8 +10623,10 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     let firstSentMessageInThisStep = '';
                     let toolsBlockedByCooldown = 0;
                     let totalSendToolsInStep = 0;
+                    let remainingToolsInBatch = decision.tools.length;
 
                     for (const toolCall of decision.tools) {
+                        remainingToolsInBatch--;
                         if (SIDE_EFFECT_TOOLS.has(toolCall.name)) {
                             const sideEffectKey = buildSideEffectKey(toolCall.name, toolCall.metadata || {});
                             if (successfulSideEffectKeys.has(sideEffectKey)) {
@@ -11097,6 +11143,20 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         }
 
                         this.saveSessionAnchorFromToolResult(action, currentStep, toolCall.name, toolCall.metadata || {}, toolResult, resultIndicatesError);
+
+                        // BATCH EXECUTION GUARDRAIL:
+                        // If a queued multi-tool sequence hits a failure, stop remaining tools now
+                        // and let the next decision step re-plan with fresh error context.
+                        if (resultIndicatesError && remainingToolsInBatch > 0) {
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-${toolCall.name}-batch-paused`,
+                                type: 'short',
+                                content: `[SYSTEM: Paused tool batch after ${toolCall.name} failed. ${remainingToolsInBatch} queued tool(s) were skipped. Re-plan from this failure before continuing.]`,
+                                metadata: { actionId: action.id, step: currentStep, skill: toolCall.name, queuedToolsSkipped: remainingToolsInBatch }
+                            });
+                            logger.info(`Agent: Paused queued tools for action ${action.id} after '${toolCall.name}' failure (${remainingToolsInBatch} remaining).`);
+                            break;
+                        }
 
                         // HARD BREAK after scheduling to prevent loops
                         if (toolCall.name === 'schedule_task') {
