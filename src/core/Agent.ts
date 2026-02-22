@@ -10681,13 +10681,17 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     let firstSentMessageInThisStep = '';
                     let toolsBlockedByCooldown = 0;
                     let totalSendToolsInStep = 0;
+                    let duplicateSideEffectsBlockedInStep = 0;
+                    let totalSideEffectToolsInStep = 0;
                     let remainingToolsInBatch = decision.tools.length;
 
                     for (const toolCall of decision.tools) {
                         remainingToolsInBatch--;
                         if (SIDE_EFFECT_TOOLS.has(toolCall.name)) {
+                            totalSideEffectToolsInStep++;
                             const sideEffectKey = buildSideEffectKey(toolCall.name, toolCall.metadata || {});
                             if (successfulSideEffectKeys.has(sideEffectKey)) {
+                                duplicateSideEffectsBlockedInStep++;
                                 logger.warn(`Agent: Blocked duplicate side-effect call '${toolCall.name}' with equivalent intent in action ${action.id}`);
                                 this.memory.saveMemory({
                                     id: `${action.id}-step-${currentStep}-${toolCall.name}-sideeffect-duplicate-blocked`,
@@ -11516,6 +11520,20 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             content: `[SYSTEM: Your recent sends were suppressed, but you have NOT delivered a substantive answer yet. Send ONE concrete, content-rich response now (not an acknowledgment/status update). If needed, combine your acknowledgment and the actual content in a single message.]`,
                             metadata: { actionId: action.id, step: currentStep }
                         });
+                    }
+
+                    // SIDE-EFFECT DEDUP COMPLETION: if every side-effect tool in this step was blocked
+                    // as a duplicate of already-successful work, stop the loop instead of redoing work.
+                    if (totalSideEffectToolsInStep > 0 && duplicateSideEffectsBlockedInStep >= totalSideEffectToolsInStep && successfulSideEffectKeys.size > 0) {
+                        logger.info(`Agent: All ${totalSideEffectToolsInStep} side-effect tool(s) in step ${currentStep} were duplicate replays. Completing action ${action.id}.`);
+                        this.memory.saveMemory({
+                            id: `${action.id}-step-${currentStep}-duplicate-sideeffects-complete`,
+                            type: 'short',
+                            content: `[SYSTEM: All side-effect operations in this step were blocked as duplicates of already successful actions. Do NOT redo completed operations. Conclude the task unless new unmet work exists.]`,
+                            metadata: { actionId: action.id, step: currentStep, duplicateSideEffectsBlockedInStep, totalSideEffectToolsInStep }
+                        });
+                        goalsMet = true;
+                        break;
                     }
 
                     if (forceBreak) break;
