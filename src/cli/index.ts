@@ -2709,13 +2709,41 @@ async function showGatewayMenu() {
     if (action === 'back') return showMainMenu();
 
     if (action === 'start' || action === 'start_with_agent') {
+        // Ask for optional static dashboard directory before starting the gateway
+        const defaultStatic = agent.config.get('gatewayStaticDir') || path.join(process.cwd(), 'apps', 'dashboard');
+        const { staticDirInput } = await inquirer.prompt([
+            { type: 'input', name: 'staticDirInput', message: 'Optional path to dashboard static files (leave blank to skip):', default: defaultStatic }
+        ]);
+
+        let staticDir = (staticDirInput || '').trim();
+        if (staticDir) {
+            if (!path.isAbsolute(staticDir)) staticDir = path.join(process.cwd(), staticDir);
+            if (!fs.existsSync(staticDir)) {
+                const { createDir } = await inquirer.prompt([
+                    { type: 'confirm', name: 'createDir', message: `Directory "${staticDir}" does not exist. Create it?`, default: false }
+                ]);
+                if (createDir) {
+                    try { fs.mkdirSync(staticDir, { recursive: true }); } catch (e) { console.log(yellow(`Failed to create directory: ${e?.message || e}`)); }
+                } else {
+                    console.log('Aborting start. No static directory set.');
+                    await waitKeyPress();
+                    return showGatewayMenu();
+                }
+            }
+            // Save as preference
+            agent.config.set('gatewayStaticDir', staticDir);
+        } else {
+            staticDir = undefined;
+        }
+
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { GatewayServer } = require('../gateway/GatewayServer');
 
         const gatewayConfig = {
             port: currentPort,
             host: currentHost,
-            apiKey: apiKey
+            apiKey: apiKey,
+            staticDir: staticDir
         };
 
         const gateway = new GatewayServer(agent, agent.config, gatewayConfig);
@@ -2729,6 +2757,7 @@ async function showGatewayMenu() {
         if (apiKey) {
             console.log(`   Auth: API key required (X-Api-Key header)`);
         }
+        if (staticDir) console.log(`   Static files served from: ${staticDir}`);
         console.log('\n   Press Ctrl+C to stop\n');
 
         if (action === 'start_with_agent') {
@@ -2761,16 +2790,58 @@ async function showGatewayMenu() {
         let statusLine = yellow('not installed');
         let tailscaleIp = dim('n/a');
 
+        // Robust detection: try which/where, then version, then status/ip
         try {
-            const ver = String(execSync('tailscale version', { stdio: ['ignore', 'pipe', 'pipe'] })).split('\n')[0].trim();
-            tailscaleInstalled = true;
-            statusLine = green(`installed (${ver})`);
+            const platform = process.platform;
             try {
-                const ip = String(execSync('tailscale ip -4', { stdio: ['ignore', 'pipe', 'pipe'] })).split('\n').find((l: string) => l.trim()) || '';
-                if (ip.trim()) tailscaleIp = brightCyan(ip.trim());
-            } catch {}
-        } catch {
-            tailscaleInstalled = false;
+                if (platform === 'win32') execSync('where tailscale', { stdio: ['ignore', 'pipe', 'pipe'] });
+                else execSync('which tailscale', { stdio: ['ignore', 'pipe', 'pipe'] });
+            } catch {
+                // which/where may fail even if tailscale CLI available (path issues);
+                // continue to try version/status commands.
+            }
+
+            // Try version first (non-interactive)
+            try {
+                const ver = String(execSync('tailscale version', { stdio: ['ignore', 'pipe', 'pipe'] })).split('\n')[0].trim();
+                tailscaleInstalled = true;
+                statusLine = green(`installed (${ver})`);
+            } catch {
+                // Try a status probe
+                try {
+                    const st = String(execSync('tailscale status --json', { stdio: ['ignore', 'pipe', 'pipe'] }));
+                    if (st && st.trim()) {
+                        tailscaleInstalled = true;
+                        statusLine = green('installed (status)');
+                    }
+                } catch {
+                    tailscaleInstalled = false;
+                }
+            }
+
+            // Try to get IPv4 address
+            if (tailscaleInstalled) {
+                try {
+                    const ipOut = String(execSync('tailscale ip -4', { stdio: ['ignore', 'pipe', 'pipe'] })).split('\n').find((l: string) => l.trim()) || '';
+                    if (ipOut.trim()) tailscaleIp = brightCyan(ipOut.trim());
+                } catch {
+                    // as fallback, try parsing status --json for self IP
+                    try {
+                        const statusJson = String(execSync('tailscale status --json', { stdio: ['ignore', 'pipe', 'pipe'] }));
+                        const parsed = JSON.parse(statusJson || '{}');
+                        if (parsed && parsed.Self && parsed.Self.TailSegments) {
+                            // Not all versions include TailSegments; try Addresses
+                        }
+                        if (parsed && parsed.Self && parsed.Self.Addresses && Array.isArray(parsed.Self.Addresses)) {
+                            const v4 = parsed.Self.Addresses.find((a: string) => a.includes('.') );
+                            if (v4) tailscaleIp = brightCyan(String(v4).split('/')[0]);
+                        }
+                    } catch {}
+                }
+            }
+        } catch (e) {
+            // fallthrough, keep as not installed
+            tailscaleInstalled = tailscaleInstalled || false;
         }
 
         const tailscaleLines = [
@@ -2795,7 +2866,71 @@ async function showGatewayMenu() {
         console.log(`  ${dim('Then browse:')} ${cyan('http://<tailnet-ip>:' + currentPort)}`);
         console.log('');
 
-        if (!tailscaleInstalled) {
+        const choices: any[] = [];
+        if (!tailscaleInstalled) choices.push({ name: `  ⬇️  ${bold('Install Tailscale')}`, value: 'install' });
+        else choices.push({ name: `  🔐 ${bold('Run login (tailscale up)')}`, value: 'login' });
+        choices.push({ name: `  🧾 ${bold('Show quick commands')}`, value: 'quick' });
+        choices.push(new inquirer.Separator(gradient('  ──────────────────────────────────', [c.cyan, c.gray])));
+        choices.push({ name: dim('  ← Back'), value: 'back' });
+
+        const { tsAction } = await inquirer.prompt([
+            { type: 'list', name: 'tsAction', message: cyan('Tailscale actions:'), choices }
+        ]);
+
+        if (tsAction === 'install') {
+            const { confirmInstall } = await inquirer.prompt([{ type: 'confirm', name: 'confirmInstall', message: 'Install Tailscale on this host now?', default: true }]);
+            if (confirmInstall) {
+                console.log('');
+                console.log('Installing Tailscale (platform-aware)...');
+                try {
+                    const platform = process.platform;
+                    let installCmd = '';
+                    if (platform === 'linux') {
+                        installCmd = 'curl -fsSL https://tailscale.com/install.sh | sh';
+                    } else if (platform === 'darwin') {
+                        installCmd = 'brew install --cask tailscale || brew install tailscale';
+                    } else if (platform === 'win32') {
+                        // Prefer winget, fallback to choco
+                        installCmd = 'winget install --silent --accept-package-agreements --accept-source-agreements Tailscale.Tailscale || choco install tailscale -y';
+                    } else {
+                        installCmd = '';
+                    }
+
+                    if (!installCmd) throw new Error(`Unsupported platform: ${process.platform}`);
+
+                    // Run the installer in a shell so complex commands (pipes) work
+                    const out = spawnSync(installCmd, { stdio: 'inherit', shell: true });
+                    if (out.error) throw out.error;
+                    if (out.status !== 0) throw new Error(`Installer exited with code ${out.status}`);
+
+                    console.log(green('Tailscale installation completed.'));
+                    console.log('You may need to run:');
+                    console.log(`  ${cyan('tailscale up')}`);
+                } catch (e: any) {
+                    console.error(red(`Installation failed: ${String(e?.message || e)}`));
+                    console.log('If automatic install failed, follow the official instructions: https://tailscale.com/download');
+                }
+            }
+        } else if (tsAction === 'login') {
+            try {
+                console.log('Launching tailscale login flow (this may open a browser)...');
+                // Run `tailscale up` which starts interactive login
+                const r = spawnSync('tailscale up', { stdio: 'inherit', shell: true });
+                if (r.error) throw r.error;
+            } catch (e: any) {
+                console.error(red(`Failed to run tailscale up: ${String(e?.message || e)}`));
+            }
+        } else if (tsAction === 'quick') {
+            // Quick commands already displayed above — repeat with emphasis
+            console.log('');
+            console.log(cyan('Quick commands:'));
+            console.log(`  ${cyan('tailscale status')}`);
+            console.log(`  ${cyan('tailscale ip -4')}`);
+            console.log(`  ${cyan('orcbot gateway --with-agent -p ' + currentPort)}`);
+            console.log(`  ${dim('Then browse:')} ${cyan('http://<tailnet-ip>:' + currentPort)}`);
+        }
+
+        if (!tailscaleInstalled && tsAction !== 'install') {
             console.log(yellow('Tip: Install tailscale first, then rerun this check to confirm status/IP.'));
         }
     }
