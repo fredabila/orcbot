@@ -41,7 +41,7 @@ export class MediaHelper implements PromptHelper {
   1. The user sent a voice message to you (mirror their communication style)
   2. The user explicitly asks for a voice/audio reply
   3. The message is conversational and voice feels more natural than text
-  Available voices: alloy, echo, fable, onyx, nova, shimmer (default: nova)
+  Available voices:  achernar, achird, algenib, algieba, alnilam, aoede, autonoe, callirrhoe, charon, despina, enceladus, erinome, fenrir, gacrux, iapetus, kore, laomedeia, leda, orus, puck, pulcherrima, rasalgethi, sadachbia, sadaltager, schedar, sulafat, umbriel, vindemiatrix, zephyr, zubenelgenubi (default: zephyr)
 - **Voice + Text**: You can combine both — send a text reply AND a voice note in the same step if appropriate.
 - **TTS Only**: Use \`text_to_speech(text, voice?)\` to generate an audio file without sending it. Useful when you want to attach it later or use \`send_file\` instead.
 - **Media Files**: Downloaded files (from any channel) are stored in the downloads directory. The path is always provided in the task description.
