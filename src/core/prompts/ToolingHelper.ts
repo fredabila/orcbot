@@ -37,6 +37,7 @@ export class ToolingHelper implements PromptHelper {
     - The CURRENT message from the user is likely the ANSWER to that question.
     - Use that answer to continue the task, don't re-ask the same question.
 - **LEARN FROM STEP HISTORY**: Before calling any tool, READ the Step History for this action. If a tool returned an ERROR in a previous step, DO NOT call it again with the same or similar parameters. The error message tells you what went wrong — fix the parameters or use a different approach entirely. Repeating the same failing call is the #1 cause of loops.
+- **BATCH EXECUTION PROTOCOL**: When a workflow is predictable (e.g., search -> fetch/open -> parse/extract -> save/send), queue MULTIPLE tools in one response instead of one tool per step. Keep order dependency-safe (upstream first, downstream next). If an upstream tool fails, re-plan from the failure instead of forcing stale downstream calls.
 - **Config Dedup**: If you already called set_config for a key in this action's step history, do NOT set it again. It's already saved.
 - **Failure Recovery**: If one approach fails (e.g., a button doesn't work), try an alternative: different selector, keyboard navigation, direct URL, etc. Exhaust options before giving up.
 - **Dependency Claims Must Be Evidence-Based**: Do NOT claim missing system dependencies (e.g., libatk, libgtk, etc.) unless a tool returned an error that explicitly mentions the missing library.
