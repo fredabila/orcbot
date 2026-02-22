@@ -1294,11 +1294,70 @@ export class WebBrowser {
         if (!this._page) return;
         try {
             await this._page.waitForLoadState('networkidle', { timeout: maxMs }).catch(() => {});
-            // Brief settle for animations/transitions
-            await this._page.waitForTimeout(Math.min(300, maxMs));
+            // Event-driven settle for animations/transitions without fixed sleeps.
+            await this._page.evaluate(() => new Promise<void>(resolve => {
+                const raf = () => requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+                if (document.readyState === 'complete' || document.readyState === 'interactive') {
+                    raf();
+                    return;
+                }
+                window.addEventListener('DOMContentLoaded', () => raf(), { once: true });
+            }));
         } catch {
             // Best effort
         }
+    }
+
+    private async withRetries<T>(
+        operationName: string,
+        fn: (attempt: number) => Promise<T>,
+        options: { attempts?: number; baseDelayMs?: number } = {}
+    ): Promise<T> {
+        const attempts = Math.max(1, options.attempts ?? 3);
+        const baseDelayMs = Math.max(100, options.baseDelayMs ?? 250);
+        let lastError: unknown;
+
+        for (let attempt = 1; attempt <= attempts; attempt++) {
+            try {
+                return await fn(attempt);
+            } catch (error) {
+                lastError = error;
+                if (attempt >= attempts) break;
+
+                const backoff = Math.min(baseDelayMs * attempt, 1200);
+                logger.debug(`Browser: ${operationName} attempt ${attempt}/${attempts} failed; retrying in ${backoff}ms: ${error}`);
+                if (this.page) {
+                    await this.page.waitForLoadState('domcontentloaded', { timeout: backoff }).catch(() => {});
+                    await this.page.waitForFunction(() => document.readyState !== 'loading', undefined, { timeout: backoff }).catch(() => {});
+                }
+            }
+        }
+
+        throw lastError;
+    }
+
+    private async captureInteractionDiagnostics(tag: string): Promise<string | undefined> {
+        try {
+            const debug = await this.saveDebugArtifacts(tag).catch(() => null);
+            return debug?.screenshotPath;
+        } catch {
+            return undefined;
+        }
+    }
+
+    private async verifyFieldValue(selector: string, expected: string): Promise<boolean> {
+        if (!this.page) return false;
+        return this.page.evaluate(({ sel, val }) => {
+            const el = document.querySelector(sel) as HTMLElement | null;
+            if (!el) return false;
+            if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+                return el.value === val;
+            }
+            if (el.isContentEditable) {
+                return (el.textContent || '').trim() === val;
+            }
+            return false;
+        }, { sel: selector, val: expected }).catch(() => false);
     }
 
     public async click(selector: string): Promise<string> {
@@ -2055,42 +2114,68 @@ export class WebBrowser {
                 }
 
                 try {
+                    const locator = this._page.locator(resolvedSelector).first();
+                    await locator.waitFor({ state: 'attached', timeout: 7000 });
+
                     switch (action) {
-                        case 'fill':
-                            // Try Playwright fill first, then click+type fallback
-                            try {
-                                await this._page.fill(resolvedSelector, value, { timeout: 3000 });
-                            } catch {
-                                await this._page.click(resolvedSelector, { force: true, timeout: 2000 });
-                                await this._page.keyboard.press('Control+a');
-                                await this._page.keyboard.press('Backspace');
-                                await this._page.keyboard.type(value, { delay: 30 });
-                            }
+                        case 'fill': {
+                            await this.withRetries(`fill(${field.selector})`, async (attempt) => {
+                                await locator.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
+                                await locator.fill(value, { timeout: 4000 });
+                                const verified = await this.verifyFieldValue(resolvedSelector, value);
+                                if (!verified) {
+                                    await locator.click({ timeout: 3000, force: attempt > 1 });
+                                    await this._page!.keyboard.press('Control+a');
+                                    await this._page!.keyboard.press('Backspace');
+                                    await this._page!.keyboard.type(value, { delay: 20 });
+                                }
+
+                                const finalVerified = await this.verifyFieldValue(resolvedSelector, value);
+                                if (!finalVerified) {
+                                    throw new Error('Value verification failed after typing.');
+                                }
+                            }, { attempts: 3, baseDelayMs: 350 });
                             results.push(`OK fill "${field.selector}" = "${value.slice(0, 30)}${value.length > 30 ? '...' : ''}"`);
                             break;
+                        }
 
-                        case 'select':
-                            await this._page.selectOption(resolvedSelector, { label: value }, { timeout: 3000 })
-                                .catch(() => this._page!.selectOption(resolvedSelector, { value }, { timeout: 2000 }));
+                        case 'select': {
+                            await this.withRetries(`select(${field.selector})`, async () => {
+                                await locator.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
+                                const selected = await this._page!.selectOption(resolvedSelector, { label: value }, { timeout: 4000 })
+                                    .catch(() => this._page!.selectOption(resolvedSelector, { value }, { timeout: 3000 }));
+                                if (!selected || selected.length === 0) throw new Error('No select value was applied.');
+                            }, { attempts: 2, baseDelayMs: 300 });
                             results.push(`OK select "${field.selector}" = "${value}"`);
                             break;
+                        }
 
-                        case 'check':
-                            const isChecked = await this._page.isChecked(resolvedSelector);
+                        case 'check': {
+                            const isChecked = await locator.isChecked();
                             const wantChecked = value.toLowerCase() !== 'false' && value !== '0';
                             if (isChecked !== wantChecked) {
-                                await this._page.click(resolvedSelector, { force: true, timeout: 2000 });
+                                await this.withRetries(`check(${field.selector})`, async () => {
+                                    await locator.click({ force: true, timeout: 3500 });
+                                    const nowChecked = await locator.isChecked();
+                                    if (nowChecked !== wantChecked) throw new Error('Checkbox state did not change as expected.');
+                                }, { attempts: 2, baseDelayMs: 250 });
                             }
                             results.push(`OK check "${field.selector}" = ${wantChecked}`);
                             break;
+                        }
 
-                        case 'click':
-                            await this._page.click(resolvedSelector, { timeout: 3000 });
+                        case 'click': {
+                            await this.withRetries(`click(${field.selector})`, async (attempt) => {
+                                await locator.click({ timeout: 4500, force: attempt > 1 });
+                            }, { attempts: 2, baseDelayMs: 300 });
                             results.push(`OK click "${field.selector}"`);
                             break;
+                        }
                     }
                 } catch (e) {
-                    results.push(`FAIL ${action} "${field.selector}": ${String(e).slice(0, 100)}`);
+                    const screenshotPath = await this.captureInteractionDiagnostics(`fillform-${action}-failure`);
+                    const screenshotNote = screenshotPath ? ` [diag: ${screenshotPath}]` : '';
+                    results.push(`FAIL ${action} "${field.selector}": ${String(e).slice(0, 120)}${screenshotNote}`);
                     failCount++;
                 }
             }
@@ -2100,13 +2185,28 @@ export class WebBrowser {
                 const resolvedSubmit = await this.resolveSelector(submitSelector);
                 if (resolvedSubmit) {
                     try {
-                        await this._page.click(resolvedSubmit, { timeout: 5000 });
+                        const beforeUrl = this._page.url();
+                        await this.withRetries(`submit(${submitSelector})`, async (attempt) => {
+                            const submitLocator = this._page!.locator(resolvedSubmit).first();
+                            await submitLocator.waitFor({ state: 'visible', timeout: 7000 });
+                            await submitLocator.click({ timeout: 6000, force: attempt > 1 });
+                        }, { attempts: 2, baseDelayMs: 400 });
+
+                        await Promise.race([
+                            this._page.waitForURL(url => url.toString() !== beforeUrl, { timeout: 8000 }).catch(() => null),
+                            this._page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => null),
+                            this._page.waitForSelector('[role="alert"], .error, .success, .notification, [aria-invalid="true"]', { timeout: 8000 }).catch(() => null)
+                        ]);
+
                         await this.waitAfterInteraction(3000);
                         const title = await this._page.title().catch(() => '');
                         const url = this._page.url();
-                        results.push(`OK submit "${submitSelector}" → "${title}" (${url})`);
+                        const changed = beforeUrl !== url;
+                        results.push(`OK submit "${submitSelector}" → "${title}" (${url})${changed ? ' [url changed]' : ''}`);
                     } catch (e) {
-                        results.push(`FAIL submit "${submitSelector}": ${e}`);
+                        const screenshotPath = await this.captureInteractionDiagnostics('fillform-submit-failure');
+                        const screenshotNote = screenshotPath ? ` [diag: ${screenshotPath}]` : '';
+                        results.push(`FAIL submit "${submitSelector}": ${e}${screenshotNote}`);
                         failCount++;
                     }
                 } else {
