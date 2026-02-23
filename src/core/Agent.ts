@@ -10916,22 +10916,36 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             }
                         });
                     }
+                    
+                    const DECISION_TIMEOUT_MS = Number(this.config.get('decisionTimeoutMs') || 180000); // 3 minutes for LLM logic
                     decision = await ErrorHandler.withRetry(async () => {
-                        return await this.decisionEngine.decide({
-                            ...action,
-                            payload: {
-                                ...action.payload,
-                                messagesSent,
-                                messagingLocked: messagesSent > 0,
-                                currentStep,
-                                stepsSinceLastMessage,
-                                isResearchTask,
-                                executionPlan, // Pass plan to DecisionEngine
-                                robustReasoningMode,
-                                sessionContinuityHint,
-                                timeSignals
-                            }
-                        });
+                        let timerId: NodeJS.Timeout | undefined;
+                        try {
+                            const decisionPromise = this.decisionEngine.decide({
+                                ...action,
+                                payload: {
+                                    ...action.payload,
+                                    messagesSent,
+                                    messagingLocked: messagesSent > 0,
+                                    currentStep,
+                                    stepsSinceLastMessage,
+                                    isResearchTask,
+                                    executionPlan, // Pass plan to DecisionEngine
+                                    robustReasoningMode,
+                                    sessionContinuityHint,
+                                    timeSignals
+                                }
+                            });
+                            
+                            const timeoutPromise = new Promise<any>((_, reject) => {
+                                timerId = setTimeout(() => reject(new Error(`[WATCHDOG] LLM Decision Engine timed out after ${DECISION_TIMEOUT_MS}ms.`)), DECISION_TIMEOUT_MS);
+                                timerId.unref();
+                            });
+                            
+                            return await Promise.race([decisionPromise, timeoutPromise]);
+                        } finally {
+                            if (timerId) clearTimeout(timerId);
+                        }
                     }, { maxRetries: 2 });
                 } catch (e) {
                     logger.error(`DecisionEngine failed after retries: ${e}`);

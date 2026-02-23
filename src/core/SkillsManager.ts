@@ -1142,12 +1142,31 @@ main().catch(console.error);
         if (!skill) {
             throw new Error(`Skill ${name} not found`);
         }
+        
+        let timerId: NodeJS.Timeout | undefined;
         try {
             logger.info(`Executing skill: ${name}`);
-            return await skill.handler(args, this.context);
+            
+            // Global watchdog timeout to prevent indefinite hangs.
+            // Defaults to 15 minutes (900000ms). This is longer than the default
+            // max command timeout (10 mins) to allow legitimate long-running tasks,
+            // while ensuring no tool can permanently zombie the agent worker.
+            const timeoutMs = Number(this.context.config.get('skillExecutionTimeoutMs') || 900000);
+            
+            const executionPromise = skill.handler(args, this.context);
+            
+            const timeoutPromise = new Promise((_, reject) => {
+                timerId = setTimeout(() => reject(new Error(`[WATCHDOG] Skill execution timed out after ${timeoutMs}ms. The process was likely blocked or waiting for interactive input.`)), timeoutMs);
+                timerId.unref(); // Don't let the timer keep the node process alive
+            });
+
+            const result = await Promise.race([executionPromise, timeoutPromise]);
+            return result;
         } catch (error) {
             logger.error(`Error executing skill ${name}: ${error}`);
             throw error;
+        } finally {
+            if (timerId) clearTimeout(timerId);
         }
     }
 
