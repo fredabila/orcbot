@@ -11220,7 +11220,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             // - If 15+ steps have passed without an update (Status update for long tasks)
                             // - Structured interactive messages (buttons/polls) ARE the substantive delivery;
                             //   they must never be blocked by the cooldown regardless of prior text sends.
-                            if (!isStructuredSend && currentStep > 1 && messagesSent > 0 && !deepToolExecutedSinceLastMessage && stepsSinceLastMessage < 15) {
+                            // - If every message sent so far in this action was just a short acknowledgement/reassurance,
+                            //   we allow one more message (the actual answer) even without new deep tool data.
+                            const isOnlyAckSoFar = messagesSent > 0 && sentMessagesInAction.every(msg => this.isLikelyAcknowledgementMessage(msg));
+                            
+                            if (!isStructuredSend && currentStep > 1 && messagesSent > 0 && !deepToolExecutedSinceLastMessage && stepsSinceLastMessage < 15 && !isOnlyAckSoFar) {
                                 logger.warn(`Agent: Blocked redundant message in action ${action.id} (Communication Cooldown - No new deep data).`);
                                 toolsBlockedByCooldown++;
                                 continue;
@@ -12190,7 +12194,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
 
                                 // Apply message guards to bonus steps too
                                 if (isSendTool) {
-                                    const bonusMsg = (toolCall.metadata?.message || '').trim();
+                                    const bonusMsg = String(toolCall.metadata?.message || '').trim();
                                     // Block duplicates
                                     if (sentMessagesInAction.includes(bonusMsg)) {
                                         logger.warn(`Agent: Blocked duplicate message in bonus step (action ${action.id}).`);
@@ -12219,7 +12223,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                         messagesSent++;
                                         bonusMsgSentThisStep = true;
                                         bonusMessageSent = true;
-                                        sentMessagesInAction.push((toolCall.metadata?.message || '').trim());
+                                        sentMessagesInAction.push(String(toolCall.metadata?.message || '').trim());
                                         lastUserDeliveryAtMs = Date.now();
                                     }
                                     this.memory.saveMemory({

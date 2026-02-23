@@ -478,22 +478,22 @@ export class DecisionPipeline {
                 continue;
             }
 
-            const message = (tool.metadata?.message || tool.metadata?.text || '').trim();
+            const message = String(tool.metadata?.message || tool.metadata?.text || '').trim();
 
             // Deduplicate per destination+channel tool, not per originating action source.
             // This ensures (1) Telegram and WhatsApp can send the same text without suppressing each other,
             // and (2) duplicates are evaluated in the correct channel/thread.
             let destination = '';
             if (toolName === 'send_telegram') {
-                destination = (tool.metadata?.chatId || tool.metadata?.chat_id || tool.metadata?.id || ctx.sourceId || '').toString();
+                destination = String(tool.metadata?.chatId || tool.metadata?.chat_id || tool.metadata?.id || ctx.sourceId || '');
             } else if (toolName === 'send_whatsapp') {
-                destination = (tool.metadata?.jid || tool.metadata?.to || tool.metadata?.id || ctx.sourceId || '').toString();
+                destination = String(tool.metadata?.jid || tool.metadata?.to || tool.metadata?.id || ctx.sourceId || '');
             } else if (toolName === 'send_discord') {
-                destination = (tool.metadata?.channel_id || tool.metadata?.channelId || tool.metadata?.to || tool.metadata?.id || ctx.sourceId || '').toString();
+                destination = String(tool.metadata?.channel_id || tool.metadata?.channelId || tool.metadata?.to || tool.metadata?.id || ctx.sourceId || '');
             } else if (toolName === 'send_slack') {
-                destination = (tool.metadata?.channel_id || tool.metadata?.channelId || tool.metadata?.to || tool.metadata?.id || ctx.sourceId || '').toString();
+                destination = String(tool.metadata?.channel_id || tool.metadata?.channelId || tool.metadata?.to || tool.metadata?.id || ctx.sourceId || '');
             } else if (toolName === 'send_gateway_chat') {
-                destination = (tool.metadata?.chatId || tool.metadata?.chat_id || tool.metadata?.id || ctx.sourceId || '').toString();
+                destination = String(tool.metadata?.chatId || tool.metadata?.chat_id || tool.metadata?.id || ctx.sourceId || '');
             }
 
             const channelKey = `${tool.name}:${destination || 'anon'}`;

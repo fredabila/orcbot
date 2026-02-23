@@ -49,6 +49,8 @@ describe('DecisionEngine - System Prompt Persistence', () => {
 
     const mockSkills = {
       getSkillsPrompt: () => 'Available Skills:\n- send_telegram\n- web_search',
+      getCompactSkillsPrompt: () => 'Tools: send_telegram, web_search',
+      getRelevantSkillsPrompt: () => 'Available Skills:\n- send_telegram\n- web_search',
       getAllSkills: () => [
         { name: 'send_telegram' },
         { name: 'web_search' }
@@ -149,6 +151,8 @@ describe('DecisionEngine - System Prompt Persistence', () => {
 
     const mockSkills = {
       getSkillsPrompt: () => 'Available Skills:\n- test_skill',
+      getCompactSkillsPrompt: () => 'Tools: test_skill',
+      getRelevantSkillsPrompt: () => 'Available Skills:\n- test_skill',
       getAllSkills: () => [{ name: 'test_skill' }],
       matchSkillsForTask: () => [],
       getAgentSkillsPrompt: () => '',
@@ -231,6 +235,8 @@ describe('DecisionEngine - Thread Context Grounding', () => {
 
     const mockSkills = {
       getSkillsPrompt: () => 'Available Skills:\n- send_telegram',
+      getCompactSkillsPrompt: () => 'Tools: send_telegram',
+      getRelevantSkillsPrompt: () => 'Available Skills:\n- send_telegram',
       getAllSkills: () => [{ name: 'send_telegram' }],
       matchSkillsForTask: () => [],
       getAgentSkillsPrompt: () => '',
@@ -309,6 +315,8 @@ describe('DecisionEngine - Scoped Memory Injection', () => {
 
     const mockSkills = {
       getSkillsPrompt: () => 'Available Skills:\n- send_whatsapp',
+      getCompactSkillsPrompt: () => 'Tools: send_whatsapp',
+      getRelevantSkillsPrompt: () => 'Available Skills:\n- send_whatsapp',
       getAllSkills: () => [{ name: 'send_whatsapp' }],
       matchSkillsForTask: () => [],
       getAgentSkillsPrompt: () => '',
@@ -376,6 +384,8 @@ describe('DecisionEngine - Step compaction expansion', () => {
 
     const mockSkills = {
       getSkillsPrompt: () => 'Available Skills\n- send_telegram',
+      getCompactSkillsPrompt: () => 'Tools: send_telegram',
+      getRelevantSkillsPrompt: () => 'Available Skills\n- send_telegram',
       getAllSkills: () => [{ name: 'send_telegram' }],
       matchSkillsForTask: () => [],
       getAgentSkillsPrompt: () => '',

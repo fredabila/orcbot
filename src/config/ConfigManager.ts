@@ -4,253 +4,9 @@ import path from 'path';
 import os from 'os';
 import { logger } from '../utils/logger';
 import { eventBus } from '../core/EventBus';
+import { AgentConfig, AgentConfigSchema } from '../types/AgentConfig';
 
-export interface AgentConfig {
-    agentName: string;
-    llmProvider?: 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia' | 'anthropic';
-    providerModelNames?: Record<string, string>; // Per-provider remembered model names
-    fallbackModelNames?: Record<string, string>; // Optional per-provider fallback model overrides
-    telegramToken?: string;
-    openaiApiKey?: string;
-    openrouterApiKey?: string;
-    openrouterBaseUrl?: string;
-    openrouterReferer?: string;
-    openrouterAppName?: string;
-    googleApiKey?: string;
-    nvidiaApiKey?: string;
-    anthropicApiKey?: string;
-    braveSearchApiKey?: string;
-    searxngUrl?: string;
-    searchProviderOrder?: string[];
-    serperApiKey?: string;
-    captchaApiKey?: string;
-    modelName?: string;
-    bedrockRegion?: string;
-    bedrockAccessKeyId?: string;
-    bedrockSecretAccessKey?: string;
-    bedrockSessionToken?: string;
-    autonomyEnabled?: boolean;
-    autonomyInterval?: number; // In minutes, default 0 (disabled)
-    autonomyPostUserCooldownSeconds?: number; // Delay heartbeat after inbound user activity (default 90)
-    autonomyBacklogLimit?: number;
-    autonomyAllowedChannels?: string[]; // Channels autonomous tasks/heartbeats may message
-    workerPoolAllowAutonomyDuringUserWork?: boolean; // Allow autonomy lane to run even while user lane is busy
-    maxActionRunMinutes?: number;
-    maxStaleActionMinutes?: number;
-    memoryPath?: string;
-    skillsPath?: string;
-    userProfilePath?: string;
-    agentIdentityPath?: string;
-    actionQueuePath?: string;
-    journalPath?: string;
-    learningPath?: string;
-    pluginsPath?: string;
-    toolsPath?: string;
-    whatsappEnabled?: boolean;
-    whatsappSessionPath?: string;
-    whatsappAutoReplyEnabled?: boolean;
-    whatsappStatusReplyEnabled?: boolean;
-    whatsappAutoReactEnabled?: boolean;
-    whatsappContextProfilingEnabled?: boolean;
-    whatsappOwnerJID?: string;
-    telegramAutoReplyEnabled?: boolean;
-    maxMessagesPerAction?: number;
-    maxStepsPerAction?: number;
-    messageDedupWindow?: number;
-    commandTimeoutMs?: number;
-    commandRetries?: number;
-    commandWorkingDir?: string;
-    buildWorkspacePath?: string;
-    commandAllowList?: string[];
-    commandDenyList?: string[];
-    safeMode?: boolean;
-    sudoMode?: boolean;
-    overrideMode?: boolean;
-    pluginAllowList?: string[];
-    pluginDenyList?: string[];
-    pluginHealthCheckIntervalMinutes?: number; // Plugin health check interval (default 15)
-    browserProfileDir?: string;
-    browserProfileName?: string;
-    browserEngine?: 'playwright' | 'lightpanda';  // Browser engine to use (default: playwright)
-    lightpandaEndpoint?: string;                  // Lightpanda CDP endpoint (default: ws://127.0.0.1:9222)
-    lightpandaPath?: string;                      // Path to Lightpanda binary
-    browserDebugAlwaysSave?: boolean;             // Save debug artifacts on every navigation/snapshot
-    browserTraceEnabled?: boolean;                // Enable Playwright trace recording
-    browserTraceDir?: string;                     // Optional trace output directory
-    browserTraceScreenshots?: boolean;            // Include screenshots in trace
-    browserTraceSnapshots?: boolean;              // Include DOM snapshots in trace
-    googleComputerUseEnabled?: boolean;           // Enable Gemini computer-use routing for browser tools
-    googleComputerUseModel?: string;              // Gemini computer-use model name
-    tokenUsagePath?: string;
-    tokenLogPath?: string;
-    // Discord
-    discordToken?: string;                // Discord bot token
-    discordAutoReplyEnabled?: boolean;    // Auto-reply in Discord (default false)
-    slackBotToken?: string;               // Slack bot token (xoxb-...)
-    slackAppToken?: string;               // Slack app token (xapp-...) for Socket Mode
-    slackSigningSecret?: string;          // Slack signing secret (for events API)
-    slackAutoReplyEnabled?: boolean;      // Auto-reply in Slack (default false)
-    // Email
-    emailEnabled?: boolean;
-    emailAutoReplyEnabled?: boolean;
-    emailAddress?: string;
-    emailFromName?: string;
-    emailDefaultSubject?: string;
-    emailSocketTimeoutMs?: number;
-    smtpHost?: string;
-    smtpPort?: number;
-    smtpSecure?: boolean;
-    smtpStartTls?: boolean;
-    smtpUsername?: string;
-    smtpPassword?: string;
-    imapHost?: string;
-    imapPort?: number;
-    imapSecure?: boolean;
-    imapUsername?: string;
-    imapPassword?: string;
-    // World events
-    worldEventsSources?: string[];        // e.g. ['gdelt', 'usgs', 'opensky']
-    worldEventsRefreshSeconds?: number;   // Live view refresh (default 60)
-    worldEventsLookbackMinutes?: number;  // GDELT/USGS lookback window (default 60)
-    worldEventsMaxRecords?: number;       // Max records per fetch (default 250)
-    worldEventsBatchMinutes?: number;     // Summarization batch window (default 10)
-    worldEventsStoreEnabled?: boolean;    // Store summaries in vector memory
-    worldEventsHeartbeatEnabled?: boolean; // Enable heartbeat-time world event ingestion (default true)
-    worldEventsGdeltQuery?: string;       // GDELT query filter (default 'global')
-    worldEventsGlobeRenderer?: 'ascii' | 'external' | 'map' | 'mapscii'; // Renderer mode
-    worldEventsGlobeCommand?: string;     // External globe CLI command
-    worldEventsGlobeArgs?: string[];      // External globe CLI args
-    // Session scoping & identity links
-    sessionScope?: 'main' | 'per-peer' | 'per-channel-peer'; // Thread scope strategy for inbound context
-    identityLinks?: Record<string, string>; // Map channel identities (e.g. telegram:123) to canonical person keys
-    // Adaptive guidance (reduce hardcoded behavior)
-    guidanceMode?: 'strict' | 'balanced' | 'fluid';
-    guidanceAckPatterns?: string[];
-    guidanceLowValuePatterns?: string[];
-    guidanceClarificationKeywords?: string[];
-    guidanceQuestionStopWords?: string[];
-    guidanceRepeatQuestionThreshold?: number;
-    guidanceShortReplyMaxWords?: number;
-    guidanceShortReplyMaxChars?: number;
-    robustReasoningMode?: boolean; // Enable stricter reasoning guardrails and verification
-    reasoningExposeChecklist?: boolean; // Send checklist preview to users for non-trivial tasks
-    reasoningChecklistMaxItems?: number; // Max checklist items to show in preview
-    orcbotControlEnabled?: boolean; // Enable admin-gated app-level control skill
-    orcbotControlCliAllowList?: string[]; // Allowed `orcbot` CLI command prefixes for app control
-    orcbotControlCliDenyList?: string[]; // Denied `orcbot` CLI command prefixes for app control
-    orcbotControlTimeoutMs?: number; // Timeout for app-control CLI execution
-    // Operational
-    autoExecuteCommands?: boolean;        // Auto-execute commands without confirmation (default false)
-    skillRoutingRules?: Array<{
-        match: string;
-        prefer?: string[];
-        avoid?: string[];
-        requirePreferred?: boolean;
-    }>;
-    autopilotNoQuestions?: boolean;
-    autopilotNoQuestionsAllow?: string[];
-    autopilotNoQuestionsDeny?: string[];
-    progressFeedbackEnabled?: boolean;
-    progressFeedbackStepInterval?: number; // Silent-step threshold before automatic status update
-    progressFeedbackForceInitial?: boolean; // Force an initial status update before deep tool work
-    progressFeedbackTypingOnly?: boolean; // Use typing indicators instead of status chat messages when supported
-    enforceExplicitFileRequestForSendFile?: boolean; // Restrict send_file unless user explicitly requested a file
-    onboardingQuestionnaireEnabled?: boolean; // Send first-contact preference questionnaire to new users
-    reconnectBriefingEnabled?: boolean;           // Send a wake-up context briefing when a known user returns after absence
-    reconnectBriefingThresholdDays?: number;      // Days of absence before triggering reconnect briefing (default 3)
-    reconnectBriefingMaxCompletions?: number;     // Max completed tasks to surface in briefing (default 5)
-    reconnectBriefingMaxPending?: number;         // Max pending tasks to surface in briefing (default 3)
-    recoveryDedupWindowHours?: number;            // Hours window for deduplicating recovery tasks (default 6)
-    usagePingEnabled?: boolean;                   // Send anonymous startup usage ping (default true)
-    usagePingUrl?: string;                        // Endpoint that receives usage pings (set to your own webhook/server URL)
-    usagePingTimeoutMs?: number;                  // Timeout for usage ping request in ms (default 4000)
-    usagePingToken?: string;                      // Optional bearer token/header secret for your usage endpoint
-    // Memory content limits
-    memoryContentMaxLength?: number;             // Hard truncation limit for stored memory content (default 500)
-    memoryFlushSoftThreshold?: number;           // Short memories count before triggering pre-consolidation flush (default 25)
-    memoryFlushCooldownMinutes?: number;         // Minimum minutes between memory flushes (default 30)
-    memoryExtendedContextLimit?: number;         // Max chars of long-term memory to include in extended context (default 2000)
-    // DecisionEngine context sizing
-    threadContextRecentN?: number;               // Recent thread messages to always include (default 8)
-    threadContextRelevantN?: number;             // Additional semantically relevant thread messages (default 8)
-    threadContextMaxLineLen?: number;            // Max chars per thread context line before clipping (default 420)
-    threadContextOtherMemoriesN?: number;        // Background memories from other actions (default 5)
-    journalContextLimit?: number;                // Max chars of journal to inject per step (default 1500)
-    learningContextLimit?: number;               // Max chars of learning notes to inject per step (default 1500)
-    userContextLimit?: number;                   // Max chars of USER.md to inject per step (default 2000)
-    stepCompactionThreshold?: number;            // Step count above which middle steps get compacted (default 10)
-    stepCompactionPreserveFirst?: number;        // Steps at start to always preserve verbatim (default 2)
-    stepCompactionPreserveLast?: number;         // Steps at end to always preserve verbatim (default 5)
-    stepCompactionExpandOnDemand?: boolean;      // Expand compacted middle steps when continuity/context intent is detected (default true)
-    stepCompactionExpansionMaxMiddleSteps?: number; // Max middle steps to rehydrate when expansion mode is active (default 12)
-    stepCompactionExpansionMaxChars?: number;    // Max chars allocated to expanded middle-step context (default 2400)
-    memoryInteractionBatchSize?: number;         // Number of short interaction events before forced scoped consolidation (default 12)
-    memoryInteractionStaleMinutes?: number;      // Max age of pending scoped interactions before consolidation (default 10)
-    memoryDedupWindowMinutes?: number;           // Recent time window for duplicate event suppression (default 5)
-    userExchangeContextLimit?: number;           // Number of scoped user exchanges injected into DecisionEngine (default 8)
-    timeSignalHighRiskNoMessageSeconds?: number; // High delay risk threshold when no message has been sent yet
-    timeSignalMediumRiskSilentSteps?: number; // Medium delay risk threshold for silent steps
-    timeSignalMediumRiskSinceDeliverySeconds?: number; // Medium delay risk threshold since last user-visible delivery
-    sessionAnchorEnabled?: boolean; // Persist and reuse workspace/artifact anchors per session scope
-    sessionAnchorMaxHints?: number; // Maximum session continuity hints to inject into reasoning context
-    // Memory limits
-    memoryContextLimit?: number;          // Recent memories in context (default 20)
-    memoryEpisodicLimit?: number;         // Episodic summaries to include (default 5)
-    memoryConsolidationThreshold?: number; // When to consolidate (default 30)
-    memoryConsolidationBatch?: number;    // How many to consolidate at once (default 20)
-    // Token optimization
-    skipSimulationForSimpleTasks?: boolean; // Skip planning step for simple tasks (default true)
-    compactSkillsPrompt?: boolean;          // Use compact skills format (default false)
-    fastModelName?: string;                 // Cheaper/faster model for internal reasoning (auto-detected from primary provider if unset)
-    // Web Gateway
-    gatewayPort?: number;                 // Port for web gateway (default 3100)
-    gatewayHost?: string;                 // Host to bind gateway (default 0.0.0.0)
-    gatewayApiKey?: string;               // API key for gateway authentication
-    gatewayCorsOrigins?: string[];        // CORS allowed origins (default ['*'])
-    // Image Generation
-    imageGenProvider?: 'openai' | 'google';       // Which provider for image gen (default: auto based on available keys)
-    imageGenModel?: string;                       // Model name (e.g. 'dall-e-3', 'gpt-image-1', 'gemini-2.5-flash-image')
-    imageGenSize?: string;                        // Default size (e.g. '1024x1024')
-    imageGenQuality?: string;                     // Default quality (e.g. 'medium', 'high', 'hd')
-    // Agentic User (autonomous HITL proxy)
-    agenticUserEnabled?: boolean;              // Master toggle (default false)
-    agenticUserResponseDelay?: number;         // Seconds to wait before intervening (default 120)
-    agenticUserConfidenceThreshold?: number;   // Min confidence 0-100 to auto-intervene (default 70)
-    agenticUserProactiveGuidance?: boolean;    // Enable proactive stuck-detection guidance (default true)
-    agenticUserProactiveStepThreshold?: number; // Steps before proactive guidance (default 8)
-    agenticUserCheckInterval?: number;         // Check interval in seconds (default 30)
-    agenticUserMaxInterventions?: number;      // Max interventions per action (default 3)
-    agenticUserNotifyUser?: boolean;              // Send notification to user on intervention (default true)
-    // Server mode optimizations
-    serverMode?: boolean;                          // Apply conservative memory/perf defaults for server deployments (default false)
-    actionQueueCompletedTTL?: number;              // Ms to keep completed actions (default: 24h; server default: 2h)
-    actionQueueFailedTTL?: number;                 // Ms to keep failed actions (default: 72h; server default: 12h)
-    actionQueueFlushIntervalMs?: number;           // Queue flush interval in ms (default: 5000; server default: 15000)
-    actionQueueMaintenanceIntervalMs?: number;     // Queue maintenance interval in ms (default: 60000; server default: 180000)
-    vectorMemoryMaxEntries?: number;               // Max vector memory entries (default: 5000; server default: 1500)
-    processedMessagesCacheSize?: number;           // Max size of deduplicated message id cache (default: 1000; server default: 300)
-    // pi-ai integration
-    usePiAI?: boolean;                             // Route LLM calls through @mariozechner/pi-ai first, fall back to legacy on error (default true)
-    // pi-ai extra provider keys (Groq, Mistral, Cerebras, xAI — not in legacy code)
-    groqApiKey?: string;
-    mistralApiKey?: string;
-    cerebrasApiKey?: string;
-    xaiApiKey?: string;
-    // User Permissions
-    tforceEnabled?: boolean;                     // Enable TForce conscience/recovery support (default true)
-    tforceMaxIncidentsPerAction?: number;        // Max incidents stored per action for TForce (default 30)
-    adminUsers?: {
-        telegram?: string[];   // Telegram numeric user IDs (e.g., ["123456789"])
-        discord?: string[];    // Discord snowflake user IDs (e.g., ["876513738667229184"])
-        whatsapp?: string[];   // WhatsApp JIDs (e.g., ["5511999998888@s.whatsapp.net"])
-        slack?: string[];      // Slack user IDs (e.g., ["U012ABCDEF"])
-        email?: string[];      // Email addresses (e.g., ["user@example.com"])
-    };
-    telegramCommands?: Array<{
-        command: string;
-        description: string;
-    }>;
-}
+export { AgentConfig };
 
 export class ConfigManager {
     private configPath: string;
@@ -310,7 +66,6 @@ export class ConfigManager {
     }
 
     private loadConfig(customPath?: string, silent: boolean = false): AgentConfig {
-        const defaults = this.getStringDefaultConfig();
         let globalConfig: any = {};
         let homeConfig: any = {};
         let localConfig: any = {};
@@ -392,8 +147,8 @@ export class ConfigManager {
             Object.entries(envConfig).filter(([_, v]) => v !== undefined)
         );
 
-        const mergedConfig: AgentConfig = {
-            ...defaults,
+        // Merge hierarchies. Note: AgentConfigSchema provides defaults.
+        const mergedRaw: any = {
             ...globalConfig,
             ...homeConfig,
             ...localConfig,
@@ -402,64 +157,28 @@ export class ConfigManager {
 
         // Apply env vars only as fallback when config value is missing
         Object.entries(activeEnv).forEach(([key, value]) => {
-            const current = (mergedConfig as any)[key];
+            const current = mergedRaw[key];
             if (current === undefined || current === null || current === '') {
-                (mergedConfig as any)[key] = value;
+                mergedRaw[key] = value;
             } else if (!silent) {
                 logger.info(`ConfigManager: Ignoring env override for ${key} because config already defines a value.`);
             }
         });
 
-        const normalized = this.normalizePlatformPaths(mergedConfig, silent);
-        const typed = this.coerceConfigTypes(normalized, defaults);
-        const repaired = this.repairWorkerCorruption(typed, silent);
+        // Use Zod to parse, validate and apply defaults
+        const parsed = AgentConfigSchema.parse(mergedRaw);
+
+        // Normalized paths - depends on dataHome which is instance-specific
+        const normalized = this.normalizePlatformPaths(parsed, silent);
+        
+        // Final repair step for worker corruption
+        const repaired = this.repairWorkerCorruption(normalized, silent);
+        
         // Apply server-mode conservative defaults AFTER user overrides are merged in
         if (repaired.serverMode) {
             return this.applyServerModeDefaults(repaired);
         }
         return repaired;
-    }
-
-    /**
-     * Coerce string values (from CLI/env/manual YAML edits) to expected types
-     * based on defaults. Prevents bugs like "false" being treated as truthy.
-     */
-    private coerceConfigTypes(config: AgentConfig, defaults: AgentConfig): AgentConfig {
-        const out: any = { ...config };
-
-        const toBool = (v: any): any => {
-            if (typeof v !== 'string') return v;
-            const s = v.trim().toLowerCase();
-            if (s === 'true') return true;
-            if (s === 'false') return false;
-            return v;
-        };
-
-        const toNumber = (v: any): any => {
-            if (typeof v === 'number') return v;
-            if (typeof v !== 'string') return v;
-            const s = v.trim();
-            if (!s) return v;
-            const n = Number(s);
-            return Number.isFinite(n) ? n : v;
-        };
-
-        for (const [key, defaultValue] of Object.entries(defaults as any)) {
-            const current = out[key];
-            if (current === undefined || current === null) continue;
-
-            if (typeof defaultValue === 'boolean') {
-                out[key] = toBool(current);
-                continue;
-            }
-
-            if (typeof defaultValue === 'number') {
-                out[key] = toNumber(current);
-                continue;
-            }
-        }
-
-        return out as AgentConfig;
     }
 
     /**
@@ -475,14 +194,16 @@ export class ConfigManager {
             'memoryPath', 'skillsPath', 'userProfilePath', 'agentIdentityPath',
             'actionQueuePath', 'journalPath', 'learningPath', 'tokenUsagePath', 'tokenLogPath'
         ];
-        const defaults = this.getStringDefaultConfig();
+        
+        // Get base defaults for restoration
+        const baseDefaults = AgentConfigSchema.parse({});
         let repaired = false;
 
         for (const key of pathKeys) {
-            const value = config[key];
+            const value = (config as any)[key];
             if (typeof value === 'string' && value.includes('orchestrator') && value.includes('instances')) {
                 if (!silent) logger.warn(`ConfigManager: Repairing worker-corrupted path for ${String(key)}: ${value} → default`);
-                (config as any)[key] = (defaults as any)[key];
+                (config as any)[key] = (baseDefaults as any)[key];
                 repaired = true;
             }
         }
@@ -490,7 +211,7 @@ export class ConfigManager {
         // Also reset agentName if it looks like a worker name
         if (config.agentName && /^(Researcher|Worker|Agent)_\d+$/i.test(config.agentName)) {
             if (!silent) logger.warn(`ConfigManager: Repairing worker-corrupted agentName: ${config.agentName} → default`);
-            config.agentName = defaults.agentName;
+            config.agentName = baseDefaults.agentName;
             repaired = true;
         }
 
@@ -538,24 +259,37 @@ export class ConfigManager {
      * resolved dataHome directory.
      */
     private normalizePlatformPaths(config: AgentConfig, silent: boolean): AgentConfig {
-        if (process.platform !== 'win32') return config;
+        // Even if not win32, we should ensure certain paths that are 'undefined' after parse (no default)
+        // are set to their standard dataHome-relative locations.
+        const out = { ...config };
+        
+        const pathDefaults: Partial<Record<keyof AgentConfig, string>> = {
+            memoryPath: 'memory.json',
+            skillsPath: 'SKILLS.md',
+            userProfilePath: 'USER.md',
+            agentIdentityPath: '.AI.md',
+            actionQueuePath: 'actions.json',
+            journalPath: 'JOURNAL.md',
+            learningPath: 'LEARNING.md',
+            pluginsPath: 'plugins',
+            toolsPath: 'tools',
+            buildWorkspacePath: 'workspace',
+            whatsappSessionPath: 'whatsapp-session',
+            browserProfileDir: 'browser-profiles',
+            browserTraceDir: 'browser-traces',
+            tokenUsagePath: 'token-usage-summary.json',
+            tokenLogPath: 'token-usage.log'
+        };
 
-        const pathKeys: Array<keyof AgentConfig> = [
-            'memoryPath',
-            'skillsPath',
-            'userProfilePath',
-            'agentIdentityPath',
-            'actionQueuePath',
-            'journalPath',
-            'learningPath',
-            'pluginsPath',
-            'toolsPath',
-            'buildWorkspacePath',
-            'whatsappSessionPath',
-            'browserProfileDir',
-            'tokenUsagePath',
-            'tokenLogPath'
-        ];
+        for (const [key, base] of Object.entries(pathDefaults)) {
+            if (!(out as any)[key]) {
+                (out as any)[key] = path.join(this.dataHome, base!);
+            }
+        }
+
+        if (process.platform !== 'win32') return out;
+
+        const pathKeys = Object.keys(pathDefaults) as Array<keyof AgentConfig>;
 
         const remapIfCiOrPosix = (value: string): string => {
             const normalized = value.replace(/\\/g, '/');
@@ -563,8 +297,6 @@ export class ConfigManager {
             // Handle relative paths (./something or just filename) - resolve to dataHome
             if (normalized.startsWith('./') || normalized.startsWith('../') || !path.isAbsolute(value)) {
                 let basename = normalized.replace(/^\.\//, '').replace(/^\.\.\//, '');
-                // Strip leading .orcbot/ — dataHome already IS .orcbot, so prepending it again
-                // would produce double-nesting like ~/.orcbot/.orcbot/memory.json
                 basename = basename.replace(/^\.orcbot\//, '');
                 return path.join(this.dataHome, basename);
             }
@@ -576,13 +308,8 @@ export class ConfigManager {
                 return path.join(this.dataHome, ...suffix.split('/'));
             }
 
-            // If it's exactly a .orcbot directory (rare), map to dataHome.
-            if (normalized.endsWith('/.orcbot')) {
-                return this.dataHome;
-            }
+            if (normalized.endsWith('/.orcbot')) return this.dataHome;
 
-            // For other POSIX-rooted absolute paths, keep as-is (user may genuinely want it),
-            // but warn once so it's not silently creating directories at drive root.
             if (normalized.startsWith('/')) {
                 if (!silent) {
                     logger.warn(`ConfigManager: Detected POSIX-style absolute path on Windows: ${value}. Consider removing it or setting ORCBOT_DATA_DIR.`);
@@ -593,299 +320,17 @@ export class ConfigManager {
         };
 
         for (const key of pathKeys) {
-            const current = config[key];
+            const current = (out as any)[key];
             if (typeof current !== 'string' || current.trim() === '') continue;
 
             const remapped = remapIfCiOrPosix(current);
             if (remapped !== current && !silent) {
                 logger.info(`ConfigManager: Normalized ${String(key)} to ${remapped}`);
             }
-            (config as any)[key] = remapped;
+            (out as any)[key] = remapped;
         }
 
-        return config;
-    }
-
-    private getStringDefaultConfig(): AgentConfig {
-        return {
-            agentName: 'OrcBot',
-            llmProvider: undefined,
-            modelName: 'gpt-4o',
-            providerModelNames: {
-                openai: 'gpt-4o',
-                google: 'gemini-2.5-flash',
-                openrouter: 'meta-llama/llama-3.3-70b-instruct:free',
-                nvidia: 'nvidia/llama-3.1-nemotron-70b-instruct',
-                anthropic: 'claude-3-5-sonnet-latest',
-                bedrock: 'anthropic.claude-3-5-sonnet-20240620-v1:0'
-            },
-            fallbackModelNames: {},
-            searchProviderOrder: ['serper', 'brave', 'searxng', 'google', 'bing', 'duckduckgo'],
-            autonomyEnabled: true,
-            autonomyInterval: 15,
-            autonomyPostUserCooldownSeconds: 90,
-            autonomyBacklogLimit: 3,
-            autonomyAllowedChannels: [],
-            workerPoolAllowAutonomyDuringUserWork: false,
-            maxActionRunMinutes: 10,
-            maxStaleActionMinutes: 30,
-            memoryPath: path.join(this.dataHome, 'memory.json'),
-            skillsPath: path.join(this.dataHome, 'SKILLS.md'),
-            userProfilePath: path.join(this.dataHome, 'USER.md'),
-            agentIdentityPath: path.join(this.dataHome, '.AI.md'),
-            actionQueuePath: path.join(this.dataHome, 'actions.json'),
-            journalPath: path.join(this.dataHome, 'JOURNAL.md'),
-            learningPath: path.join(this.dataHome, 'LEARNING.md'),
-            pluginsPath: path.join(this.dataHome, 'plugins'),
-            toolsPath: path.join(this.dataHome, 'tools'),
-            whatsappEnabled: false,
-            whatsappSessionPath: path.join(this.dataHome, 'whatsapp-session'),
-            whatsappAutoReplyEnabled: false,
-            whatsappStatusReplyEnabled: false,
-            whatsappAutoReactEnabled: false,
-            whatsappContextProfilingEnabled: false,
-            whatsappOwnerJID: undefined,
-            telegramAutoReplyEnabled: false,
-            maxMessagesPerAction: 10,
-            maxStepsPerAction: 30,
-            messageDedupWindow: 10,
-            commandTimeoutMs: 120000,
-            commandRetries: 1,
-            commandWorkingDir: undefined,
-            buildWorkspacePath: path.join(this.dataHome, 'workspace'),
-            commandAllowList: [
-                'npm',
-                'node',
-                'npx',
-                'git',
-                'python',
-                'pip',
-                'pip3',
-                'curl',
-                'wget',
-                'powershell',
-                'pwsh',
-                'bash',
-                'apt',
-                'apt-get',
-                'yum',
-                'dnf',
-                'pacman',
-                'brew',
-                'sudo',
-                'systemctl',
-                'service',
-                'cat',
-                'ls',
-                'dir',
-                'echo',
-                'mkdir',
-                'touch',
-                'cp',
-                'mv',
-                'head',
-                'tail',
-                'grep',
-                'find',
-                'which',
-                'whoami',
-                'uname',
-                'hostname'
-            ],
-            commandDenyList: [
-                'rm',
-                'rmdir',
-                'del',
-                'erase',
-                'format',
-                'mkfs',
-                'dd',
-                'shutdown',
-                'reboot',
-                'poweroff',
-                'reg',
-                'diskpart',
-                'netsh'
-            ],
-            safeMode: false,
-            pluginAllowList: [],
-            pluginDenyList: [],
-            pluginHealthCheckIntervalMinutes: 15,
-            browserProfileDir: path.join(this.dataHome, 'browser-profiles'),
-            browserProfileName: 'default',
-            browserEngine: 'playwright',
-            lightpandaEndpoint: 'ws://127.0.0.1:9222',
-            browserDebugAlwaysSave: false,
-            browserTraceEnabled: false,
-            browserTraceDir: path.join(this.dataHome, 'browser-traces'),
-            browserTraceScreenshots: true,
-            browserTraceSnapshots: true,
-            googleComputerUseEnabled: false,
-            googleComputerUseModel: 'gemini-2.5-computer-use-preview-10-2025',
-            tokenUsagePath: path.join(this.dataHome, 'token-usage-summary.json'),
-            tokenLogPath: path.join(this.dataHome, 'token-usage.log'),
-            discordAutoReplyEnabled: false,
-            slackAutoReplyEnabled: false,
-            slackAppToken: undefined,
-            slackSigningSecret: undefined,
-            emailEnabled: false,
-            emailAutoReplyEnabled: false,
-            emailAddress: undefined,
-            emailFromName: undefined,
-            emailDefaultSubject: 'OrcBot response',
-            emailSocketTimeoutMs: 15000,
-            smtpHost: undefined,
-            smtpPort: 587,
-            smtpSecure: false,
-            smtpStartTls: true,
-            smtpUsername: undefined,
-            smtpPassword: undefined,
-            imapHost: undefined,
-            imapPort: 993,
-            imapSecure: true,
-            imapUsername: undefined,
-            imapPassword: undefined,
-            worldEventsSources: ['gdelt', 'usgs'],
-            worldEventsRefreshSeconds: 60,
-            worldEventsLookbackMinutes: 60,
-            worldEventsMaxRecords: 250,
-            worldEventsBatchMinutes: 10,
-            worldEventsStoreEnabled: true,
-            worldEventsHeartbeatEnabled: true,
-            worldEventsGdeltQuery: 'global',
-            tforceEnabled: true,
-            tforceMaxIncidentsPerAction: 30,
-            worldEventsGlobeRenderer: 'mapscii',
-            worldEventsGlobeCommand: 'mapscii',
-            worldEventsGlobeArgs: [],
-            sessionScope: 'per-channel-peer',
-            identityLinks: {},
-            guidanceMode: 'balanced',
-            guidanceAckPatterns: [
-                '^(understood|got it|on it|acknowledged|okay|ok|alright|sure|perfect)\\b',
-                '^thanks?[,.!\\s]',
-                "\\bi\\s*(am|'m)\\s*(ready|working on|going to|about to)\\b",
-                '\\bi\\s*will\\s*now\\b',
-                '\\bworking on it\\b',
-                '\\blet me\\b'
-            ],
-            guidanceLowValuePatterns: [
-                '^(got it|on it|working on it|one moment|hang tight|be right back|still working)[.!]?$',
-                "^i('m| am) (checking|working on|looking into)\\b",
-                '^quick update[:\\-]?\\s*$',
-                '^sorry[,\\s]',
-                '^(understood|acknowledged)[,.!\\s]',
-                "\\bi\\s*(am|'m)\\s*ready\\s*to\\b",
-                '\\bi\\s*will\\s*now\\b'
-            ],
-            guidanceClarificationKeywords: [
-                'clarif', 'question', 'which', 'what', 'prefer', 'preference', 'confirm', 'api', 'details'
-            ],
-            guidanceQuestionStopWords: [
-                'the', 'a', 'an', 'and', 'or', 'to', 'for', 'of', 'in', 'on', 'at', 'is', 'are', 'was', 'were',
-                'be', 'been', 'being', 'do', 'does', 'did', 'can', 'could', 'would', 'should', 'will', 'please',
-                'you', 'your', 'me', 'my', 'we', 'our', 'it', 'this', 'that', 'with', 'about', 'if', 'as', 'by'
-            ],
-            guidanceRepeatQuestionThreshold: 0.65,
-            guidanceShortReplyMaxWords: 7,
-            guidanceShortReplyMaxChars: 48,
-            robustReasoningMode: false,
-            reasoningExposeChecklist: false,
-            reasoningChecklistMaxItems: 5,
-            orcbotControlEnabled: true,
-            orcbotControlCliAllowList: ['config get', 'config set', 'models', 'gateway', 'security', 'agentic-user'],
-            orcbotControlCliDenyList: ['reset', 'ui', 'setup', 'builder', 'daemon stop'],
-            orcbotControlTimeoutMs: 45000,
-            autoExecuteCommands: false,
-            bedrockRegion: process.env.BEDROCK_REGION || process.env.AWS_REGION,
-            bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
-            bedrockSecretAccessKey: process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY,
-            sudoMode: false,
-            overrideMode: false,
-            bedrockSessionToken: process.env.BEDROCK_SESSION_TOKEN || process.env.AWS_SESSION_TOKEN,
-            openrouterBaseUrl: 'https://openrouter.ai/api/v1',
-            skillRoutingRules: [],
-            autopilotNoQuestions: false,
-            autopilotNoQuestionsAllow: [],
-            autopilotNoQuestionsDeny: [],
-            progressFeedbackEnabled: true,
-            progressFeedbackStepInterval: 4,
-            progressFeedbackForceInitial: true,
-            progressFeedbackTypingOnly: true,
-            enforceExplicitFileRequestForSendFile: false,
-            onboardingQuestionnaireEnabled: true,
-            reconnectBriefingEnabled: true,
-            reconnectBriefingThresholdDays: 3,
-            reconnectBriefingMaxCompletions: 5,
-            reconnectBriefingMaxPending: 3,
-            recoveryDedupWindowHours: 6,
-            usagePingEnabled: true,
-            usagePingUrl: '',
-            usagePingTimeoutMs: 4000,
-            usagePingToken: '',
-            memoryContentMaxLength: 500,
-            memoryFlushSoftThreshold: 25,
-            memoryFlushCooldownMinutes: 30,
-            memoryExtendedContextLimit: 2000,
-            threadContextRecentN: 8,
-            threadContextRelevantN: 8,
-            threadContextMaxLineLen: 420,
-            threadContextOtherMemoriesN: 5,
-            journalContextLimit: 1500,
-            learningContextLimit: 1500,
-            userContextLimit: 2000,
-            stepCompactionThreshold: 10,
-            stepCompactionPreserveFirst: 2,
-            stepCompactionPreserveLast: 5,
-            stepCompactionExpandOnDemand: true,
-            stepCompactionExpansionMaxMiddleSteps: 12,
-            stepCompactionExpansionMaxChars: 2400,
-            memoryInteractionBatchSize: 12,
-            memoryInteractionStaleMinutes: 10,
-            memoryDedupWindowMinutes: 5,
-            userExchangeContextLimit: 8,
-            timeSignalHighRiskNoMessageSeconds: 25,
-            timeSignalMediumRiskSilentSteps: 4,
-            timeSignalMediumRiskSinceDeliverySeconds: 45,
-            sessionAnchorEnabled: true,
-            sessionAnchorMaxHints: 4,
-            memoryContextLimit: 20,
-            memoryEpisodicLimit: 5,
-            memoryConsolidationThreshold: 30,
-            memoryConsolidationBatch: 20,
-            skipSimulationForSimpleTasks: true,
-            compactSkillsPrompt: false,
-            fastModelName: undefined,
-            imageGenProvider: undefined,
-            imageGenModel: undefined,
-            imageGenSize: '1024x1024',
-            imageGenQuality: 'medium',
-            // Agentic User defaults
-            agenticUserEnabled: false,
-            agenticUserResponseDelay: 120,
-            agenticUserConfidenceThreshold: 70,
-            agenticUserProactiveGuidance: true,
-            agenticUserProactiveStepThreshold: 8,
-            agenticUserCheckInterval: 30,
-            agenticUserMaxInterventions: 3,
-            agenticUserNotifyUser: true,
-            // Server mode
-            serverMode: false,
-            actionQueueCompletedTTL: 24 * 60 * 60 * 1000,   // 24h
-            actionQueueFailedTTL: 72 * 60 * 60 * 1000,       // 72h
-            actionQueueFlushIntervalMs: 5000,                 // 5s
-            actionQueueMaintenanceIntervalMs: 60000,          // 60s
-            vectorMemoryMaxEntries: 5000,
-            processedMessagesCacheSize: 1000,
-            // pi-ai (on by default — old per-provider code is automatic fallback)
-            usePiAI: true,
-            telegramCommands: [
-                { command: 'status', description: 'Check agent health and queue status' },
-                { command: 'reset', description: 'Reset conversation context (clears short-term memory)' },
-                { command: 'help', description: 'Show all available commands' },
-                { command: 'search', description: 'Trigger a web search task' }
-            ]
-        };
+        return out;
     }
 
     /**
@@ -894,40 +339,34 @@ export class ConfigManager {
      */
     private applyServerModeDefaults(cfg: AgentConfig): AgentConfig {
         const serverDefaults: Partial<AgentConfig> = {
-            // Action queue — shorter retention, less frequent flushes
-            actionQueueCompletedTTL: 2 * 60 * 60 * 1000,    // 2h (vs 24h)
-            actionQueueFailedTTL: 12 * 60 * 60 * 1000,       // 12h (vs 72h)
-            actionQueueFlushIntervalMs: 15000,                // 15s (vs 5s)
-            actionQueueMaintenanceIntervalMs: 180000,         // 3min (vs 1min)
-            // Vector memory — smaller cap
-            vectorMemoryMaxEntries: 1500,                     // vs 5000
-            // In-memory de-dup cache
-            processedMessagesCacheSize: 300,                  // vs 1000
-            // Memory consolidation — consolidate more aggressively
-            memoryConsolidationThreshold: 20,                 // vs 30
-            memoryConsolidationBatch: 15,                     // vs 20
-            memoryFlushSoftThreshold: 18,                     // vs 25
-            memoryFlushCooldownMinutes: 20,                   // vs 30
-            // Per-step context sizing — smaller windows
-            threadContextRecentN: 6,                          // vs 8
-            threadContextRelevantN: 5,                        // vs 8
-            journalContextLimit: 800,                         // vs 1500
-            learningContextLimit: 800,                        // vs 1500
-            userContextLimit: 1200,                           // vs 2000
-            memoryExtendedContextLimit: 1000,                 // vs 2000
-            memoryContextLimit: 15,                           // vs 20
-            // Token optimization
+            actionQueueCompletedTTL: 2 * 60 * 60 * 1000,
+            actionQueueFailedTTL: 12 * 60 * 60 * 1000,
+            actionQueueFlushIntervalMs: 15000,
+            actionQueueMaintenanceIntervalMs: 180000,
+            vectorMemoryMaxEntries: 1500,
+            processedMessagesCacheSize: 300,
+            memoryConsolidationThreshold: 20,
+            memoryConsolidationBatch: 15,
+            memoryFlushSoftThreshold: 18,
+            memoryFlushCooldownMinutes: 20,
+            threadContextRecentN: 6,
+            threadContextRelevantN: 5,
+            journalContextLimit: 800,
+            learningContextLimit: 800,
+            userContextLimit: 1200,
+            memoryExtendedContextLimit: 1000,
+            memoryContextLimit: 15,
             skipSimulationForSimpleTasks: true,
-            compactSkillsPrompt: true,                        // Use short skill descriptions
+            compactSkillsPrompt: true,
         };
 
         // Only apply server defaults for keys the user has NOT explicitly set in YAML.
-        // Comparison: if value still equals the original default → override with server value.
-        const originalDefaults = this.getStringDefaultConfig();
+        // Get base defaults for comparison.
+        const baseDefaults = AgentConfigSchema.parse({});
+        
         for (const [k, serverVal] of Object.entries(serverDefaults) as [keyof AgentConfig, any][]) {
             const currentVal = (cfg as any)[k];
-            const originalDefault = (originalDefaults as any)[k];
-            // If the user explicitly overrode this key away from the base default, respect their choice
+            const originalDefault = (baseDefaults as any)[k];
             if (currentVal === originalDefault || currentVal === undefined) {
                 (cfg as any)[k] = serverVal;
             }
@@ -997,25 +436,19 @@ export class ConfigManager {
             .filter(p => p !== this.configPath);
 
         // Safety guard: never propagate worker-specific config to shared locations.
-        // Worker configs have isolated paths (e.g. orchestrator/instances/agent-xxx/)
-        // and empty channel tokens.  Syncing these would corrupt the parent config.
         const isWorkerConfig = this.configPath.includes('orchestrator')
             && this.configPath.includes('instances');
         if (isWorkerConfig) {
-            return; // Workers must NEVER overwrite shared config files
+            return;
         }
 
         for (const target of targets) {
             if (!fs.existsSync(target) && target !== globalPath) continue;
             try {
-                // If a target file already exists, merge rather than overwrite:
-                // preserve any keys in the target that are set but empty/missing in
-                // the current config (protects tokens set in different config locations).
                 if (fs.existsSync(target)) {
                     let existing: any = {};
                     try { existing = yaml.parse(fs.readFileSync(target, 'utf-8')) || {}; } catch { /* proceed with full overwrite */ }
 
-                    // Critical keys that should never be blanked by a sync
                     const protectedKeys = [
                         'telegramToken', 'discordToken', 'slackBotToken', 'slackAppToken', 'slackSigningSecret', 'smtpPassword', 'imapPassword', 'openaiApiKey', 'googleApiKey',
                         'nvidiaApiKey', 'anthropicApiKey', 'openrouterApiKey', 'serperApiKey',
@@ -1027,7 +460,6 @@ export class ConfigManager {
                     for (const key of protectedKeys) {
                         const current = (merged as any)[key];
                         const targetVal = (existing as any)[key];
-                        // If we'd blank out a key that exists in the target, keep the target's value
                         if ((!current || String(current).trim() === '') && targetVal && String(targetVal).trim() !== '') {
                             (merged as any)[key] = targetVal;
                         }

@@ -1,26 +1,31 @@
+import { z } from 'zod';
 import { logger } from '../utils/logger';
 import { LLMParser, ParserLLM } from './LLMParser';
 
-export interface ToolCall {
-    name: string;
-    metadata?: Record<string, any>;
-}
+export const ToolCallSchema = z.object({
+    name: z.string(),
+    metadata: z.record(z.string(), z.any()).optional()
+});
 
-export interface StandardResponse {
-    success: boolean;
-    action?: string;
-    tool?: string;
-    tools?: ToolCall[];
-    content?: string;
-    metadata?: Record<string, any>;
-    reasoning?: string;
-    verification?: {
-        goals_met: boolean;
-        analysis: string;
-    };
+export type ToolCall = z.infer<typeof ToolCallSchema>;
+
+export const StandardResponseSchema = z.object({
+    success: z.boolean().default(true),
+    action: z.string().optional(),
+    tool: z.string().optional(),
+    tools: z.array(ToolCallSchema).optional(),
+    content: z.string().optional(),
+    metadata: z.record(z.string(), z.any()).optional(),
+    reasoning: z.string().optional(),
+    verification: z.object({
+        goals_met: z.boolean(),
+        analysis: z.string()
+    }).optional(),
     /** Set by DecisionEngine when validator filters out tools */
-    toolsFiltered?: number;
-}
+    toolsFiltered: z.number().optional()
+});
+
+export type StandardResponse = z.infer<typeof StandardResponseSchema>;
 
 export class ParserLayer {
     /** Optional LLM instance for smart parsing fallback (Tier 3) */
@@ -170,7 +175,7 @@ export class ParserLayer {
 
                 tools = this.normalizeToolCalls(tools);
 
-                return {
+                const finalResponse = {
                     success: parsed.success ?? true,
                     action: parsed.action,
                     tool: parsed.tool,
@@ -180,6 +185,14 @@ export class ParserLayer {
                     reasoning: parsed.reasoning,
                     verification: parsed.verification
                 };
+
+                // Final validation with Zod
+                const result = StandardResponseSchema.safeParse(finalResponse);
+                if (!result.success) {
+                    logger.debug(`ParserLayer: Response validation issues: ${result.error.message}`);
+                    return finalResponse as StandardResponse;
+                }
+                return result.data;
             }
 
             // Fallback: treat whole response as content
@@ -422,7 +435,7 @@ export class ParserLayer {
             };
         }
 
-        return {
+        const finalResponse = {
             success: true,
             action: action || (tools.length > 0 ? 'EXECUTE' : 'THOUGHT'),
             tool: tools.length === 1 ? tools[0].name : undefined,
@@ -432,6 +445,14 @@ export class ParserLayer {
             reasoning,
             verification,
         };
+
+        // Final validation with Zod
+        const result = StandardResponseSchema.safeParse(finalResponse);
+        if (!result.success) {
+            logger.debug(`ParserLayer: Native tool response validation issues: ${result.error.message}`);
+            return finalResponse as StandardResponse;
+        }
+        return result.data;
     }
 
     /**
