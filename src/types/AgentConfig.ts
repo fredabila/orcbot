@@ -282,10 +282,18 @@ export const AgentConfigSchema = z.object({
         command: z.string(),
         description: z.string()
     })).default([
-        { command: 'status', description: 'Check agent health and queue status' },
+        { command: 'status', description: 'Check agent health and current activity' },
+        { command: 'queue', description: 'View pending and active tasks' },
+        { command: 'cancel', description: 'Cancel the current running task' },
         { command: 'reset', description: 'Reset conversation context (clears short-term memory)' },
-        { command: 'help', description: 'Show all available commands' },
-        { command: 'search', description: 'Trigger a web search task' }
+        { command: 'models', description: 'List available LLM models and providers' },
+        { command: 'config', description: 'View current configuration settings' },
+        { command: 'memory', description: 'View memory statistics and recent items' },
+        { command: 'skills', description: 'List all active and available skills' },
+        { command: 'logs', description: 'View recent agent logs' },
+        { command: 'help', description: 'Show all available commands and usage' },
+        { command: 'search', description: 'Trigger a web search task' },
+        { command: 'admin', description: 'Administrative controls and user management' }
     ]),
     // Allow dynamic keys (e.g. MOLTBOOK_API_KEY)
 }).catchall(z.any());

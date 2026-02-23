@@ -38,6 +38,7 @@ import { buildWorkflowSignalLog, buildWorkflowSignalMemory, shouldInjectWorkflow
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import { SyntaxChecker } from '../utils/SyntaxChecker';
 import { shellSessions } from '../utils/ShellSession';
 import { TForceSystem } from '../codes/tforce/TForceSystem';
 
@@ -548,6 +549,14 @@ export class Agent {
 
         const peer = sourceId || userId || 'unknown';
         return `scope:channel-peer:${cleanSource}:${peer}`;
+    }
+
+    public getCurrentActionId(): string | null {
+        return this.currentActionId;
+    }
+
+    public getBusyLanes(): Set<'user' | 'autonomy'> {
+        return new Set(this.busyLanes);
     }
 
     private getBuildWorkspacePath(): string {
@@ -2998,8 +3007,15 @@ Output the fixed code:
 `;
 
                     logger.info(`SelfRepair: Consulting LLM to fix "${skillName}"...`);
-                    const fixedCode = await this.llm.call(repairPrompt, "You are a master at debugging and fixing AI agent plugins.");
-                    const cleanCode = fixedCode.replace(/```typescript/g, '').replace(/```/g, '').trim();
+                    const fixedCode = await this.llm.call(repairPrompt, "You are a master at debugging and fixing AI agent plugins. Output ONLY raw source code.");
+                    const cleanCode = SyntaxChecker.cleanLLMOutput(fixedCode);
+
+                    // Syntax verification
+                    const validation = SyntaxChecker.verify(cleanCode);
+                    if (!validation.valid) {
+                        logger.error(`SelfRepair: Generated code for "${skillName}" has syntax errors: ${validation.error}`);
+                        return `Error: Generated repair for "${skillName}" has syntax issues: ${validation.error}. Please try again with a clearer problem description.`;
+                    }
 
                     fs.writeFileSync(targetSkill.pluginPath, cleanCode);
                     this.skills.loadPlugins(); // Reload registry
@@ -3077,10 +3093,14 @@ Output the fixed CommonJS code now:`;
                     const patchCode = await this.llm.call(patchPrompt, 'You are an expert Node.js/TypeScript developer and AI skill-patching engine. Output ONLY the raw CommonJS code with no markdown.');
 
                     // Strip any accidental markdown fences
-                    const cleanCode = patchCode
-                        .replace(/^```(?:javascript|typescript|js|ts)?\n?/gm, '')
-                        .replace(/^```\s*$/gm, '')
-                        .trim();
+                    const cleanCode = SyntaxChecker.cleanLLMOutput(patchCode);
+
+                    // Syntax verification
+                    const validation = SyntaxChecker.verify(cleanCode);
+                    if (!validation.valid) {
+                        logger.error(`TweakSkill: Generated patch for "${skillName}" has syntax errors: ${validation.error}`);
+                        return `Error: Generated patch for "${skillName}" is invalid (syntax error): ${validation.error}. Try again with a more specific fix description.`;
+                    }
 
                     // Basic validation — must contain module.exports
                     if (!cleanCode.includes('module.exports')) {

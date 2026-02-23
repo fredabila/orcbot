@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { logger } from '../utils/logger';
+import { SyntaxChecker } from '../utils/SyntaxChecker';
 import type { LLMToolDefinition } from './MultiLLM';
 
 export interface AgentContext {
@@ -154,16 +155,16 @@ export class SkillsManager {
         return removed;
     }
 
-    public loadPlugins() {
+    public loadPlugins(verifyOnly: boolean = false) {
         if (!this.pluginsDir) return;
 
-        if (this.context?.config?.get('safeMode')) {
+        if (this.context?.config?.get('safeMode') && !verifyOnly) {
             logger.warn('SkillsManager: Safe mode enabled; plugin loading is disabled.');
             return;
         }
 
         if (!fs.existsSync(this.pluginsDir)) {
-            fs.mkdirSync(this.pluginsDir, { recursive: true });
+            if (!verifyOnly) fs.mkdirSync(this.pluginsDir, { recursive: true });
             return;
         }
 
@@ -171,12 +172,21 @@ export class SkillsManager {
         this.ensureTsNodeRegistered();
 
         const files = fs.readdirSync(this.pluginsDir);
-        logger.info(`SkillsManager: Found ${files.length} files in ${this.pluginsDir}: ${files.join(', ')}`);
+        if (!verifyOnly) logger.info(`SkillsManager: Found ${files.length} files in ${this.pluginsDir}: ${files.join(', ')}`);
 
         for (const file of files) {
             if (file.endsWith('.js') || file.endsWith('.ts')) {
                 const fullPath = path.resolve(this.pluginsDir, file);
                 try {
+                    // Syntax verification first
+                    const content = fs.readFileSync(fullPath, 'utf8');
+                    const syntaxCheck = SyntaxChecker.verify(content);
+                    if (!syntaxCheck.valid) {
+                        throw new Error(`Syntax error: ${syntaxCheck.error}`);
+                    }
+
+                    if (verifyOnly) continue;
+
                     // HOT RELOAD: Clear cache to force re-read
                     delete require.cache[fullPath];
 

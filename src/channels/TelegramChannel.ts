@@ -30,7 +30,130 @@ export class TelegramChannel implements IChannel {
         this.bot.command('status', (ctx) => {
             const memoryCount = this.agent.memory.searchMemory('short').length;
             const queueCount = this.agent.actionQueue.getQueue().length;
-            ctx.reply(`Status:\n- Short-term Memories: ${memoryCount}\n- Pending Actions: ${queueCount}`);
+            const activeCount = this.agent.actionQueue.getActive().length;
+            const provider = this.agent.config.get('llmProvider') || 'default';
+            const model = this.agent.config.get('modelName');
+            
+            ctx.reply(`<b>Agent Status</b>\n\n` +
+                      `- <b>Model:</b> ${model} (${provider})\n` +
+                      `- <b>Short-term Memories:</b> ${memoryCount}\n` +
+                      `- <b>Active Tasks:</b> ${activeCount}\n` +
+                      `- <b>Pending in Queue:</b> ${queueCount}`, { parse_mode: 'HTML' });
+        });
+
+        this.bot.command('queue', (ctx) => {
+            const active = this.agent.actionQueue.getActive();
+            const pending = this.agent.actionQueue.getQueue().filter(a => a.status === 'pending');
+            
+            let response = '<b>Task Queue</b>\n\n';
+            
+            if (active.length > 0) {
+                response += '<b>Active:</b>\n';
+                active.forEach(a => {
+                    response += `• <code>${a.id}</code>: ${a.payload.description.substring(0, 50)}...\n`;
+                });
+                response += '\n';
+            }
+            
+            if (pending.length > 0) {
+                response += '<b>Pending:</b>\n';
+                pending.slice(0, 5).forEach(a => {
+                    response += `• <code>${a.id}</code>: ${a.payload.description.substring(0, 50)}...\n`;
+                });
+                if (pending.length > 5) response += `<i>...and ${pending.length - 5} more</i>\n`;
+            }
+            
+            if (active.length === 0 && pending.length === 0) {
+                response += 'Queue is empty.';
+            }
+            
+            ctx.reply(response, { parse_mode: 'HTML' });
+        });
+
+        this.bot.command('cancel', async (ctx) => {
+            const currentAction = this.agent.getCurrentActionId();
+            if (!currentAction) {
+                return ctx.reply("No task is currently running.");
+            }
+            
+            await this.agent.cancelAction(currentAction);
+            ctx.reply(`Task <code>${currentAction}</code> has been cancelled.`, { parse_mode: 'HTML' });
+        });
+
+        this.bot.command('logs', async (ctx) => {
+            const logPath = path.join(this.agent.config.getDataHome(), 'logs', 'orcbot.log');
+            if (!fs.existsSync(logPath)) {
+                return ctx.reply("Log file not found.");
+            }
+            
+            try {
+                const logs = fs.readFileSync(logPath, 'utf8').split('\n').slice(-15).join('\n');
+                ctx.reply(`<b>Recent Logs:</b>\n<pre>${logs}</pre>`, { parse_mode: 'HTML' });
+            } catch (e) {
+                ctx.reply(`Error reading logs: ${e}`);
+            }
+        });
+
+        this.bot.command('memory', async (ctx) => {
+            const short = this.agent.memory.searchMemory('short').length;
+            const episodic = (this.agent.memory as any).episodicMemories?.length || 0;
+            const long = (this.agent.memory as any).longTermMemories?.length || 0;
+            
+            ctx.reply(`<b>Memory Summary</b>\n\n` +
+                      `- <b>Short-term:</b> ${short} items\n` +
+                      `- <b>Episodic:</b> ${episodic} items\n` +
+                      `- <b>Long-term:</b> ${long} items`, { parse_mode: 'HTML' });
+        });
+
+        this.bot.command('skills', async (ctx) => {
+            const skills = this.agent.skills.getAllSkills();
+            const core = skills.filter(s => !s.pluginPath).length;
+            const plugins = skills.filter(s => !!s.pluginPath).length;
+            
+            let response = `<b>Skills & Tools</b> (${skills.length} total)\n\n`;
+            response += `- <b>Core:</b> ${core}\n`;
+            response += `- <b>Plugins:</b> ${plugins}\n\n`;
+            
+            const pluginNames = skills.filter(s => !!s.pluginPath).map(s => s.name).slice(0, 10);
+            if (pluginNames.length > 0) {
+                response += `<b>Active Plugins:</b>\n${pluginNames.map(n => `• ${n}`).join('\n')}`;
+                if (plugins > 10) response += `\n<i>...and ${plugins - 10} more</i>`;
+            }
+            
+            ctx.reply(response, { parse_mode: 'HTML' });
+        });
+
+        this.bot.command('models', async (ctx) => {
+            const summary = this.agent.llm.getModelAvailabilitySummary();
+            ctx.reply(`<b>LLM Model Availability</b>\n\n${summary}`, { parse_mode: 'HTML' });
+        });
+
+        this.bot.command('config', (ctx) => {
+            const keys = ['agentName', 'llmProvider', 'modelName', 'autonomyEnabled', 'safeMode', 'sudoMode'];
+            let response = '<b>Current Configuration:</b>\n\n';
+            keys.forEach(k => {
+                response += `- <b>${k}:</b> <code>${this.agent.config.get(k)}</code>\n`;
+            });
+            ctx.reply(response, { parse_mode: 'HTML' });
+        });
+
+        this.bot.command('admin', (ctx) => {
+            const userId = ctx.from.id.toString();
+            const admins = this.agent.config.get('adminUsers')?.telegram || [];
+            const isAdmin = admins.includes(userId);
+            
+            if (!isAdmin && admins.length > 0) {
+                return ctx.reply("Permission denied. You are not an administrator.");
+            }
+            
+            const users = this.agent.getKnownUsers();
+            let response = `<b>Administrator Panel</b>\n\n<b>Known Users:</b> (${users.length})\n`;
+            users.slice(0, 15).forEach(u => {
+                response += `• ${u.name} (<code>${u.id}</code>) on ${u.channel}\n`;
+            });
+            if (users.length > 15) response += `<i>...and ${users.length - 15} more</i>`;
+            
+            ctx.reply(response, { parse_mode: 'HTML' });
         });
 
         this.bot.command('reset', async (ctx) => {
@@ -60,7 +183,7 @@ export class TelegramChannel implements IChannel {
         for (const cmdCfg of configuredCommands) {
             const cmd = cmdCfg.command;
             // Skip built-ins already handled explicitly
-            if (['start', 'status', 'reset', 'help'].includes(cmd)) continue;
+            if (['start', 'status', 'reset', 'help', 'queue', 'cancel', 'logs', 'memory', 'skills', 'models', 'config', 'admin'].includes(cmd)) continue;
 
             this.bot.command(cmd, async (ctx) => {
                 const userId = ctx.from.id.toString();
