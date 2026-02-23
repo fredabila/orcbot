@@ -202,6 +202,12 @@ export const AgentConfigSchema = z.object({
     usagePingUrl: z.string().default(''),
     usagePingTimeoutMs: coerceNumber.default(4000),
     usagePingToken: z.string().default(''),
+    // Advanced behavior tuning (previously hardcoded)
+    messageSimilarityThreshold: coerceNumber.default(0.7),
+    maxToolRepeats: coerceNumber.default(5),
+    maxResearchToolRepeats: coerceNumber.default(15),
+    maxToolLoops: coerceNumber.default(3),
+    taskDedupWindowMs: coerceNumber.default(60000),
     memoryContentMaxLength: coerceNumber.default(500),
     memoryFlushSoftThreshold: coerceNumber.default(25),
     memoryFlushCooldownMinutes: coerceNumber.default(30),

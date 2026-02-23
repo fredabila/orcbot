@@ -19,7 +19,7 @@ export interface PipelineContext {
 
 class LastMessageCache {
     private cache: Map<string, string[]> = new Map();
-    constructor(private windowSize: number) { }
+    constructor(private windowSize: number, private config: ConfigManager) { }
 
     private normalize(message: string) {
         return message.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -73,11 +73,12 @@ class LastMessageCache {
         const fingerprint = this.getSemanticFingerprint(message);
         if (fingerprint.length < 20) return false; // Too short to compare meaningfully
         
+        const threshold = this.config.get('messageSimilarityThreshold') || 0.7;
         const history = this.cache.get(channelKey) || [];
         for (const prev of history.slice(-5)) { // Check last 5 messages
             const prevFingerprint = this.getSemanticFingerprint(prev);
             // Check for high similarity (common substring)
-            if (this.stringSimilarity(fingerprint, prevFingerprint) > 0.7) {
+            if (this.stringSimilarity(fingerprint, prevFingerprint) > threshold) {
                 return true;
             }
         }
@@ -118,7 +119,7 @@ export class DecisionPipeline {
 
     constructor(private config: ConfigManager) {
         const dedupWindow = this.config.get('messageDedupWindow') || 10;
-        this.messageCache = new LastMessageCache(dedupWindow);
+        this.messageCache = new LastMessageCache(dedupWindow, this.config);
     }
 
     private isShortReassurance(message: string): boolean {
@@ -406,6 +407,8 @@ export class DecisionPipeline {
         const hasAnyFileSend = uniqueTools.some(t => (t.name || '').toLowerCase().trim() === 'send_file');
         const suppressFileOnlyByIntent = ctx.fileIntent === 'not_requested' && hasAnyFileSend && !hasAnyTextSend;
 
+        const maxToolLoops = this.config.get('maxToolLoops') || 3;
+
         for (const tool of uniqueTools) {
             const toolName = (tool.name || '').toLowerCase().trim();
             if (toolName === 'send_file' && suppressFileOnlyByIntent) {
@@ -422,7 +425,7 @@ export class DecisionPipeline {
 
             if (toolName === 'web_search') {
                 const q = (tool.metadata?.query || tool.metadata?.q || tool.metadata?.text || '').toString().trim().toLowerCase();
-                if (q && (searchCounts.get(q) || 0) >= 2) {
+                if (q && (searchCounts.get(q) || 0) >= (maxToolLoops - 1)) {
                     dropped.push(`search-loop:${tool.name}`);
                     notes.push('Suppressed web_search: repeated query already attempted multiple times in this action');
                     continue;
@@ -432,7 +435,7 @@ export class DecisionPipeline {
             if (toolName === 'browser_navigate') {
                 const rawUrl = (tool.metadata?.url || tool.metadata?.link || tool.metadata?.site || '').toString().trim().toLowerCase();
                 const normalizedUrl = rawUrl ? rawUrl.replace(/^https?:\/\//, '').replace(/\/$/, '') : '';
-                if (normalizedUrl && (browserNavigateCounts.get(normalizedUrl) || 0) >= 2) {
+                if (normalizedUrl && (browserNavigateCounts.get(normalizedUrl) || 0) >= (maxToolLoops - 1)) {
                     dropped.push(`browser-nav-loop:${tool.name}`);
                     notes.push(`Suppressed browser_navigate: URL already visited multiple times in this action (${normalizedUrl})`);
                     continue;
@@ -448,7 +451,7 @@ export class DecisionPipeline {
             }
 
             if ((toolName === 'browser_examine_page' || toolName === 'browser_screenshot' || toolName === 'browser_vision')
-                && (browserToolCounts.get(toolName) || 0) >= 3) {
+                && (browserToolCounts.get(toolName) || 0) >= maxToolLoops) {
                 dropped.push(`browser-inspect-loop:${tool.name}`);
                 notes.push(`Suppressed ${tool.name}: repeated browser inspection without progress`);
                 continue;
@@ -458,7 +461,7 @@ export class DecisionPipeline {
             const orchestrationLoopTools = ['distribute_tasks', 'orchestrator_status', 'list_agents', 'get_agent_messages'];
             if (orchestrationLoopTools.includes(toolName)) {
                 const callCount = orchestrationCallCounts.get(toolName) || 0;
-                if (callCount >= 2) {
+                if (callCount >= (maxToolLoops - 1)) {
                     dropped.push(`orch-loop:${tool.name}`);
                     notes.push(`Suppressed ${tool.name}: called ${callCount} times already - likely loop`);
                     continue;

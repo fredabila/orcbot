@@ -138,7 +138,7 @@ export class Agent {
     private processedMessages: Set<string> = new Set();
     private processedMessagesMaxSize: number = 1000;
     private recentTaskFingerprints: Map<string, number> = new Map();
-    private readonly recentTaskDedupWindowMs: number = 60_000;
+    private recentTaskDedupWindowMs: number = 60_000;
 
     private readonly TOOL_CHANNEL_MAP: Record<string, 'telegram' | 'whatsapp' | 'discord' | 'slack' | 'email' | 'gateway-chat'> = {
         send_telegram: 'telegram',
@@ -185,6 +185,7 @@ export class Agent {
         );
 
         this.tforce = new TForceSystem(this.config.get('tforceMaxIncidentsPerAction') || 30);
+        this.recentTaskDedupWindowMs = this.config.get('taskDedupWindowMs') || 60_000;
 
         // Configure memory limits from config
         this.memory.setLimits({
@@ -10714,8 +10715,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
             const MAX_MESSAGES = limits.messages;
             const isResearchTask = taskComplexity === 'complex';
             const MAX_NO_TOOLS_RETRIES = 3; // Max retries when LLM returns no tools but goals_met=false
-            const MAX_SKILL_REPEATS = 5; // Max times any single skill can be called in one action
-            const MAX_RESEARCH_SKILL_REPEATS = 15; // Higher ceiling for research tools (web_search, browser_*, etc.)
+            const MAX_SKILL_REPEATS = this.config.get('maxToolRepeats') || 5; 
+            const MAX_RESEARCH_SKILL_REPEATS = this.config.get('maxResearchToolRepeats') || 15;
             const MAX_CONSECUTIVE_FAILURES = 3; // Max consecutive failures of same skill before aborting
             let currentStep = 0;
             let messagesSent = 0;
