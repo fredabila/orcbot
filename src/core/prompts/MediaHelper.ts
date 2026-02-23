@@ -12,16 +12,17 @@ export class MediaHelper implements PromptHelper {
     readonly priority = 50;
     readonly alwaysActive = false;
 
-    private static readonly MEDIA_SIGNALS = [
-        'voice', 'audio', 'transcri', 'speech', 'listen', 'record',
-        'image', 'photo', 'picture', 'screenshot', 'visual', 'camera',
-        'document', 'pdf', 'file', 'attachment', 'upload', 'download',
-        'video', 'media', 'analyze', 'examine', 'ocr', 'read image',
-        'send voice', 'voice note', 'tts', 'text to speech',
-        '[voice:', 'file stored at:', 'sticker', 'gif',
-        'generate image', 'create image', 'draw', 'illustration',
-        'make an image', 'make a picture', 'make me an image', 'make me a picture',
-        'generate a', 'design a', 'render', 'art of', 'artwork'
+    private static readonly MEDIA_SIGNALS: RegExp[] = [
+        /\bvoice\b/i, /\baudio\b/i, /\btranscri\b/i, /\bspeech\b/i, /\blisten\b/i,
+        /\brecord\b/i, /\bimage\b/i, /\bphoto\b/i, /\bpicture\b/i, /\bscreenshot\b/i,
+        /\bvisual\b/i, /\bcamera\b/i, /\bdocument\b/i, /\bpdf\b/i, /\bfile\b/i,
+        /\battachment\b/i, /\bupload\b/i, /\bdownload\b/i, /\bvideo\b/i, /\bmedia\b/i,
+        /\banalyze\b/i, /\bexamine\b/i, /\bocr\b/i, /\bread image\b/i, /\bsend voice\b/i,
+        /\bvoice note\b/i, /\btts\b/i, /\btext to speech\b/i, /\[voice:/i,
+        /\bfile stored at:/i, /\bsticker\b/i, /\bgif\b/i, /\bgenerate image\b/i,
+        /\bcreate image\b/i, /\bdraw\b/i, /\billustration\b/i, /\bmake an image\b/i,
+        /\bmake a picture\b/i, /\bmake me an image\b/i, /\bmake me a picture\b/i,
+        /\bgenerate a\b/i, /\bdesign a\b/i, /\brender\b/i, /\bart of\b/i, /\bartwork\b/i
     ];
 
     shouldActivate(ctx: PromptHelperContext): boolean {
@@ -30,7 +31,7 @@ export class MediaHelper implements PromptHelper {
         if (task.includes('file stored at:') || task.includes('[voice:')) return true;
         // File extension pattern: .pdf, .jpg, .mp3, .docx, etc.
         if (/\.(pdf|doc|docx|xls|xlsx|csv|jpg|jpeg|png|gif|svg|mp3|mp4|wav|zip|tar)\b/.test(task)) return true;
-        return MediaHelper.MEDIA_SIGNALS.some(kw => task.includes(kw));
+        return MediaHelper.MEDIA_SIGNALS.some(rx => rx.test(task));
     }
 
     getPrompt(ctx: PromptHelperContext): string {

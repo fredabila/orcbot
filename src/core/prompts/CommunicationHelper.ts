@@ -13,12 +13,13 @@ export class CommunicationHelper implements PromptHelper {
     readonly alwaysActive = false;
 
     // Keywords that signal this task involves communication/interaction
-    private static readonly COMMUNICATION_SIGNALS = [
-        'send', 'message', 'reply', 'respond', 'tell', 'say', 'ask',
-        'hello', 'hi', 'hey', 'good morning', 'good evening', 'how are you',
-        'text', 'chat', 'dm', 'notify', 'inform', 'update them',
-        'write to', 'post', 'forward', 'share with',
-        'react', 'reaction', 'emoji', 'thumbs up', 'like', 'love'
+    private static readonly COMMUNICATION_SIGNALS: RegExp[] = [
+        /\bsend\b/i, /\bmessage\b/i, /\breply\b/i, /\brespond\b/i, /\btell\b/i, /\bsay\b/i,
+        /\bask\b/i, /\bhello\b/i, /\bhi\b/i, /\bhey\b/i, /\bgood morning\b/i,
+        /\bgood evening\b/i, /\bhow are you\b/i, /\btext\b/i, /\bchat\b/i, /\bdm\b/i,
+        /\bnotify\b/i, /\binform\b/i, /\bupdate them\b/i, /\bwrite to\b/i, /\bpost\b/i,
+        /\bforward\b/i, /\bshare with\b/i, /\breact\b/i, /\breaction\b/i, /\bemoji\b/i,
+        /\bthumbs up\b/i, /\blike\b/i, /\blove\b/i
     ];
 
     shouldActivate(ctx: PromptHelperContext): boolean {
@@ -28,7 +29,7 @@ export class CommunicationHelper implements PromptHelper {
             ctx.metadata.source === 'discord' || ctx.metadata.source === 'gateway-chat') {
             return true;
         }
-        return CommunicationHelper.COMMUNICATION_SIGNALS.some(kw => task.includes(kw));
+        return CommunicationHelper.COMMUNICATION_SIGNALS.some(rx => rx.test(task));
     }
 
     getPrompt(ctx: PromptHelperContext): string {

@@ -14,26 +14,26 @@ export class TaskChecklistHelper implements PromptHelper {
     readonly priority = 22; // After core/tooling (0-10), before research (25)
     readonly alwaysActive = false;
 
-    private static readonly CHECKLIST_SIGNALS = [
-        'step by step', 'steps', 'checklist', 'todo', 'to-do', 'plan',
-        'break down', 'breakdown', 'multi-step', 'multistep', 'phase',
-        'track progress', 'track the', 'keep track', 'progress',
-        'walk me through', 'one step at a time',
-        'multiple', 'several', 'all of', 'each of', 'one by one',
-        'first', 'then', 'after that', 'finally', 'next',
-        'set up', 'configure', 'install and', 'build and', 'create and',
-        'research and', 'find and', 'download and', 'compile',
-        'migrate', 'refactor', 'upgrade', 'convert', 'transform',
-        'audit', 'review all', 'check all', 'scan all', 'update all',
-        'comprehensive', 'thorough', 'complete', 'full',
-        'project', 'workflow', 'pipeline', 'process'
+    private static readonly CHECKLIST_SIGNALS: RegExp[] = [
+        /\bstep by step\b/i, /\bsteps\b/i, /\bchecklist\b/i, /\btodo\b/i, /\bto-do\b/i,
+        /\bplan\b/i, /\bbreak down\b/i, /\bbreakdown\b/i, /\bmulti-step\b/i, /\bmultistep\b/i,
+        /\bphase\b/i, /\btrack progress\b/i, /\btrack the\b/i, /\bkeep track\b/i,
+        /\bprogress\b/i, /\bwalk me through\b/i, /\bone step at a time\b/i, /\bmultiple\b/i,
+        /\bseveral\b/i, /\ball of\b/i, /\beach of\b/i, /\bone by one\b/i, /\bfirst\b/i,
+        /\bthen\b/i, /\bafter that\b/i, /\bfinally\b/i, /\bnext\b/i, /\bset up\b/i,
+        /\bconfigure\b/i, /\binstall and\b/i, /\bbuild and\b/i, /\bcreate and\b/i,
+        /\bresearch and\b/i, /\bfind and\b/i, /\bdownload and\b/i, /\bcompile\b/i,
+        /\bmigrate\b/i, /\brefactor\b/i, /\bupgrade\b/i, /\bconvert\b/i, /\btransform\b/i,
+        /\baudit\b/i, /\breview all\b/i, /\bcheck all\b/i, /\bscan all\b/i, /\bupdate all\b/i,
+        /\bcomprehensive\b/i, /\bthorough\b/i, /\bcomplete\b/i, /\bfull\b/i, /\bproject\b/i,
+        /\bworkflow\b/i, /\bpipeline\b/i, /\bprocess\b/i
     ];
 
     shouldActivate(ctx: PromptHelperContext): boolean {
         const task = ctx.taskDescription.toLowerCase();
 
         // Activate for multi-step tasks detected by keywords
-        if (TaskChecklistHelper.CHECKLIST_SIGNALS.some(kw => task.includes(kw))) return true;
+        if (TaskChecklistHelper.CHECKLIST_SIGNALS.some(rx => rx.test(task))) return true;
 
         // Activate when already past step 2 (implies multi-step work)
         if ((ctx.metadata.currentStep || 1) > 2) return true;

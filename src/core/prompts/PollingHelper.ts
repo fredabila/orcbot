@@ -14,23 +14,23 @@ export class PollingHelper implements PromptHelper {
     readonly priority = 35; // Between development (30) and scheduling (40)
     readonly alwaysActive = false;
 
-    private static readonly POLLING_SIGNALS = [
-        'wait for', 'wait until', 'waiting', 'poll', 'polling',
-        'monitor', 'monitoring', 'watch for', 'watching',
-        'check if', 'check when', 'check whether', 'keep checking',
-        'notify me when', 'alert me when', 'tell me when', 'let me know when',
-        'is it ready', 'is it done', 'has it finished', 'did it complete',
-        'status of', 'status update', 'progress of',
-        'until', 'when it', 'once it', 'as soon as',
-        'deploy', 'deployment', 'build status', 'ci', 'pipeline',
-        'download complete', 'file ready', 'process finished',
-        'available', 'becomes available', 'comes back', 'goes live',
-        'retry', 'try again', 'attempt again', 'keep trying'
+    private static readonly POLLING_SIGNALS: RegExp[] = [
+        /\bwait for\b/i, /\bwait until\b/i, /\bwaiting\b/i, /\bpoll\b/i, /\bpolling\b/i,
+        /\bmonitor\b/i, /\bmonitoring\b/i, /\bwatch for\b/i, /\bwatching\b/i, /\bcheck if\b/i,
+        /\bcheck when\b/i, /\bcheck whether\b/i, /\bkeep checking\b/i, /\bnotify me when\b/i,
+        /\balert me when\b/i, /\btell me when\b/i, /\blet me know when\b/i,
+        /\bis it ready\b/i, /\bis it done\b/i, /\bhas it finished\b/i,
+        /\bdid it complete\b/i, /\bstatus of\b/i, /\bstatus update\b/i, /\bprogress of\b/i,
+        /\buntil\b/i, /\bwhen it\b/i, /\bonce it\b/i, /\bas soon as\b/i, /\bdeploy\b/i,
+        /\bdeployment\b/i, /\bbuild status\b/i, /\bci\b/i, /\bpipeline\b/i,
+        /\bdownload complete\b/i, /\bfile ready\b/i, /\bprocess finished\b/i,
+        /\bavailable\b/i, /\bbecomes available\b/i, /\bcomes back\b/i, /\bgoes live\b/i,
+        /\bretry\b/i, /\btry again\b/i, /\battempt again\b/i, /\bkeep trying\b/i
     ];
 
     shouldActivate(ctx: PromptHelperContext): boolean {
         const task = ctx.taskDescription.toLowerCase();
-        if (PollingHelper.POLLING_SIGNALS.some(kw => task.includes(kw))) return true;
+        if (PollingHelper.POLLING_SIGNALS.some(rx => rx.test(task))) return true;
 
         // Activate when skills used suggest monitoring needs
         const usedSkills = ctx.skillsUsedInAction || [];

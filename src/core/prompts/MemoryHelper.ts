@@ -11,16 +11,17 @@ export class MemoryHelper implements PromptHelper {
     readonly priority = 20;
     readonly alwaysActive = false;
 
-    private static readonly MEMORY_SIGNALS = [
-        'remember', 'recall', 'look up', 'find in history', 'past', 'previous',
-        'earlier', 'history', 'log', 'journal', 'learning', 'fact', 'preference',
-        'have we', 'did i', 'did you', 'what was', 'where was', 'when was',
-        'context', 'background', 'relationship', 'person', 'contact', 'profile'
+    private static readonly MEMORY_SIGNALS: RegExp[] = [
+        /\bremember\b/i, /\brecall\b/i, /\blook up\b/i, /\bfind in history\b/i, /\bpast\b/i,
+        /\bprevious\b/i, /\bearlier\b/i, /\bhistory\b/i, /\blog\b/i, /\bjournal\b/i,
+        /\blearning\b/i, /\bfact\b/i, /\bpreference\b/i, /\bhave we\b/i, /\bdid i\b/i,
+        /\bdid you\b/i, /\bwhat was\b/i, /\bwhere was\b/i, /\bwhen was\b/i, /\bcontext\b/i,
+        /\bbackground\b/i, /\brelationship\b/i, /\bperson\b/i, /\bcontact\b/i, /\bprofile\b/i
     ];
 
     shouldActivate(ctx: PromptHelperContext): boolean {
         const task = ctx.taskDescription.toLowerCase();
-        return MemoryHelper.MEMORY_SIGNALS.some(kw => task.includes(kw));
+        return MemoryHelper.MEMORY_SIGNALS.some(rx => rx.test(task));
     }
 
     getPrompt(ctx: PromptHelperContext): string {

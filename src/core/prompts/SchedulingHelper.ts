@@ -12,21 +12,22 @@ export class SchedulingHelper implements PromptHelper {
     readonly priority = 40;
     readonly alwaysActive = false;
 
-    private static readonly SCHEDULING_SIGNALS = [
-        'remind', 'schedule', 'later', 'tomorrow', 'tonight', 'morning',
-        'evening', 'next week', 'in an hour', 'in minutes', 'at noon',
-        'every day', 'every morning', 'every week', 'recurring', 'repeat',
-        'cron', 'daily', 'weekly', 'monthly', 'periodic', 'regularly',
-        'timer', 'alarm', 'deadline', 'by end of day', 'before',
-        'follow up', 'check back', 'retry later', 'try again',
-        'rate limit', 'cooldown', 'wait', 'postpone', 'defer',
-        'monitor', 'keep checking', 'watch for', 'alert me when',
-        'send at', 'post at', 'do this at', 'wake me'
+    private static readonly SCHEDULING_SIGNALS: RegExp[] = [
+        /\bremind\b/i, /\bschedule\b/i, /\blater\b/i, /\btomorrow\b/i, /\btonight\b/i,
+        /\bmorning\b/i, /\bevening\b/i, /\bnext week\b/i, /\bin an hour\b/i,
+        /\bin minutes\b/i, /\bat noon\b/i, /\bevery day\b/i, /\bevery morning\b/i,
+        /\bevery week\b/i, /\brecurring\b/i, /\brepeat\b/i, /\bcron\b/i, /\bdaily\b/i,
+        /\bweekly\b/i, /\bmonthly\b/i, /\bperiodic\b/i, /\bregularly\b/i, /\btimer\b/i,
+        /\balarm\b/i, /\bdeadline\b/i, /\bby end of day\b/i, /\bbefore\b/i, /\bfollow up\b/i,
+        /\bcheck back\b/i, /\bretry later\b/i, /\btry again\b/i, /\brate limit\b/i,
+        /\bcooldown\b/i, /\bwait\b/i, /\bpostpone\b/i, /\bdefer\b/i, /\bmonitor\b/i,
+        /\bkeep checking\b/i, /\bwatch for\b/i, /\balert me when\b/i, /\bsend at\b/i,
+        /\bpost at\b/i, /\bdo this at\b/i, /\bwake me\b/i
     ];
 
     shouldActivate(ctx: PromptHelperContext): boolean {
         const task = ctx.taskDescription.toLowerCase();
-        return SchedulingHelper.SCHEDULING_SIGNALS.some(kw => task.includes(kw));
+        return SchedulingHelper.SCHEDULING_SIGNALS.some(rx => rx.test(task));
     }
 
     getRelatedHelpers(ctx: PromptHelperContext): string[] {

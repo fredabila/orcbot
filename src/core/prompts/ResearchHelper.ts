@@ -12,21 +12,23 @@ export class ResearchHelper implements PromptHelper {
     readonly priority = 25;
     readonly alwaysActive = false;
 
-    private static readonly RESEARCH_SIGNALS = [
-        'research', 'deep dive', 'investigate', 'find out', 'look up', 'search for',
-        'compile', 'gather', 'aggregate', 'analyze', 'explore', 'discover',
-        'browse', 'scrape', 'crawl', 'download', 'collect', 'summarize',
-        'report on', 'write about', 'create a report', 'build a', 'develop a',
-        'set up', 'configure', 'install', 'deploy', 'with pictures', 'with images',
-        'compare', 'review', 'audit', 'scan', 'check all', 'find all',
-        'comprehensive', 'detailed', 'thorough', 'in-depth', 'full analysis'
+    private static readonly RESEARCH_SIGNALS: RegExp[] = [
+        /\bresearch\b/i, /\bdeep dive\b/i, /\binvestigate\b/i, /\bfind out\b/i,
+        /\blook up\b/i, /\bsearch for\b/i, /\bcompile\b/i, /\bgather\b/i, /\baggregate\b/i,
+        /\banalyze\b/i, /\bexplore\b/i, /\bdiscover\b/i, /\bbrowse\b/i, /\bscrape\b/i,
+        /\bcrawl\b/i, /\bdownload\b/i, /\bcollect\b/i, /\bsummarize\b/i, /\breport on\b/i,
+        /\bwrite about\b/i, /\bcreate a report\b/i, /\bbuild a\b/i, /\bdevelop a\b/i,
+        /\bset up\b/i, /\bconfigure\b/i, /\binstall\b/i, /\bdeploy\b/i, /\bwith pictures\b/i,
+        /\bwith images\b/i, /\bcompare\b/i, /\breview\b/i, /\baudit\b/i, /\bscan\b/i,
+        /\bcheck all\b/i, /\bfind all\b/i, /\bcomprehensive\b/i, /\bdetailed\b/i,
+        /\bthorough\b/i, /\bin-depth\b/i, /\bfull analysis\b/i
     ];
 
     shouldActivate(ctx: PromptHelperContext): boolean {
         const task = ctx.taskDescription.toLowerCase();
         // Activate for research tasks or multi-step tasks (step > 2)
         if ((ctx.metadata.currentStep || 1) > 2) return true;
-        return ResearchHelper.RESEARCH_SIGNALS.some(kw => task.includes(kw));
+        return ResearchHelper.RESEARCH_SIGNALS.some(rx => rx.test(task));
     }
 
     getRelatedHelpers(ctx: PromptHelperContext): string[] {

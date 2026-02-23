@@ -16,20 +16,22 @@ export class DevelopmentHelper implements PromptHelper {
     readonly alwaysActive = false;
 
     // Direct keyword signals — fast path
-    private static readonly DEV_KEYWORDS = [
-        'build', 'create a', 'make a', 'develop', 'code', 'program', 'implement',
-        'website', 'web app', 'webapp', 'web page', 'webpage', 'landing page',
-        'app', 'application', 'dashboard', 'portfolio', 'blog', 'platform',
-        'api', 'backend', 'frontend', 'server', 'database', 'script',
-        'bot', 'tool', 'cli', 'library', 'package', 'plugin',
-        'html', 'css', 'javascript', 'typescript', 'python', 'react', 'vue',
-        'node', 'express', 'next', 'vite', 'tailwind', 'bootstrap',
-        'project', 'scaffold', 'boilerplate', 'template', 'starter',
-        'deploy', 'host', 'set up', 'setup', 'configure a',
-        'fix the code', 'refactor', 'optimize', 'debug', 'test',
-        'feature', 'component', 'module', 'function', 'class',
-        'login page', 'signup', 'form', 'gallery', 'e-commerce', 'ecommerce',
-        'todo', 'calculator', 'game', 'chat app', 'clone'
+    private static readonly DEV_KEYWORDS: RegExp[] = [
+        /\bbuild\b/i, /\bcreate a\b/i, /\bmake a\b/i, /\bdevelop\b/i, /\bcode\b/i,
+        /\bprogram\b/i, /\bimplement\b/i, /\bwebsite\b/i, /\bweb app\b/i, /\bwebapp\b/i,
+        /\bweb page\b/i, /\bwebpage\b/i, /\blanding page\b/i, /\bapp\b/i, /\bapplication\b/i,
+        /\bdashboard\b/i, /\bportfolio\b/i, /\bblog\b/i, /\bplatform\b/i, /\bapi\b/i,
+        /\bbackend\b/i, /\bfrontend\b/i, /\bserver\b/i, /\bdatabase\b/i, /\bscript\b/i,
+        /\bbot\b/i, /\btool\b/i, /\bcli\b/i, /\blibrary\b/i, /\bpackage\b/i, /\bplugin\b/i,
+        /\bhtml\b/i, /\bcss\b/i, /\bjavascript\b/i, /\btypescript\b/i, /\bpython\b/i,
+        /\breact\b/i, /\bvue\b/i, /\bnode\b/i, /\bexpress\b/i, /\bnext\b/i, /\bvite\b/i,
+        /\btailwind\b/i, /\bbootstrap\b/i, /\bproject\b/i, /\bscaffold\b/i,
+        /\bboilerplate\b/i, /\btemplate\b/i, /\bstarter\b/i, /\bdeploy\b/i, /\bhost\b/i,
+        /\bset up\b/i, /\bsetup\b/i, /\bconfigure a\b/i, /\bfix the code\b/i, /\brefactor\b/i,
+        /\boptimize\b/i, /\bdebug\b/i, /\btest\b/i, /\bfeature\b/i, /\bcomponent\b/i,
+        /\bmodule\b/i, /\bfunction\b/i, /\bclass\b/i, /\blogin page\b/i, /\bsignup\b/i,
+        /\bform\b/i, /\bgallery\b/i, /\be-commerce\b/i, /\becommerce\b/i, /\btodo\b/i,
+        /\bcalculator\b/i, /\bgame\b/i, /\bchat app\b/i, /\bclone\b/i
     ];
 
     // Regex patterns that catch creative/indirect phrasings — fallback path
@@ -55,7 +57,7 @@ export class DevelopmentHelper implements PromptHelper {
     shouldActivate(ctx: PromptHelperContext): boolean {
         const task = ctx.taskDescription.toLowerCase();
         // Fast path: direct keyword match
-        if (DevelopmentHelper.DEV_KEYWORDS.some(kw => task.includes(kw))) return true;
+        if (DevelopmentHelper.DEV_KEYWORDS.some(rx => rx.test(task))) return true;
         // Slow path: regex pattern matching for creative phrasings
         if (DevelopmentHelper.DEV_PATTERNS.some(rx => rx.test(ctx.taskDescription))) return true;
         return false;

@@ -12,19 +12,20 @@ export class BrowserHelper implements PromptHelper {
     readonly priority = 30;
     readonly alwaysActive = false;
 
-    private static readonly BROWSER_SIGNALS = [
-        'browse', 'navigate', 'website', 'web page', 'webpage', 'url',
-        'click', 'login', 'sign in', 'sign up', 'fill form', 'submit',
-        'open site', 'go to', 'visit', 'scrape', 'crawl', 'extract',
-        'screenshot', 'download from', 'web search', 'search for',
-        'google', 'look up', 'find online', 'internet', 'http',
-        'browser', 'surf', 'account', 'register', 'create account'
+    private static readonly BROWSER_SIGNALS: RegExp[] = [
+        /\bbrowse\b/i, /\bnavigate\b/i, /\bwebsite\b/i, /\bweb page\b/i, /\bwebpage\b/i,
+        /\burl\b/i, /\bclick\b/i, /\blogin\b/i, /\bsign in\b/i, /\bsign up\b/i,
+        /\bfill form\b/i, /\bsubmit\b/i, /\bopen site\b/i, /\bgo to\b/i, /\bvisit\b/i,
+        /\bscrape\b/i, /\bcrawl\b/i, /\bextract\b/i, /\bscreenshot\b/i, /\bdownload from\b/i,
+        /\bweb search\b/i, /\bsearch for\b/i, /\bgoogle\b/i, /\blook up\b/i,
+        /\bfind online\b/i, /\binternet\b/i, /\bhttp\b/i, /\bbrowser\b/i, /\bsurf\b/i,
+        /\baccount\b/i, /\bregister\b/i, /\bcreate account\b/i
     ];
 
     shouldActivate(ctx: PromptHelperContext): boolean {
         const task = ctx.taskDescription.toLowerCase();
         // Fast path: keyword match
-        if (BrowserHelper.BROWSER_SIGNALS.some(kw => task.includes(kw))) return true;
+        if (BrowserHelper.BROWSER_SIGNALS.some(rx => rx.test(task))) return true;
         // URL detection: if the task contains a URL, browser guidance is relevant
         if (/https?:\/\/\S+|www\.\S+|\w+\.(com|org|net|io|dev|app|co)\b/.test(task)) return true;
         // Activate if browser or computer-use tools have been used in this action

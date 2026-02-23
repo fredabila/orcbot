@@ -8323,6 +8323,15 @@ REFLECTION: <1-2 sentences>`;
             }
         } catch { /* ignore */ }
 
+        // ── 5b. Custom Heartbeat Instructions ──
+        const heartbeatMdPath = path.join(path.dirname(this.config.get('actionQueuePath')), 'heartbeat.md');
+        let heartbeatMdContent = '';
+        try {
+            if (fs.existsSync(heartbeatMdPath)) {
+                heartbeatMdContent = fs.readFileSync(heartbeatMdPath, 'utf-8');
+            }
+        } catch { /* ignore */ }
+
         // ── 6. Journal & Learning tails (match what DecisionEngine sees) ──
         let journalTail = '';
         let learningTail = '';
@@ -8428,6 +8437,7 @@ ACTIVE RECURRING SCHEDULES:
 ${activeSchedules}
 ${contactSummary ? `\nKNOWN CONTACTS:\n${contactSummary}` : ''}
 ${userContext ? `\nUSER PROFILE:\n${userContext.slice(0, 300)}` : ''}
+${heartbeatMdContent ? `\nCUSTOM HEARTBEAT INSTRUCTIONS (from heartbeat.md):\n${heartbeatMdContent}` : ''}
 ${journalTail ? `\nJOURNAL (recent):\n${journalTail.slice(0, 400)}` : ''}
 ${learningTail ? `\nKNOWLEDGE BASE (recent):\n${learningTail.slice(0, 400)}` : ''}
 ═══════════════════════════════════════════
@@ -8482,6 +8492,8 @@ DECISION FRAMEWORK
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 **Update heartbeat state:** After completing any proactive check (email/calendar/social/weather/news), use write_file on \`${heartbeatStatePath}\` with updated timestamps so future heartbeats skip redundant rechecks. Example JSON: {"email": ${now}, "news": ${now}}
+
+**Modify your own heartbeat behavior:** You can manage and update your own proactive behavior by using write_file to edit \`${heartbeatMdPath}\`. Whatever you write there will be included as custom instructions in all future heartbeats. Use this to maintain your own long-term proactive agenda, persistent tasks, or custom routines.
 
 **Priority Order:**
 1. REACTIVE items from the last few hours (unfinished work, failed retries, pending follow-ups)

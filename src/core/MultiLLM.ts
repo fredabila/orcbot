@@ -889,20 +889,21 @@ export class MultiLLM {
         return { encoded: working.toString('base64'), mime: workingMime };
     }
     private async extractPdfText(buffer: Buffer): Promise<string> {
-        // pdfjs-dist is ESM; use dynamic import
-        const pdfjs = await import('pdfjs-dist');
-        const loadingTask = pdfjs.getDocument({ data: buffer });
-        const doc = await loadingTask.promise;
-        const maxPages = Math.min(doc.numPages, 20);
-        let text = '';
-        for (let i = 1; i <= maxPages; i++) {
-            const page = await doc.getPage(i);
-            const content = await page.getTextContent();
-            const strings = content.items.map((it: any) => it.str).join(' ');
-            text += strings + '\n';
-            if (text.length > 20000) break; // guardrail
+        try {
+            // Use pdf-parse for more robust, native node.js parsing
+            // Dynamic import to handle both ESM/CJS interop gracefully
+            const mod: any = await import('pdf-parse');
+            const pdfParse = mod.default || mod;
+            const data = await pdfParse(buffer, { max: 20 }); // limit to 20 pages
+            let text = data.text || '';
+            if (text.length > 20000) {
+                text = text.substring(0, 20000);
+            }
+            return text;
+        } catch (e) {
+            logger.warn(`PDF parse failed: ${e}`);
+            return '';
         }
-        return text;
     }
     /** Build PiAIAdapterOptions from current state. */
     private getPiAIOptions(modelOverride?: string, providerOverride?: LLMProvider): PiAIAdapterOptions {
