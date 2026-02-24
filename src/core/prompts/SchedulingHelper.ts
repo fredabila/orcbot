@@ -36,17 +36,29 @@ export class SchedulingHelper implements PromptHelper {
     }
 
     getPrompt(ctx: PromptHelperContext): string {
-        return `SMART SCHEDULING:
-You have two scheduling skills — use them proactively:
-- \`schedule_task(time_or_cron, task_description)\` — one-off future task. Supports cron syntax OR relative time like "in 15 minutes", "in 2 hours", "in 1 day".
-- \`heartbeat_schedule(schedule, task_description, priority?)\` — recurring task. Use for "every morning", "every 2 hours", "daily", etc.
+        return `PROACTIVE SCHEDULING & HEARTBEATS:
+You have advanced scheduling skills — use them to "own" your work autonomously. 
+- \`schedule_task(time_or_cron, task_description)\` — one-off future task.
+- \`heartbeat_schedule(schedule, task_description, priority?)\` — recurring task.
+- \`heartbeat_list()\` / \`heartbeat_remove(id)\` — manage recurring workflows.
 
-When to schedule:
-1. **User explicitly asks**: "Remind me to X tomorrow", "Post this at 3pm", "Check for updates every morning", "Do this in 2 hours", "Send me a summary every Friday". ALWAYS honor these with the appropriate scheduling skill.
-2. **Temporal blockers**: Rate limits ("wait 11 minutes"), cooldowns, "service unavailable — try later", API quota resets. DO NOT just inform the user and stop. Schedule the retry automatically, THEN tell the user you've scheduled it.
-3. **Smart deferral**: If a task logically depends on a future condition (e.g., "check if my order shipped" when it was just placed, "see if they responded" right after sending), suggest scheduling a follow-up check rather than making the user remember to ask again.
-4. **Recurring patterns**: If the user asks you to do something that implies repetition ("keep me updated on X", "monitor this", "let me know when Y changes"), use \`heartbeat_schedule\` to set up periodic checks.
+CORE PRINCIPLES:
+1. **Promise = Action**: If you say you "will check" something later, you MUST use \`schedule_task\` now. Never leave the user hanging on a promise without a system-tracked follow-up.
+2. **Autonomous Monitoring**: If the user asks for ongoing updates ("keep me posted on X", "alert me if Y changes"), do NOT wait for them to ask again. Setup a \`heartbeat_schedule\` (e.g., "every 2 hours", "daily at 9am") to check autonomously.
+3. **Proactive Summaries**: If you've done a lot of work today, suggest a \`heartbeat_schedule\` to provide a daily summary of your progress at a specific time.
+4. **Temporal Blockers**: If hit by rate limits or "try again in X minutes", schedule the retry automatically. DO NOT just report the failure.
 
-After scheduling, ALWAYS confirm to the user what you scheduled and when it will run. Be specific: "I've scheduled a retry for 12 minutes from now" not "I'll try again later".`;
+When to use Heartbeats (Recurring):
+- Daily morning briefings / Evening summaries.
+- Hourly price/news/stock/crypto monitoring.
+- Periodic health checks on servers/services.
+- "Keep-alive" interactions for long-running research.
+
+When to use Schedule (One-off):
+- Reminders for the user.
+- Retrying a failed task after a cooldown.
+- Following up on a pending response/email.
+
+After scheduling, ALWAYS confirm the ID and time to the user: "I've scheduled a recurring check for this every morning (ID: hb_abc123)."`;
     }
 }

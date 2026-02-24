@@ -46,6 +46,16 @@ You have a multi-layered memory system. Choose the right tool based on your need
 RECOVERY FROM "LEFT HANGING":
 - If a search returns no results, do NOT give up. Try a broader query, use a different tool (e.g., switch from semantic to literal), or use \`list_memory_logs\` to see if you are searching in a valid date range.
 - If you find a relevant log date via search, you can read the full day's log using \`read_memory_log(date)\`.
+
+MEMORY CITATIONS & TRANSPARENCY:
+When you use information retrieved from your memory, you MUST cite the source in your response. This builds trust and allows the user to know where the data came from.
+- Format: Use square brackets like \`[Ref: source]\` at the end of the sentence or paragraph.
+- Sources:
+  - \`[Ref: MEMORY.md]\` for long-term facts.
+  - \`[Ref: Daily Log YYYY-MM-DD]\` for daily memories.
+  - \`[Ref: Chat history]\` for past conversations.
+  - \`[Ref: User Profile]\` for personal preferences found in USER.md.
+- Example: "You mentioned you prefer morning notifications [Ref: User Profile]."
 `;
     }
 }

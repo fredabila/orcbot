@@ -19,19 +19,40 @@ export async function memorySearchSkill(args: any, context: any): Promise<string
             return 'Error: No search query provided. Use: memory_search query="your search term"';
         }
 
-        const dataHome = context?.config?.getDataHome?.() || process.env.ORCBOT_DATA_DIR || path.join(os.homedir(), '.orcbot');
-        const dailyMemory = new DailyMemory(dataHome);
+        const memoryManager = context?.agent?.memory;
+        const dataHome = memoryManager?.dataHome || context?.config?.getDataHome?.() || process.env.ORCBOT_DATA_DIR || path.join(os.homedir(), '.orcbot');
+        const dailyMemory = memoryManager?.getDailyMemory() || new DailyMemory(dataHome);
+        
         const results: Array<{
             file: string;
             snippet: string;
             score: number;
+            type: 'semantic' | 'keyword';
         }> = [];
 
+        // 1. Semantic Recall (if vector memory is enabled)
+        if (memoryManager?.vectorMemory?.isEnabled()) {
+            try {
+                const semanticHits = await memoryManager.semanticRecall(query, 5);
+                for (const hit of semanticHits) {
+                    results.push({
+                        file: hit.metadata?.source || 'vector-memory',
+                        snippet: `[Semantic Match] ${hit.content}`,
+                        score: hit.score * 2, // Boost semantic relevance
+                        type: 'semantic'
+                    });
+                }
+            } catch (e) {
+                logger.warn(`Memory search: Semantic recall failed: ${e}`);
+            }
+        }
+
+        // 2. Keyword Search (Precision matching in Markdown files)
         // Search in long-term memory
         const longTerm = dailyMemory.readLongTerm();
         if (longTerm) {
             const matches = findMatches(longTerm, query, 'MEMORY.md');
-            results.push(...matches);
+            results.push(...matches.map(m => ({ ...m, type: 'keyword' as const })));
         }
 
         // Search in recent daily memories (last 7 days)
@@ -40,24 +61,35 @@ export async function memorySearchSkill(args: any, context: any): Promise<string
             const content = dailyMemory.readDailyMemory(fileName.replace('.md', ''));
             if (content) {
                 const matches = findMatches(content, query, `memory/${fileName}`);
-                results.push(...matches);
+                results.push(...matches.map(m => ({ ...m, type: 'keyword' as const })));
             }
         }
 
         // Sort by score (descending)
         results.sort((a, b) => b.score - a.score);
 
-        // Return top 5 results
-        const topResults = results.slice(0, 5);
+        // Deduplicate results with similar snippets
+        const uniqueResults: typeof results = [];
+        const seenSnippets = new Set<string>();
+        for (const r of results) {
+            const normalized = r.snippet.toLowerCase().replace(/\W/g, '').slice(0, 100);
+            if (!seenSnippets.has(normalized)) {
+                seenSnippets.add(normalized);
+                uniqueResults.push(r);
+            }
+        }
+
+        // Return top 8 results
+        const topResults = uniqueResults.slice(0, 8);
         
         if (topResults.length === 0) {
             return `No matches found for query: "${query}"`;
         }
 
         const output = [
-            `Found ${topResults.length} result(s) for query: "${query}"\n`,
+            `Found ${topResults.length} result(s) for query: "${query}" (Hybrid Search: Semantic + Keyword)\n`,
             ...topResults.map((r, i) => 
-                `${i + 1}. **${r.file}** (score: ${r.score.toFixed(2)})\n${r.snippet}\n`
+                `${i + 1}. **${r.file}** (score: ${r.score.toFixed(2)}, type: ${r.type})\n${r.snippet}\n`
             )
         ].join('\n');
 
@@ -78,8 +110,9 @@ export async function memoryGetSkill(args: any, context: any): Promise<string> {
             return 'Error: No file path provided. Use: memory_get path="MEMORY.md" or path="memory/2024-01-15.md"';
         }
 
-        const dataHome = context?.config?.getDataHome?.() || process.env.ORCBOT_DATA_DIR || path.join(os.homedir(), '.orcbot');
-        const dailyMemory = new DailyMemory(dataHome);
+        const memoryManager = context?.agent?.memory;
+        const dataHome = memoryManager?.dataHome || context?.config?.getDataHome?.() || process.env.ORCBOT_DATA_DIR || path.join(os.homedir(), '.orcbot');
+        const dailyMemory = memoryManager?.getDailyMemory() || new DailyMemory(dataHome);
         
         // Handle different file path formats
         let content: string | null = null;
@@ -128,14 +161,37 @@ export async function memoryWriteSkill(args: any, context: any): Promise<string>
             return 'Error: No content provided. Use: memory_write content="text to remember" type="daily|long-term"';
         }
 
-        const dataHome = context?.config?.getDataHome?.() || process.env.ORCBOT_DATA_DIR || path.join(os.homedir(), '.orcbot');
-        const dailyMemory = new DailyMemory(dataHome);
+        const memoryManager = context?.agent?.memory;
+        const dataHome = memoryManager?.dataHome || context?.config?.getDataHome?.() || process.env.ORCBOT_DATA_DIR || path.join(os.homedir(), '.orcbot');
+        const dailyMemory = memoryManager?.getDailyMemory() || new DailyMemory(dataHome);
 
         if (type === 'long-term' || type === 'longterm') {
             dailyMemory.appendToLongTerm(content, category);
+            
+            // Queue for vector memory as well
+            if (memoryManager) {
+                memoryManager.saveMemory({
+                    id: `manual-long-${Date.now()}`,
+                    type: 'long',
+                    content,
+                    metadata: { category, source: 'memory_write_skill' }
+                });
+            }
+            
             return `✓ Written to long-term memory (MEMORY.md)${category ? ` under section: ${category}` : ''}`;
         } else {
             dailyMemory.appendToDaily(content, category);
+            
+            // Queue for vector memory as well
+            if (memoryManager) {
+                memoryManager.saveMemory({
+                    id: `manual-daily-${Date.now()}`,
+                    type: 'short',
+                    content,
+                    metadata: { category, source: 'memory_write_skill' }
+                });
+            }
+            
             return `✓ Written to today's daily log${category ? ` (category: ${category})` : ''}`;
         }
     } catch (error) {
@@ -149,20 +205,27 @@ export async function memoryWriteSkill(args: any, context: any): Promise<string>
  */
 export async function memoryStatsSkill(args: any, context: any): Promise<string> {
     try {
-        const dataHome = context?.config?.getDataHome?.() || process.env.ORCBOT_DATA_DIR || path.join(os.homedir(), '.orcbot');
-        const dailyMemory = new DailyMemory(dataHome);
+        const memoryManager = context?.agent?.memory;
+        const dataHome = memoryManager?.dataHome || context?.config?.getDataHome?.() || process.env.ORCBOT_DATA_DIR || path.join(os.homedir(), '.orcbot');
+        const dailyMemory = memoryManager?.getDailyMemory() || new DailyMemory(dataHome);
         const stats = dailyMemory.getStats();
         const recentFiles = dailyMemory.listDailyMemories().slice(0, 10);
+
+        const vectorStats = memoryManager?.vectorMemory?.getStats() || { indexed: 0, pending: 0, provider: 'none', dimensions: 0 };
 
         const output = [
             '# Memory System Statistics\n',
             `**Memory Directory:** ${stats.memoryDir}`,
             `**Long-term Memory:** ${stats.hasLongTerm ? '✓ exists' : '✗ not created'}`,
-            `**Daily Memory Files:** ${stats.dailyFiles}\n`,
+            `**Daily Memory Files:** ${stats.dailyFiles}`,
+            `**Vector Memory:** ${memoryManager?.vectorMemory?.isEnabled() ? '✓ enabled' : '✗ disabled'}`,
+            `  - Provider: ${vectorStats.provider}`,
+            `  - Indexed: ${vectorStats.indexed}`,
+            `  - Pending: ${vectorStats.pending}\n`,
             '## Recent Daily Logs:',
             ...recentFiles.map(f => `- ${f}`),
             '\n**Available commands:**',
-            '- `memory_search query="search term"` - Search across all memory',
+            '- `memory_search query="search term"` - Search across all memory (Hybrid)',
             '- `memory_get path="MEMORY.md"` - Read a specific file',
             '- `memory_write content="text" type="daily|long-term"` - Write to memory',
             '- `memory_stats` - Show this information'

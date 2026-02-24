@@ -24,6 +24,7 @@ import { UsagePing } from './UsagePing';
 import { AgenticUser } from './AgenticUser';
 import { KnowledgeStore } from '../memory/KnowledgeStore';
 import { memoryToolsSkills } from '../skills/memoryTools';
+import { canvasToolsSkills } from '../skills/canvasTools';
 import { ToolsManager } from './ToolsManager';
 import { Cron } from 'croner';
 import { Readability } from '@mozilla/readability';
@@ -41,6 +42,7 @@ import os from 'os';
 import { SyntaxChecker } from '../utils/SyntaxChecker';
 import { shellSessions } from '../utils/ShellSession';
 import { TForceSystem } from '../codes/tforce/TForceSystem';
+import { MessageBus } from './MessageBus';
 
 /**
  * Skills that require admin-level permissions.
@@ -99,7 +101,9 @@ export class Agent {
     public bootstrap: BootstrapManager;
     public agenticUser: AgenticUser;
     public knowledgeStore: KnowledgeStore;
+    public messageBus: MessageBus;
     public tforce: TForceSystem;
+    public isRunning: boolean = false;
     private lastActionTime: number;
     private lastHeartbeatAt: number = 0;
     private consecutiveIdleHeartbeats: number = 0;
@@ -175,6 +179,7 @@ export class Agent {
         this.config = new ConfigManager();
         this.agentConfigFile = this.config.get('agentIdentityPath');
         this.initializeStorage();
+        this.messageBus = new MessageBus(this);
 
         this.tools = new ToolsManager(
             this.config.get('toolsPath') || path.join(this.config.getDataHome(), 'tools')
@@ -6037,6 +6042,12 @@ Be thorough and academic.`;
             logger.info(`Registered memory tool: ${skill.name}`);
         }
 
+        // OrcCanvas Tools (A2UI)
+        for (const skill of canvasToolsSkills) {
+            this.skills.registerSkill(skill);
+            logger.info(`Registered canvas tool: ${skill.name}`);
+        }
+
         // ─── RAG Knowledge Store Skills ──────────────────────────────────
 
         this.skills.registerSkill({
@@ -9507,6 +9518,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
     public async start() {
         this.acquireInstanceLock();
         logger.info('Agent is starting...');
+        this.isRunning = true;
         this.scheduler.start();
         this.pollingManager.start();
         void this.usagePing.sendStartupPing();
@@ -9545,6 +9557,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
     }
 
     public async stop() {
+        this.isRunning = false;
         this.scheduler.stop();
         this.pollingManager.stop();
         if (this.telegram) {
@@ -11900,14 +11913,14 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         const isRecoveryDeliveryTask = action.payload?.trigger === 'completion_audit_recovery';
                         const wasSuccessful = toolResult && !JSON.stringify(toolResult).toLowerCase().includes('error');
 
-                        if (isChannelSend && isResponseTask && wasSuccessful) {
+                        if (isChannelSend && isResponseTask && wasSuccessful && remainingToolsInBatch === 0) {
                             logger.info(`Agent: Channel message sent for response task ${action.id}. Terminating to prevent duplicates.`);
                             goalsMet = true;
                             forceBreak = true;
                             break;
                         }
 
-                        if (isChannelSend && isRecoveryDeliveryTask && wasSuccessful) {
+                        if (isChannelSend && isRecoveryDeliveryTask && wasSuccessful && remainingToolsInBatch === 0) {
                             logger.info(`Agent: Channel message sent for recovery task ${action.id}. Terminating immediately to prevent duplicate recovery sends.`);
                             goalsMet = true;
                             forceBreak = true;

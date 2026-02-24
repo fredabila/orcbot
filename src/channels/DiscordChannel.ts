@@ -105,29 +105,10 @@ export class DiscordChannel implements IChannel {
 
         logger.info(`Discord message from ${username} (${userId}) in ${channelName}: ${content.substring(0, 100)}${replyContext ? ' ' + replyContext : ''}`);
 
-        // Save message to memory with metadata (using proper MemoryEntry format)
-        this.agent.memory.saveMemory({
-            id: `discord-${messageId}`,
-            type: 'short',
-            content: `Discord message from ${username}: ${content}${replyContext ? ' ' + replyContext : ''}`,
-            timestamp: new Date().toISOString(),
-            metadata: {
-                source: 'discord',
-                role: 'user',
-                sessionScopeId,
-                channelId,
-                userId,
-                username,
-                messageId,
-                guildId,
-                channelName,
-                replyToMessageId,
-                replyContext: replyContext || undefined
-            }
-        });
-
         // Handle attachments — download locally so the agent can analyze them
         const mediaPaths: string[] = [];
+        let transcriptionResult = '';
+
         if (message.attachments.size > 0) {
             for (const attachment of message.attachments.values()) {
                 const fileName = attachment.name || 'attachment';
@@ -140,7 +121,6 @@ export class DiscordChannel implements IChannel {
                 try {
                     const response = await fetch(fileUrl);
                     const buffer = Buffer.from(await response.arrayBuffer());
-                    const ext = path.extname(fileName) || '.bin';
                     localPath = path.join(this.downloadPath, `discord_${messageId}_${fileName}`);
                     fs.writeFileSync(localPath, buffer);
                     mediaPaths.push(localPath);
@@ -150,80 +130,40 @@ export class DiscordChannel implements IChannel {
                 }
 
                 // Auto-transcribe audio attachments
-                let transcription = '';
                 const audioExts = ['.ogg', '.mp3', '.m4a', '.wav', '.opus', '.flac'];
                 if (localPath && audioExts.includes(path.extname(fileName).toLowerCase())) {
                     try {
                         logger.info(`Discord: Auto-transcribing audio from ${username}...`);
                         const result = await this.agent.llm.analyzeMedia(localPath, 'Transcribe this audio message exactly. Return only the transcription text.');
-                        transcription = result.replace(/^Transcription result:\n/i, '').trim();
-                        if (transcription) {
-                            logger.info(`Discord: Transcribed audio from ${username}: "${transcription.substring(0, 100)}..."`);
+                        const text = result.replace(/^Transcription result:\n/i, '').trim();
+                        if (text) {
+                            logger.info(`Discord: Transcribed audio from ${username}: "${text.substring(0, 100)}..."`);
+                            transcriptionResult += (transcriptionResult ? '\n' : '') + `[Audio: ${text}]`;
                         }
                     } catch (e) {
                         logger.warn(`Discord: Auto-transcription failed: ${e}`);
                     }
                 }
-                
-                this.agent.memory.saveMemory({
-                    id: `discord-attach-${messageId}-${fileName}`,
-                    type: 'short',
-                    content: transcription
-                        ? `Discord voice/audio from ${username}: "${transcription}" (saved to: ${localPath})`
-                        : localPath 
-                            ? `Discord attachment from ${username}: ${fileName} (saved to: ${localPath})`
-                            : `Discord attachment from ${username}: ${fileName} (${fileUrl})`,
-                    timestamp: new Date().toISOString(),
-                    metadata: {
-                        source: 'discord',
-                        sessionScopeId,
-                        attachmentType: transcription ? 'audio' : 'attachment',
-                        channelId,
-                        userId,
-                        username,
-                        fileName,
-                        fileUrl,
-                        mediaPath: localPath || undefined,
-                        transcription: transcription || undefined,
-                        messageId
-                    }
-                });
             }
         }
 
-        // Auto-reply if enabled
-        if (this.autoReplyEnabled) {
-            // Send typing indicator immediately for user feedback
-            try {
-                await this.sendTypingIndicator(channelId);
-            } catch (e) {
-                // Ignore typing indicator errors
+        // Dispatch to unified MessageBus
+        await this.agent.messageBus.dispatch({
+            source: 'discord',
+            sourceId: channelId,
+            userId,
+            senderName: username,
+            content,
+            messageId,
+            replyContext: replyContext || undefined,
+            mediaPaths,
+            mediaAnalysis: transcriptionResult || undefined,
+            channelName,
+            metadata: {
+                guildId,
+                replyToMessageId
             }
-
-            const mediaNote = mediaPaths.length > 0 ? ` (Files stored at: ${mediaPaths.join(', ')})` : '';
-            const priority = 10; // High priority for user messages (same as Telegram)
-            const taskDescription = replyContext
-                ? `Respond to Discord message from ${username} in ${channelName}: "${content || '[Media]'}" ${replyContext}${mediaNote}`
-                : `Respond to Discord message from ${username} in ${channelName}: "${content || '[Media]'}"${mediaNote}`;
-            
-            await this.agent.pushTask(
-                taskDescription,
-                priority,
-                {
-                    source: 'discord',
-                    sourceId: channelId,  // Use channelId as sourceId (where to reply)
-                    sessionScopeId,
-                    senderName: username,  // Use username as senderName for DecisionEngine
-                    channelId,
-                    userId,
-                    username,
-                    messageId,
-                    replyToMessageId,
-                    replyContext: replyContext || undefined,
-                    requiresResponse: true
-                }
-            );
-        }
+        });
     }
 
     public async start(): Promise<void> {

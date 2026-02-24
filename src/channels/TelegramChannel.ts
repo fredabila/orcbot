@@ -194,21 +194,19 @@ export class TelegramChannel implements IChannel {
 
                 logger.info(`Telegram: Command /${cmd} from ${userName} (${userId})`);
 
-                await this.agent.pushTask(
-                    `Telegram command /${cmd}: "${text}"`,
-                    20, // Higher priority for explicit commands
-                    {
-                        source: 'telegram',
-                        sourceId: chatId,
-                        sessionScopeId,
-                        senderName: userName,
-                        chatId,
-                        userId,
-                        messageId: ctx.message.message_id,
-                        isCommand: true,
-                        command: cmd
+                await this.agent.messageBus.dispatch({
+                    source: 'telegram',
+                    sourceId: chatId,
+                    userId,
+                    senderName: userName,
+                    content: text || `/${cmd}`,
+                    messageId: `cmd-${ctx.message.message_id}-${Date.now()}`,
+                    isCommand: true,
+                    metadata: {
+                        command: cmd,
+                        chatType: ctx.chat.type
                     }
-                );
+                });
             });
         }
 
@@ -310,74 +308,24 @@ export class TelegramChannel implements IChannel {
 
             logger.info(`Telegram: Message from ${userName} (${userId}): ${text || transcription || '[Media]'} | autoReply=${autoReplyEnabled}`);
 
-            // Build content with transcription / media analysis if available
-            const voiceLabel = transcription ? ` [Voice message transcription: "${transcription}"]` : '';
-            const mediaLabel = mediaAnalysis ? ` [Media analysis: ${mediaAnalysis}]` : '';
-            const content = text
-                ? `User ${userName} (Telegram ${userId}) said: ${text}${voiceLabel}${mediaLabel}${replyContext ? ' ' + replyContext : ''}`
-                : transcription
-                    ? `User ${userName} (Telegram ${userId}) sent a voice message: "${transcription}"${replyContext ? ' ' + replyContext : ''}`
-                    : mediaAnalysis
-                        ? `User ${userName} (Telegram ${userId}) sent media: ${path.basename(mediaPath)} [Media analysis: ${mediaAnalysis}]${replyContext ? ' ' + replyContext : ''}`
-                        : `User ${userName} (Telegram ${userId}) sent a file: ${path.basename(mediaPath)}${replyContext ? ' ' + replyContext : ''}`;
-
-            // Store user message in memory
-            this.agent.memory.saveMemory({
-                id: `tg-${message.message_id}`,
-                type: 'short',
-                content: content,
-                timestamp: new Date().toISOString(),
+            // Dispatch to unified MessageBus
+            await this.agent.messageBus.dispatch({
+                source: 'telegram',
+                sourceId: chatId,
+                userId,
+                senderName: userName,
+                content: text || '',
+                messageId: String(message.message_id),
+                replyContext: replyContext || undefined,
+                mediaPaths: mediaPath ? [mediaPath] : [],
+                mediaAnalysis: mediaAnalysis || transcription || undefined,
+                channelName: chatType === 'private' ? 'DM' : (ctx.chat as any).title || 'Group',
                 metadata: {
-                    source: 'telegram',
-                    role: 'user',
-                    sessionScopeId,
-                    messageId: message.message_id,
-                    chatId,
-                    userId,
-                    userName,
-                    mediaPath,
                     replyToMessageId,
-                    replyContext: replyContext || undefined
-                }
-            });
-
-            if (!autoReplyEnabled) {
-                logger.debug(`Telegram: Auto-reply disabled, skipping task creation.`);
-                return;
-            }
-
-            // Push task to agent — include transcription/analysis in task so agent has full context
-            const displayText = text || (transcription ? `[Voice: "${transcription}"]` : '[Media]');
-            const mediaContext = mediaAnalysis ? ` [Media analysis: ${mediaAnalysis}]` : '';
-            const taskDescription = replyContext
-                ? `Telegram message from ${userName}: "${displayText}"${mediaContext} ${replyContext}${mediaPath ? ` (File stored at: ${mediaPath})` : ''}`
-                : `Telegram message from ${userName}: "${displayText}"${mediaContext}${mediaPath ? ` (File stored at: ${mediaPath})` : ''}`;
-
-            await this.agent.pushTask(
-                taskDescription,
-                10,
-                {
-                    source: 'telegram',
-                    // Use chatId as sourceId so replies go to the same chat (DM or group).
-                    sourceId: chatId,
-                    sessionScopeId,
-                    senderName: userName,
-                    chatId,
-                    userId,
-                    messageId: message.message_id,  // For deduplication
-                    mediaPath,
-                    replyToMessageId,
-                    replyContext: replyContext || undefined,
                     isGroupChat,
                     chatType
                 }
-            );
-
-            // We could wait for a response event here, but for now we'll rely on the agent to act
-            // and maybe implementing a "SendMessage" skill would be better.
-            // But for interactive chat, we might want a direct response loop.
-            // For this MVP, let's just acknowledge receipt if needed, or better yet,
-            // let the Agent's decision engine decide to call a "send_telegram" skill.
+            });
         });
 
         // ── Inline-keyboard button presses ───────────────────────────────────────
@@ -394,46 +342,32 @@ export class TelegramChannel implements IChannel {
             // Always answer the callback so the button spinner clears in the UI
             try { await ctx.answerCbQuery(); } catch (_) { /* non-critical */ }
 
+            // AFTER-ACTION EFFECT: Remove the buttons so the user knows the choice is final
+            try {
+                await ctx.editMessageReplyMarkup(undefined);
+            } catch (e) {
+                logger.debug(`Telegram: Could not remove buttons (message may be too old or modified): ${e}`);
+            }
+
             if (!callbackData) return;
 
             const autoReplyEnabled = this.agent.config.get('telegramAutoReplyEnabled');
 
             logger.info(`Telegram: Button callback from ${userName} (${userId}) in ${chatId}: "${callbackData}" (msg=${messageId})`);
 
-            const content = `User ${userName} (Telegram ${userId}) pressed button: "${callbackData}" (from message ${messageId})`;
-            this.agent.memory.saveMemory({
-                id: `tg-cb-${messageId}-${Date.now()}`,
-                type: 'short',
-                content,
-                timestamp: new Date().toISOString(),
+            // Dispatch to unified MessageBus
+            await this.agent.messageBus.dispatch({
+                source: 'telegram',
+                sourceId: chatId,
+                userId,
+                senderName: userName,
+                content: `Pressed button: "${callbackData}" (from message ${messageId})`,
+                messageId: `tg-cb-${messageId}-${Date.now()}`,
                 metadata: {
-                    source: 'telegram',
-                    role: 'user',
-                    chatId,
-                    userId,
-                    userName,
-                    messageId,
-                    callbackData
+                    callbackData,
+                    originalMessageId: messageId
                 }
             });
-
-            if (!autoReplyEnabled) return;
-
-            const sessionScopeId = this.agent.resolveSessionScopeId('telegram', { sourceId: chatId, userId, chatId });
-            await this.agent.pushTask(
-                `Telegram button callback from ${userName}: "${callbackData}" (message_id=${messageId})`,
-                10,
-                {
-                    source: 'telegram',
-                    sourceId: chatId,
-                    sessionScopeId,
-                    senderName: userName,
-                    chatId,
-                    userId,
-                    messageId,
-                    callbackData
-                }
-            );
         });
     }
 

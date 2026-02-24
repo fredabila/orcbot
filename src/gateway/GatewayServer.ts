@@ -1109,12 +1109,12 @@ export class GatewayServer {
         }
 
         // Determine running state
-        const isAgentRunning = lockFileValid || this.agentLoopStarted;
+        const isAgentRunning = lockFileValid || this.agentLoopStarted || this.agent.isRunning;
 
         return {
             running: isAgentRunning,
-            mode: this.agentLoopStarted ? 'full' : (lockFileValid ? 'external' : 'gateway-only'),
-            modeDescription: this.agentLoopStarted 
+            mode: (this.agentLoopStarted || this.agent.isRunning) ? 'full' : (lockFileValid ? 'external' : 'gateway-only'),
+            modeDescription: (this.agentLoopStarted || this.agent.isRunning)
                 ? 'Gateway + Agent Loop'
                 : (lockFileValid ? 'Agent running externally' : 'Gateway only (use --with-agent to start agent)'),
             lockInfo,

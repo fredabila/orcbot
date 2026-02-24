@@ -1007,9 +1007,14 @@ ${this.repoContext}`,
                     return recalled
                         .map(r => {
                             const ts = r.timestamp || '';
-                            const src = r.metadata?.source ? ` [${r.metadata.source}]` : '';
+                            const src = r.metadata?.source || 'history';
+                            // Normalize source names for better agent citation
+                            let citationLabel = src;
+                            if (src === 'memory_write_skill' && r.metadata?.category) citationLabel = r.metadata.category;
+                            if (src === 'memory_write_skill' && !r.metadata?.category) citationLabel = r.type === 'long' ? 'MEMORY.md' : 'daily log';
+                            
                             const content = r.content.length > 400 ? r.content.slice(0, 400) + '…' : r.content;
-                            return `[${ts}]${src} (relevance: ${(r.score * 100).toFixed(0)}%) ${content}`;
+                            return `[${ts}] [Source: ${citationLabel}] (relevance: ${(r.score * 100).toFixed(0)}%) ${content}`;
                         })
                         .join('\n');
                 })(),
@@ -1020,8 +1025,9 @@ ${this.repoContext}`,
                     return relevantEpisodic
                         .map(m => {
                             const ts = m.timestamp || '';
+                            const date = ts.split('T')[0];
                             const content = (m.content || '').length > 500 ? m.content.slice(0, 500) + '…' : m.content;
-                            return `[${ts}] ${content}`;
+                            return `[${ts}] [Source: Episodic Summary ${date}] ${content}`;
                         })
                         .join('\n');
                 })(),

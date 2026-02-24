@@ -40,6 +40,7 @@ export class MemoryManager {
     private lastMemoryFlushAt: number = 0;
     private memoryFlushEnabled: boolean = true;
     public vectorMemory: VectorMemory | null = null;
+    private backgroundIndexingTimer: ReturnType<typeof setInterval> | null = null;
 
     // Configurable limits (can be updated via setLimits)
     private contextLimit: number = 20;
@@ -123,6 +124,40 @@ export class MemoryManager {
             dimensions: config.dimensions,
             maxEntries: config.maxEntries
         });
+
+        // Start background indexing for full-session semantic search
+        if (this.vectorMemory.isEnabled()) {
+            this.backgroundIndexingTimer = setInterval(() => {
+                this.backgroundIndex().catch(e => logger.warn(`MemoryManager: Background indexing error: ${e}`));
+            }, 5 * 60 * 1000); // Every 5 minutes
+            logger.info('MemoryManager: Background session indexing enabled.');
+        }
+    }
+
+    /**
+     * Periodically index recent short-term memories that haven't been indexed yet.
+     * This ensures the entire conversation history is semantically searchable.
+     */
+    private async backgroundIndex(): Promise<void> {
+        if (!this.vectorMemory?.isEnabled()) return;
+
+        const shortMemories = this.searchMemory('short');
+        const stats = this.vectorMemory.getStats();
+        
+        // We don't want to re-index everything, but VectorMemory.queue 
+        // already handles deduplication by ID. We'll just pass the recent ones.
+        let queued = 0;
+        for (const m of shortMemories.slice(-50)) {
+            // Skip system noise and very short messages
+            if (m.content.length < 20 || m.content.startsWith('[SYSTEM:')) continue;
+            
+            this.vectorMemory.queue(m.id, m.content, m.type, m.metadata, m.timestamp);
+            queued++;
+        }
+
+        if (queued > 0) {
+            logger.debug(`MemoryManager: Queued ${queued} short-term memories for background indexing.`);
+        }
     }
 
     public refreshUserContext(userPath: string) {
@@ -308,6 +343,13 @@ Events:\n${JSON.stringify(structuredContext, null, 2)}`;
      * Shut down memory system cleanly: flush all pending writes.
      */
     public shutdown(): void {
+        if (this.backgroundIndexingTimer) {
+            clearInterval(this.backgroundIndexingTimer);
+            this.backgroundIndexingTimer = null;
+        }
+        if (this.vectorMemory) {
+            this.vectorMemory.shutdown();
+        }
         this.storage.shutdown();
     }
     /**
