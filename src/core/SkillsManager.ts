@@ -21,6 +21,13 @@ export interface Skill {
     handler: (args: any, context?: AgentContext) => Promise<any>;
     pluginPath?: string; // Track source file for uninstallation
     sourceUrl?: string;  // Original URL if generated from a spec
+    
+    // Metadata flags for orchestration (fluidity)
+    isResearch?: boolean;    // Higher repetition budget (e.g. search/browsing)
+    isSideEffect?: boolean;  // Subject to deduplication (e.g. sending messages)
+    isDeep?: boolean;        // Resets communication cooldown; counts as substantive progress
+    isDangerous?: boolean;   // Requires confirmation in autonomy mode
+    isElevated?: boolean;    // Requires admin privileges
 }
 
 /**
@@ -71,6 +78,43 @@ export class SkillsManager {
 
     public setContext(context: AgentContext) {
         this.context = context;
+    }
+
+    public getSkill(name: string): Skill | undefined {
+        return this.skills.get(name);
+    }
+
+    /**
+     * Get the set of skill names that require elevated (admin) permissions.
+     */
+    public getElevatedSkills(): Set<string> {
+        const elevated = new Set<string>();
+        for (const [name, skill] of this.skills.entries()) {
+            if (skill.isElevated) {
+                elevated.add(name);
+            }
+        }
+
+        // Legacy fallbacks for built-in skills that may not have been registered with flags yet
+        const legacyElevated = [
+            'run_command',
+            'shell_start', 'shell_read', 'shell_send', 'shell_stop', 'shell_list',
+            'orcbot_control',
+            'write_file', 'write_to_file', 'create_file', 'delete_file', 'read_file',
+            'install_npm_dependency',
+            'browser_navigate', 'browser_click', 'browser_type', 'browser_snapshot', 'browser_close',
+            'browser_fill_form', 'browser_extract_data', 'browser_extract_content', 'browser_api_intercept',
+            'schedule_task',
+            'manage_skills', 'manage_config',
+            'generate_image', 'send_image',
+            'install_tool', 'approve_tool', 'run_tool_command', 'uninstall_tool', 'activate_tool', 'read_tool_readme',
+        ];
+
+        for (const name of legacyElevated) {
+            elevated.add(name);
+        }
+
+        return elevated;
     }
 
     private ensureTsNodeRegistered() {

@@ -660,7 +660,7 @@ export class MultiLLM {
      * @param voice The voice to use. OpenAI voices: alloy, echo, fable, onyx, nova, shimmer. Google: e.g. kore.
      * @param speed Speech speed multiplier (0.25 to 4.0). Default: 1.0
      */
-    public async textToSpeech(text: string, outputPath: string, voice: string = 'nova', speed: number = 1.0): Promise<string> {
+    public async textToSpeech(text: string, outputPath: string, voice?: string, speed: number = 1.0): Promise<string> {
         const primaryProvider = this.preferredProvider || this.inferProvider(this.modelName);
         if (primaryProvider === 'google' && this.googleKey) {
             return this.textToSpeechGoogle(text, outputPath, voice);
@@ -669,8 +669,9 @@ export class MultiLLM {
             throw new Error('OpenAI API key not configured — required for TTS');
         }
         const validVoices = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'];
-        if (!validVoices.includes(voice)) {
-            voice = 'nova';
+        let selectedVoice = voice || 'nova';
+        if (!validVoices.includes(selectedVoice)) {
+            selectedVoice = 'nova';
         }
         try {
             const response = await fetch('https://api.openai.com/v1/audio/speech', {
@@ -682,7 +683,7 @@ export class MultiLLM {
                 body: JSON.stringify({
                     model: 'tts-1',
                     input: text,
-                    voice: voice,
+                    voice: selectedVoice,
                     response_format: 'opus',  // Opus codec in OGG container — works as voice note
                     speed: Math.max(0.25, Math.min(4.0, speed))
                 })
@@ -703,9 +704,16 @@ export class MultiLLM {
             throw error;
         }
     }
-    private async textToSpeechGoogle(text: string, outputPath: string, voice: string = 'kore'): Promise<string> {
+    private async textToSpeechGoogle(text: string, outputPath: string, voice?: string): Promise<string> {
         if (!this.googleKey) throw new Error('Google API key not configured — required for TTS');
         const url = `https://generativelanguage.googleapis.com/v1beta/interactions?key=${this.googleKey}`;
+        
+        const googleVoices = ['achernar', 'achird', 'algenib', 'algieba', 'alnilam', 'aoede', 'autonoe', 'callirrhoe', 'charon', 'despina', 'enceladus', 'erinome', 'fenrir', 'gacrux', 'iapetus', 'kore', 'laomedeia', 'leda', 'orus', 'puck', 'pulcherrima', 'rasalgethi', 'sadachbia', 'sadaltager', 'schedar', 'sulafat', 'umbriel', 'vindemiatrix', 'zephyr', 'zubenelgenubi'];
+        let selectedVoice = voice || 'kore';
+        if (!googleVoices.includes(selectedVoice)) {
+            selectedVoice = 'kore';
+        }
+
         const body = {
             model: 'gemini-2.5-flash-preview-tts',
             input: text,
@@ -713,7 +721,7 @@ export class MultiLLM {
             generation_config: {
                 speech_config: {
                     language: 'en-us',
-                    voice: voice || 'kore'
+                    voice: selectedVoice
                 }
             }
         };

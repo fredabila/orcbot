@@ -11,8 +11,8 @@ This file lists the available skills for the agent.
 - **send_file(jid, path, caption?)**: Send a file to Telegram or WhatsApp.
 - **download_file(url, filename?)**: Download a file to local storage.
 - **analyze_media(path, prompt?)**: Analyze an image, audio, or document file.
-- **text_to_speech(text, voice?, speed?)**: Convert text to an audio file using AI voice synthesis.
-- **send_voice_note(jid, text, voice?)**: Convert text to speech and send as a voice note.
+- **text_to_speech(text, voice?, speed?)**: Convert text to an audio file using AI voice synthesis. Available voices: OpenAI (alloy, echo, fable, onyx, nova, shimmer) or Google (achernar, achird, algenib, algieba, alnilam, aoede, autonoe, callirrhoe, charon, despina, enceladus, erinome, fenrir, gacrux, iapetus, kore, laomedeia, leda, orus, puck, pulcherrima, rasalgethi, sadachbia, sadaltager, schedar, sulafat, umbriel, vindemiatrix, zephyr, zubenelgenubi).
+- **send_voice_note(jid, text, voice?)**: Convert text to speech and send as a voice note. Same voice options as text_to_speech.
 - **post_whatsapp_status(text)**: Post a text update to WhatsApp status.
 - **react(message_id, emoji, channel?, chat_id?)**: React to a message with an emoji (auto-detect channel).
 - **react_telegram(chat_id, message_id, emoji)**: React to a Telegram message with an emoji.
@@ -98,6 +98,15 @@ This file lists the available skills for the agent.
 - **configure_peer_agent(agent_id, updates:object)**: Update the configuration (API keys, channel tokens, etc.) for an existing peer agent. The agent will be restarted to apply changes.
 - **list_agents()**: List active agents.
 - **terminate_agent(agent_id)**: Terminate a spawned agent.
+
+## Skill Orchestration Metadata
+Built-in and plugin skills use metadata flags to drive fluid orchestration without hardcoded tool lists:
+
+- `isDeep`: (boolean) When true, this tool counts as "substantive progress." Resets the communication cooldown, allowing the agent to send a fresh status update after execution.
+- `isResearch`: (boolean) When true, this tool has a much higher repetition budget (up to 15 calls per action). Essential for browsing and searching.
+- `isSideEffect`: (boolean) When true, this tool is subject to deduplication and cross-channel permission checks. Used for messaging and file delivery.
+- `isDangerous`: (boolean) When true, requires explicit user permission in autonomy mode unless `sudoMode` is active.
+- `isElevated`: (boolean) When true, restricts execution to authorized admin users only.
 - **delegate_task(description, priority?, agent_id?)**: Create and assign a task.
 - **distribute_tasks()**: Auto-assign pending tasks.
 - **orchestrator_status()**: Get orchestration summary.

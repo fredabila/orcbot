@@ -2,7 +2,6 @@ import { MemoryManager } from '../memory/MemoryManager';
 import { MultiLLM, LLMToolResponse } from './MultiLLM';
 import { ParserLayer, StandardResponse } from './ParserLayer';
 import { SkillsManager } from './SkillsManager';
-import { ELEVATED_SKILLS } from './Agent';
 import { logger } from '../utils/logger';
 import fs from 'fs';
 import os from 'os';
@@ -577,7 +576,7 @@ ${this.repoContext}`,
 
         // Filter out elevated skills for non-admin users
         const isAdmin = metadata.isAdmin !== false; // undefined = admin (backwards compatible)
-        const excludeSkills = !isAdmin ? ELEVATED_SKILLS : undefined;
+        const excludeSkills = !isAdmin ? this.skills.getElevatedSkills() : undefined;
 
 
         // Declare isFirstStep before usage

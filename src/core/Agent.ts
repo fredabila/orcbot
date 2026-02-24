@@ -45,25 +45,6 @@ import { TForceSystem } from '../codes/tforce/TForceSystem';
 import { MessageBus } from './MessageBus';
 
 /**
- * Skills that require admin-level permissions.
- * Non-admin users (external users not in adminUsers config) cannot trigger these.
- * When adminUsers is not configured, everyone is treated as admin (backwards compatible).
- */
-export const ELEVATED_SKILLS = new Set([
-    'run_command',
-    'shell_start', 'shell_read', 'shell_send', 'shell_stop', 'shell_list',
-    'orcbot_control',
-    'write_file', 'write_to_file', 'create_file', 'delete_file', 'read_file',
-    'install_npm_dependency',
-    'browser_navigate', 'browser_click', 'browser_type', 'browser_snapshot', 'browser_close',
-    'browser_fill_form', 'browser_extract_data', 'browser_extract_content', 'browser_api_intercept',
-    'schedule_task',
-    'manage_skills', 'manage_config',
-    'generate_image', 'send_image',
-    'install_tool', 'approve_tool', 'run_tool_command', 'uninstall_tool', 'activate_tool', 'read_tool_readme',
-]);
-
-/**
  * Tracks users who have interacted with the bot across channels.
  * Used in the TUI to select admin users without needing to know raw IDs.
  */
@@ -382,10 +363,9 @@ export class Agent {
 
         this.loadAgentIdentity();
         this.setupEventListeners();
-        // Workers don't set up messaging channels — only the primary agent manages channels
-        // UNLESS allowWorkerChannels is true (used for peer agents with their own bots)
+        // Initialize messaging channels (primary agent only, unless overridden)
         const allowWorkerChannels = this.config.get('allowWorkerChannels') === true;
-        if ((!this.isWorker || allowWorkerChannels) && !this.isCLI) {
+        if (!this.isWorker || allowWorkerChannels) {
             this.setupChannels();
         }
         this.registerInternalSkills();
@@ -455,37 +435,32 @@ export class Agent {
         const telegramToken = this.config.get('telegramToken');
         if (telegramToken && !this.telegram) {
             this.telegram = new TelegramChannel(telegramToken, this);
-            this.telegram.start().catch(e => logger.error(`Failed to start Telegram: ${e}`));
-            logger.info('Agent: Telegram channel started');
+            logger.info('Agent: Telegram channel initialized');
         }
 
         const whatsappEnabled = this.config.get('whatsappEnabled');
         if (whatsappEnabled && !this.whatsapp) {
             this.whatsapp = new WhatsAppChannel(this);
-            this.whatsapp.start().catch(e => logger.error(`Failed to start WhatsApp: ${e}`));
-            logger.info('Agent: WhatsApp channel started');
+            logger.info('Agent: WhatsApp channel initialized');
         }
 
         const discordToken = this.config.get('discordToken');
         if (discordToken && !this.discord) {
             this.discord = new DiscordChannel(discordToken, this);
-            this.discord.start().catch(e => logger.error(`Failed to start Discord: ${e}`));
-            logger.info('Agent: Discord channel started');
+            logger.info('Agent: Discord channel initialized');
         }
 
         const slackBotToken = this.config.get('slackBotToken');
         if (slackBotToken && !this.slack) {
             const slackAppToken = this.config.get('slackAppToken');
             this.slack = new SlackChannel(slackBotToken, slackAppToken, this);
-            this.slack.start().catch(e => logger.error(`Failed to start Slack: ${e}`));
-            logger.info('Agent: Slack channel started');
+            logger.info('Agent: Slack channel initialized');
         }
 
         const emailEnabled = this.config.get('emailEnabled') === true;
         if (emailEnabled && !this.email) {
             this.email = new EmailChannel(this);
-            this.email.start().catch(e => logger.error(`Failed to start Email: ${e}`));
-            logger.info('Agent: Email channel started');
+            logger.info('Agent: Email channel initialized');
         }
     }
 
@@ -744,7 +719,7 @@ export class Agent {
             return { allowed: false, reason: `Channel '${targetChannel}' is disabled or not configured.` };
         }
 
-        const isAutonomous = action.lane === 'autonomy' || !!action.payload?.isHeartbeat || source.includes('heartbeat');
+        const isAutonomous = (action.lane === 'autonomy' || !!action.payload?.isHeartbeat || source.includes('heartbeat')) && source !== targetChannel;
         if (isAutonomous) {
             const allowedChannels = Array.isArray(this.config.get('autonomyAllowedChannels'))
                 ? this.config.get('autonomyAllowedChannels')
@@ -769,6 +744,8 @@ export class Agent {
                 name: 'send_telegram',
                 description: 'Send a message to a Telegram user. The chatId MUST be the numeric Telegram ID (e.g. 123456789), NOT the user\'s name.',
                 usage: 'send_telegram(chatId, message)',
+                isSideEffect: true,
+                isDeep: false,
                 handler: async (args: any) => {
                     let chat_id = args.chat_id || args.chatId || args.id;
                     const message = args.message || args.content || args.text;
@@ -1826,11 +1803,11 @@ export class Agent {
         // Skill: Text-to-Speech
         this.skills.registerSkill({
             name: 'text_to_speech',
-            description: 'Convert text to an audio file using AI voice synthesis. Returns the file path of the generated audio. Available voices:  achernar, achird, algenib, algieba, alnilam, aoede, autonoe, callirrhoe, charon, despina, enceladus, erinome, fenrir, gacrux, iapetus, kore, laomedeia, leda, orus, puck, pulcherrima, rasalgethi, sadachbia, sadaltager, schedar, sulafat, umbriel, vindemiatrix, zephyr, zubenelgenubi.',
+            description: 'Convert text to an audio file using AI voice synthesis. Returns the file path of the generated audio. Available voices: OpenAI (alloy, echo, fable, onyx, nova, shimmer) or Google (achernar, achird, algenib, algieba, alnilam, aoede, autonoe, callirrhoe, charon, despina, enceladus, erinome, fenrir, gacrux, iapetus, kore, laomedeia, leda, orus, puck, pulcherrima, rasalgethi, sadachbia, sadaltager, schedar, sulafat, umbriel, vindemiatrix, zephyr, zubenelgenubi).',
             usage: 'text_to_speech(text, voice?, speed?)',
             handler: async (args: any) => {
                 const text = args.text || args.message || args.content;
-                const voice = args.voice || 'nova';
+                const voice = args.voice;
                 const speed = parseFloat(args.speed) || 1.0;
 
                 if (!text) return 'Error: Missing text to convert to speech.';
@@ -1842,7 +1819,7 @@ export class Agent {
                     const requestedOutputPath = path.join(downloadsDir, `tts_${Date.now()}.ogg`);
 
                     const generatedAudioPath = await this.llm.textToSpeech(text, requestedOutputPath, voice, speed);
-                    return `Audio generated successfully: ${generatedAudioPath} (voice: ${voice}, ${text.length} chars)`;
+                    return `Audio generated successfully: ${generatedAudioPath} (voice: ${voice || 'default'}, ${text.length} chars)`;
                 } catch (e) {
                     return `Error generating speech: ${e}`;
                 }
@@ -1852,12 +1829,12 @@ export class Agent {
         // Skill: Send Voice Note (compound: TTS + send as voice message)
         this.skills.registerSkill({
             name: 'send_voice_note',
-            description: 'Convert text to speech and send it as a voice note/voice message to a contact. The message will appear as a playable voice bubble (not a file attachment). Available voices: alloy, echo, fable, onyx, nova, shimmer.',
+            description: 'Convert text to speech and send it as a voice note/voice message to a contact. The message will appear as a playable voice bubble (not a file attachment). Available voices: OpenAI (alloy, echo, fable, onyx, nova, shimmer) or Google (achernar, achird, algenib, algieba, alnilam, aoede, autonoe, callirrhoe, charon, despina, enceladus, erinome, fenrir, gacrux, iapetus, kore, laomedeia, leda, orus, puck, pulcherrima, rasalgethi, sadachbia, sadaltager, schedar, sulafat, umbriel, vindemiatrix, zephyr, zubenelgenubi).',
             usage: 'send_voice_note(jid, text, voice?)',
             handler: async (args: any) => {
                 const jid = args.jid || args.to;
                 const text = args.text || args.message || args.content;
-                const voice = args.voice || 'nova';
+                const voice = args.voice;
 
                 if (!jid) return 'Error: Missing jid (recipient identifier).';
                 if (!text) return 'Error: Missing text to convert to voice.';
@@ -1882,14 +1859,14 @@ export class Agent {
 
                     if (isWhatsApp && this.whatsapp) {
                         await this.whatsapp.sendVoiceNote(jid, audioPath);
-                        return `Voice note sent via WhatsApp to ${jid} (voice: ${voice}, ${text.length} chars)`;
+                        return `Voice note sent via WhatsApp to ${jid} (voice: ${voice || 'default'}, ${text.length} chars)`;
                     } else if (isDiscord && this.discord) {
                         // Discord has no native voice-note concept; send as audio file attachment
                         await this.discord.sendFile(jid, audioPath, `🎙️ Voice message (${text.length} chars)`);
-                        return `Voice note sent via Discord to ${jid} as audio file (voice: ${voice}, ${text.length} chars)`;
+                        return `Voice note sent via Discord to ${jid} as audio file (voice: ${voice || 'default'}, ${text.length} chars)`;
                     } else if (isTelegram && this.telegram) {
                         await this.telegram.sendVoiceNote(jid, audioPath);
-                        return `Voice note sent via Telegram to ${jid} (voice: ${voice}, ${text.length} chars)`;
+                        return `Voice note sent via Telegram to ${jid} (voice: ${voice || 'default'}, ${text.length} chars)`;
                     }
                     return 'No channel available to send voice note. Is WhatsApp/Telegram/Discord connected?';
                 } catch (e) {
@@ -2558,6 +2535,10 @@ export class Agent {
             name: 'run_command',
             description: 'Execute a shell command on the server. On Windows, commands run in PowerShell — use PowerShell syntax (Get-ChildItem, Get-Command, Start-MpScan, etc.), NOT cmd.exe syntax (dir, where, etc.). For file creation, use write_file skill. To run commands in a specific directory, pass cwd parameter. For long-running commands, tune timeoutMs/retries and timeoutBackoffFactor to adapt to slower environments.',
             usage: 'run_command(command, cwd?, timeoutMs?, retries?, timeoutBackoffFactor?, maxTimeoutMs?)',
+            isDeep: true,
+            isResearch: true,
+            isDangerous: true,
+            isElevated: true,
             handler: async (args: any) => {
                 let command = args.command || args.cmd || args.text;
                 if (!command) return 'Error: Missing command string.';
@@ -8238,7 +8219,7 @@ REFLECTION: <1-2 sentences>`;
                     'whatsappEnabled', 'emailEnabled'
                 ];
                 const channelsChanged = channelKeys.some(key => oldConfig[key] !== newConfig[key]);
-                if (channelsChanged && !this.isCLI) {
+                if (channelsChanged && (this.isRunning || !this.isCLI)) {
                     await this.hotReloadChannels(oldConfig, newConfig);
                 }
 
@@ -9823,12 +9804,24 @@ Respond with a single actionable task description (one sentence). Be specific ab
     }
 
     public async start() {
+        if (this.isRunning) return;
         this.acquireInstanceLock();
         logger.info('Agent is starting...');
         this.isRunning = true;
         this.scheduler.start();
         this.pollingManager.start();
         void this.usagePing.sendStartupPing();
+
+        // Ensure Agentic User is started when the loop begins (supports CLI 'run' command)
+        if (!this.isWorker) {
+            this.agenticUser.start();
+        }
+
+        // Re-ensure channels are initialized (idempotent)
+        const allowWorkerChannels = this.config.get('allowWorkerChannels') === true;
+        if (!this.isWorker || allowWorkerChannels) {
+            await this.setupChannels();
+        }
 
         const startupTasks: Array<{ name: string; promise: Promise<void> }> = [];
         if (this.telegram) {
@@ -11030,21 +11023,61 @@ Respond with a single actionable task description (one sentence). Be specific ab
             const robustReasoningMode = this.isRobustReasoningEnabled();
             const exposeChecklistPreview = this.shouldExposeChecklistPreview();
 
-            // RESEARCH TOOLS — used for skill-repeat ceiling differentiation (browser/search
-            // tools legitimately get called many times in a single action).
-            const RESEARCH_TOOLS = new Set([
-                'web_search', 'browser_navigate', 'browser_click', 'browser_type',
-                'browser_examine_page', 'browser_screenshot', 'browser_back',
-                'browser_scroll', 'browser_hover', 'browser_select',
-                'browser_fill_form', 'browser_extract_data', 'browser_extract_content',
-                'browser_api_intercept', 'browser_api_list',
-                'computer_screenshot', 'computer_click', 'computer_vision_click',
-                'computer_type', 'computer_key', 'computer_locate', 'computer_describe',
-                'extract_article', 'http_fetch', 'download_file', 'read_file', 'write_to_file',
-                'write_file', 'create_file', 'send_file',
-                'run_command', 'analyze_media', 'recall_memory',
-                'generate_image', 'send_image'
-            ]);
+            // Meta-helper to retrieve skill flags from registry with legacy fallbacks
+            const getSkillMeta = (name: string) => {
+                const s = this.skills.getSkill(name);
+                if (s) return s;
+                
+                // Legacy fallbacks for built-in skills if they aren't fully registered with flags yet
+                const isResearch = [
+                    'web_search', 'browser_navigate', 'browser_click', 'browser_type',
+                    'browser_examine_page', 'browser_screenshot', 'browser_back',
+                    'browser_scroll', 'browser_hover', 'browser_select',
+                    'browser_fill_form', 'browser_extract_data', 'browser_extract_content',
+                    'browser_api_intercept', 'browser_api_list',
+                    'computer_screenshot', 'computer_click', 'computer_vision_click',
+                    'computer_type', 'computer_key', 'computer_locate', 'computer_describe',
+                    'extract_article', 'http_fetch', 'download_file', 'read_file', 'write_to_file',
+                    'write_file', 'create_file', 'send_file',
+                    'run_command', 'analyze_media', 'recall_memory',
+                    'generate_image', 'send_image'
+                ].includes(name);
+
+                const isDeep = ![
+                    'send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat',
+                    'update_journal', 'update_user_profile', 'update_agent_identity',
+                    'get_system_info', 'system_check', 'read_bootstrap_file',
+                    'browser_screenshot', 'browser_trace_start', 'browser_trace_stop',
+                    'request_supporting_data'
+                ].includes(name);
+
+                const isSideEffect = [
+                    'send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat',
+                    'telegram_send_buttons', 'telegram_edit_message', 'telegram_send_poll', 'telegram_react', 'telegram_pin_message',
+                    'send_file', 'send_image', 'send_discord_file', 'send_slack_file'
+                ].includes(name);
+
+                const isDangerous = [
+                    'run_command', 'write_to_file', 'write_file', 'create_file', 
+                    'install_npm_dependency', 'delete_file', 'manage_skills'
+                ].includes(name);
+
+                const isElevated = [
+                    'run_command',
+                    'shell_start', 'shell_read', 'shell_send', 'shell_stop', 'shell_list',
+                    'orcbot_control',
+                    'write_file', 'write_to_file', 'create_file', 'delete_file', 'read_file',
+                    'install_npm_dependency',
+                    'browser_navigate', 'browser_click', 'browser_type', 'browser_snapshot', 'browser_close',
+                    'browser_fill_form', 'browser_extract_data', 'browser_extract_content', 'browser_api_intercept',
+                    'schedule_task',
+                    'manage_skills', 'manage_config',
+                    'generate_image', 'send_image',
+                    'install_tool', 'approve_tool', 'run_tool_command', 'uninstall_tool', 'activate_tool', 'read_tool_readme',
+                ].includes(name);
+
+                return { isResearch, isDeep, isSideEffect, isDangerous, isElevated };
+            };
 
             // Dynamic limits driven by task complexity classification
             const rawConfigMaxSteps = Number(this.config.get('maxStepsPerAction') || 25);
@@ -11099,36 +11132,12 @@ Respond with a single actionable task description (one sentence). Be specific ab
             this._blankPageCount = 0; // Reset blank-page counter for each new action
             this.browser._blankUrlHistory?.clear(); // Reset blank-URL domain tracker for each new action
 
-            const nonDeepSkills = [
-                'send_telegram',
-                'send_whatsapp',
-                'send_discord',
-                'send_slack',
-                'send_gateway_chat',
-                'update_journal',
-                // update_learning and update_world are NOT in this list — they ARE productive work
-                'update_user_profile',
-                'update_agent_identity',
-                'get_system_info',
-                'system_check',
-                'read_bootstrap_file', // Reading bootstrap files is not progress
-                'browser_screenshot',
-                'browser_trace_start',
-                'browser_trace_stop',
-                'request_supporting_data'
-            ];
-
             const configuredProgressInterval = Number(this.config.get('progressFeedbackStepInterval') ?? 4);
             const progressIntervalSteps = Number.isFinite(configuredProgressInterval)
                 ? Math.max(2, Math.floor(configuredProgressInterval))
                 : 4;
             const forceInitialProgress = this.config.get('progressFeedbackForceInitial') !== false;
 
-            const SIDE_EFFECT_TOOLS = new Set([
-                'send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat',
-                'telegram_send_buttons', 'telegram_edit_message', 'telegram_send_poll', 'telegram_react', 'telegram_pin_message',
-                'send_file', 'send_image', 'send_discord_file', 'send_slack_file'
-            ]);
             const buildSideEffectKey = (toolName: string, metadata: any): string => {
                 const md = metadata || {};
                 const name = String(toolName || '').toLowerCase();
@@ -11292,13 +11301,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                 // PROACTIVE PRE-TOOL UPDATE: avoid long silent stretches before deep/slow tool execution.
                 if (action.payload.source && decision.tools && decision.tools.length > 0) {
-                    const hasChannelSendTool = decision.tools.some((t: any) => {
-                        const name = String(t?.name || '').toLowerCase();
-                        return name === 'send_telegram' || name === 'send_whatsapp' || name === 'send_discord' || name === 'send_slack' || name === 'send_gateway_chat' ||
-                            name === 'telegram_send_buttons' || name === 'telegram_edit_message' || name === 'telegram_send_poll' || name === 'telegram_react' || name === 'telegram_pin_message';
-                    });
+                    const hasChannelSendTool = decision.tools.some((t: any) => getSkillMeta(t.name).isSideEffect);
 
-                    const hasDeepTool = decision.tools.some((t: any) => !nonDeepSkills.includes(String(t?.name || '')));
+                    const hasDeepTool = decision.tools.some((t: any) => getSkillMeta(t.name).isDeep);
                     const eligibleByCadence = currentStep - lastProgressFeedbackStep >= progressIntervalSteps;
                     const shouldForceInitial = forceInitialProgress && messagesSent === 0;
                     const shouldSendProactive = hasDeepTool && !hasChannelSendTool && (shouldForceInitial || (stepsSinceLastMessage >= progressIntervalSteps && eligibleByCadence));
@@ -11339,7 +11344,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                     // 2. PLANNING LOOP PROTECTION
                     // If all tools in this turn are non-deep (journal, learning, etc.), increment turn counter
-                    const hasDeepToolThisTurn = decision.tools.some((t: any) => !nonDeepSkills.includes(t.name));
+                    const hasDeepToolThisTurn = decision.tools.some((t: any) => getSkillMeta(t.name).isDeep);
                     if (!hasDeepToolThisTurn) {
                         consecutiveNonDeepTurns++;
                         if (consecutiveNonDeepTurns >= 5) {
@@ -11393,15 +11398,17 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     // Research tools (web_search, browser_*, extract_article) get a higher ceiling
                     // because they legitimately need many calls with different queries for deep research.
                     const overusedSkill = Object.entries(skillCallCounts).find(([skillName, count]) => {
-                        const limit = RESEARCH_TOOLS.has(skillName) ? MAX_RESEARCH_SKILL_REPEATS : MAX_SKILL_REPEATS;
+                        const meta = getSkillMeta(skillName);
+                        const limit = meta.isResearch ? MAX_RESEARCH_SKILL_REPEATS : MAX_SKILL_REPEATS;
                         return count >= limit;
                     });
 
                     if (overusedSkill) {
                         const [skillName, callCount] = overusedSkill;
-                        const isResearchTool = RESEARCH_TOOLS.has(skillName);
+                        const meta = getSkillMeta(skillName);
+                        const isResearchTool = meta.isResearch;
                         const failCount = skillFailCounts[skillName] || 0;
-                        const skillExists = this.skills.getAllSkills().some(s => s.name === skillName);
+                        const skillExists = this.skills.getSkill(skillName) !== undefined;
 
                         logger.warn(`Agent: Skill '${skillName}' called ${callCount} times in action ${action.id}${isResearchTool ? ' (research tool, higher limit)' : ''}.`);
 
@@ -11489,8 +11496,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     let remainingToolsInBatch = decision.tools.length;
 
                     for (const toolCall of decision.tools) {
+                        const toolMeta = getSkillMeta(toolCall.name);
                         remainingToolsInBatch--;
-                        if (SIDE_EFFECT_TOOLS.has(toolCall.name)) {
+                        if (toolMeta.isSideEffect) {
                             totalSideEffectToolsInStep++;
                             const sideEffectKey = buildSideEffectKey(toolCall.name, toolCall.metadata || {});
                             if (successfulSideEffectKeys.has(sideEffectKey)) {
@@ -11530,7 +11538,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         }
 
                         // Reset cooldown if a deep tool (search, command, browser interaction) is used
-                        if (!nonDeepSkills.includes(toolCall.name)) {
+                        if (toolMeta.isDeep) {
                             deepToolExecutedSinceLastMessage = true;
                         }
 
@@ -11654,8 +11662,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         // Autonomous background tasks cannot run dangerous commands without explicit user permission.
                         // sudoMode: true bypasses this restriction (full trust)
                         const sudoMode = this.config.get('sudoMode');
-                        const dangerousTools = ['run_command', 'write_to_file', 'write_file', 'create_file', 'install_npm_dependency', 'delete_file', 'manage_skills'];
-                        if (!sudoMode && action.lane === 'autonomy' && dangerousTools.includes(toolCall.name)) {
+                        if (!sudoMode && action.lane === 'autonomy' && toolMeta.isDangerous) {
                             logger.warn(`Agent: Blocked dangerous tool ${toolCall.name} in autonomy lane.`);
 
                             // If we have a Telegram, notify the user
@@ -11684,7 +11691,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         // This is a hard block — the LLM should have been told not to attempt these,
                         // but this is defense-in-depth in case it does.
                         const isAdmin = action.payload?.isAdmin !== false;
-                        if (!isAdmin && ELEVATED_SKILLS.has(toolCall.name)) {
+                        if (!isAdmin && toolMeta.isElevated) {
                             logger.warn(`Agent: BLOCKED elevated skill '${toolCall.name}' for non-admin user ${action.payload?.senderName || action.payload?.userId || 'unknown'} (${action.payload?.source}).`);
 
                             // Send a polite denial message to the user via the appropriate channel
@@ -11833,12 +11840,9 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         // Channel send skills (telegram, whatsapp, discord, etc.) are NEVER added to
                         // blockedFailedSignatures — they can fail transiently (API errors, parse failures)
                         // and the LLM needs to retry with adjusted content/params.
-                        const isChannelSendSkill = [
-                            'send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat',
-                            'telegram_send_buttons', 'telegram_send_poll', 'telegram_edit_message', 'send_file', 'send_image', 'send_email'
-                        ].includes(toolCall.name);
+                        const isChannelSendSkill = toolMeta.isSideEffect;
 
-                        if (!nonDeepSkills.includes(toolCall.name) && !resultIndicatesError) {
+                        if (toolMeta.isDeep && !resultIndicatesError) {
                             deepToolExecutedSinceLastMessage = true;
                             // Reset failure counter for this skill on success
                             skillFailCounts[toolCall.name] = 0;
@@ -12061,7 +12065,7 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                             }));
                         }
 
-                        if (SIDE_EFFECT_TOOLS.has(toolCall.name) && !resultIndicatesError) {
+                        if (toolMeta.isSideEffect && !resultIndicatesError) {
                             const sideEffectKey = buildSideEffectKey(toolCall.name, toolCall.metadata || {});
                             successfulSideEffectKeys.add(sideEffectKey);
                             if (toolCall.name === 'send_file' || toolCall.name === 'send_image' || toolCall.name === 'send_discord_file' || toolCall.name === 'send_slack_file') {

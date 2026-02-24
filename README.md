@@ -298,7 +298,7 @@ OrcBot comes out of the box with "God Mode" capabilities:
 | `send_file` | Send file via WhatsApp, Telegram, or Discord (auto-detected) | `send_file("123456", "/path/img.png", channel="discord")` |
 | `send_voice_note` | TTS → voice note. Discord fallback: audio file attachment | `send_voice_note("user@s.whatsapp.net", "Hello!")` |
 | `send_image` | Generate AI image and send in one step | `send_image("user_id", "a futuristic city", channel="telegram")` |
-| `text_to_speech` | Convert text to .ogg audio file | `text_to_speech("Hello world", voice="nova")` |
+| `text_to_speech` | Convert text to .ogg/wav audio file | `text_to_speech("Hello world", voice="nova" [OAI] or "kore" [Google])` |
 | `manage_skills` | Append skill definition to SKILLS.md | `manage_skills("New Skill Definition...")` |
 | `create_skill` | Create a knowledge-based SKILL.md skill | `create_skill("pdf-processor", "Parse PDFs")` |
 | `create_custom_skill` | Create an executable TypeScript plugin skill | `create_custom_skill("stripe-charge", "Charge via Stripe")` |
@@ -473,10 +473,21 @@ Key settings (excerpt):
 - `telegramToken` / `whatsappEnabled`
 - `maxStepsPerAction`, `maxMessagesPerAction`, `messageDedupWindow`
 - `autonomyEnabled`, `autonomyInterval`, `autonomyBacklogLimit`
+- `autonomyAllowedChannels`: List of channels the agent can message proactively (e.g., `["telegram"]`).
 - `skillRoutingRules`: Intent-based skill selection rules
-- `autopilotNoQuestions`: Skip clarification requests in autopilot mode
 
-You can manage settings via the TUI (`orcbot ui`) or by editing your config file directly.
+### Autonomy Channel Policy
+To prevent background spam, the agent uses `autonomyAllowedChannels` to restrict where it can send "out of the blue" updates.
+*   **Direct Responses:** Always allowed. If you message the bot, it can always reply on that same channel.
+*   **Proactive Updates:** Only allowed on channels listed in `autonomyAllowedChannels`.
+*   **Default:** Empty `[]` (Silent in background).
+
+Example config:
+```yaml
+autonomyAllowedChannels:
+  - telegram
+  - discord
+```
 
 ### Agent-Driven Config Management
 
