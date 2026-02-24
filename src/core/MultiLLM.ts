@@ -112,6 +112,55 @@ export class MultiLLM {
         if (this.usePiAI) logger.info('MultiLLM: pi-ai backend enabled');
         logger.info(`MultiLLM: Initialized with model ${this.modelName}`);
     }
+
+    /**
+     * Update configuration and API keys at runtime without re-instantiating.
+     */
+    public updateConfig(config: {
+        apiKey?: string, googleApiKey?: string, nvidiaApiKey?: string, anthropicApiKey?: string, modelName?: string,
+        bedrockRegion?: string, bedrockAccessKeyId?: string, bedrockSecretAccessKey?: string, bedrockSessionToken?: string,
+        openrouterApiKey?: string, openrouterBaseUrl?: string, openrouterReferer?: string,
+        openrouterAppName?: string, llmProvider?: LLMProvider, usePiAI?: boolean, groqApiKey?: string, mistralApiKey?: string,
+        cerebrasApiKey?: string, xaiApiKey?: string, huggingfaceApiKey?: string, kimiApiKey?: string, minimaxApiKey?: string,
+        zaiApiKey?: string, perplexityApiKey?: string, deepseekApiKey?: string, opencodeApiKey?: string,
+        azureEndpoint?: string, googleProjectId?: string, googleLocation?: string, fallbackModelNames?: Record<string, string>,
+        fastModelName?: string
+    }) {
+        if (config.apiKey !== undefined) this.openaiKey = config.apiKey;
+        if (config.googleApiKey !== undefined) this.googleKey = config.googleApiKey;
+        if (config.nvidiaApiKey !== undefined) this.nvidiaKey = config.nvidiaApiKey;
+        if (config.anthropicApiKey !== undefined) this.anthropicKey = config.anthropicApiKey;
+        if (config.modelName !== undefined) this.modelName = config.modelName;
+        if (config.bedrockRegion !== undefined) this.bedrockRegion = config.bedrockRegion;
+        if (config.bedrockAccessKeyId !== undefined) this.bedrockAccessKeyId = config.bedrockAccessKeyId;
+        if (config.bedrockSecretAccessKey !== undefined) this.bedrockSecretAccessKey = config.bedrockSecretAccessKey;
+        if (config.bedrockSessionToken !== undefined) this.bedrockSessionToken = config.bedrockSessionToken;
+        if (config.openrouterApiKey !== undefined) this.openrouterKey = config.openrouterApiKey;
+        if (config.openrouterBaseUrl !== undefined) this.openrouterBaseUrl = config.openrouterBaseUrl;
+        if (config.openrouterReferer !== undefined) this.openrouterReferer = config.openrouterReferer;
+        if (config.openrouterAppName !== undefined) this.openrouterAppName = config.openrouterAppName;
+        if (config.llmProvider !== undefined) this.preferredProvider = config.llmProvider;
+        if (config.usePiAI !== undefined) this.usePiAI = config.usePiAI;
+        if (config.groqApiKey !== undefined) this.groqKey = config.groqApiKey;
+        if (config.mistralApiKey !== undefined) this.mistralKey = config.mistralApiKey;
+        if (config.cerebrasApiKey !== undefined) this.cerebrasKey = config.cerebrasApiKey;
+        if (config.xaiApiKey !== undefined) this.xaiKey = config.xaiApiKey;
+        if (config.huggingfaceApiKey !== undefined) this.huggingfaceKey = config.huggingfaceApiKey;
+        if (config.kimiApiKey !== undefined) this.kimiKey = config.kimiApiKey;
+        if (config.minimaxApiKey !== undefined) this.minimaxKey = config.minimaxApiKey;
+        if (config.zaiApiKey !== undefined) this.zaiKey = config.zaiApiKey;
+        if (config.perplexityApiKey !== undefined) this.perplexityKey = config.perplexityApiKey;
+        if (config.deepseekApiKey !== undefined) this.deepseekKey = config.deepseekApiKey;
+        if (config.opencodeApiKey !== undefined) this.opencodeKey = config.opencodeApiKey;
+        if (config.azureEndpoint !== undefined) this.azureEndpoint = config.azureEndpoint;
+        if (config.googleProjectId !== undefined) this.googleProjectId = config.googleProjectId;
+        if (config.googleLocation !== undefined) this.googleLocation = config.googleLocation;
+        if (config.fallbackModelNames !== undefined) this.fallbackModelNames = config.fallbackModelNames;
+        if (config.fastModelName !== undefined) this.fastModelName = config.fastModelName;
+
+        logger.info(`MultiLLM: Configuration updated (active model: ${this.modelName}, provider: ${this.preferredProvider || 'auto'})`);
+    }
+
     // ── Fast model for internal reasoning (reviews, reflections, classification) ──
     // Uses a cheaper/faster model for non-user-facing LLM calls.
     // Set via config key `fastModelName` (default: gpt-4o-mini).

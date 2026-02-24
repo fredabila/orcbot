@@ -46,6 +46,7 @@ export class DecisionEngine {
         private skills: SkillsManager,
         private journalPath: string = './JOURNAL.md',
         private learningPath: string = './LEARNING.md',
+        private worldPath: string = './WORLD.md',
         private config?: ConfigManager,
         bootstrap?: BootstrapManager,
         tools?: ToolsManager
@@ -394,6 +395,16 @@ ${this.repoContext}`,
     }
 
     /**
+     * Clear the per-action core instruction cache.
+     * Useful when configuration (like identity or skills) changes mid-session.
+     */
+    public clearCache(): void {
+        this._cachedCoreActionId = null;
+        this._cachedCoreInstructions = null;
+        logger.info('DecisionEngine: Prompt cache cleared');
+    }
+
+    /**
      * LEGACY: Builds the core system instructions that should be present in ALL LLM calls.
      * Kept for backward compatibility with the termination review layer.
      * @deprecated Use buildHelperPrompt() for new code.
@@ -621,6 +632,7 @@ ${this.repoContext}`,
         
         let journalContent = '';
         let learningContent = '';
+        let worldContent = '';
         if (!isHeartbeat && !omitRedundantContext) {
             try {
                 if (fs.existsSync(this.journalPath)) {
@@ -630,6 +642,11 @@ ${this.repoContext}`,
                 if (fs.existsSync(this.learningPath)) {
                     const full = fs.readFileSync(this.learningPath, 'utf-8');
                     learningContent = full.length > learningLimit ? full.slice(-learningLimit) : full;
+                }
+                if (fs.existsSync(this.worldPath)) {
+                    const full = fs.readFileSync(this.worldPath, 'utf-8');
+                    // Use learningLimit for worldContent as well, or a custom config
+                    worldContent = full.length > learningLimit ? full.slice(-learningLimit) : full;
                 }
             } catch (e) { }
         }
@@ -1176,6 +1193,7 @@ Respond conversationally. If the user asks you to do something that requires ele
         // the sensitive data at all.
         const safeJournal = isAdmin ? journalContent : '';
         const safeLearning = isAdmin ? learningContent : '';
+        const safeWorld = isAdmin ? worldContent : '';
         const safeSemanticRecall = isAdmin ? semanticRecallString : '';
         const safeEpisodic = isAdmin ? semanticEpisodicString : '';
         const safeOtherContext = isAdmin ? otherContextString : '';
@@ -1259,6 +1277,8 @@ ${trimmedUserContext || 'No user information available.'}
 ${safeJournal ? `Agent Journal (Recent Reflections):\n${safeJournal}` : ''}
 
 ${safeLearning ? `Agent Learning Base (Knowledge):\n${safeLearning}` : ''}
+
+${safeWorld ? `Agent World (Internal Governance/Environment):\n${safeWorld}` : ''}
 
 ${threadContextString ? `THREAD CONTEXT (Same Chat):\n${threadContextString}` : ''}
 

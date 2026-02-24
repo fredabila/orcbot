@@ -58,17 +58,17 @@ class AgentWorkerProcess {
 
         process.on('disconnect', () => {
             logger.info(`Worker ${this.config?.agentId}: Parent disconnected, shutting down`);
-            this.shutdown();
+            void this.shutdown();
         });
 
         process.on('SIGTERM', () => {
             logger.info(`Worker ${this.config?.agentId}: Received SIGTERM, shutting down`);
-            this.shutdown();
+            void this.shutdown();
         });
 
         process.on('SIGINT', () => {
             logger.info(`Worker ${this.config?.agentId}: Received SIGINT, shutting down`);
-            this.shutdown();
+            void this.shutdown();
         });
     }
 
@@ -110,7 +110,7 @@ class AgentWorkerProcess {
                 break;
 
             case 'shutdown':
-                this.shutdown();
+                await this.shutdown();
                 break;
         }
     }
@@ -140,9 +140,16 @@ class AgentWorkerProcess {
                 logger.warn(`Worker ${config.agentId}: Failed to read parent config: ${e}`);
             }
 
-            // Build the worker config object in memory
+            // ── Worker isolation ──
+            // Workers MUST NOT start channels or AgenticUser (only primary manages those)
+            // UNLESS role is peer or allowWorkerChannels is true.
+            // Even then, we NEVER inherit the parent's actual tokens to avoid 409 Conflicts.
+            const allowWorkerChannels = !!parentCfg.allowWorkerChannels || config.role === 'peer';
+            
+            // Build the base worker config template in memory
             const workerCfg: any = {
                 // ── API keys (all providers) ──
+                // These ARE inherited so workers have "fuel"
                 openaiApiKey: parentCfg.openaiApiKey,
                 googleApiKey: parentCfg.googleApiKey,
                 nvidiaApiKey: parentCfg.nvidiaApiKey,
@@ -170,7 +177,6 @@ class AgentWorkerProcess {
                 captchaApiKey: parentCfg.captchaApiKey,
                 browserEngine: parentCfg.browserEngine,
                 lightpandaEndpoint: parentCfg.lightpandaEndpoint,
-                // Each worker gets its own browser profile to avoid lock conflicts
                 browserProfileDir: path.join(workerDir, 'browser-profile'),
                 browserProfileName: `worker-${config.agentId}`,
 
@@ -182,34 +188,54 @@ class AgentWorkerProcess {
                 memoryConsolidationThreshold: parentCfg.memoryConsolidationThreshold,
                 memoryConsolidationBatch: parentCfg.memoryConsolidationBatch,
 
-                // ── Worker-specific paths ──
-                agentName: config.name,
-                agentRole: config.role, // Pass role to config so CoreHelper can see it
-                memoryPath: config.memoryPath,
-                actionQueuePath: path.join(workerDir, 'actions.json'),
-                journalPath: path.join(workerDir, 'JOURNAL.md'),
-                learningPath: path.join(workerDir, 'LEARNING.md'),
-                userProfilePath: path.join(workerDir, 'USER.md'),
-                agentIdentityPath: path.join(workerDir, 'AGENT.md'),
-                tokenUsagePath: path.join(workerDir, 'token-usage-summary.json'),
-                tokenLogPath: path.join(workerDir, 'token-usage.log'),
-
-                // ── Worker isolation ──
-                // Workers MUST NOT start channels or AgenticUser (only primary manages those)
+                // ── Worker isolation defaults ──
+                // We NEVER copy parent channel tokens here.
+                // If a worker needs a channel, it must be explicitly configured via configure_peer_agent.
                 agenticUserEnabled: false,
-                telegramToken: '',
+                allowWorkerChannels: allowWorkerChannels,
+                telegramToken: '', 
                 whatsappEnabled: false,
                 discordToken: '',
+                slackBotToken: '',
+                slackAppToken: '',
+                emailEnabled: false
             };
 
-            // Remove undefined keys so parent defaults aren't overridden with undefined
-            for (const key of Object.keys(workerCfg)) {
-                if (workerCfg[key] === undefined) delete workerCfg[key];
+            // IF a config already exists for this worker, read it and merge
+            let existingCfg: any = {};
+            if (fs.existsSync(workerConfigPath)) {
+                try {
+                    existingCfg = yaml.parse(fs.readFileSync(workerConfigPath, 'utf-8')) || {};
+                } catch { /* ignore */ }
             }
 
-            // Write the entire config in ONE atomic operation
+            // Merge order: base workerCfg < existingCfg (explicit worker overrides)
+            const mergedCfg: any = {
+                ...workerCfg, 
+                ...existingCfg,
+            };
+
+            // Enforce worker specific paths
+            mergedCfg.agentName = config.name;
+            mergedCfg.agentRole = config.role;
+            mergedCfg.memoryPath = config.memoryPath;
+            mergedCfg.actionQueuePath = path.join(workerDir, 'actions.json');
+            mergedCfg.journalPath = path.join(workerDir, 'JOURNAL.md');
+            mergedCfg.learningPath = path.join(workerDir, 'LEARNING.md');
+            mergedCfg.worldPath = path.join(workerDir, 'WORLD.md');
+            mergedCfg.userProfilePath = path.join(workerDir, 'USER.md');
+            mergedCfg.agentIdentityPath = path.join(workerDir, 'AGENT.md');
+            mergedCfg.tokenUsagePath = path.join(workerDir, 'token-usage-summary.json');
+            mergedCfg.tokenLogPath = path.join(workerDir, 'token-usage.log');
+
+            // Remove undefined keys
+            for (const key of Object.keys(mergedCfg)) {
+                if (mergedCfg[key] === undefined) delete mergedCfg[key];
+            }
+
+            // Write the merged config
             try {
-                fs.writeFileSync(workerConfigPath, yaml.stringify(workerCfg));
+                fs.writeFileSync(workerConfigPath, yaml.stringify(mergedCfg));
             } catch (e) {
                 logger.error(`Worker ${config.agentId}: Failed to write worker config: ${e}`);
             }
@@ -253,7 +279,7 @@ class AgentWorkerProcess {
 3. If the task mentions "content from another agent" but none exists, generate the content yourself or use placeholder content.
 4. When DONE, use 'complete_delegated_task("${taskId}", "<your_findings_summary>")' to report results.
 5. DO NOT get stuck in loops checking for external data - take action with what you have.
-6. You have RAG capabilities: use 'rag_ingest' to store knowledge and 'rag_search' to retrieve it. Use 'update_learning' and 'update_journal' to record learnings and reflections.${platformNote}`;
+6. You have RAG capabilities: use 'rag_ingest' to store knowledge and 'rag_search' to retrieve it. Use 'update_learning', 'update_world', and 'update_journal' to record learnings and reflections.${platformNote}`;
 
 
             // Push the task to the worker's action queue and process it
@@ -358,14 +384,22 @@ class AgentWorkerProcess {
         return { shortTermCount: 0, episodicCount: 0, semanticCount: 0 };
     }
 
-    private shutdown(): void {
+    private async shutdown(): Promise<void> {
         logger.info(`Worker ${this.config?.agentId}: Shutting down...`);
         this.isRunning = false;
         
-        // Give time for cleanup
+        if (this.agent) {
+            try {
+                await this.agent.stop();
+            } catch (e) {
+                logger.error(`Worker ${this.config?.agentId}: Error stopping agent: ${e}`);
+            }
+        }
+
+        // Give time for final cleanup
         setTimeout(() => {
             process.exit(0);
-        }, 500);
+        }, 1000);
     }
 }
 

@@ -149,6 +149,18 @@ export class ActionQueue {
             if (!dep || dep.status !== 'completed') return false;
         }
 
+        // Session Serialization: Ensure no other action for the same session is "active"
+        // Active = in-progress (running now) or waiting (paused for user input)
+        const sessionId = action.payload?.sessionScopeId;
+        if (sessionId) {
+            const sessionBusy = this.cache.some(a => 
+                (a.status === 'in-progress' || a.status === 'waiting') && 
+                a.payload?.sessionScopeId === sessionId &&
+                a.id !== action.id
+            );
+            if (sessionBusy) return false;
+        }
+
         // Retry backoff: not yet eligible
         if (action.retry?.nextRetryAt && action.retry.nextRetryAt > nowIso) return false;
 

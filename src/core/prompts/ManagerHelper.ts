@@ -16,7 +16,7 @@ export class ManagerHelper implements PromptHelper {
 
     shouldActivate(ctx: PromptHelperContext): boolean {
         // Activate if the user explicitly asks for delegation or management
-        if (/(delegate|assign|manager|worker|spawn|parallel)/i.test(ctx.taskDescription)) return true;
+        if (/(delegate|assign|manager|worker|spawn|parallel|peer|clone)/i.test(ctx.taskDescription)) return true;
         
         // Activate if the task is complex/multi-step (heuristic based on description length or keywords)
         // Heuristic: "research", "analyze multiple", "compare", "comprehensive" often benefit from delegation
@@ -25,6 +25,7 @@ export class ManagerHelper implements PromptHelper {
         // Activate if orchestration skills have been used recently
         if (ctx.skillsUsedInAction?.some(s => 
             s.startsWith('spawn_') || 
+            s.startsWith('create_peer_agent') ||
             s.startsWith('delegate_') || 
             s.startsWith('list_agents') ||
             s.includes('orchestrator')
@@ -63,8 +64,12 @@ You are not just a worker; you are a MANAGER. You have an AgentOrchestrator syst
 
 **COMMANDS:**
 - "browse_async(goal)": *High-level shortcut.* Spawns/reuses a "browser_specialist" and delegates immediately. Returns "Task delegated".
-- "spawn_agent(name, role)": Create a new persistent process.
+- "spawn_agent(name, role)": Create a new persistent process for sub-tasks.
+- "create_peer_agent(name, role, specialized_governance?)": Create an independent "clone" that inherits your WORLD.md and identity. Use this for permanent specialized entities (e.g. a SecurityPeer or a FinancePeer).
 - "delegate_task(task, priority, agent_id)": Send work.
-- "list_agents()": See your workforce.`;
+- "list_agents()": See your workforce.
+
+**TRUST THE HAND-OFF:**
+When using tools that trigger background restarts (like "configure_peer_agent"), trust that the system will handle the restart. Do NOT call "list_agents" repeatedly to verify — the process may take a few seconds to show as "Running" again. If the tool returns a success message, assume it worked and inform the user.`;
     }
 }

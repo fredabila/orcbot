@@ -19,6 +19,7 @@ function mockConfig(overrides: Record<string, any> = {}): ConfigManager {
         agenticUserMaxInterventions: 3,
         journalPath: '',
         learningPath: '',
+        worldPath: '',
         ...overrides
     };
 

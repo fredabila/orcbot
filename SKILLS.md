@@ -73,7 +73,8 @@ This file lists the available skills for the agent.
 - **update_user_profile(info_text)**: Save permanent information learned about the user.
 - **update_agent_identity(trait)**: Update the agent’s personality/identity.
 - **update_journal(entry_text)**: Write a reflection entry to JOURNAL.md.
-- **update_learning(topic, knowledge_content?)**: Research and persist knowledge.
+- **update_learning(topic, knowledge_content?)**: Research and persist knowledge to LEARNING.md.
+- **update_world(topic, content)**: Update the internal environment cluster, institution, and governance structure in WORLD.md. Use this to maintain the agentic society rules.
 - **request_supporting_data(question)**: Ask for missing info and pause execution.
 - **deep_reason(topic)**: Perform intensive multi-step analysis.
 - **recall_memory(query, limit?)**: Semantic search across ALL memory — finds relevant memories from any channel, time period, or type.
@@ -92,7 +93,9 @@ This file lists the available skills for the agent.
 - **schedule_task(time_or_cron, task_description)**: Schedule a task for later.
 
 ## Multi-Agent Orchestration
-- **spawn_agent(name, role, capabilities?)**: Create a sub-agent.
+- **spawn_agent(name, role, capabilities?)**: Create a sub-agent for temporary task delegation.
+- **create_peer_agent(name, role, specialized_governance?)**: Create an independent "clone" that inherits your identity foundations and WORLD.md governance. Use this for permanent specialized entities.
+- **configure_peer_agent(agent_id, updates:object)**: Update the configuration (API keys, channel tokens, etc.) for an existing peer agent. The agent will be restarted to apply changes.
 - **list_agents()**: List active agents.
 - **terminate_agent(agent_id)**: Terminate a spawned agent.
 - **delegate_task(description, priority?, agent_id?)**: Create and assign a task.

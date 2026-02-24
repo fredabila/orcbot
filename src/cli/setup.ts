@@ -386,6 +386,7 @@ export async function runSetup() {
         userProfilePath: path.join(dataHome, 'USER.md'),
         journalPath: path.join(dataHome, 'JOURNAL.md'),
         learningPath: path.join(dataHome, 'LEARNING.md'),
+        worldPath: path.join(dataHome, 'WORLD.md'),
         agentIdentityPath: path.join(dataHome, '.AI.md'),
         actionQueuePath: path.join(dataHome, 'actions.json'),
         tokenUsagePath: path.join(dataHome, 'token-usage-summary.json'),

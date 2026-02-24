@@ -385,7 +385,7 @@ process.on('uncaughtException', (err) => {
 });
 
 const program = new Command();
-const agent = new Agent();
+const agent = new Agent({ isCLI: true });
 const workerProfile = new WorkerProfileManager();
 
 program
@@ -2187,6 +2187,7 @@ async function showMainMenu() {
                 { name: `  ${c.magenta}🧠${c.reset}  Manage AI Models`, value: 'models' },
                 { name: `  ${c.brightBlue}🔌${c.reset}  Manage Connections`, value: 'connections' },
                 { name: `  ${c.brightCyan}⚡${c.reset}  Manage Skills  ${c.gray}(${agent.skills.getAgentSkills().length} installed)${c.reset}`, value: 'skills' },
+                { name: `  ${c.brightBlue}🌍${c.reset}  World Governance`, value: 'world' },
                 { name: `  ${c.brightMagenta}🧰${c.reset}  Manage Tools   ${c.gray}(${agent.tools.listTools().length} installed)${c.reset}`, value: 'tools' },
                 { name: `  ${c.yellow}🔧${c.reset}  Tooling & APIs`, value: 'tooling' },
                 new inquirer.Separator(`${c.brightCyan} ── ADVANCED ${'─'.repeat(30)}${c.reset}`),
@@ -2224,6 +2225,9 @@ async function showMainMenu() {
             break;
         case 'skills':
             await showSkillsMenu();
+            break;
+        case 'world':
+            await showWorldGovernanceMenu();
             break;
         case 'tools':
             await showToolsManagerMenu();
@@ -4454,6 +4458,107 @@ async function showWorkerProfileMenu() {
     return showWorkerProfileMenu();
 }
 
+async function showWorldGovernanceMenu() {
+    console.clear();
+    banner();
+    sectionHeader('🌍', 'World Governance');
+
+    const worldPath = agent.config.get('worldPath');
+    let worldContent = '';
+    try {
+        if (require('fs').existsSync(worldPath)) {
+            worldContent = require('fs').readFileSync(worldPath, 'utf-8');
+        } else {
+            worldContent = '(WORLD.md not found)';
+        }
+    } catch (e) {
+        worldContent = `(Error reading WORLD.md: ${e})`;
+    }
+
+    const preview = worldContent.length > 800 ? worldContent.slice(0, 800) + '...' : worldContent;
+    
+    box([preview || '(Empty)'], { title: '📜 WORLD.MD PREVIEW', width: 64, color: c.brightBlue });
+    console.log('');
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: cyan('Governance Options:'),
+            choices: [
+                { name: `  📝 ${bold('Edit WORLD.md (Manual)')}`, value: 'edit' },
+                { name: `  🤖 ${bold('Ask Agent to Update World')}`, value: 'agent_update' },
+                { name: `  👥 ${bold('View Peer Agent Worlds')}`, value: 'peers' },
+                { name: dim('  ← Back'), value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showMainMenu();
+
+    switch (action) {
+        case 'edit': {
+            console.log(yellow('\nOpening WORLD.md in your default editor...'));
+            // Use OS-specific open command
+            const cmd = process.platform === 'win32' ? 'start' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+            require('child_process').spawn(cmd, [worldPath], { shell: true });
+            await waitKeyPress();
+            return showWorldGovernanceMenu();
+        }
+        case 'agent_update': {
+            const { topic, content } = await inquirer.prompt([
+                { type: 'input', name: 'topic', message: 'Governance Topic (e.g. "Security Protocol"):', validate: (v: string) => v.trim().length > 0 || 'Topic required' },
+                { type: 'input', name: 'content', message: 'Rules/Content:', validate: (v: string) => v.trim().length > 0 || 'Content required' }
+            ]);
+            
+            try {
+                const entry = `\n\n## ${topic}\n**Date**: ${new Date().toISOString().split('T')[0]}\n**User Entry via TUI**\n\n${content}\n\n---`;
+                require('fs').appendFileSync(worldPath, entry);
+                console.log(green('\n✅ WORLD.md updated successfully.'));
+            } catch (e: any) {
+                console.log(red(`\n❌ Failed to update world: ${e.message}`));
+            }
+            await waitKeyPress();
+            return showWorldGovernanceMenu();
+        }
+        case 'peers': {
+            const orchestrator = agent.orchestrator;
+            const status = orchestrator.getStatus();
+            if (status.activeAgents <= 1) { // Primary is 1
+                console.log(yellow('\nNo peer agents found.'));
+                await waitKeyPress();
+                return showWorldGovernanceMenu();
+            }
+
+            const peers = orchestrator.getAgents().filter(a => a.id !== 'primary' && a.status !== 'terminated');
+            const { peerId } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'peerId',
+                    message: 'Select peer to view their world state:',
+                    choices: peers.map(p => ({ name: `${p.name} (${p.role})`, value: p.id }))
+                }
+            ]);
+
+            const peer = orchestrator.getAgent(peerId);
+            if (peer) {
+                const peerWorldPath = require('path').join(require('path').dirname(peer.memoryPath), 'WORLD.md');
+                if (require('fs').existsSync(peerWorldPath)) {
+                    const peerWorld = require('fs').readFileSync(peerWorldPath, 'utf-8');
+                    console.clear();
+                    banner();
+                    sectionHeader('👥', `${peer.name}'s World`);
+                    box(peerWorld.split('\n'), { title: '📜 PEER WORLD.MD', width: 64, color: c.magenta });
+                } else {
+                    console.log(red('\n❌ Peer WORLD.md not found.'));
+                }
+            }
+            await waitKeyPress();
+            return showWorldGovernanceMenu();
+        }
+    }
+}
+
 async function showWorkerWebsitesMenu() {
     const profile = workerProfile.get();
     if (!profile) return showWorkerProfileMenu();
@@ -4751,7 +4856,9 @@ async function showOrchestrationMenu() {
                 { name: `  ⚡ ${bold('View Running Processes')}`, value: 'processes' },
                 { name: `  🔍 ${bold('View Worker Task Details')}`, value: 'worker_details' },
                 new inquirer.Separator(gradient('  ─── Manage ───────────────────────', [c.cyan, c.gray])),
-                { name: `  ➕ ${bold('Spawn New Agent')}`, value: 'spawn' },
+                { name: `  👥 ${bold('Create Peer Agent (Clone)')}`, value: 'create_peer' },
+                { name: `  ⚙️  ${bold('Configure Peer Agent')}`, value: 'configure_peer' },
+                { name: `  ➕ ${bold('Spawn New Worker')}`, value: 'spawn' },
                 { name: `  ▶️  ${bold('Start Worker Process')}`, value: 'start_worker' },
                 { name: `  ⏹️  ${bold('Stop Worker Process')}`, value: 'stop_worker' },
                 new inquirer.Separator(gradient('  ─── Tasks ────────────────────────', [c.yellow, c.gray])),
@@ -5006,6 +5113,55 @@ async function showOrchestrationMenu() {
             console.log(success ? '\n✅ Stop signal sent to worker.' : '\n❌ Failed to stop worker.');
             break;
         }
+        case 'create_peer': {
+            const { name, role, governance } = await inquirer.prompt([
+                { type: 'input', name: 'name', message: 'Peer name:', validate: (v: string) => v.trim().length > 0 || 'Name required' },
+                { type: 'input', name: 'role', message: 'Specialized role (e.g. "Security Auditor"):', default: 'peer' },
+                { type: 'input', name: 'governance', message: 'Additional governance rules (optional):' }
+            ]);
+
+            // Call the same underlying logic as the create_peer_agent skill
+            try {
+                // Prepare the spawn
+                const agentInstance = orchestrator.spawnAgent({
+                    name: name.trim(),
+                    role: role.trim(),
+                    autoStart: false
+                });
+
+                const agentDir = require('path').dirname(agentInstance.memoryPath);
+                if (!require('fs').existsSync(agentDir)) require('fs').mkdirSync(agentDir, { recursive: true });
+
+                // 1. Clone Identity
+                const primaryIdPath = agent.config.get('agentIdentityPath');
+                if (primaryIdPath && require('fs').existsSync(primaryIdPath)) {
+                    const content = require('fs').readFileSync(primaryIdPath, 'utf-8');
+                    const newId = content.replace(/Name: .*/, `Name: ${name}`);
+                    require('fs').writeFileSync(require('path').join(agentDir, 'AGENT.md'), newId);
+                }
+
+                // 2. Clone World
+                const primaryWorldPath = agent.config.get('worldPath');
+                let worldContent = '';
+                if (primaryWorldPath && require('fs').existsSync(primaryWorldPath)) {
+                    worldContent = require('fs').readFileSync(primaryWorldPath, 'utf-8');
+                } else {
+                    worldContent = '# Agent World\nThis file contains the internal environment cluster and governance structure.\n';
+                }
+
+                if (governance) {
+                    worldContent += `\n\n## Specialized Peer Governance: ${name}\n${governance}\n`;
+                }
+                require('fs').writeFileSync(require('path').join(agentDir, 'WORLD.md'), worldContent);
+
+                // 3. Start
+                orchestrator.startWorkerProcess(agentInstance);
+                console.log(`\n✅ Peer agent created and started: ${agentInstance.id} (${agentInstance.name})`);
+            } catch (err: any) {
+                console.log(`\n❌ Error creating peer: ${err.message}`);
+            }
+            break;
+        }
         case 'spawn': {
             const { name, capabilities } = await inquirer.prompt([
                 { type: 'input', name: 'name', message: 'Agent name:', validate: (v: string) => v.trim().length > 0 || 'Name required' },
@@ -5019,6 +5175,80 @@ async function showOrchestrationMenu() {
                 capabilities: caps.length > 0 ? caps : undefined
             });
             console.log(`\n✅ Agent spawned: ${newAgent.id} (${newAgent.name})`);
+            break;
+        }
+        case 'configure_peer': {
+            const agents = orchestrator.listAgents().filter(a => a.id !== 'primary');
+            if (agents.length === 0) {
+                console.log('\n❌ No peer agents available to configure.');
+                break;
+            }
+
+            const { agentId } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'agentId',
+                    message: 'Select peer agent to configure:',
+                    choices: agents.map(a => ({ name: `${a.name} (${a.id.slice(0, 8)}...)`, value: a.id }))
+                }
+            ]);
+
+            const { key, value } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'key',
+                    message: 'Select setting to configure:',
+                    choices: [
+                        { name: 'Telegram Token', value: 'telegramToken' },
+                        { name: 'Discord Token', value: 'discordToken' },
+                        { name: 'Model Name', value: 'modelName' },
+                        { name: 'LLM Provider', value: 'llmProvider' },
+                        { name: 'Custom Setting...', value: 'custom' }
+                    ]
+                },
+                {
+                    type: 'input',
+                    name: 'customKey',
+                    message: 'Enter config key:',
+                    when: (a) => a.key === 'custom'
+                },
+                {
+                    type: 'input',
+                    name: 'value',
+                    message: 'Enter new value:',
+                }
+            ]);
+
+            const finalKey = key === 'custom' ? key.customKey : key;
+            const updates: Record<string, any> = { [finalKey]: value };
+
+            // Call the same underlying logic as the configure_peer_agent skill
+            try {
+                const agentInstance = orchestrator.getAgent(agentId);
+                if (!agentInstance) throw new Error('Agent not found');
+
+                const workerDir = require('path').dirname(agentInstance.memoryPath);
+                const workerConfigPath = require('path').join(workerDir, 'orcbot.config.yaml');
+
+                const yamlMod = require('yaml');
+                const currentCfg = require('fs').existsSync(workerConfigPath) 
+                    ? yamlMod.parse(require('fs').readFileSync(workerConfigPath, 'utf-8')) 
+                    : {};
+                
+                const newCfg = { ...currentCfg, ...updates };
+                if (updates.telegramToken || updates.discordToken) newCfg.allowWorkerChannels = true;
+
+                require('fs').writeFileSync(workerConfigPath, yamlMod.stringify(newCfg));
+
+                if (orchestrator.isWorkerRunning(agentId)) {
+                    console.log(yellow(`\n🔄 Restarting peer ${agentId} to apply changes...`));
+                    orchestrator.stopWorkerProcess(agentId);
+                    setTimeout(() => orchestrator.startWorkerProcess(agentInstance), 6000);
+                }
+                console.log(green(`\n✅ Peer configuration updated.`));
+            } catch (err: any) {
+                console.log(red(`\n❌ Error configuring peer: ${err.message}`));
+            }
             break;
         }
         case 'delegate': {

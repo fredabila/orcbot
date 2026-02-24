@@ -173,9 +173,12 @@ export class Agent {
 
     /** True when this Agent instance runs inside a worker process (AgentWorker). */
     public readonly isWorker: boolean;
+    /** True when this Agent instance runs in CLI/TUI mode (prevents background auto-start). */
+    public readonly isCLI: boolean;
 
-    constructor(options?: { isWorker?: boolean }) {
+    constructor(options?: { isWorker?: boolean, isCLI?: boolean }) {
         this.isWorker = options?.isWorker ?? false;
+        this.isCLI = options?.isCLI ?? false;
         this.config = new ConfigManager();
         this.agentConfigFile = this.config.get('agentIdentityPath');
         this.initializeStorage();
@@ -280,6 +283,7 @@ export class Agent {
             this.skills,
             this.config.get('journalPath'),
             this.config.get('learningPath'),
+            this.config.get('worldPath'),
             this.config,
             this.bootstrap,  // Pass bootstrap manager
             this.tools
@@ -372,14 +376,16 @@ export class Agent {
             this.llm,
             this.config
         );
-        if (!this.isWorker) {
+        if (!this.isWorker && !this.isCLI) {
             this.agenticUser.start();
         }
 
         this.loadAgentIdentity();
         this.setupEventListeners();
         // Workers don't set up messaging channels — only the primary agent manages channels
-        if (!this.isWorker) {
+        // UNLESS allowWorkerChannels is true (used for peer agents with their own bots)
+        const allowWorkerChannels = this.config.get('allowWorkerChannels') === true;
+        if ((!this.isWorker || allowWorkerChannels) && !this.isCLI) {
             this.setupChannels();
         }
         this.registerInternalSkills();
@@ -390,6 +396,7 @@ export class Agent {
             userProfile: this.config.get('userProfilePath'),
             journal: this.config.get('journalPath'),
             learning: this.config.get('learningPath'),
+            world: this.config.get('worldPath'),
             actionQueue: this.config.get('actionQueuePath'),
             memory: this.config.get('memoryPath'),
             skills: this.config.get('skillsPath')
@@ -412,6 +419,7 @@ export class Agent {
                 if (key === 'userProfile') defaultContent = '# User Profile\n\nThis file contains information about the user.\n\n## Core Identity\n- Name: Unknown\n- Preferences: None known yet\n';
                 if (key === 'journal') defaultContent = '# Agent Journal\nThis file contains self-reflections and activity logs.\n';
                 if (key === 'learning') defaultContent = '# Agent Learning Base\nThis file contains structured knowledge on various topics.\n';
+                if (key === 'world') defaultContent = '# Agent World\nThis file contains the internal environment cluster, institution, and governance structure maintained by the agents.\n';
                 if (key === 'actionQueue') defaultContent = '[]';
                 if (key === 'memory') defaultContent = '{"memories":[]}';
                 if (key === 'skills') {
@@ -443,37 +451,137 @@ export class Agent {
         return this.config.get('googleComputerUseModel') || 'gemini-2.5-computer-use-preview-10-2025';
     }
 
-    public setupChannels() {
+    public async setupChannels() {
         const telegramToken = this.config.get('telegramToken');
-        if (telegramToken) {
+        if (telegramToken && !this.telegram) {
             this.telegram = new TelegramChannel(telegramToken, this);
-            logger.info('Agent: Telegram channel configured');
+            this.telegram.start().catch(e => logger.error(`Failed to start Telegram: ${e}`));
+            logger.info('Agent: Telegram channel started');
         }
 
         const whatsappEnabled = this.config.get('whatsappEnabled');
-        if (whatsappEnabled) {
+        if (whatsappEnabled && !this.whatsapp) {
             this.whatsapp = new WhatsAppChannel(this);
-            logger.info('Agent: WhatsApp channel configured');
+            this.whatsapp.start().catch(e => logger.error(`Failed to start WhatsApp: ${e}`));
+            logger.info('Agent: WhatsApp channel started');
         }
 
         const discordToken = this.config.get('discordToken');
-        if (discordToken) {
+        if (discordToken && !this.discord) {
             this.discord = new DiscordChannel(discordToken, this);
-            logger.info('Agent: Discord channel configured');
+            this.discord.start().catch(e => logger.error(`Failed to start Discord: ${e}`));
+            logger.info('Agent: Discord channel started');
         }
 
         const slackBotToken = this.config.get('slackBotToken');
-        if (slackBotToken) {
+        if (slackBotToken && !this.slack) {
             const slackAppToken = this.config.get('slackAppToken');
             this.slack = new SlackChannel(slackBotToken, slackAppToken, this);
-            logger.info('Agent: Slack channel configured');
+            this.slack.start().catch(e => logger.error(`Failed to start Slack: ${e}`));
+            logger.info('Agent: Slack channel started');
         }
 
-
         const emailEnabled = this.config.get('emailEnabled') === true;
-        if (emailEnabled) {
+        if (emailEnabled && !this.email) {
             this.email = new EmailChannel(this);
-            logger.info('Agent: Email channel configured');
+            this.email.start().catch(e => logger.error(`Failed to start Email: ${e}`));
+            logger.info('Agent: Email channel started');
+        }
+    }
+
+    private async hotReloadLLM(newConfig: any) {
+        logger.info('Agent: Hot-reloading LLM configuration...');
+        this.llm.updateConfig({
+            apiKey: newConfig.openaiApiKey,
+            googleApiKey: newConfig.googleApiKey,
+            nvidiaApiKey: newConfig.nvidiaApiKey,
+            anthropicApiKey: newConfig.anthropicApiKey,
+            openrouterApiKey: newConfig.openrouterApiKey,
+            openrouterBaseUrl: newConfig.openrouterBaseUrl,
+            openrouterReferer: newConfig.openrouterReferer,
+            openrouterAppName: newConfig.openrouterAppName,
+            modelName: newConfig.modelName,
+            llmProvider: newConfig.llmProvider,
+            bedrockRegion: newConfig.bedrockRegion,
+            bedrockAccessKeyId: newConfig.bedrockAccessKeyId,
+            bedrockSecretAccessKey: newConfig.bedrockSecretAccessKey,
+            bedrockSessionToken: newConfig.bedrockSessionToken,
+            groqApiKey: newConfig.groqApiKey,
+            mistralApiKey: newConfig.mistralApiKey,
+            cerebrasApiKey: newConfig.cerebrasApiKey,
+            xaiApiKey: newConfig.xaiApiKey,
+            fallbackModelNames: newConfig.fallbackModelNames,
+            fastModelName: newConfig.fastModelName
+        });
+    }
+
+    private async hotReloadChannels(oldConfig: any, newConfig: any) {
+        // 1. Telegram
+        if (oldConfig.telegramToken !== newConfig.telegramToken) {
+            if (this.telegram) {
+                logger.info('Agent: Telegram token changed, stopping old instance...');
+                await this.telegram.stop();
+                this.telegram = undefined;
+            }
+            if (newConfig.telegramToken) {
+                logger.info('Agent: Starting new Telegram instance...');
+                this.telegram = new TelegramChannel(newConfig.telegramToken, this);
+                this.telegram.start().catch(e => logger.error(`Failed to start Telegram: ${e}`));
+            }
+        }
+
+        // 2. Discord
+        if (oldConfig.discordToken !== newConfig.discordToken) {
+            if (this.discord) {
+                logger.info('Agent: Discord token changed, stopping old instance...');
+                await this.discord.stop();
+                this.discord = undefined;
+            }
+            if (newConfig.discordToken) {
+                logger.info('Agent: Starting new Discord instance...');
+                this.discord = new DiscordChannel(newConfig.discordToken, this);
+                this.discord.start().catch(e => logger.error(`Failed to start Discord: ${e}`));
+            }
+        }
+
+        // 3. Slack
+        if (oldConfig.slackBotToken !== newConfig.slackBotToken || oldConfig.slackAppToken !== newConfig.slackAppToken) {
+            if (this.slack) {
+                logger.info('Agent: Slack token changed, stopping old instance...');
+                await this.slack.stop();
+                this.slack = undefined;
+            }
+            if (newConfig.slackBotToken) {
+                logger.info('Agent: Starting new Slack instance...');
+                this.slack = new SlackChannel(newConfig.slackBotToken, newConfig.slackAppToken, this);
+                this.slack.start().catch(e => logger.error(`Failed to start Slack: ${e}`));
+            }
+        }
+
+        // 4. WhatsApp
+        if (oldConfig.whatsappEnabled !== newConfig.whatsappEnabled) {
+            if (oldConfig.whatsappEnabled && this.whatsapp) {
+                logger.info('Agent: WhatsApp disabled, stopping...');
+                await this.whatsapp.stop();
+                this.whatsapp = undefined;
+            } else if (newConfig.whatsappEnabled && !this.whatsapp) {
+                logger.info('Agent: WhatsApp enabled, starting...');
+                this.whatsapp = new WhatsAppChannel(this);
+                this.whatsapp.start().catch(e => logger.error(`Failed to start WhatsApp: ${e}`));
+            }
+        }
+
+        // 5. Email
+        if (oldConfig.emailEnabled !== newConfig.emailEnabled) {
+            if (oldConfig.emailEnabled && this.email) {
+                logger.info('Agent: Email disabled, stopping...');
+                await this.email.stop();
+                this.email = undefined;
+            } else if (newConfig.emailEnabled && !this.email) {
+                logger.info('Agent: Email enabled, starting...');
+                this.email = new EmailChannel(this);
+                this.email.start().catch(e => logger.error(`Failed to start Email: ${e}`));
+            }
         }
     }
 
@@ -5368,6 +5476,38 @@ Be thorough and academic.`;
             }
         });
 
+        // Skill: Update World - maintain internal governance/environment
+        this.skills.registerSkill({
+            name: 'update_world',
+            description: 'Update the internal environment cluster, institution, and governance structure in WORLD.md.',
+            usage: 'update_world(topic, content)',
+            handler: async (args: any) => {
+                const topic = args.topic || args.subject || args.title;
+                const content = args.content || args.text || args.data;
+
+                if (!topic) return 'Error: Missing topic.';
+                if (!content) return 'Error: Missing content.';
+
+                const MAX_WORLD_CHARS = 5000;
+                let storedContent = String(content);
+                const wasTruncated = storedContent.length > MAX_WORLD_CHARS;
+                if (wasTruncated) {
+                    storedContent = storedContent.substring(0, MAX_WORLD_CHARS) + '\n\n[...truncated]';
+                }
+
+                const worldPath = this.config.get('worldPath');
+                try {
+                    const entry = `\n\n## ${topic}\n**Date**: ${new Date().toISOString().split('T')[0]}\n\n${storedContent}\n\n---`;
+                    fs.appendFileSync(worldPath, entry);
+                    this.lastHeartbeatProductive = true;
+                    logger.info(`World: Saved governance/environment data about "${topic}" to ${worldPath}`);
+                    return `Successfully updated world structure for "${topic}" in WORLD.md${wasTruncated ? ' (content was truncated)' : ''}`;
+                } catch (e) {
+                    return `Failed to update world base at ${worldPath}: ${e}`;
+                }
+            }
+        });
+
         // Skill: Request Supporting Data
         this.skills.registerSkill({
             name: 'request_supporting_data',
@@ -5479,6 +5619,122 @@ Be thorough and academic.`;
                 }
             });
 
+            // Skill: Create Peer Agent (Governance Duplication)
+            this.skills.registerSkill({
+                name: 'create_peer_agent',
+                description: 'Create an independent peer agent that inherits the current world governance structure and identity foundations. Unlike a sub-agent, a peer is designed for long-term specialized autonomy within the world.',
+                usage: 'create_peer_agent(name, role, specialized_governance?, inherit_current_world:boolean?)',
+                handler: async (args: any) => {
+                    const name = args.name;
+                    const role = args.role || 'peer';
+                    const specializedGovernance = args.specialized_governance || args.governance || '';
+                    const inheritWorld = args.inherit_current_world !== false;
+
+                    if (!name) return 'Error: Missing agent name.';
+
+                    try {
+                        // 1. Spawn the base agent (autoStart=false so we can prep files)
+                        const agentInstance = this.orchestrator.spawnAgent({
+                            name,
+                            role,
+                            autoStart: false
+                        });
+
+                        const agentDir = path.dirname(agentInstance.memoryPath);
+                        
+                        // Ensure directory exists (spawnAgent usually handles this but safety first)
+                        if (!fs.existsSync(agentDir)) {
+                            fs.mkdirSync(agentDir, { recursive: true });
+                        }
+
+                        // 2. Inherit Identity foundations
+                        const primaryIdentityPath = this.config.get('agentIdentityPath');
+                        if (primaryIdentityPath && fs.existsSync(primaryIdentityPath)) {
+                            const identityContent = fs.readFileSync(primaryIdentityPath, 'utf-8');
+                            // Replace primary name with new name in identity header
+                            const newIdentity = identityContent.replace(/Name: .*/, `Name: ${name}`);
+                            fs.writeFileSync(path.join(agentDir, 'AGENT.md'), newIdentity);
+                        }
+
+                        // 3. Inherit World (WORLD.md)
+                        let worldContent = '';
+                        if (inheritWorld) {
+                            const primaryWorldPath = this.config.get('worldPath');
+                            if (primaryWorldPath && fs.existsSync(primaryWorldPath)) {
+                                worldContent = fs.readFileSync(primaryWorldPath, 'utf-8');
+                            }
+                        }
+
+                        if (!worldContent) {
+                            worldContent = '# Agent World\nThis file contains the internal environment cluster and governance structure.\n';
+                        }
+
+                        if (specializedGovernance) {
+                            worldContent += `\n\n## Specialized Peer Governance: ${name}\n${specializedGovernance}\n`;
+                        }
+                        fs.writeFileSync(path.join(agentDir, 'WORLD.md'), worldContent);
+
+                        // 4. Start the worker process
+                        this.orchestrator.startWorkerProcess(agentInstance);
+
+                        logger.info(`Agent: Created peer agent "${name}" (${agentInstance.id}) with inherited world state.`);
+                        return `Successfully created peer agent "${name}" (ID: ${agentInstance.id}). It has inherited the governance structure and is now active in its own isolated environment.`;
+                    } catch (e) {
+                        return `Error creating peer agent: ${e}`;
+                    }
+                }
+            });
+
+            // Skill: Configure Peer Agent
+            this.skills.registerSkill({
+                name: 'configure_peer_agent',
+                description: 'Update the configuration (API keys, channel tokens, etc.) for an existing peer agent. The agent will be restarted to apply changes.',
+                usage: 'configure_peer_agent(agent_id, updates:object)',
+                handler: async (args: any) => {
+                    const agentId = args.agent_id || args.id;
+                    const updates = args.updates || {};
+
+                    if (!agentId) return 'Error: Missing agent_id.';
+                    const agentInstance = this.orchestrator.getAgent(agentId);
+                    if (!agentInstance) return `Error: Agent ${agentId} not found. Use list_agents() to find valid IDs.`;
+
+                    const workerDir = path.dirname(agentInstance.memoryPath);
+                    const workerConfigPath = path.join(workerDir, 'orcbot.config.yaml');
+
+                    if (!fs.existsSync(workerConfigPath)) return `Error: Config file not found for agent ${agentId}.`;
+
+                    try {
+                        const yamlMod = require('yaml');
+                        const currentCfg = yamlMod.parse(fs.readFileSync(workerConfigPath, 'utf-8')) || {};
+                        
+                        // Merge updates
+                        const newCfg = { ...currentCfg, ...updates };
+                        
+                        // If telegramToken or discordToken is being set, also ensure allowWorkerChannels is true
+                        if (updates.telegramToken || updates.discordToken) {
+                            newCfg.allowWorkerChannels = true;
+                        }
+
+                        fs.writeFileSync(workerConfigPath, yamlMod.stringify(newCfg));
+
+                        // Restart the worker process to apply changes if it's running
+                        if (this.orchestrator.isWorkerRunning(agentId)) {
+                            logger.info(`Agent: Restarting peer ${agentId} to apply new configuration.`);
+                            this.orchestrator.stopWorkerProcess(agentId);
+                            // Wait for cleanup before restart - increase to 6s to exceed SIGKILL timeout
+                            setTimeout(() => {
+                                this.orchestrator.startWorkerProcess(agentInstance);
+                            }, 6000);
+                            return `Successfully updated config for peer ${agentId}. The agent is now RESTARTING with the new settings. You can inform the user that the configuration is complete and the agent will be online momentarily. (No further verification steps needed).`;
+                        }
+
+                        return `Successfully updated config for peer ${agentId}. It will apply next time the agent is manually started.`;
+                    } catch (e) {
+                        return `Error updating config: ${e}`;
+                    }
+                }
+            });
+
             // Skill: List Agents
             this.skills.registerSkill({
                 name: 'list_agents',
@@ -5490,7 +5746,9 @@ Be thorough and academic.`;
 
                     return agents.map(a => {
                         const taskInfo = a.currentTask ? ` [Task: ${a.currentTask}]` : '';
-                        return `- ${a.name} (${a.id}): ${a.status}${taskInfo} | Role: ${a.role} | Capabilities: ${a.capabilities.join(', ')}`;
+                        const isRunning = this.orchestrator.isWorkerRunning(a.id);
+                        const processStatus = isRunning ? 'Running' : 'Stopped';
+                        return `- ${a.name} (${a.id}): Status=${a.status}${taskInfo} | Process=${processStatus} | Role: ${a.role}`;
                     }).join('\n');
                 }
             });
@@ -6835,7 +7093,7 @@ Respond with ONLY valid JSON:
             'telegram_send_buttons', 'telegram_edit_message', 'telegram_send_poll', 'telegram_react', 'telegram_pin_message',
             'send_voice_note', 'text_to_speech', 'analyze_media',
             'generate_image', 'send_image',
-            'update_journal', 'update_learning', 'update_user_profile',
+            'update_journal', 'update_learning', 'update_world', 'update_user_profile',
             'update_agent_identity', 'get_system_info', 'system_check',
             'manage_config', 'read_bootstrap_file', 'request_supporting_data',
             'manage_skills', 'create_custom_skill', 'create_skill',
@@ -7446,6 +7704,10 @@ REFLECTION: <1-2 sentences>`;
         const learningTail = fs.existsSync(learningPath)
             ? fs.readFileSync(learningPath, 'utf-8').slice(-1200)
             : '';
+        const worldPath = this.config.get('worldPath') || path.join(dataHome, 'WORLD.md');
+        const worldTail = fs.existsSync(worldPath)
+            ? fs.readFileSync(worldPath, 'utf-8').slice(-1200)
+            : '';
 
         const channelExchanges = (source && sourceId)
             ? this.memory.getUserRecentExchanges({ platform: source, contactId: sourceId }, 6)
@@ -7460,6 +7722,7 @@ REFLECTION: <1-2 sentences>`;
             identitySnapshot ? `IDENTITY.md SNAPSHOT:\n${identitySnapshot}` : '',
             soulSnapshot ? `SOUL.md SNAPSHOT:\n${soulSnapshot}` : '',
             learningTail ? `LEARNING.md (recent tail):\n${learningTail}` : '',
+            worldTail ? `WORLD.md (recent tail):\n${worldTail}` : '',
             channelExchanges ? `CHANNEL EXCHANGES (${source}:${sourceId}):\n${channelExchanges}` : ''
         ].filter(Boolean).join('\n\n');
 
@@ -7957,17 +8220,45 @@ REFLECTION: <1-2 sentences>`;
                 logger.info('Agent: Config changed, reloading affected components...');
                 const { oldConfig, newConfig } = data;
 
-                // Reload WhatsApp channel if settings changed
-                const whatsappChanged =
-                    oldConfig.whatsappEnabled !== newConfig.whatsappEnabled ||
+                // 1. Hot-reload LLM (Models, Providers, API Keys)
+                const llmKeys = [
+                    'modelName', 'llmProvider', 'openaiApiKey', 'googleApiKey', 'nvidiaApiKey',
+                    'anthropicApiKey', 'openrouterApiKey', 'bedrockRegion', 'bedrockAccessKeyId',
+                    'groqApiKey', 'mistralApiKey', 'cerebrasApiKey', 'xaiApiKey', 'fastModelName'
+                ];
+                const llmChanged = llmKeys.some(key => oldConfig[key] !== newConfig[key]);
+                if (llmChanged) {
+                    await this.hotReloadLLM(newConfig);
+                    this.decisionEngine.clearCache();
+                }
+
+                // 2. Hot-reload Channels (Telegram, Discord, etc.)
+                const channelKeys = [
+                    'telegramToken', 'discordToken', 'slackBotToken', 'slackAppToken',
+                    'whatsappEnabled', 'emailEnabled'
+                ];
+                const channelsChanged = channelKeys.some(key => oldConfig[key] !== newConfig[key]);
+                if (channelsChanged && !this.isCLI) {
+                    await this.hotReloadChannels(oldConfig, newConfig);
+                }
+
+                // Reload WhatsApp sub-settings if base is still enabled
+                const whatsappSubSettingsChanged =
                     oldConfig.whatsappAutoReplyEnabled !== newConfig.whatsappAutoReplyEnabled ||
                     oldConfig.whatsappStatusReplyEnabled !== newConfig.whatsappStatusReplyEnabled ||
                     oldConfig.whatsappAutoReactEnabled !== newConfig.whatsappAutoReactEnabled ||
                     oldConfig.whatsappContextProfilingEnabled !== newConfig.whatsappContextProfilingEnabled;
 
-                if (whatsappChanged && this.whatsapp) {
-                    logger.info('Agent: WhatsApp config changed, notifying channel...');
+                if (whatsappSubSettingsChanged && this.whatsapp) {
+                    logger.info('Agent: WhatsApp sub-settings changed, notifying channel...');
                     eventBus.emit('whatsapp:config-changed', newConfig);
+                }
+
+                // 3. Reload identity if path changed
+                if (oldConfig.agentIdentityPath !== newConfig.agentIdentityPath) {
+                    this.agentConfigFile = newConfig.agentIdentityPath;
+                    this.loadAgentIdentity();
+                    this.decisionEngine.clearCache();
                 }
 
                 // Reload memory limits if changed
@@ -8346,6 +8637,7 @@ REFLECTION: <1-2 sentences>`;
         // ── 6. Journal & Learning tails (match what DecisionEngine sees) ──
         let journalTail = '';
         let learningTail = '';
+        let worldTail = '';
         try {
             const jp = this.config.get('journalPath');
             if (jp && fs.existsSync(jp)) {
@@ -8356,6 +8648,11 @@ REFLECTION: <1-2 sentences>`;
             if (lp && fs.existsSync(lp)) {
                 const full = fs.readFileSync(lp, 'utf-8');
                 learningTail = full.length > 800 ? full.slice(-800) : full;
+            }
+            const wp = this.config.get('worldPath');
+            if (wp && fs.existsSync(wp)) {
+                const full = fs.readFileSync(wp, 'utf-8');
+                worldTail = full.length > 800 ? full.slice(-800) : full;
             }
         } catch { /* ignore */ }
 
@@ -8451,6 +8748,7 @@ ${userContext ? `\nUSER PROFILE:\n${userContext.slice(0, 300)}` : ''}
 ${heartbeatMdContent ? `\nCUSTOM HEARTBEAT INSTRUCTIONS (from heartbeat.md):\n${heartbeatMdContent}` : ''}
 ${journalTail ? `\nJOURNAL (recent):\n${journalTail.slice(0, 400)}` : ''}
 ${learningTail ? `\nKNOWLEDGE BASE (recent):\n${learningTail.slice(0, 400)}` : ''}
+${worldTail ? `\nWORLD BASE (recent):\n${worldTail.slice(0, 400)}` : ''}
 ═══════════════════════════════════════════
 
 You are an autonomous agent with full capabilities. You have TWO modes of thinking:
@@ -8947,6 +9245,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
         const userPath = this.config.get('userProfilePath') || path.join(dataHome, 'USER.md');
         const journalPath = this.config.get('journalPath') || path.join(dataHome, 'JOURNAL.md');
         const learningPath = this.config.get('learningPath') || path.join(dataHome, 'LEARNING.md');
+        const worldPath = this.config.get('worldPath') || path.join(dataHome, 'WORLD.md');
 
         // ── Memory & Actions ──
         if (opts.memory) {
@@ -9019,7 +9318,14 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 ? fs.readFileSync(localLearningPath, 'utf-8')
                 : '# Agent Learning Base\nThis file contains structured knowledge on various topics.\n';
             fs.writeFileSync(learningPath, defaultLearning);
-            logger.info('Agent: Reset identity files (USER.md, .AI.md, JOURNAL.md, LEARNING.md)');
+
+            const localWorldPath = path.resolve(process.cwd(), 'WORLD.md');
+            const defaultWorld = fs.existsSync(localWorldPath)
+                ? fs.readFileSync(localWorldPath, 'utf-8')
+                : '# Agent World\nThis file contains the internal environment cluster, institution, and governance structure maintained by the agents.\n';
+            fs.writeFileSync(worldPath, defaultWorld);
+
+            logger.info('Agent: Reset identity files (USER.md, .AI.md, JOURNAL.md, LEARNING.md, WORLD.md)');
         }
 
         // ── Custom Plugins ──
@@ -9151,6 +9457,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 this.skills,
                 journalPath,
                 learningPath,
+                worldPath,
                 this.config,
                 this.bootstrap
             );
@@ -10799,7 +11106,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 'send_slack',
                 'send_gateway_chat',
                 'update_journal',
-                // update_learning is NOT in this list — it IS productive work
+                // update_learning and update_world are NOT in this list — they ARE productive work
                 'update_user_profile',
                 'update_agent_identity',
                 'get_system_info',
@@ -11110,7 +11417,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             this.memory.saveMemory({
                                 id: `${action.id}-step-${currentStep}-skill-pivot-guidance`,
                                 type: 'short',
-                                content: `[SYSTEM: You have called '${skillName}' ${callCount} times. STOP using '${skillName}' — you MUST try a completely different approach. ${isResearchTool ? 'If web_search isn\'t finding what you need, try browser_navigate to visit specific sites directly. If browser isn\'t working, try a different search query strategy or compile what you already have.' : 'Switch to a different tool or method entirely.'} Compile and deliver whatever results you have gathered so far.]`,
+                                content: `[SYSTEM: You have called '${skillName}' ${callCount} times. STOP using '${skillName}' — you MUST try a completely different approach. ${skillName === 'list_agents' ? 'The agent status is already clear from your previous checks. Do NOT check the agent list again.' : ''} ${isResearchTool ? 'If web_search isn\'t finding what you need, try browser_navigate to visit specific sites directly. If browser isn\'t working, try a different search query strategy or compile what you already have.' : 'Switch to a different tool or method entirely.'} Compile and deliver whatever results you have gathered so far.]`,
                                 metadata: { actionId: action.id, skill: skillName, callCount, step: currentStep }
                             });
                             // Ban the overused skill for the rest of this action
@@ -11913,8 +12220,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         const isRecoveryDeliveryTask = action.payload?.trigger === 'completion_audit_recovery';
                         const wasSuccessful = toolResult && !JSON.stringify(toolResult).toLowerCase().includes('error');
 
-                        if (isChannelSend && isResponseTask && wasSuccessful && remainingToolsInBatch === 0) {
-                            logger.info(`Agent: Channel message sent for response task ${action.id}. Terminating to prevent duplicates.`);
+                        if (isChannelSend && isResponseTask && wasSuccessful && remainingToolsInBatch === 0 && isSimpleTask) {
+                            logger.info(`Agent: Channel message sent for simple response task ${action.id}. Terminating to prevent duplicates.`);
                             goalsMet = true;
                             forceBreak = true;
                             break;

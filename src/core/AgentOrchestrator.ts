@@ -207,10 +207,20 @@ export class AgentOrchestrator extends EventEmitter {
             const isTypeScript = this.workerScriptPath.endsWith('.ts');
             const execArgv = isTypeScript ? ['-r', 'ts-node/register'] : [];
 
+            // Scrub sensitive channel tokens from worker environment to prevent 409 Conflicts.
+            // Workers should only connect if explicitly configured via their own local config.
+            const workerEnv = { ...process.env };
+            delete workerEnv.TELEGRAM_TOKEN;
+            delete workerEnv.DISCORD_TOKEN;
+            delete workerEnv.SLACK_BOT_TOKEN;
+            delete workerEnv.SLACK_APP_TOKEN;
+            delete workerEnv.WHATSAPP_ENABLED;
+            delete workerEnv.EMAIL_ENABLED;
+
             const child = fork(this.workerScriptPath, [], {
                 execArgv,
                 stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-                env: { ...process.env, ORCBOT_WORKER: 'true' }
+                env: { ...workerEnv, ORCBOT_WORKER: 'true' }
             });
 
             agent.pid = child.pid;

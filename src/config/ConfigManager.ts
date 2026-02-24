@@ -158,7 +158,7 @@ export class ConfigManager {
         // Apply env vars only as fallback when config value is missing
         Object.entries(activeEnv).forEach(([key, value]) => {
             const current = mergedRaw[key];
-            if (current === undefined || current === null || current === '') {
+            if (current === undefined || current === null) {
                 mergedRaw[key] = value;
             } else if (!silent) {
                 logger.info(`ConfigManager: Ignoring env override for ${key} because config already defines a value.`);
@@ -192,7 +192,7 @@ export class ConfigManager {
 
         const pathKeys: Array<keyof AgentConfig> = [
             'memoryPath', 'skillsPath', 'userProfilePath', 'agentIdentityPath',
-            'actionQueuePath', 'journalPath', 'learningPath', 'tokenUsagePath', 'tokenLogPath'
+            'actionQueuePath', 'journalPath', 'learningPath', 'worldPath', 'tokenUsagePath', 'tokenLogPath'
         ];
         
         // Get base defaults for restoration
@@ -271,6 +271,7 @@ export class ConfigManager {
             actionQueuePath: 'actions.json',
             journalPath: 'JOURNAL.md',
             learningPath: 'LEARNING.md',
+            worldPath: 'world.md',
             pluginsPath: 'plugins',
             toolsPath: 'tools',
             buildWorkspacePath: 'workspace',

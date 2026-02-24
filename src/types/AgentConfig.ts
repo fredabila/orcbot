@@ -58,6 +58,7 @@ export const AgentConfigSchema = z.object({
     actionQueuePath: z.string().optional(),
     journalPath: z.string().optional(),
     learningPath: z.string().optional(),
+    worldPath: z.string().optional(),
     pluginsPath: z.string().optional(),
     toolsPath: z.string().optional(),
     whatsappEnabled: coerceBool.default(false),

@@ -555,6 +555,7 @@ export class AgenticUser {
         recentEpisodic: string;
         journal: string;
         learning: string;
+        world: string;
         taskDescription: string;
         stepHistory: string;
         summary: string;
@@ -579,6 +580,7 @@ export class AgenticUser {
         recentEpisodic: string;
         journal: string;
         learning: string;
+        world: string;
         taskDescription: string;
         stepHistory: string;
         summary: string;
@@ -615,6 +617,16 @@ export class AgenticUser {
             if (lp && fs.existsSync(lp)) {
                 const full = fs.readFileSync(lp, 'utf-8');
                 learning = full.length > 1500 ? full.slice(-1500) : full;
+            }
+        } catch { /* ignore */ }
+
+        // 6. World state (internal governance)
+        let world = '';
+        try {
+            const wp = this.config.get('worldPath');
+            if (wp && fs.existsSync(wp)) {
+                const full = fs.readFileSync(wp, 'utf-8');
+                world = full.length > 1500 ? full.slice(-1500) : full;
             }
         } catch { /* ignore */ }
 
@@ -659,6 +671,7 @@ export class AgenticUser {
             recentEpisodic ? 'episodic-memory' : '',
             journal ? 'journal' : '',
             learning ? 'learning' : '',
+            world ? 'world' : '',
             bootstrapContext ? 'bootstrap' : '',
             semanticRecall ? 'semantic-recall' : '',
         ].filter(Boolean).join(', ');
@@ -669,6 +682,7 @@ export class AgenticUser {
             recentEpisodic: recentEpisodic + (semanticRecall ? `\n\n${semanticRecall}` : ''),
             journal,
             learning,
+            world,
             taskDescription,
             stepHistory,
             summary: `Context sources: ${summary}`
@@ -708,6 +722,9 @@ ${context.journal || 'No journal available.'}
 
 AGENT KNOWLEDGE BASE (Learned facts):
 ${context.learning || 'No learning base available.'}
+
+AGENT WORLD (Internal Governance/Environment):
+${context.world || 'No world environment data available.'}
 
 PAST EXPERIENCES (Episodic memories):
 ${context.recentEpisodic || 'No episodic memories available.'}
@@ -792,6 +809,9 @@ ${context.userProfile || 'No user profile available.'}
 
 AGENT KNOWLEDGE:
 ${context.learning || 'No learning base.'}
+
+AGENT WORLD (Governance/Environment):
+${context.world || 'No world environment data.'}
 
 CURRENT TASK: ${context.taskDescription}
 
@@ -977,7 +997,7 @@ Respond with ONLY the guidance text. No JSON, no formatting, just the message.`;
         }
 
         // 3. Planning-only turns (journal/learning updates without real work)
-        const planningTools = ['update_journal', 'update_learning', 'update_user_profile'];
+        const planningTools = ['update_journal', 'update_learning', 'update_world', 'update_user_profile'];
         const planningOnly = recent.filter(m =>
             planningTools.includes(m.metadata?.tool)
         );
