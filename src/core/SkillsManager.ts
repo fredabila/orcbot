@@ -224,7 +224,8 @@ export class SkillsManager {
                 try {
                     // Syntax verification first
                     const content = fs.readFileSync(fullPath, 'utf8');
-                    const syntaxCheck = SyntaxChecker.verify(content);
+                    const isTS = file.endsWith('.ts');
+                    const syntaxCheck = SyntaxChecker.verify(content, isTS);
                     if (!syntaxCheck.valid) {
                         throw new Error(`Syntax error: ${syntaxCheck.error}`);
                     }
@@ -645,6 +646,7 @@ export class SkillsManager {
         if (this.agentSkills.size === 0) return '';
 
         const lines: string[] = ['<available_skills>'];
+        lines.push('  <!-- Use read_skill_resource(skill_name, file_path) to read full content of scripts/references listed below -->');
         for (const skill of this.agentSkills.values()) {
             lines.push(`  <skill>`);
             lines.push(`    <name>${skill.meta.name}</name>`);
@@ -1141,11 +1143,22 @@ main().catch(console.error);
 
     // ─── Utility helpers ─────────────────────────────────────────────────
 
-    private listDir(dirPath: string): string[] {
+    private listDir(dirPath: string, baseDir: string = ''): string[] {
         if (!fs.existsSync(dirPath)) return [];
+        const results: string[] = [];
         try {
-            return fs.readdirSync(dirPath).filter(f => !f.startsWith('.'));
-        } catch { return []; }
+            const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+            for (const entry of entries) {
+                if (entry.name.startsWith('.')) continue;
+                const relativePath = baseDir ? path.join(baseDir, entry.name) : entry.name;
+                if (entry.isDirectory()) {
+                    results.push(...this.listDir(path.join(dirPath, entry.name), relativePath));
+                } else {
+                    results.push(relativePath);
+                }
+            }
+        } catch { /* ignore */ }
+        return results;
     }
 
     private findSkillMdRecursive(dir: string, maxDepth: number = 3, depth: number = 0): string[] {

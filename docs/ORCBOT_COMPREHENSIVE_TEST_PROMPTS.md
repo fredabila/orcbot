@@ -829,7 +829,50 @@ Apply my stored preferences for tone and detail level.
 
 ---
 
-## 35) Notes Template (v2.0)
+## 35) Dynamic Code Execution (execute_typescript)
+
+### Prompt 35.1
+"Use your execute_typescript skill to write a simple script that returns the sum of 10 and 20."
+
+**Expected**: `execute_typescript` called; the code exports a default async function returning `30`; no formal plugin created.
+
+### Prompt 35.2
+"Write a typescript script using execute_typescript that reads the contents of the current directory using the 'fs' module and returns the count of files."
+
+**Expected**: `execute_typescript` called; uses `require('fs')` or `import`; returns a valid integer count.
+
+### Prompt 35.3
+"Write a typescript script that uses your internal Agent context to log a message 'Hello from scratchpad' to the system logger, and then return true."
+
+**Expected**: `execute_typescript` called; script uses `context.logger.info(...)`; returns `true`.
+
+### Prompt 35.4
+"Write a typescript script that intentionally throws an error, like 'Test error'. Then read the error output."
+
+**Expected**: `execute_typescript` called; execution fails; agent correctly observes the stack trace/error message without crashing the main process.
+
+---
+
+## 36) Remote Agent Management (Peer Agents)
+
+### Prompt 36.1
+"List all registered agents and their current status."
+
+**Expected**: `list_agents` called; returns a formatted list showing the primary agent and any peers.
+
+### Prompt 36.2
+"Create a new peer agent named 'dev-ops-bot' with a specialized governance rule: 'Always prioritize system stability over speed'."
+
+**Expected**: `create_peer_agent` called; confirmation of creation and inheritance of the WORLD.md governance rules.
+
+### Prompt 36.3
+"Stop the 'dev-ops-bot' agent, then start it again."
+
+**Expected**: `terminate_agent` (if stopping) or `restart_agent` called; followed by `start_agent`; status verified.
+
+---
+
+## 37) Notes Template (v2.1)
 
 Copy per test run:
 
@@ -848,6 +891,8 @@ Section results (score 0–5):
   32. Self-Tuning:
   33. Multi-Media/Social:
   34. System Repair:
+  35. Dynamic TS Execution:
+  36. Remote Agent Management:
 
 Critical Failures:
 Loop Occurrences:

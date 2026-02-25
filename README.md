@@ -253,6 +253,7 @@ Live docs (GitHub Pages): https://fredabila.github.io/orcbot/docs/
 *   🐳 [**Docker Guide**](docs/DOCKER.md) - Container deployment options
 *   📊 [**Testing Guide**](TESTING_GUIDE.md) - Testing strategies and patterns
 *   🔒 [**Security Summary**](SECURITY_SUMMARY.md) - Security features and best practices
+*   🚀 [**Extraordinary Use Cases**](docs/EXTRAORDINARY_USE_CASES.md) - God-mode automation, robotics, and strategic orchestration
 *   🤖 [**Robotics + OrcBot**](docs/blog/robotics.md) - Hardware integration approach and safety patterns
 
 ---
