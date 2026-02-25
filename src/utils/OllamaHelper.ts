@@ -57,14 +57,58 @@ export class OllamaHelper {
         }
     }
 
-    public async pullModel(name: string): Promise<boolean> {
+    public async listRunningModels(): Promise<Array<{ name: string, size: number, digest: string }>> {
+        try {
+            const response = await fetch(`${this.apiUrl}/api/ps`);
+            if (!response.ok) return [];
+            const data = await response.json() as any;
+            return (data.models || []).map((m: any) => ({
+                name: m.name,
+                size: m.size,
+                digest: m.digest
+            }));
+        } catch (e) {
+            return [];
+        }
+    }
+
+    public async pullModel(name: string, onProgress?: (status: string, completed?: number, total?: number) => void): Promise<boolean> {
         logger.info(`OllamaHelper: Pulling model ${name}...`);
         try {
             const response = await fetch(`${this.apiUrl}/api/pull`, {
                 method: 'POST',
-                body: JSON.stringify({ name, stream: false })
+                body: JSON.stringify({ name, stream: true })
             });
-            return response.ok;
+
+            if (!response.ok) return false;
+
+            const reader = response.body?.getReader();
+            if (!reader) {
+                // Fallback for environments without streaming fetch body
+                const data = await response.json() as any;
+                return data.status === 'success';
+            }
+
+            const decoder = new TextDecoder();
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const chunk = decoder.decode(value, { stream: true });
+                const lines = chunk.split('\n');
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+                    try {
+                        const json = JSON.parse(line);
+                        if (onProgress && json.status) {
+                            onProgress(json.status, json.completed, json.total);
+                        }
+                    } catch (e) {
+                        // Ignore partial JSON
+                    }
+                }
+            }
+            return true;
         } catch (e) {
             logger.error(`OllamaHelper: Failed to pull model ${name}: ${e}`);
             return false;

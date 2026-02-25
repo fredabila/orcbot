@@ -1055,13 +1055,21 @@ export class MultiLLM {
         };
     }
     public inferProvider(modelName: string): LLMProvider {
-        const lower = modelName.toLowerCase();
+        const lower = (modelName || '').toLowerCase();
+        
+        // 1. Explicit local/ollama prefixes always win
+        if (lower.startsWith('ollama:') || lower.startsWith('local:') || lower.startsWith('ol:')) return 'ollama';
+        
+        // 2. Other explicit prefixes
         if (lower.includes('bedrock') || lower.startsWith('br:')) return 'bedrock';
         if (lower.includes('claude') || lower.startsWith('anthropic:') || lower.startsWith('ant:')) return 'anthropic';
-        if (lower.includes('gemini')) return 'google';
         if (lower.startsWith('openrouter:') || lower.startsWith('openrouter/') || lower.startsWith('or:')) return 'openrouter';
         if (lower.startsWith('nvidia:') || lower.startsWith('nv:')) return 'nvidia';
-        if (lower.startsWith('ollama:') || lower.startsWith('local:')) return 'ollama';
+        
+        // 3. Inference from common names (Cloud defaults)
+        if (lower.includes('gemini')) return 'google';
+        if (lower.includes('gpt-') || lower.includes('o1-')) return 'openai';
+        
         return 'openai';
     }
     private normalizeOpenRouterModel(modelName: string): string {

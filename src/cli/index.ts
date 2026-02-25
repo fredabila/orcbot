@@ -3133,6 +3133,7 @@ async function showOllamaMenu() {
     const isInstalled = await helper.isInstalled();
     const isRunning = await helper.isRunning();
     const localModels = isRunning ? await helper.listModels() : [];
+    const runningModels = isRunning ? await helper.listRunningModels() : [];
     const currentModel = agent.config.get('modelName');
     const currentProvider = agent.config.get('llmProvider');
 
@@ -3142,6 +3143,9 @@ async function showOllamaMenu() {
         `${dim('Installed')}  ${isInstalled ? green('Yes') : yellow('No (Download below)')}`,
         `${dim('URL')}        ${ollamaUrl}`,
     ];
+    if (isRunning && runningModels.length > 0) {
+        statusLines.push(`${dim('Active')}     ${green(runningModels.map(m => m.name.split(':')[0]).join(', '))}`);
+    }
     box(statusLines, { title: '📡 OLLAMA STATUS', width: 52, color: isRunning ? c.brightGreen : c.brightRed });
 
     if (!isRunning && !isInstalled) {
@@ -3223,12 +3227,21 @@ async function showOllamaMenu() {
                 validate: (input) => input.length > 0 || 'Please enter a model name.'
             }
         ]);
-        console.log(yellow(`\n  Pulling ${modelName}... This may take a while depending on your internet speed.`));
-        const success = await helper.pullModel(modelName);
+        console.log(yellow(`\n  Pulling ${modelName}...`));
+        
+        const success = await helper.pullModel(modelName, (status, completed, total) => {
+            if (completed !== undefined && total !== undefined) {
+                const percent = Math.round((completed / total) * 100);
+                process.stdout.write(`\r  ${cyan('●')} ${status}: ${percent}% (${Math.round(completed/1024/1024)}MB / ${Math.round(total/1024/1024)}MB)      `);
+            } else {
+                process.stdout.write(`\r  ${cyan('●')} ${status}...                              `);
+            }
+        });
+
         if (success) {
-            console.log(green(`\n  ✓ Model ${modelName} pulled successfully.`));
+            console.log(green(`\n\n  ✓ Model ${modelName} pulled successfully.`));
         } else {
-            console.log(red(`\n  ✗ Failed to pull model ${modelName}. Check logs for details.`));
+            console.log(red(`\n\n  ✗ Failed to pull model ${modelName}. Check logs for details.`));
         }
         await waitKeyPress();
         return showOllamaMenu();
@@ -3659,8 +3672,15 @@ async function showOpenAIConfig() {
 }
 
 async function showGeminiConfig() {
+    console.clear();
+    banner();
+    sectionHeader('🤖', 'Google Gemini (Cloud API)');
+
     const currentModel = agent.config.get('modelName');
     const apiKey = agent.config.get('googleApiKey') || 'Not Set';
+
+    console.log(dim('\n  Note: This is for Google\'s Cloud API.'));
+    console.log(dim('  If you are using a Gemini model via Ollama, use the "Ollama" menu instead.\n'));
 
     const { action } = await inquirer.prompt([
         {
