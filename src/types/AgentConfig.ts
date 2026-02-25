@@ -21,7 +21,7 @@ const coerceNumber = z.preprocess((val) => {
 
 export const AgentConfigSchema = z.object({
     agentName: z.string().default('OrcBot'),
-    llmProvider: z.enum(['openai', 'google', 'bedrock', 'openrouter', 'nvidia', 'anthropic']).optional(),
+    llmProvider: z.enum(['openai', 'google', 'bedrock', 'openrouter', 'nvidia', 'anthropic', 'ollama']).optional(),
     providerModelNames: z.record(z.string(), z.string()).optional(),
     fallbackModelNames: z.record(z.string(), z.string()).optional(),
     telegramToken: z.string().optional(),
