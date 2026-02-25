@@ -233,6 +233,7 @@ export class Agent {
             mistralApiKey: this.config.get('mistralApiKey'),
             cerebrasApiKey: this.config.get('cerebrasApiKey'),
             xaiApiKey: this.config.get('xaiApiKey'),
+            ollamaApiUrl: this.config.get('ollamaApiUrl'),
             fallbackModelNames: this.config.get('fallbackModelNames'),
         });
 
@@ -485,6 +486,7 @@ export class Agent {
             mistralApiKey: newConfig.mistralApiKey,
             cerebrasApiKey: newConfig.cerebrasApiKey,
             xaiApiKey: newConfig.xaiApiKey,
+            ollamaApiUrl: newConfig.ollamaApiUrl,
             fallbackModelNames: newConfig.fallbackModelNames,
             fastModelName: newConfig.fastModelName
         });
@@ -2850,7 +2852,8 @@ export class Agent {
                     'models',
                     'gateway',
                     'security',
-                    'agentic-user'
+                    'agentic-user',
+                    'update'
                 ];
 
                 const tuiMap = [
@@ -2858,7 +2861,8 @@ export class Agent {
                     'TUI: 🤖 Model & Providers -> CLI: orcbot models',
                     'TUI: 🌐 Gateway Control -> CLI: orcbot gateway',
                     'TUI: 🔒 Security & Permissions -> CLI: orcbot security',
-                    'TUI: 🧠 Agentic User -> CLI: orcbot agentic-user'
+                    'TUI: 🧠 Agentic User -> CLI: orcbot agentic-user',
+                    'TUI: ✨ Update OrcBot -> CLI: orcbot update'
                 ];
 
                 if (action === 'help' || action === 'list_commands') {
@@ -3081,6 +3085,7 @@ ${commandGuidance}`;
             name: 'self_repair_skill',
             description: 'Autonomously diagnose and fix a failing plugin skill. Use this when a tool returns an error or fails to execute correctly.',
             usage: 'self_repair_skill(skillName, errorMessage)',
+            isDeep: true,
             handler: async (args: any) => {
                 const { skillName, errorMessage } = args;
                 if (!skillName || !errorMessage) return 'Error: skillName and errorMessage are required.';
@@ -3159,6 +3164,7 @@ Output the fixed code:
             name: 'tweak_skill',
             description: 'Patch any built-in or plugin skill that keeps failing by generating a replacement wrapper plugin. The patch is saved to the plugins directory and takes effect immediately. Use this when a skill (e.g. telegram_send_buttons, run_command) repeatedly returns errors that you know how to fix.',
             usage: 'tweak_skill(skillName, issue, fix?)',
+            isDeep: true,
             handler: async (args: any) => {
                 const { skillName, issue, fix } = args;
                 if (!skillName || !issue) return 'Error: skillName and issue are required.';
@@ -3271,6 +3277,7 @@ Output the fixed CommonJS code now:`;
             name: 'manage_skills',
             description: 'Append a skill definition to SKILLS.md (the skill registry doc). This is a LIGHTWEIGHT way to document a new skill. For creating actual EXECUTABLE skills use create_custom_skill. For creating KNOWLEDGE-BASED skills use create_skill.',
             usage: 'manage_skills(skill_definition)',
+            isDeep: true,
             handler: async (args: any) => {
                 const skill_definition = args.skill_definition || args.definition || args.skill || args.text;
                 if (!skill_definition) return 'Error: Missing skill_definition.';
@@ -3293,6 +3300,7 @@ Output the fixed CommonJS code now:`;
             name: 'install_tool',
             description: 'Install a third-party tool from a git URL or local directory into the tools registry. Reads README and creates a manifest.',
             usage: 'install_tool(source, name?, subdir?, allowedCommands?, description?)',
+            isDeep: true,
             handler: async (args: any) => {
                 if (this.config.get('safeMode')) {
                     return 'Error: Safe mode is enabled. Tool installation is disabled.';
@@ -3338,6 +3346,7 @@ Output the fixed CommonJS code now:`;
             name: 'activate_tool',
             description: 'Activate or deactivate a tool to include its README in context.',
             usage: 'activate_tool(name, active?)',
+            isDeep: true,
             handler: async (args: any) => {
                 const name = args.name || args.tool || args.tool_name;
                 const active = args.active !== false && args.active !== 'false' && args.deactivate !== true;
@@ -3399,6 +3408,7 @@ Output the fixed CommonJS code now:`;
             name: 'uninstall_tool',
             description: 'Uninstall a tool and remove its files.',
             usage: 'uninstall_tool(name)',
+            isDeep: true,
             handler: async (args: any) => {
                 if (this.config.get('safeMode')) {
                     return 'Error: Safe mode is enabled. Tool uninstall is disabled.';
@@ -3415,6 +3425,7 @@ Output the fixed CommonJS code now:`;
             name: 'install_skill',
             description: 'Install an Agent Skill from a GitHub repo URL, gist, .skill file URL, raw SKILL.md URL, local path, or npm package (e.g. "firecrawl/cli", "@anthropic/pdf-processing", "npm:my-skill"). Agent Skills follow the agentskills.io format and extend the agent with new capabilities, workflows, and knowledge.',
             usage: 'install_skill(source)',
+            isDeep: true,
             handler: async (args: any) => {
                 const source = args.source || args.url || args.path || args.repo;
                 if (!source) return 'Error: Missing source. Provide a URL, local path, or npm package ref (e.g. "firecrawl/cli").';
@@ -3461,6 +3472,7 @@ Output the fixed CommonJS code now:`;
             name: 'create_skill',
             description: 'Create a KNOWLEDGE-BASED Agent Skill (SKILL.md format) with instructions, scripts, references, and assets. Use this for skills that teach the agent NEW WORKFLOWS, PROCEDURES, KNOWLEDGE, or PROMPT PATTERNS — not executable code. For skills that need to RUN CODE (API calls, automation, etc.), use create_custom_skill instead.',
             usage: 'create_skill(name, description?, instructions?)',
+            isDeep: true,
             handler: async (args: any) => {
                 const name = args.name || args.skill_name;
                 const description = args.description || args.desc;
@@ -3514,21 +3526,65 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
         // Skill: Activate/Deactivate Agent Skill
         this.skills.registerSkill({
             name: 'activate_skill',
-            description: 'Activate or deactivate an Agent Skill. Activated skills have their full instructions loaded into your context. Use this to load specialized knowledge on demand.',
-            usage: 'activate_skill(name, active?)',
+            description: 'Activate or deactivate an Agent Skill. Activated skills have their full instructions loaded into your context. Use this to load specialized knowledge on demand. Set sticky=true to make the activation permanent across restarts and new tasks.',
+            usage: 'activate_skill(name, active?, sticky?)',
+            isDeep: true,
             handler: async (args: any) => {
                 const name = args.name || args.skill_name || args.skill;
                 const active = args.active !== false && args.active !== 'false' && args.deactivate !== true;
+                const sticky = args.sticky === true || args.sticky === 'true';
                 if (!name) return 'Error: Missing skill name.';
 
                 if (active) {
                     const skill = this.skills.activateAgentSkill(name);
                     if (!skill) return `Agent skill "${name}" not found. Use list_agent_skills to see available skills.`;
-                    return `Activated skill "${name}". Its instructions are now in your context:\n\n${skill.instructions.slice(0, 500)}${skill.instructions.length > 500 ? '...' : ''}`;
+                    
+                    if (sticky) {
+                        try {
+                            const skillMdPath = path.join(skill.skillDir, 'SKILL.md');
+                            if (fs.existsSync(skillMdPath)) {
+                                let content = fs.readFileSync(skillMdPath, 'utf8');
+                                if (content.includes('autoActivate:')) {
+                                    content = content.replace(/autoActivate:\s*(true|false)/, 'autoActivate: true');
+                                } else if (content.includes('orcbot:')) {
+                                    content = content.replace(/orcbot:/, 'orcbot:\n    autoActivate: true');
+                                } else {
+                                    // Insert orcbot section if missing
+                                    content = content.replace(/---/, '---\norcbot:\n  autoActivate: true');
+                                }
+                                fs.writeFileSync(skillMdPath, content);
+                                // Update in-memory metadata
+                                if (!skill.meta.orcbot) skill.meta.orcbot = {};
+                                skill.meta.orcbot.autoActivate = true;
+                            }
+                        } catch (e) {
+                            logger.warn(`Agent: Failed to make skill "${name}" sticky: ${e}`);
+                        }
+                    }
+
+                    return `Activated skill "${name}"${sticky ? ' (permanently)' : ''}. Its instructions are now in your context:\n\n${skill.instructions.slice(0, 500)}${skill.instructions.length > 500 ? '...' : ''}`;
                 } else {
                     const ok = this.skills.deactivateAgentSkill(name);
                     if (!ok) return `Agent skill "${name}" not found.`;
-                    return `Deactivated skill "${name}". Its instructions are removed from context.`;
+                    
+                    if (sticky) {
+                        try {
+                            const skill = this.skills.getAgentSkill(name);
+                            if (skill) {
+                                const skillMdPath = path.join(skill.skillDir, 'SKILL.md');
+                                if (fs.existsSync(skillMdPath)) {
+                                    let content = fs.readFileSync(skillMdPath, 'utf8');
+                                    content = content.replace(/autoActivate:\s*(true|false)/, 'autoActivate: false');
+                                    fs.writeFileSync(skillMdPath, content);
+                                    if (skill.meta.orcbot) skill.meta.orcbot.autoActivate = false;
+                                }
+                            }
+                        } catch (e) {
+                            logger.warn(`Agent: Failed to remove sticky status from "${name}": ${e}`);
+                        }
+                    }
+
+                    return `Deactivated skill "${name}"${sticky ? ' (permanently)' : ''}. Its instructions are removed from context.`;
                 }
             }
         });
@@ -3606,6 +3662,7 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             name: 'uninstall_agent_skill',
             description: 'Uninstall an Agent Skill by removing its directory. This is for SKILL.md-format skills only.',
             usage: 'uninstall_agent_skill(name)',
+            isDeep: true,
             handler: async (args: any) => {
                 const name = args.name || args.skill_name || args.skill;
                 if (!name) return 'Error: Missing skill name.';
@@ -5137,6 +5194,7 @@ export default ${name};
             name: 'schedule_task',
             description: 'Schedule a one-off task to run later. Supports relative time (e.g. "in 15 minutes", "in 2 hours", "in 1 day") or cron syntax. Returns an ID you can use with schedule_list / schedule_remove.',
             usage: 'schedule_task(time_or_cron, task_description)',
+            isDeep: true,
             handler: async (args: any) => {
                 const time_or_cron = args.time_or_cron || args.time || args.schedule;
                 const task_description = args.task_description || args.task || args.description;
@@ -5282,6 +5340,7 @@ export default ${name};
             name: 'deep_reason',
             description: 'Perform an intensive analysis of a topic with multiple steps',
             usage: 'deep_reason(topic)',
+            isDeep: true,
             handler: async (args: any) => {
                 const topic = args.topic || args.subject || args.query || args.text;
                 if (!topic) return 'Error: Missing topic.';
@@ -5445,6 +5504,7 @@ Be thorough and academic.`;
             name: 'update_learning',
             description: 'Research a topic using web search and save structured findings to LEARNING.md. If knowledge_content is empty, will auto-research the topic.',
             usage: 'update_learning(topic, knowledge_content?)',
+            isDeep: true,
             handler: async (args: any) => {
                 const topic = args.topic || args.subject || args.title;
                 let knowledge_content = args.knowledge_content || args.content || args.text || args.data;
@@ -5496,6 +5556,7 @@ Be thorough and academic.`;
             name: 'update_world',
             description: 'Update the internal environment cluster, institution, and governance structure in WORLD.md.',
             usage: 'update_world(topic, content)',
+            isDeep: true,
             handler: async (args: any) => {
                 const topic = args.topic || args.subject || args.title;
                 const content = args.content || args.text || args.data;
@@ -5614,6 +5675,7 @@ Be thorough and academic.`;
                 name: 'spawn_agent',
                 description: 'Create a new sub-agent instance for parallel task execution. The spawned agent inherits capabilities and can work independently.',
                 usage: 'spawn_agent(name, role, capabilities?)',
+                isDeep: true,
                 handler: async (args: any) => {
                     const name = args.name || args.agent_name;
                     const role = args.role || 'worker';
@@ -5639,6 +5701,7 @@ Be thorough and academic.`;
                 name: 'create_peer_agent',
                 description: 'Create an independent peer agent that inherits the current world governance structure and identity foundations. Unlike a sub-agent, a peer is designed for long-term specialized autonomy within the world.',
                 usage: 'create_peer_agent(name, role, specialized_governance?, inherit_current_world:boolean?)',
+                isDeep: true,
                 handler: async (args: any) => {
                     const name = args.name;
                     const role = args.role || 'peer';
@@ -5705,6 +5768,7 @@ Be thorough and academic.`;
                 name: 'configure_peer_agent',
                 description: 'Update the configuration (API keys, channel tokens, etc.) for an existing peer agent. The agent will be restarted to apply changes.',
                 usage: 'configure_peer_agent(agent_id, updates:object)',
+                isDeep: true,
                 handler: async (args: any) => {
                     const agentId = args.agent_id || args.id;
                     const updates = args.updates || {};
@@ -6375,6 +6439,7 @@ Be thorough and academic.`;
             name: 'rag_ingest',
             description: 'Ingest a document or dataset into the RAG knowledge store for future retrieval. Supports text, markdown, CSV, JSON, JSONL, and code files. The content will be chunked, embedded, and stored for semantic search. Use this when the user asks you to learn from, study, or memorize a document/dataset/file. The content parameter should be the full text content to ingest.',
             usage: 'rag_ingest(content, source, collection?, title?, tags?, format?)',
+            isDeep: true,
             handler: async (args: any) => {
                 try {
                     const content = args.content || args.text || args.data;
@@ -6408,6 +6473,7 @@ Be thorough and academic.`;
             name: 'rag_ingest_file',
             description: 'Read a local file and ingest it into the RAG knowledge store. Reads the file from disk, then chunks and embeds it. Use when the user points you to a file path to learn from.',
             usage: 'rag_ingest_file(file_path, collection?, tags?)',
+            isDeep: true,
             handler: async (args: any) => {
                 try {
                     const filePath = args.file_path || args.path || args.filePath;
@@ -6442,6 +6508,7 @@ Be thorough and academic.`;
             name: 'rag_ingest_url',
             description: 'Download a web page or file from a URL and ingest it into the RAG knowledge store. Fetches the content, extracts readable text, then chunks and embeds it. Use when the user asks you to learn from a webpage, dataset URL, or online document.',
             usage: 'rag_ingest_url(url, collection?, tags?, title?)',
+            isDeep: true,
             handler: async (args: any) => {
                 try {
                     const url = args.url || args.link;

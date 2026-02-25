@@ -30,6 +30,8 @@ export const AgentConfigSchema = z.object({
     openrouterBaseUrl: z.string().default('https://openrouter.ai/api/v1'),
     openrouterReferer: z.string().optional(),
     openrouterAppName: z.string().optional(),
+    ollamaEnabled: coerceBool.default(false),
+    ollamaApiUrl: z.string().default('http://localhost:11434'),
     googleApiKey: z.string().optional(),
     nvidiaApiKey: z.string().optional(),
     anthropicApiKey: z.string().optional(),
@@ -80,7 +82,7 @@ export const AgentConfigSchema = z.object({
         'npm', 'node', 'npx', 'git', 'python', 'pip', 'pip3', 'curl', 'wget', 'powershell',
         'pwsh', 'bash', 'apt', 'apt-get', 'yum', 'dnf', 'pacman', 'brew', 'sudo', 'systemctl',
         'service', 'cat', 'ls', 'dir', 'echo', 'mkdir', 'touch', 'cp', 'mv', 'head', 'tail',
-        'grep', 'find', 'which', 'whoami', 'uname', 'hostname'
+        'grep', 'find', 'which', 'whoami', 'uname', 'hostname', 'orcbot'
     ]),
     commandDenyList: z.array(z.string()).default([
         'rm', 'rmdir', 'del', 'erase', 'format', 'mkfs', 'dd', 'shutdown', 'reboot', 'poweroff',
@@ -175,7 +177,7 @@ export const AgentConfigSchema = z.object({
     reasoningExposeChecklist: coerceBool.default(false),
     reasoningChecklistMaxItems: coerceNumber.default(5),
     orcbotControlEnabled: coerceBool.default(true),
-    orcbotControlCliAllowList: z.array(z.string()).default(['config get', 'config set', 'models', 'gateway', 'security', 'agentic-user']),
+    orcbotControlCliAllowList: z.array(z.string()).default(['config get', 'config set', 'models', 'gateway', 'security', 'agentic-user', 'update']),
     orcbotControlCliDenyList: z.array(z.string()).default(['reset', 'ui', 'setup', 'builder', 'daemon stop']),
     orcbotControlTimeoutMs: coerceNumber.default(45000),
     autoExecuteCommands: coerceBool.default(false),

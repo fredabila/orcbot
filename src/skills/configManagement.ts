@@ -298,6 +298,7 @@ export const configManagementSkill = {
     name: 'manage_config',
     description: 'Manage agent configuration settings. Can view, modify safe settings, request approval for sensitive settings, and get optimization suggestions.',
     usage: 'manage_config({ action: "get"|"set"|"list"|"policy"|"history"|"pending"|"approve"|"reject"|"suggest", key?: string, value?: any, reason?: string, taskDescription?: string })',
+    isDeep: true,
     
     handler: async (args: any, context?: AgentContext) => {
         if (!context) {

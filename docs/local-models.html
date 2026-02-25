@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Local Models - OrcBot Documentation</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <a href="index.html" class="sidebar-logo">
+          <div class="sidebar-logo-icon">🤖</div>
+          OrcBot
+        </a>
+        <span class="sidebar-version">v2.1.0</span>
+      </div>
+      
+      <nav class="sidebar-nav">
+        <div class="nav-section">
+          <div class="nav-section-title">Getting Started</div>
+          <ul class="nav-links">
+            <li><a href="index.html" class="nav-link"><span class="nav-link-icon">📚</span> Introduction</a></li>
+            <li><a href="getting-started.html" class="nav-link"><span class="nav-link-icon">🚀</span> Quick Start</a></li>
+            <li><a href="configuration.html" class="nav-link"><span class="nav-link-icon">⚙️</span> Configuration</a></li>
+          </ul>
+        </div>
+        
+        <div class="nav-section">
+          <div class="nav-section-title">Core Concepts</div>
+          <ul class="nav-links">
+            <li><a href="architecture.html" class="nav-link"><span class="nav-link-icon">🏗️</span> Architecture</a></li>
+            <li><a href="skills.html" class="nav-link"><span class="nav-link-icon">🧩</span> Skills & Plugins</a></li>
+            <li><a href="autonomy.html" class="nav-link"><span class="nav-link-icon">🤖</span> Autonomy</a></li>
+            <li><a href="local-models.html" class="nav-link active"><span class="nav-link-icon">🦙</span> Local Models</a></li>
+          </ul>
+        </div>
+        
+        <div class="nav-section">
+          <div class="nav-section-title">Deployment</div>
+          <ul class="nav-links">
+            <li><a href="docker.html" class="nav-link"><span class="nav-link-icon">🐳</span> Docker</a></li>
+            <li><a href="gateway.html" class="nav-link"><span class="nav-link-icon">🌐</span> Web Gateway</a></li>
+            <li><a href="operations.html" class="nav-link"><span class="nav-link-icon">📊</span> Operations</a></li>
+          </ul>
+        </div>
+      </nav>
+      
+      <div class="sidebar-footer">
+        <a href="https://github.com/fredabila/orcbot" target="_blank">
+          <span>⭐</span> GitHub
+        </a>
+        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank">
+          <span>💬</span> Community
+        </a>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <header class="content-header">
+        <button class="mobile-menu-toggle">☰</button>
+        <div class="breadcrumb">
+          <a href="index.html">Docs</a>
+          <span class="breadcrumb-sep">/</span>
+          <span>Core Concepts</span>
+          <span class="breadcrumb-sep">/</span>
+          <span>Local Models</span>
+        </div>
+        <div class="header-actions">
+          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank">
+            <span>⭐</span> Star on GitHub
+          </a>
+        </div>
+      </header>
+
+      <div class="page-content">
+        <div class="content-body">
+          <h1>🦙 Local Model Support</h1>
+          <p class="lead">
+            OrcBot v2.1 introduces first-class support for local LLMs, allowing you to run your agent with total privacy and zero per-token costs.
+          </p>
+
+          <div class="alert alert-info">
+            <strong>TUI Integration:</strong> You can manage your entire Ollama stack directly from the OrcBot TUI under <code>Manage AI Models -> Ollama / Local Models</code>.
+          </div>
+
+          <h2>Supported Providers</h2>
+          <p>
+            OrcBot's local model engine is designed around the OpenAI-compatible API standard. While <strong>Ollama</strong> is the primary supported platform, any server that exposes a <code>/v1/chat/completions</code> endpoint will work.
+          </p>
+          <ul>
+            <li><strong>Ollama</strong> (Native integration with auto-start and model pull)</li>
+            <li><strong>LM Studio</strong></li>
+            <li><strong>vLLM</strong></li>
+            <li><strong>LocalAI</strong></li>
+            <li><strong>Text Generation WebUI</strong></li>
+          </ul>
+
+          <h2>Configuration</h2>
+          <p>To use a local model, update your configuration using one of the methods below.</p>
+
+          <h3>Using the TUI (Recommended)</h3>
+          <ol>
+            <li>Run <code>orcbot ui</code></li>
+            <li>Navigate to <strong>Manage AI Models</strong></li>
+            <li>Select <strong>Ollama / Local Models</strong></li>
+            <li>Follow the prompts to start the server, pull a model, and set it as primary.</li>
+          </ol>
+
+          <h3>Using <code>orcbot.config.yaml</code></h3>
+          <pre><code>llmProvider: ollama
+ollamaApiUrl: http://localhost:11434
+modelName: llama3</code></pre>
+
+          <h3>Using Environment Variables</h3>
+          <pre><code>ORCBOT_LLM_PROVIDER=ollama
+ORCBOT_OLLAMA_API_URL=http://localhost:11434
+ORCBOT_MODEL_NAME=llama3</code></pre>
+
+          <h2>Native Tool Calling</h2>
+          <p>
+            One of OrcBot's core strengths is its ability to use tools (shell, browser, etc.). Unlike many local agent implementations that rely on brittle text parsing, OrcBot uses <strong>Native Tool Calling</strong> with local models that support it.
+          </p>
+          <p>
+            When a tool-capable local model (like <code>llama3</code> or <code>mistral</code>) is used, OrcBot sends the tool definitions as part of the structured API request, ensuring high reliability and complex task execution.
+          </p>
+
+          <h2>Performance Tuning</h2>
+          <p>
+            Running models locally requires significant hardware resources. Here are some tips for optimizing performance:
+          </p>
+          <div class="grid grid-2">
+            <div class="card">
+              <h4>GPU Acceleration</h4>
+              <p>Always ensure your GPU drivers are up to date. Ollama will automatically use NVIDIA (CUDA) or Apple (Metal) acceleration if available.</p>
+            </div>
+            <div class="card">
+              <h4>Model Sizing</h4>
+              <p>For complex strategic planning, use at least a 7B parameter model. For better tool usage and reasoning, 13B or 70B models are recommended if your VRAM allows.</p>
+            </div>
+          </div>
+
+          <h2>Security & Air-Gapping</h2>
+          <p>
+            By combining Local Model support with OrcBot's <strong>User-Space Restricted Shell</strong>, you can create a highly secure, air-gapped autonomous system. Since the model runs on your machine, sensitive data like logs, file paths, and internal reasoning never leave your local network.
+          </p>
+        </div>
+
+        <!-- Footer -->
+        <footer class="page-footer">
+          <span>© 2026 OrcBot Project</span>
+          <div class="footer-nav">
+            <a href="https://github.com/fredabila/orcbot">GitHub</a>
+            <a href="https://github.com/fredabila/orcbot/discussions">Community</a>
+          </div>
+        </footer>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    // Mobile menu toggle
+    const menuToggle = document.querySelector('.mobile-menu-toggle');
+    const sidebar = document.querySelector('.sidebar');
+    if (menuToggle) {
+      menuToggle.addEventListener('click', () => sidebar.classList.toggle('open'));
+    }
+  </script>
+</body>
+</html>

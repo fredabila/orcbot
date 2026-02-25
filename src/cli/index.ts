@@ -15,6 +15,7 @@ import { spawnSync } from 'child_process';
 import { WorkerProfileManager } from '../core/WorkerProfile';
 import { DaemonManager } from '../utils/daemon';
 import { TokenTracker } from '../core/TokenTracker';
+import { OllamaHelper } from '../utils/OllamaHelper';
 import { aggregateWorldEvents, fetchWorldEvents, summarizeWorldEvents, WorldEvent, WorldEventSource, getRootCodeLabel } from '../tools/WorldEvents';
 import { piBox, isPiTuiAvailable } from '../core/PiTuiRenderer';
 
@@ -3045,6 +3046,9 @@ async function showModelsMenu() {
     const hasNvidia = !!agent.config.get('nvidiaApiKey');
     const hasAnthropic = !!agent.config.get('anthropicApiKey');
     const hasBedrock = !!agent.config.get('bedrockAccessKeyId');
+    const ollamaUrl = agent.config.get('ollamaApiUrl') || 'http://localhost:11434';
+    const ollamaHelper = new OllamaHelper(ollamaUrl);
+    const hasOllama = await ollamaHelper.isRunning();
     const piAiEnabled = agent.config.get('usePiAI') !== false; // true by default
 
     console.log('');
@@ -3061,6 +3065,7 @@ async function showModelsMenu() {
     const providerLines = [
         `${statusDot(hasOpenAI, '')}  ${bold('OpenAI')}       ${hasOpenAI ? green('Key set') : gray('Not configured')}`,
         `${statusDot(hasOpenRouter, '')}  ${bold('OpenRouter')}   ${hasOpenRouter ? green('Key set') : gray('Not configured')}`,
+        `${statusDot(hasOllama, '')}  ${bold('Ollama')}       ${hasOllama ? green('Online') : gray('Offline')}`,
         `${statusDot(hasGoogle, '')}  ${bold('Google')}       ${hasGoogle ? green('Key set') : gray('Not configured')}`,
         `${statusDot(hasNvidia, '')}  ${bold('NVIDIA')}       ${hasNvidia ? green('Key set') : gray('Not configured')}`,
         `${statusDot(hasAnthropic, '')}  ${bold('Anthropic')}    ${hasAnthropic ? green('Key set') : gray('Not configured')}`,
@@ -3080,6 +3085,7 @@ async function showModelsMenu() {
                 new inquirer.Separator(gradient('  ─── Per-Provider Config ──────────', [c.green, c.gray])),
                 { name: `  ${statusDot(hasOpenAI, '')} OpenAI ${dim('(GPT-4, etc.)')}`, value: 'openai' },
                 { name: `  ${statusDot(hasOpenRouter, '')} OpenRouter ${dim('(multi-model gateway)')}`, value: 'openrouter' },
+                { name: `  ${statusDot(hasOllama, '')} Ollama ${dim('(local models)')}`, value: 'ollama' },
                 { name: `  ${statusDot(hasGoogle, '')} Google ${dim('(Gemini Pro/Flash)')}`, value: 'google' },
                 { name: `  ${statusDot(hasNvidia, '')} NVIDIA ${dim('(AI models)')}`, value: 'nvidia' },
                 { name: `  ${statusDot(hasAnthropic, '')} Anthropic ${dim('(Claude)')}`, value: 'anthropic' },
@@ -3100,6 +3106,8 @@ async function showModelsMenu() {
         await showOpenAIConfig();
     } else if (provider === 'openrouter') {
         await showOpenRouterConfig();
+    } else if (provider === 'ollama') {
+        await showOllamaMenu();
     } else if (provider === 'google') {
         await showGeminiConfig();
     } else if (provider === 'nvidia') {
@@ -3113,6 +3121,131 @@ async function showModelsMenu() {
 
 // ── pi-ai model catalogue ───────────────────────────────────────────
 // Catalogue is now fetched dynamically from agent.llm.getPiAICatalogue()
+
+async function showOllamaMenu() {
+    console.clear();
+    banner();
+    sectionHeader('🦙', 'Ollama / Local Models');
+
+    const ollamaUrl = agent.config.get('ollamaApiUrl') || 'http://localhost:11434';
+    const helper = new OllamaHelper(ollamaUrl);
+    
+    const isInstalled = await helper.isInstalled();
+    const isRunning = await helper.isRunning();
+    const localModels = isRunning ? await helper.listModels() : [];
+    const currentModel = agent.config.get('modelName');
+    const currentProvider = agent.config.get('llmProvider');
+
+    console.log('');
+    const statusLines = [
+        `${dim('Status')}     ${isRunning ? green('● ONLINE') : red('○ OFFLINE')}`,
+        `${dim('Installed')}  ${isInstalled ? green('Yes') : yellow('No (Download at ollama.com)')}`,
+        `${dim('URL')}        ${ollamaUrl}`,
+    ];
+    box(statusLines, { title: '📡 OLLAMA STATUS', width: 52, color: isRunning ? c.brightGreen : c.brightRed });
+
+    if (isRunning && localModels.length > 0) {
+        console.log('');
+        const modelLines = localModels.map(m => 
+            `${m === currentModel && currentProvider === 'ollama' ? brightGreen('●') : gray('○')} ${m}`
+        );
+        box(modelLines, { title: '📦 LOCAL MODELS', width: 52, color: c.brightCyan });
+    }
+
+    console.log('');
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: cyan('Ollama Management:'),
+            choices: [
+                { name: `  ⭐ ${bold('Set as Primary Provider')}`, value: 'set_primary', disabled: !isRunning },
+                { name: `  📦 ${bold('Select Local Model')}`, value: 'select_model', disabled: !isRunning || localModels.length === 0 },
+                { name: `  ⬇️  ${bold('Pull New Model')}`, value: 'pull_model', disabled: !isRunning },
+                { name: `  🚀 ${bold('Start Ollama Server')}`, value: 'start_server', disabled: isRunning || !isInstalled },
+                new inquirer.Separator(gradient('  ─── Configuration ────────────────', [c.cyan, c.gray])),
+                { name: `  ⚙️  Set API URL ${dim(`(${ollamaUrl})`)}`, value: 'set_url' },
+                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.cyan, c.gray])),
+                { name: dim('  ← Back'), value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showModelsMenu();
+
+    if (action === 'set_primary') {
+        agent.config.set('llmProvider', 'ollama');
+        console.log(green('\n  ✓ Ollama set as primary provider.'));
+        await waitKeyPress();
+        return showOllamaMenu();
+    }
+
+    if (action === 'select_model') {
+        const { model } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'model',
+                message: 'Select model to use:',
+                choices: localModels.map(m => ({ name: m, value: m }))
+            }
+        ]);
+        agent.config.set('modelName', model);
+        agent.config.set('llmProvider', 'ollama');
+        console.log(green(`\n  ✓ Active model set to ${model} via Ollama.`));
+        await waitKeyPress();
+        return showOllamaMenu();
+    }
+
+    if (action === 'pull_model') {
+        const { modelName } = await inquirer.prompt([
+            {
+                type: 'input',
+                name: 'modelName',
+                message: 'Enter model name to pull (e.g. llama3, mistral):',
+                validate: (input) => input.length > 0 || 'Please enter a model name.'
+            }
+        ]);
+        console.log(yellow(`\n  Pulling ${modelName}... This may take a while depending on your internet speed.`));
+        const success = await helper.pullModel(modelName);
+        if (success) {
+            console.log(green(`\n  ✓ Model ${modelName} pulled successfully.`));
+        } else {
+            console.log(red(`\n  ✗ Failed to pull model ${modelName}. Check logs for details.`));
+        }
+        await waitKeyPress();
+        return showOllamaMenu();
+    }
+
+    if (action === 'start_server') {
+        helper.startServer();
+        console.log(yellow('\n  Starting Ollama server in background...'));
+        console.log(dim('  Checking status...'));
+        for (let i = 0; i < 5; i++) {
+            await new Promise(r => setTimeout(r, 2000));
+            if (await helper.isRunning()) {
+                console.log(green('  ✓ Ollama is now online!'));
+                break;
+            }
+        }
+        await waitKeyPress();
+        return showOllamaMenu();
+    }
+
+    if (action === 'set_url') {
+        const { url } = await inquirer.prompt([
+            {
+                type: 'input',
+                name: 'url',
+                message: 'Enter Ollama API URL:',
+                default: ollamaUrl
+            }
+        ]);
+        agent.config.set('ollamaApiUrl', url);
+        console.log(green(`\n  ✓ Ollama API URL set to ${url}`));
+        await waitKeyPress();
+        return showOllamaMenu();
+    }
+}
 
 async function showPiAIConfig() {
     console.clear();

@@ -35,7 +35,14 @@ export class ConfigPolicy {
             level: ConfigChangeLevel.SAFE,
             description: 'LLM provider selection',
             reason: 'Agents can switch providers based on availability and task requirements',
-            validation: (value: any) => ['openai', 'google', 'bedrock', 'openrouter', 'nvidia', 'anthropic'].includes(value)
+            validation: (value: any) => ['openai', 'google', 'bedrock', 'openrouter', 'nvidia', 'anthropic', 'ollama'].includes(value)
+        }],
+        ['ollamaApiUrl', {
+            key: 'ollamaApiUrl',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Local Ollama API URL',
+            reason: 'Non-sensitive endpoint configuration',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
         }],
         ['memoryContextLimit', {
             key: 'memoryContextLimit',

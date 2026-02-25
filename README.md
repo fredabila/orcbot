@@ -45,6 +45,7 @@ OrcBot is a next-generation **autonomous reasoning agent**. Beyond the v2.0 Stra
 *   📚 **Self-Updating Identity**: Agent can evolve its personality, values, and operating instructions through bootstrap files.
 *   ⏱️ **Event-Driven Polling**: Efficient condition monitoring without busy-waiting loops.
 *   🎨 **Image Generation**: Built-in skill for generating and delivering images across WhatsApp, Telegram, and Discord.
+*   🦙 **Ollama / Local Models**: Full TUI management for local LLMs, including auto-starting servers, pulling models, and OpenAI-compatible native tool calling.
 *   🗃️ **RAG Knowledge Store**: Ingest documents, URLs, and files into a semantic vector search index for durable recall.
 *   💬 **Rich Telegram UX**: Inline buttons, polls, message editing, emoji reactions (with reply fallback), and message pinning.
 *   🔁 **Clarification Delivery**: `request_supporting_data` now actively sends questions through the active channel before pausing.

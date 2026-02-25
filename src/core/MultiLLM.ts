@@ -6,7 +6,7 @@ import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedroc
 import { TokenTracker } from './TokenTracker';
 import { piAiCall, piAiCallWithTools, getPiProviders, getPiModels, piAiLogin, isPiAiLinked, type PiAIAdapterOptions } from './PiAIAdapter';
 import { convertToWhisperCompatible, getMimeType as getAudioHelperMimeType, isAudioFile } from '../utils/AudioHelper';
-export type LLMProvider = 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia' | 'anthropic';
+export type LLMProvider = 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia' | 'anthropic' | 'ollama';
 export interface LLMMessage {
     role: 'system' | 'user' | 'assistant';
     content: string;
@@ -61,6 +61,7 @@ export class MultiLLM {
     private perplexityKey?: string;
     private deepseekKey?: string;
     private opencodeKey?: string;
+    private ollamaUrl?: string;
     private azureEndpoint?: string;
     private googleProjectId?: string;
     private googleLocation?: string;
@@ -76,7 +77,8 @@ export class MultiLLM {
         openrouterAppName?: string, llmProvider?: LLMProvider, usePiAI?: boolean, groqApiKey?: string, mistralApiKey?: string,
         cerebrasApiKey?: string, xaiApiKey?: string, huggingfaceApiKey?: string, kimiApiKey?: string, minimaxApiKey?: string,
         zaiApiKey?: string, perplexityApiKey?: string, deepseekApiKey?: string, opencodeApiKey?: string,
-        azureEndpoint?: string, googleProjectId?: string, googleLocation?: string, fallbackModelNames?: Record<string, string>
+        ollamaApiUrl?: string, azureEndpoint?: string, googleProjectId?: string, googleLocation?: string,
+        fallbackModelNames?: Record<string, string>
     }) {
         this.openaiKey = config?.apiKey || process.env.OPENAI_API_KEY;
         this.openrouterKey = config?.openrouterApiKey || process.env.OPENROUTER_API_KEY;
@@ -102,6 +104,7 @@ export class MultiLLM {
         this.perplexityKey = config?.perplexityApiKey || process.env.PERPLEXITY_API_KEY;
         this.deepseekKey = config?.deepseekApiKey || process.env.DEEPSEEK_API_KEY;
         this.opencodeKey = config?.opencodeApiKey || process.env.OPENCODE_API_KEY;
+        this.ollamaUrl = config?.ollamaApiUrl || process.env.OLLAMA_API_URL || 'http://localhost:11434';
         this.azureEndpoint = config?.azureEndpoint || process.env.AZURE_OPENAI_ENDPOINT;
         this.googleProjectId = config?.googleProjectId || process.env.GOOGLE_PROJECT_ID;
         this.googleLocation = config?.googleLocation || process.env.GOOGLE_LOCATION;
@@ -123,8 +126,8 @@ export class MultiLLM {
         openrouterAppName?: string, llmProvider?: LLMProvider, usePiAI?: boolean, groqApiKey?: string, mistralApiKey?: string,
         cerebrasApiKey?: string, xaiApiKey?: string, huggingfaceApiKey?: string, kimiApiKey?: string, minimaxApiKey?: string,
         zaiApiKey?: string, perplexityApiKey?: string, deepseekApiKey?: string, opencodeApiKey?: string,
-        azureEndpoint?: string, googleProjectId?: string, googleLocation?: string, fallbackModelNames?: Record<string, string>,
-        fastModelName?: string
+        ollamaApiUrl?: string, azureEndpoint?: string, googleProjectId?: string, googleLocation?: string,
+        fallbackModelNames?: Record<string, string>, fastModelName?: string
     }) {
         if (config.apiKey !== undefined) this.openaiKey = config.apiKey;
         if (config.googleApiKey !== undefined) this.googleKey = config.googleApiKey;
@@ -152,6 +155,7 @@ export class MultiLLM {
         if (config.perplexityApiKey !== undefined) this.perplexityKey = config.perplexityApiKey;
         if (config.deepseekApiKey !== undefined) this.deepseekKey = config.deepseekApiKey;
         if (config.opencodeApiKey !== undefined) this.opencodeKey = config.opencodeApiKey;
+        if (config.ollamaApiUrl !== undefined) this.ollamaUrl = config.ollamaApiUrl;
         if (config.azureEndpoint !== undefined) this.azureEndpoint = config.azureEndpoint;
         if (config.googleProjectId !== undefined) this.googleProjectId = config.googleProjectId;
         if (config.googleLocation !== undefined) this.googleLocation = config.googleLocation;
@@ -238,6 +242,7 @@ export class MultiLLM {
             if (p === 'openrouter') return this.callOpenRouter(prompt, systemMessage, m);
             if (p === 'nvidia') return this.callNvidia(prompt, systemMessage, m);
             if (p === 'anthropic') return this.callAnthropic(prompt, systemMessage, m);
+            if (p === 'ollama') return this.callOllama(prompt, systemMessage, m);
             throw new Error(`Provider ${p} not supported`);
         };
         const primaryModel = modelOverride || this.modelName;
@@ -293,6 +298,8 @@ export class MultiLLM {
                     return this.callGoogleWithTools(prompt, systemMessage, tools, m);
                 case 'openrouter':
                     return this.callOpenRouterWithTools(prompt, systemMessage, tools, m);
+                case 'ollama':
+                    return this.callOllamaWithTools(prompt, systemMessage, tools, m);
                 default:
                     // Unsupported: fall back to text-based
                     const text = await this.call(prompt, systemMessage, p, m);
@@ -315,7 +322,54 @@ export class MultiLLM {
      */
     public supportsNativeToolCalling(provider?: LLMProvider): boolean {
         const p = provider || this.preferredProvider || this.inferProvider(this.modelName);
-        return ['openai', 'anthropic', 'google', 'openrouter', 'nvidia'].includes(p);
+        return ['openai', 'anthropic', 'google', 'openrouter', 'nvidia', 'ollama'].includes(p);
+    }
+    // ── Native tool calling: Ollama (OpenAI-compatible) ──
+    private async callOllamaWithTools(
+        prompt: string,
+        systemMessage: string,
+        tools: LLMToolDefinition[],
+        model: string
+    ): Promise<LLMToolResponse> {
+        const baseUrl = (this.ollamaUrl || 'http://localhost:11434').replace(/\/+$/, '');
+        const url = `${baseUrl}/v1/chat/completions`;
+        const messages: LLMMessage[] = [];
+        if (systemMessage) messages.push({ role: 'system', content: systemMessage });
+        messages.push({ role: 'user', content: prompt });
+        const resolvedModel = this.normalizeOllamaModel(model);
+        const body: any = {
+            model: resolvedModel,
+            messages,
+            temperature: 0.7,
+            tools,
+        };
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(body),
+            });
+            if (!response.ok) {
+                const err = await response.text();
+                throw new Error(`Ollama Tool Call API Error: ${response.status} ${err}`);
+            }
+            const data = await response.json() as any;
+            const message = data.choices?.[0]?.message;
+            const textContent = message?.content || '';
+            const toolCalls: LLMToolCall[] = (message?.tool_calls || []).map((tc: any) => ({
+                name: tc.function?.name || '',
+                arguments: this.safeParseJson(tc.function?.arguments),
+                id: tc.id,
+            }));
+            this.recordUsage('ollama', resolvedModel, prompt, data, textContent);
+            logger.debug(`MultiLLM: Ollama tool call returned ${toolCalls.length} tool(s) + ${textContent.length} chars text`);
+            return { content: textContent, toolCalls, raw: data };
+        } catch (error) {
+            logger.error(`MultiLLM Ollama tool call error: ${error}`);
+            throw error;
+        }
     }
     // ── Native tool calling: OpenAI / NVIDIA (OpenAI-compatible) ──
     private async callOpenAIWithTools(
@@ -600,6 +654,7 @@ export class MultiLLM {
             case 'nvidia': return 'moonshotai/kimi-k2.5';
             case 'openrouter': return 'google/gemini-2.0-flash-exp:free';
             case 'anthropic': return 'claude-sonnet-4-5';
+            case 'ollama': return 'llama3';
             case 'bedrock': return this.modelName;
             default: return this.modelName;
         }
@@ -618,6 +673,7 @@ export class MultiLLM {
             { provider: 'anthropic', configured: has(this.anthropicKey), model: this.getDefaultModelForProvider('anthropic') },
             { provider: 'nvidia', configured: has(this.nvidiaKey), model: this.getDefaultModelForProvider('nvidia') },
             { provider: 'openrouter', configured: has(this.openrouterKey), model: this.getDefaultModelForProvider('openrouter') },
+            { provider: 'ollama', configured: !!this.ollamaUrl, model: this.getDefaultModelForProvider('ollama') },
             { provider: 'bedrock', configured: has(this.bedrockAccessKeyId), model: this.getDefaultModelForProvider('bedrock') },
         ];
         const currentProvider = this.preferredProvider || this.inferProvider(this.modelName);
@@ -1005,6 +1061,7 @@ export class MultiLLM {
         if (lower.includes('gemini')) return 'google';
         if (lower.startsWith('openrouter:') || lower.startsWith('openrouter/') || lower.startsWith('or:')) return 'openrouter';
         if (lower.startsWith('nvidia:') || lower.startsWith('nv:')) return 'nvidia';
+        if (lower.startsWith('ollama:') || lower.startsWith('local:')) return 'ollama';
         return 'openai';
     }
     private normalizeOpenRouterModel(modelName: string): string {
@@ -1067,7 +1124,46 @@ export class MultiLLM {
             throw error;
         }
     }
-    private async callOpenAI(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
+        private async callOllama(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
+            const messages: LLMMessage[] = [];
+            if (systemMessage) messages.push({ role: 'system', content: systemMessage });
+            messages.push({ role: 'user', content: prompt });
+            const rawModel = modelOverride || this.modelName;
+            const model = this.normalizeOllamaModel(rawModel);
+            const baseUrl = (this.ollamaUrl || 'http://localhost:11434').replace(/\/+$/, '');
+            const url = `${baseUrl}/v1/chat/completions`;
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        model,
+                        messages,
+                        temperature: 0.7,
+                    }),
+                });
+                if (!response.ok) {
+                    const err = await response.text();
+                    throw new Error(`Ollama API Error: ${response.status} ${err}`);
+                }
+                const data = await response.json() as any;
+                this.recordUsage('ollama', model, prompt, data, data?.choices?.[0]?.message?.content);
+                return data.choices[0].message.content;
+            } catch (error) {
+                logger.error(`MultiLLM Ollama Error: ${error}`);
+                throw error;
+            }
+        }
+    
+        private normalizeOllamaModel(modelName: string): string {
+            return modelName
+                .replace(/^ollama:/i, '')
+                .replace(/^local:/i, '');
+        }
+    
+        private async callOpenAI(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
         if (!this.openaiKey) throw new Error('OpenAI API key not configured');
         const messages: LLMMessage[] = [];
         if (systemMessage) messages.push({ role: 'system', content: systemMessage });
