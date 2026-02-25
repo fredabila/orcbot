@@ -1156,6 +1156,12 @@ export class MultiLLM {
             }
 
             const url = `${baseUrl}/v1/chat/completions`;
+            logger.info(`MultiLLM: Calling Ollama model "${model}" for reasoning (this may take time on low-RAM systems)...`);
+            
+            // Use a longer timeout for local Ollama calls (3 minutes) to allow for model loading/swapping
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 180000);
+
             try {
                 const response = await fetch(url, {
                     method: 'POST',
@@ -1167,7 +1173,10 @@ export class MultiLLM {
                         messages,
                         temperature: 0.7,
                     }),
+                    signal: controller.signal
                 });
+                clearTimeout(timeoutId);
+
                 if (!response.ok) {
                     const err = await response.text();
                     throw new Error(`Ollama API Error: ${response.status} ${err}`);
@@ -1175,7 +1184,11 @@ export class MultiLLM {
                 const data = await response.json() as any;
                 this.recordUsage('ollama', model, prompt, data, data?.choices?.[0]?.message?.content);
                 return data.choices[0].message.content;
-            } catch (error) {
+            } catch (error: any) {
+                clearTimeout(timeoutId);
+                if (error.name === 'AbortError') {
+                    throw new Error(`Ollama request timed out after 180s. Your system (2GB RAM) might be struggling to run both OrcBot and the model.`);
+                }
                 logger.error(`MultiLLM Ollama Error: ${error}`);
                 throw error;
             }

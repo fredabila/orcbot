@@ -566,6 +566,8 @@ ${this.repoContext}`,
         const metadata = action.payload;
         const actionId = action.id;
 
+        logger.info(`Agent: Starting deliberation for task "${taskDescription.slice(0, 50)}..." (Action ID: ${actionId})`);
+
         // Detect heartbeat/autonomy tasks — they carry their own rich context
         // in the task description, so we use a lightweight prompt assembly path
         // that skips redundant journal/learning/thread/semantic/episodic/channel context.
