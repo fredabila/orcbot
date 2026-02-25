@@ -10,6 +10,7 @@
 
 import { PromptHelper, PromptHelperContext } from './PromptHelper';
 import { CoreHelper } from './CoreHelper';
+import { EnvironmentHelper } from './EnvironmentHelper';
 import { ToolingHelper } from './ToolingHelper';
 import { CommunicationHelper } from './CommunicationHelper';
 import { BrowserHelper } from './BrowserHelper';
@@ -53,6 +54,7 @@ export class PromptRouter {
     constructor() {
         // Register all built-in helpers
         this.register(new CoreHelper());
+        this.register(new EnvironmentHelper());
         this.register(new PrivacyHelper());
         this.register(new ToolingHelper());
         this.register(new CommunicationHelper());

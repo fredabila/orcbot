@@ -484,6 +484,8 @@ IMPORTANT: You MUST always respond with a valid JSON object wrapped in code bloc
 You can call MULTIPLE tools in a single turn using the "tools" array - use this for parallel/independent operations.
 
 JSON Format:
+- Always optimize your workflow based on the provided SYSTEM ENVIRONMENT (CPU/RAM/OS).
+- If resources are constrained, explain your choice of a lighter-weight approach in "reasoning".
 \`\`\`json
 {
   "action": "THOUGHT",

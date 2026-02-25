@@ -54,10 +54,7 @@ ROLE: Browser Specialist
 - Use 'browser_cleanup' to handle overlays.
 - DO NOT engage in conversation. Your output is actions.
 - When done, report result via 'complete_delegated_task' or 'send_agent_message'.
-- If blocked, report error.
-
-SYSTEM ENVIRONMENT:
-${ctx.systemContext}`;
+- If blocked, report error.`;
         }
 
         return `You are a highly intelligent, autonomous AI Agent. Your persona and identity are defined below.
@@ -91,9 +88,6 @@ ACCOUNT OWNERSHIP CLARITY:
 - If you have a skill like \`post_whatsapp_status\`, that posts to the user's status (the one you control).
 - Do NOT ask for clarification about "your status vs my status" - they are the same thing.
 
-${ParserLayer.getSystemPromptSnippet()}
-
-SYSTEM ENVIRONMENT:
-${ctx.systemContext}`;
+${ParserLayer.getSystemPromptSnippet()}`;
     }
 }

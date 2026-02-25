@@ -16,11 +16,11 @@ import { BootstrapManager } from './BootstrapManager';
 import { PromptRouter, PromptHelperContext } from './prompts';
 import { KnowledgeStore } from '../memory/KnowledgeStore';
 import { ToolsManager } from './ToolsManager';
+import { Environment } from './utils/Environment';
 
 export class DecisionEngine {
     private agentIdentity: string = '';
     private pipeline: DecisionPipeline;
-    private systemContext: string;
     private executionStateManager: ExecutionStateManager;
     private promptRouter: PromptRouter;
     private contextCompactor: ContextCompactor;
@@ -53,7 +53,6 @@ export class DecisionEngine {
         this.bootstrap = bootstrap;
         this.tools = tools;
         this.pipeline = new DecisionPipeline(this.config || new ConfigManager());
-        this.systemContext = this.buildSystemContext();
         this.repoContext = this.buildRepoContext();
         this.executionStateManager = new ExecutionStateManager();
         this.contextCompactor = new ContextCompactor(this.llm);
@@ -140,33 +139,6 @@ The user appreciates knowing what's happening, especially during complex tasks. 
 - Delay Risk: ${delayRisk.toUpperCase()}${riskGuidance}`;
     }
 
-    private buildSystemContext(): string {
-        const isWindows = process.platform === 'win32';
-        const isMac = process.platform === 'darwin';
-        const platformName = isWindows ? 'Windows' : isMac ? 'macOS' : 'Linux';
-        
-        if (isWindows) {
-            return `- Platform: ${platformName} (${os.release()})
-- Shell: PowerShell (all run_command calls execute in PowerShell, NOT cmd.exe)
-- CRITICAL: Use PowerShell cmdlets, NOT cmd.exe commands:
-  - Use Get-ChildItem (NOT dir), Get-Command (NOT where), Test-Path (NOT if exist)
-  - Use Start-MpScan for Windows Defender scans
-  - Use Get-Process, Stop-Process, Get-Service, Start-Service
-  - Use Invoke-WebRequest (NOT curl on older systems)
-- Use 'write_file' skill for creating files (echo multiline doesn't work)
-- Use 'create_directory' skill for making directories
-- Path format: C:\\path\\to\\file or C:/path/to/file
-- Command chaining: Use semicolons (;) to chain commands`;
-        } else {
-            return `- Platform: ${platformName} (${os.release()})
-- Shell: Bash/Zsh
-- Command chaining: Use && or ;
-- Standard Unix commands available (ls, cat, mkdir, echo, etc.)
-- Path format: /path/to/file`;
-        }
-    }
-
-
     private buildRepoContext(): string {
         try {
             const cwd = process.cwd();
@@ -204,7 +176,7 @@ The user appreciates knowing what's happening, especially during complex tasks. 
     }
 
     private getSystemContext(): string {
-        return this.systemContext;
+        return Environment.getSystemPromptSnippet();
     }
 
     private async inferFileIntentForAction(

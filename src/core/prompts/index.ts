@@ -24,6 +24,7 @@
 export { PromptHelper, PromptHelperContext } from './PromptHelper';
 export { PromptRouter, RouteResult, RouterLLM } from './PromptRouter';
 export { CoreHelper } from './CoreHelper';
+export { EnvironmentHelper } from './EnvironmentHelper';
 export { ToolingHelper } from './ToolingHelper';
 export { CommunicationHelper } from './CommunicationHelper';
 export { BrowserHelper } from './BrowserHelper';
