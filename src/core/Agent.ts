@@ -584,6 +584,36 @@ export class Agent {
         return null;
     }
 
+    /**
+     * Helper to resolve a chatId from tool arguments, with fallback to current action metadata
+     * if the provided ID is missing, invalid, or looks like a placeholder (e.g. 12345).
+     */
+    private resolveContextualChatId(inputId: any, expectedChannel: string): string | null {
+        let id = String(inputId || '').trim();
+        const currentAction = this.actionQueue.getQueue().find(a => a.id === this.currentActionId);
+        const metadata = currentAction?.payload || {};
+
+        // 1. Detect if the input is missing or a common placeholder
+        const isPlaceholder = !id || id === '12345' || id === '123456789' || id === '0' || id === 'undefined' || id === 'null';
+
+        // 2. If it's a placeholder and the action source matches, autofill from metadata
+        if (isPlaceholder && metadata.source === expectedChannel) {
+            const autofilled = metadata.sourceId || metadata.chatId || metadata.channelId || metadata.jid;
+            if (autofilled) {
+                logger.info(`resolveContextualChatId: Autofilled placeholder "${id}" with real ID "${autofilled}" from action ${this.currentActionId} metadata`);
+                return String(autofilled);
+            }
+        }
+
+        // 3. Special handling for Telegram name resolution
+        if (expectedChannel === 'telegram') {
+            const resolved = this.resolveTelegramChatId(id);
+            if (resolved) return resolved.id;
+        }
+
+        return id || null;
+    }
+
     private getSessionScopeMode(): 'main' | 'per-peer' | 'per-channel-peer' {
         const raw = String(this.config.get('sessionScope') || 'per-channel-peer').toLowerCase();
         if (raw === 'main' || raw === 'per-peer' || raw === 'per-channel-peer') {
@@ -747,18 +777,11 @@ export class Agent {
                 isSideEffect: true,
                 isDeep: false,
                 handler: async (args: any) => {
-                    let chat_id = args.chat_id || args.chatId || args.id;
+                    let chat_id = this.resolveContextualChatId(args.chat_id || args.chatId || args.id, 'telegram');
                     const message = args.message || args.content || args.text;
 
-                    if (!chat_id) return 'Error: Missing chatId. Use the NUMERIC Telegram chat ID from the message metadata (e.g. 123456789), not the user\'s name.';
+                    if (!chat_id) return 'Error: Missing chatId. Check the incoming message metadata for the correct chatId or userId.';
                     if (!message) return 'Error: Missing message content.';
-
-                    // Validate: Telegram chat IDs are numeric. If the agent passed a name, try to resolve it.
-                    const resolved = this.resolveTelegramChatId(String(chat_id));
-                    if (!resolved) {
-                        return `Error: "${chat_id}" is not a valid Telegram chat ID. Telegram IDs are numeric (e.g. 123456789). Check the incoming message metadata for the correct chatId or userId.`;
-                    }
-                    chat_id = resolved.id;
 
                     if (this.telegram) {
                         await this.telegram.sendMessage(chat_id, message);
@@ -787,7 +810,7 @@ export class Agent {
                 description: 'Send a Telegram message with inline keyboard buttons. Use this to ask the user to choose an option, confirm an action, or provide navigation. buttons is a 2-D array of rows; each cell has text and an optional callback_data (payload sent back when pressed) or url.',
                 usage: 'telegram_send_buttons(chatId, message, buttons:array)',
                 handler: async (args: any) => {
-                    let chat_id = args.chat_id || args.chatId || args.id;
+                    let chat_id = this.resolveContextualChatId(args.chat_id || args.chatId || args.id, 'telegram');
                     const message = args.message || args.content || args.text;
                     let buttons = args.buttons;
 
@@ -814,10 +837,6 @@ export class Agent {
                         // Standard Telegram UX prefers each button on its own row for 1-D arrays.
                         buttons = (buttons as any[]).map(btn => [btn]);
                     }
-
-                    const resolved = this.resolveTelegramChatId(String(chat_id));
-                    if (!resolved) return `Error: "${chat_id}" is not a valid Telegram chat ID.`;
-                    chat_id = resolved.id;
 
                     if (this.telegram) {
                         try {
@@ -978,7 +997,7 @@ export class Agent {
                 description: 'Send a message to a WhatsApp contact or group',
                 usage: 'send_whatsapp(jid, message)',
                 handler: async (args: any) => {
-                    const jid = args.jid || args.to || args.id;
+                    const jid = this.resolveContextualChatId(args.jid || args.to || args.id, 'whatsapp');
                     const message = args.message || args.content || args.text;
 
                     if (!jid) return 'Error: Missing jid (WhatsApp ID).';
@@ -1012,7 +1031,7 @@ export class Agent {
                 description: 'Send a message to a Discord channel',
                 usage: 'send_discord(channel_id, message)',
                 handler: async (args: any) => {
-                    const channel_id = args.channel_id || args.channelId || args.id || args.to;
+                    const channel_id = this.resolveContextualChatId(args.channel_id || args.channelId || args.id || args.to, 'discord');
                     const message = args.message || args.content || args.text;
 
                     if (!channel_id) return 'Error: Missing channel_id. Use the Discord channel ID.';
@@ -1120,7 +1139,7 @@ export class Agent {
                 description: 'Send a message to a Slack channel or DM',
                 usage: 'send_slack(channel_id, message)',
                 handler: async (args: any) => {
-                    const channel_id = args.channel_id || args.channelId || args.to || args.id;
+                    const channel_id = this.resolveContextualChatId(args.channel_id || args.channelId || args.to || args.id, 'slack');
                     const message = args.message || args.content || args.text;
 
                     if (!channel_id) return 'Error: Missing channel_id.';
@@ -1233,7 +1252,14 @@ export class Agent {
                     let messageId = args.message_id || args.messageId || args.id;
                     const emojiInput = args.emoji || args.reaction || args.text || 'thumbs_up';
                     let channel = (args.channel || args.source || '').toLowerCase();
-                    let chatId = args.chat_id || args.chatId || args.jid || args.to;
+                    
+                    // Auto-detect channel from action context if not specified
+                    if (!channel) {
+                        const currentAction = this.actionQueue.getQueue().find(a => a.id === this.currentActionId);
+                        channel = currentAction?.payload?.source || '';
+                    }
+
+                    let chatId = this.resolveContextualChatId(args.chat_id || args.chatId || args.jid || args.to, channel);
 
                     const isTemplateId = (raw: any) => /\{\{[^}]+\}\}|\[\[[^\]]+\]\]/.test(String(raw || ''));
                     const resolveFallbackMessageId = (sourceHint?: string, chatHint?: string): string | null => {
@@ -1569,19 +1595,21 @@ export class Agent {
             description: 'Send a file (image, document, audio) to a contact. Supports WhatsApp, Telegram, Discord, and Gateway Chat. Set "channel" to "discord", "telegram", "whatsapp", or "gateway-chat" to override auto-detection. For gateway-chat, jid can be any value (e.g. "gateway-web").',
             usage: 'send_file(jid, path, caption?, channel?)',
             handler: async (args: any) => {
-                const jid = args.jid || args.to;
                 const filePath = args.path || args.file_path;
                 const caption = args.caption || '';
                 const explicitChannel = args.channel || args.via;
+
+                // Resolve channel: explicit arg > action source
+                const currentAction = this.actionQueue.getQueue().find(a => a.id === this.currentActionId);
+                const actionSource = explicitChannel || currentAction?.payload?.source || 'telegram';
+                
+                const jid = this.resolveContextualChatId(args.jid || args.to, actionSource);
 
                 if (!jid) return 'Error: Missing jid.';
                 if (!filePath) return 'Error: Missing file path.';
 
                 try {
-                    // Resolve channel: explicit arg > action source > JID pattern
-                    const currentAction = this.actionQueue.getQueue().find(a => a.id === this.currentActionId);
-                    const actionSource = currentAction?.payload?.source;
-                    const channelHint = explicitChannel || actionSource;
+                    const channelHint = actionSource;
 
                     // Gateway Chat: encode file as base64 and broadcast via event bus
                     if (channelHint === 'gateway-chat') {
@@ -1925,12 +1953,17 @@ export class Agent {
             description: 'Generate an AI image from a text prompt and immediately send it to a contact. This is the PREFERRED way to deliver generated images — it generates and sends in one step, preventing duplicates. Use this instead of generate_image + send_file. IMPORTANT: set "channel" to the correct platform (discord/telegram/whatsapp/slack/gateway-chat). For gateway-chat, set jid to "gateway-web".',
             usage: 'send_image(jid, prompt, channel?, size?, quality?, caption?)',
             handler: async (args: any) => {
-                const jid = args.jid || args.to;
                 const prompt = args.prompt || args.text || args.description;
                 const caption = args.caption || '';
                 const size = args.size || this.config.get('imageGenSize') || '1024x1024';
                 const quality = args.quality || this.config.get('imageGenQuality') || 'medium';
                 const explicitChannel = args.channel || args.via; // 'discord', 'telegram', 'whatsapp'
+
+                // Determine target channel: explicit parameter > action source
+                const currentAction = this.actionQueue.getQueue().find(a => a.id === this.currentActionId);
+                const actionSource = explicitChannel || currentAction?.payload?.source || 'telegram';
+                
+                const jid = this.resolveContextualChatId(args.jid || args.to, actionSource);
 
                 if (!jid) return 'Error: Missing jid (recipient identifier).';
                 if (!prompt) return 'Error: Missing prompt for image generation.';
@@ -1957,12 +1990,8 @@ export class Agent {
                     }
                     generatedFilePath = result.filePath;
 
-                    // Determine target channel: action source > explicit parameter > JID pattern detection > fallback
-                    // The action's source (which channel the user messaged from) is the most reliable signal.
-                    const currentAction = this.actionQueue.getQueue().find(a => a.id === this.currentActionId);
-                    const actionSource = currentAction?.payload?.source; // 'discord', 'telegram', 'whatsapp'
                     const imgCaption = caption || (result.revisedPrompt ? result.revisedPrompt.substring(0, 200) : '');
-                    const channelHint = explicitChannel || actionSource;
+                    const channelHint = actionSource;
                     const isWhatsApp = channelHint === 'whatsapp' || jid.includes('@s.whatsapp.net') || jid.includes('@g.us');
                     // Discord snowflake IDs: purely numeric, 17-20 digits
                     const isDiscord = channelHint === 'discord' || (!isWhatsApp && /^\d{15,20}$/.test(String(jid)));
@@ -4595,7 +4624,64 @@ Output JSON now:`;
             }
         });
 
-        // Skill: Create Custom Skill (CODE-BASED — writes a .ts plugin with executable logic)
+                    // Skill: Execute TypeScript
+                    this.skills.registerSkill({
+                        name: 'execute_typescript',
+                        description: 'Write, compile, and execute TypeScript code on the fly within the agent\'s Node.js environment. The code is saved to a persistent `scratchpad.ts` file in the data directory before execution. This allows you to import installed modules, write complex custom logic, and interact with the filesystem or APIs natively without creating a formal plugin. The code MUST export a default async function: `export default async function(args, context) { ... }`.',
+                        usage: 'execute_typescript(code: string, args?: object)',
+                        isResearch: true,
+                        isDeep: true,
+                        isDangerous: true,
+                        isElevated: true,
+                        handler: async (args: any) => {
+                            const code = args.code || args.text || args.script;
+                            if (!code) return 'Error: Missing code to execute.';
+        
+                            const scratchpadPath = path.join(this.config.getDataHome(), 'scratchpad.ts');
+                            
+                            try {
+                                // Ensure directory exists
+                                const dir = path.dirname(scratchpadPath);
+                                if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        
+                                fs.writeFileSync(scratchpadPath, code);
+                                
+                                // Clear require cache so we can run new code
+                                try {
+                                    const resolvedPath = require.resolve(scratchpadPath);
+                                    delete require.cache[resolvedPath];
+                                } catch (e) {
+                                    // First time require.resolve might fail if it's not cached yet, which is fine
+                                }
+                                
+                                // This relies on ts-node being registered by SkillsManager
+                                const module = require(scratchpadPath);
+                                const func = module.default || module.handler || (typeof module === 'function' ? module : null);
+                                
+                                if (typeof func !== 'function') {
+                                    return `Error: The provided code did not export a function. Please ensure your code includes: \`export default async function(args, context) { ... }\`. Module exports found: ${Object.keys(module).join(', ')}`;
+                                }
+                                
+                                // Create an execution context
+                                const context = {
+                                    agent: this,
+                                    config: this.config,
+                                    browser: this.browser,
+                                    logger: logger
+                                };
+        
+                                const result = await func(args.args || {}, context);
+                                
+                                if (result === undefined) return 'Execution successful (no return value).';
+                                if (typeof result === 'string') return result;
+                                return JSON.stringify(result, null, 2);
+                            } catch (e: any) {
+                                return `Error executing TypeScript: ${e.message || e}\n${e.stack || ''}`;
+                            }
+                        }
+                    });
+        
+                    // Skill: Create Custom Skill (CODE-BASED — writes a .ts plugin with executable logic)
         // Use create_custom_skill when you need to write RUNNABLE CODE (API calls, automation, data processing).
         // Use create_skill when you need to capture KNOWLEDGE/INSTRUCTIONS (workflows, guides, prompts).
         this.skills.registerSkill({
@@ -5747,6 +5833,54 @@ Be thorough and academic.`;
                     return success
                         ? `Agent ${agentId} terminated successfully.`
                         : `Failed to terminate agent ${agentId}. It may not exist or is the primary agent.`;
+                }
+            });
+
+            // Skill: Start Agent
+            this.skills.registerSkill({
+                name: 'start_agent',
+                description: 'Start a stopped agent instance worker process.',
+                usage: 'start_agent(agent_id)',
+                handler: async (args: any) => {
+                    const agentId = args.agent_id || args.id;
+                    if (!agentId) return 'Error: Missing agent_id.';
+
+                    const agentInstance = this.orchestrator.getAgent(agentId);
+                    if (!agentInstance) return `Error: Agent ${agentId} not found.`;
+
+                    if (this.orchestrator.isWorkerRunning(agentId)) {
+                        return `Agent ${agentId} is already running.`;
+                    }
+
+                    const success = this.orchestrator.startWorkerProcess(agentInstance);
+                    return success
+                        ? `Agent ${agentId} started successfully.`
+                        : `Failed to start agent ${agentId}.`;
+                }
+            });
+
+            // Skill: Restart Agent
+            this.skills.registerSkill({
+                name: 'restart_agent',
+                description: 'Restart an agent instance worker process.',
+                usage: 'restart_agent(agent_id)',
+                handler: async (args: any) => {
+                    const agentId = args.agent_id || args.id;
+                    if (!agentId) return 'Error: Missing agent_id.';
+
+                    const agentInstance = this.orchestrator.getAgent(agentId);
+                    if (!agentInstance) return `Error: Agent ${agentId} not found.`;
+
+                    if (this.orchestrator.isWorkerRunning(agentId)) {
+                        this.orchestrator.stopWorkerProcess(agentId);
+                        // Small delay for cleanup
+                        await new Promise(r => setTimeout(r, 3000));
+                    }
+
+                    const success = this.orchestrator.startWorkerProcess(agentInstance);
+                    return success
+                        ? `Agent ${agentId} restarted successfully.`
+                        : `Failed to restart agent ${agentId}.`;
                 }
             });
 
@@ -7861,13 +7995,6 @@ REFLECTION: <1-2 sentences>`;
         if (!message || !action.payload?.source) return false;
         const source = action.payload.source;
         const sourceId = action.payload.sourceId;
-
-        // Never send internal execution checklists to end-user channels.
-        const userFacingSources = new Set(['telegram', 'whatsapp', 'discord', 'slack', 'email', 'gateway-chat']);
-        if (userFacingSources.has(String(source).toLowerCase())) {
-            logger.debug(`Checklist preview suppressed for user-facing source: ${source}`);
-            return false;
-        }
 
         if (source !== 'gateway-chat' && !sourceId) return false;
 
@@ -11149,15 +11276,19 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 return `${name}|${target}|${message.slice(0, 240)}|${payload.slice(0, 240)}`;
             };
 
-            if (!isSimpleTask && action.payload.source && exposeChecklistPreview) {
+            if (!isSimpleTask) {
                 const checklistMessage = this.buildChecklistPreviewMessage(executionPlan);
                 if (checklistMessage) {
-                    const checklistSent = await this.sendChecklistPreview(action, checklistMessage);
-                    if (checklistSent) {
-                        messagesSent++;
-                        stepsSinceLastMessage = 0;
-                        lastMessageContent = checklistMessage;
-                        sentMessagesInAction.push(checklistMessage);
+                    logger.info(`Agent: Task Checklist for action ${action.id}:\n${checklistMessage.split('\n').map(l => '  ' + l).join('\n')}`);
+                    
+                    if (action.payload.source && exposeChecklistPreview) {
+                        const checklistSent = await this.sendChecklistPreview(action, checklistMessage);
+                        if (checklistSent) {
+                            messagesSent++;
+                            stepsSinceLastMessage = 0;
+                            lastMessageContent = checklistMessage;
+                            sentMessagesInAction.push(checklistMessage);
+                        }
                     }
                 }
             }
@@ -11954,17 +12085,14 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                         } else {
                             observation = `Observation: Tool ${toolCall.name} returned: ${resultString.slice(0, obsLimit)}`;
                         }
-                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_gateway_chat' || toolCall.name === 'send_discord' || toolCall.name === 'send_slack' ||
-                            toolCall.name === 'telegram_send_buttons' || toolCall.name === 'telegram_send_poll' || toolCall.name === 'send_email' || 
-                            toolCall.name === 'send_image' || toolCall.name === 'send_file' || toolCall.name === 'send_discord_file' || toolCall.name === 'send_slack_file') {
-
+                        if (toolMeta.isSideEffect) {
                             const isStructuredSend = toolCall.name === 'telegram_send_buttons' || toolCall.name === 'telegram_send_poll';
                             const isMediaSend = toolCall.name === 'send_image' || toolCall.name === 'send_file' || toolCall.name === 'send_discord_file' || toolCall.name === 'send_slack_file';
                             
                             const structuredSuffix = isStructuredSend
                                 ? '|' + JSON.stringify(toolCall.metadata?.buttons ?? toolCall.metadata?.options ?? [])
                                 : '';
-                            const sentMessage = ((toolCall.metadata?.message || toolCall.metadata?.text || toolCall.metadata?.question || toolCall.metadata?.caption || '').trim()).toString();
+                            const sentMessage = ((toolCall.metadata?.message || toolCall.metadata?.text || toolCall.metadata?.question || toolCall.metadata?.caption || toolCall.metadata?.newText || toolCall.metadata?.new_text || '').trim()).toString();
                             const currentMessage = sentMessage + (isMediaSend ? ` [Media: ${toolCall.metadata?.path || toolCall.metadata?.prompt || 'attachment'}]` : '') + structuredSuffix;
 
                             if (!resultIndicatesError) {
@@ -12560,12 +12688,12 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
 
                             let bonusMsgSentThisStep = false;
                             for (const toolCall of bonusDecision.tools) {
-                                const isSendTool = toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_discord' || toolCall.name === 'send_slack' || toolCall.name === 'send_gateway_chat' ||
-                                    toolCall.name === 'telegram_send_buttons' || toolCall.name === 'telegram_send_poll';
+                                const toolMeta = getSkillMeta(toolCall.name);
+                                const isSendTool = toolMeta.isSideEffect;
 
                                 // Apply message guards to bonus steps too
                                 if (isSendTool) {
-                                    const bonusMsg = String(toolCall.metadata?.message || '').trim();
+                                    const bonusMsg = String(toolCall.metadata?.message || toolCall.metadata?.text || toolCall.metadata?.newText || '').trim();
                                     // Block duplicates
                                     if (sentMessagesInAction.includes(bonusMsg)) {
                                         logger.warn(`Agent: Blocked duplicate message in bonus step (action ${action.id}).`);
@@ -12592,9 +12720,10 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
                                     const toolResult = await this.skills.executeSkill(toolCall.name, toolCall.metadata || {});
                                     if (isSendTool) {
                                         messagesSent++;
+                                        anyUserDeliverySuccess = true;
                                         bonusMsgSentThisStep = true;
                                         bonusMessageSent = true;
-                                        sentMessagesInAction.push(String(toolCall.metadata?.message || '').trim());
+                                        sentMessagesInAction.push(String(toolCall.metadata?.message || toolCall.metadata?.text || toolCall.metadata?.newText || '').trim());
                                         lastUserDeliveryAtMs = Date.now();
                                     }
                                     this.memory.saveMemory({
@@ -12610,7 +12739,8 @@ Action: Use 'send_telegram' to explain what you want to do and ask for approval.
 
                             // Detect bonus-step looping on the same non-messaging tool
                             const primaryBonusTool = bonusDecision.tools[0]?.name || '';
-                            if (primaryBonusTool && !primaryBonusTool.startsWith('send_')) {
+                            const primaryToolMeta = getSkillMeta(primaryBonusTool);
+                            if (primaryBonusTool && !primaryToolMeta.isSideEffect) {
                                 if (primaryBonusTool === lastBonusTool) {
                                     bonusSameToolCount++;
                                     if (bonusSameToolCount >= 2) {

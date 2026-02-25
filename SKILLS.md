@@ -29,6 +29,7 @@ This file lists the available skills for the agent.
 - **run_command(command, cwd?)**: Execute shell commands (subject to allow/deny lists). Automatically extracts directory from "cd /path && command" or "cd /path ; command" patterns and uses as working directory.
 - **get_system_info()**: Return server time/date and OS info.
 - **set_config(key, value)**: Persist configuration values.
+- **execute_typescript(code, args?)**: Compile and execute a free-form TypeScript block in the agent's Node.js environment. Saves to a persistent `scratchpad.ts` file, allowing you to build up complex reusable logic or import arbitrary NPM modules without creating a formal plugin.
 - **manage_skills(skill_definition)**: Append new skill definitions to SKILLS.md.
 - **self_repair_skill(skillName, errorMessage)**: Diagnose and fix a failing plugin skill.
 - **tweak_skill(skillName, issue, fix?)**: Patch any skill — built-in or plugin — that keeps failing. Generates and saves a replacement wrapper plugin, reloads it immediately. Use when a core skill has a fixable argument-shape or API error.

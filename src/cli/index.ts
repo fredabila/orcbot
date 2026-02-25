@@ -784,6 +784,86 @@ program
     });
 
 program
+    .command('agent')
+    .description('Manage peer agents')
+    .argument('<action>', 'Action to perform (list, start, stop, restart, terminate)')
+    .argument('[id]', 'Agent ID (required for start/stop/restart/terminate)')
+    .action(async (action, id) => {
+        const cmd = String(action).toLowerCase();
+        
+        if (cmd === 'list') {
+            const agents = agent.orchestrator.getAgents();
+            if (agents.length === 0) {
+                console.log('No agents registered.');
+                return;
+            }
+            console.log('\nRegistered Agents:');
+            for (const a of agents) {
+                const isRunning = agent.orchestrator.isWorkerRunning(a.id);
+                const statusStr = isRunning ? c.green + 'Running' + c.reset : c.red + 'Stopped' + c.reset;
+                console.log(`- ${c.bold}${a.name}${c.reset} (${a.id})`);
+                console.log(`  Status: ${statusStr} | Role: ${a.role}`);
+                if (a.currentTask) console.log(`  Task: ${a.currentTask}`);
+            }
+            console.log('');
+            return;
+        }
+
+        if (!id) {
+            console.error(`❌ Error: Agent ID is required for action '${cmd}'`);
+            return;
+        }
+
+        const agentInstance = agent.orchestrator.getAgent(id);
+        if (!agentInstance) {
+            console.error(`❌ Error: Agent '${id}' not found.`);
+            return;
+        }
+
+        switch (cmd) {
+            case 'start':
+                if (agent.orchestrator.isWorkerRunning(id)) {
+                    console.log(`Agent ${id} is already running.`);
+                } else {
+                    console.log(`Starting agent ${id}... (Requires primary OrcBot to be running)`);
+                    const success = agent.orchestrator.startWorkerProcess(agentInstance);
+                    console.log(success ? `✅ Agent ${id} started.` : `❌ Failed to start agent ${id}.`);
+                }
+                break;
+            case 'stop':
+                if (!agent.orchestrator.isWorkerRunning(id)) {
+                    console.log(`Agent ${id} is not running.`);
+                } else {
+                    const success = agent.orchestrator.stopWorkerProcess(id);
+                    console.log(success ? `✅ Agent ${id} stopped.` : `❌ Failed to stop agent ${id}.`);
+                }
+                break;
+            case 'restart':
+                console.log(`Restarting agent ${id}...`);
+                agent.orchestrator.stopWorkerProcess(id);
+                setTimeout(() => {
+                    const success = agent.orchestrator.startWorkerProcess(agentInstance);
+                    console.log(success ? `✅ Agent ${id} restarted.` : `❌ Failed to restart agent ${id}.`);
+                }, 3000);
+                break;
+            case 'terminate':
+                const { confirm } = await inquirer.prompt([{
+                    type: 'confirm',
+                    name: 'confirm',
+                    message: `Are you sure you want to PERMANENTLY terminate agent ${id}? This deletes their memory and files.`,
+                    default: false
+                }]);
+                if (confirm) {
+                    const success = agent.orchestrator.terminateAgent(id);
+                    console.log(success ? `✅ Agent ${id} terminated.` : `❌ Failed to terminate agent ${id}.`);
+                }
+                break;
+            default:
+                console.error(`❌ Unknown action: ${cmd}`);
+        }
+    });
+
+program
     .command('ui')
     .description('Start the interactive TUI mode')
     .action(async () => {

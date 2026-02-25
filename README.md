@@ -302,6 +302,7 @@ OrcBot comes out of the box with "God Mode" capabilities:
 | `manage_skills` | Append skill definition to SKILLS.md | `manage_skills("New Skill Definition...")` |
 | `create_skill` | Create a knowledge-based SKILL.md skill | `create_skill("pdf-processor", "Parse PDFs")` |
 | `create_custom_skill` | Create an executable TypeScript plugin skill | `create_custom_skill("stripe-charge", "Charge via Stripe")` |
+| `execute_typescript` | Write, compile, and execute a free-form TS scratchpad | `execute_typescript("console.log('hi');")` |
 | `deep_reason` | Intensive chain-of-thought analysis | `deep_reason("Ethics of AGI")` |
 | `update_user_profile` | Permanently persist user preferences and facts | `update_user_profile("User prefers concise answers")` |
 | `update_learning` | Research topic and save findings to LEARNING.md | `update_learning("WebAssembly 2025")` |
@@ -475,6 +476,7 @@ Key settings (excerpt):
 - `autonomyEnabled`, `autonomyInterval`, `autonomyBacklogLimit`
 - `autonomyAllowedChannels`: List of channels the agent can message proactively (e.g., `["telegram"]`).
 - `skillRoutingRules`: Intent-based skill selection rules
+- `reasoningExposeChecklist`: Set to `true` to send the agent's internal step-by-step checklist to the user before starting complex tasks.
 
 ### Autonomy Channel Policy
 To prevent background spam, the agent uses `autonomyAllowedChannels` to restrict where it can send "out of the blue" updates.
