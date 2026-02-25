@@ -1173,6 +1173,15 @@ export class MultiLLM {
             // Use a longer timeout for local Ollama calls (3 minutes) to allow for model loading/swapping
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 180000);
+            
+            // HEARTBEAT TIMER: Log status every 15s to keep the user informed during slow local reasoning
+            let elapsed = 0;
+            const heartbeatId = setInterval(() => {
+                elapsed += 15;
+                if (elapsed < 180) {
+                    logger.info(`MultiLLM: Still waiting for Ollama response from "${model}" (elapsed: ${elapsed}s)...`);
+                }
+            }, 15000);
 
             try {
                 const response = await fetch(url, {
@@ -1188,6 +1197,7 @@ export class MultiLLM {
                     signal: controller.signal
                 });
                 clearTimeout(timeoutId);
+                clearInterval(heartbeatId);
 
                 if (!response.ok) {
                     const err = await response.text();
@@ -1198,6 +1208,7 @@ export class MultiLLM {
                 return data.choices[0].message.content;
             } catch (error: any) {
                 clearTimeout(timeoutId);
+                clearInterval(heartbeatId);
                 if (error.name === 'AbortError') {
                     throw new Error(`Ollama request timed out after 180s. Your system (2GB RAM) might be struggling to run both OrcBot and the model.`);
                 }

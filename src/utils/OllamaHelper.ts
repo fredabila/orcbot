@@ -34,8 +34,11 @@ export class OllamaHelper {
     }
 
     public startServer(): void {
-        logger.info('OllamaHelper: Starting Ollama server...');
-        const logPath = path.join(os.homedir(), '.orcbot', 'ollama.log');
+        const logPath = path.join(process.cwd(), 'logs', 'ollama.log');
+        const logDir = path.dirname(logPath);
+        if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+        
+        logger.info(`OllamaHelper: Starting Ollama server, logging to ${logPath}`);
         const out = fs.openSync(logPath, 'a');
         const err = fs.openSync(logPath, 'a');
 
