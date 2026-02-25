@@ -322,6 +322,8 @@ export class MultiLLM {
      */
     public supportsNativeToolCalling(provider?: LLMProvider): boolean {
         const p = provider || this.preferredProvider || this.inferProvider(this.modelName);
+        // Ollama supports tools in modern versions, but it depends on the model.
+        // We'll allow it here, but handle the 400 error in the call method to fall back.
         return ['openai', 'anthropic', 'google', 'openrouter', 'nvidia', 'ollama'].includes(p);
     }
     // ── Native tool calling: Ollama (OpenAI-compatible) ──
@@ -353,6 +355,11 @@ export class MultiLLM {
             });
             if (!response.ok) {
                 const err = await response.text();
+                // Ollama returns 400 if the model doesn't support tools
+                if (response.status === 400 && (err.toLowerCase().includes('tool') || err.toLowerCase().includes('function'))) {
+                    logger.warn(`Ollama: Model "${resolvedModel}" does not support native tool calling. Falling back to text-based tools.`);
+                    throw new Error('MODEL_DOES_NOT_SUPPORT_TOOLS');
+                }
                 throw new Error(`Ollama Tool Call API Error: ${response.status} ${err}`);
             }
             const data = await response.json() as any;

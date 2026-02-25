@@ -1320,9 +1320,22 @@ ${safeOtherContext ? `RECENT BACKGROUND CONTEXT (reference only — may describe
                 ParserLayer.getSystemPromptSnippet(),
                 ParserLayer.getNativeToolCallingPromptSnippet()
             );
-            const rawParsed = await this.callLLMWithToolsAndRetry(taskDescription, nativeSystemPrompt || systemPrompt, actionId, 1, excludeSkills);
-            parsed = this.applyChannelDefaultsToTools(rawParsed, metadata);
-            logger.info(`DecisionEngine: Used native tool calling — ${parsed.tools?.length || 0} tool(s)`);
+
+            try {
+                const rawParsed = await this.callLLMWithToolsAndRetry(taskDescription, nativeSystemPrompt || systemPrompt, actionId, 1, excludeSkills);
+                parsed = this.applyChannelDefaultsToTools(rawParsed, metadata);
+                logger.info(`DecisionEngine: Used native tool calling — ${parsed.tools?.length || 0} tool(s)`);
+            } catch (e: any) {
+                // If the model explicitly doesn't support tools, fallback to text-based parsing
+                if (e?.message?.includes('MODEL_DOES_NOT_SUPPORT_TOOLS')) {
+                    logger.warn(`DecisionEngine: Native tool calling not supported by model, falling back to text-based parsing.`);
+                    const rawResponse = await this.callLLMWithRetry(taskDescription, systemPrompt, actionId);
+                    parsed = this.applyChannelDefaultsToTools(ParserLayer.normalize(rawResponse), metadata);
+                } else {
+                    // Rethrow other errors (e.g. connection errors) so they can be handled by the retry logic
+                    throw e;
+                }
+            }
         } else {
             // Text-based: tools embedded in prompt, parse JSON from response
             const rawResponse = await this.callLLMWithRetry(taskDescription, systemPrompt, actionId);
