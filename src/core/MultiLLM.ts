@@ -1136,9 +1136,25 @@ export class MultiLLM {
             const messages: LLMMessage[] = [];
             if (systemMessage) messages.push({ role: 'system', content: systemMessage });
             messages.push({ role: 'user', content: prompt });
+            
             const rawModel = modelOverride || this.modelName;
             const model = this.normalizeOllamaModel(rawModel);
             const baseUrl = (this.ollamaUrl || 'http://localhost:11434').replace(/\/+$/, '');
+            
+            // 1. Check if model is loaded (optional but helpful for logging)
+            try {
+                const psResponse = await fetch(`${baseUrl}/api/ps`);
+                if (psResponse.ok) {
+                    const psData = await psResponse.json() as any;
+                    const isLoaded = (psData.models || []).some((m: any) => m.name === model || m.name.startsWith(model + ':'));
+                    if (!isLoaded) {
+                        logger.info(`Ollama: Model "${model}" is not in memory. Triggering load...`);
+                    }
+                }
+            } catch (e) {
+                // Ignore ps errors
+            }
+
             const url = `${baseUrl}/v1/chat/completions`;
             try {
                 const response = await fetch(url, {

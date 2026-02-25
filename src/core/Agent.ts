@@ -9989,6 +9989,21 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 logger.error(`Agent: Failed to start ${name} channel: ${result.reason?.message || result.reason}`);
             }
         });
+        
+        // ── Ollama Warm-up ──
+        // If Ollama is the selected provider, trigger a pre-load of the model
+        // so it's ready when the first task hits the queue.
+        if (this.config.get('llmProvider') === 'ollama') {
+            const model = this.config.get('modelName');
+            const baseUrl = (this.config.get('ollamaUrl') || 'http://localhost:11434').replace(/\/+$/, '');
+            logger.info(`Agent: Waking up Ollama model "${model}"...`);
+            // Fire and forget warm-up request
+            fetch(`${baseUrl}/api/generate`, {
+                method: 'POST',
+                body: JSON.stringify({ model, prompt: '', keep_alive: -1 }),
+            }).catch(() => {});
+        }
+
         await this.runPluginHealthCheck('startup');
         logger.info('Agent: All channels initialized');
 
