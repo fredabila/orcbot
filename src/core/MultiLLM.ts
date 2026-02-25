@@ -229,7 +229,7 @@ export class MultiLLM {
             try {
                 return await piAiCall(prompt, systemMessage, this.getPiAIOptions(modelOverride, provider));
             } catch (e) {
-                logger.warn(`MultiLLM: pi-ai call failed, falling back to legacy — ${(e as Error).message}`);
+                // Silently fall back if pi-ai fails or is misconfigured
             }
         }
         const primaryProvider = provider || this.preferredProvider || this.inferProvider(modelOverride || this.modelName);
@@ -1141,22 +1141,27 @@ export class MultiLLM {
             const model = this.normalizeOllamaModel(rawModel);
             const baseUrl = (this.ollamaUrl || 'http://localhost:11434').replace(/\/+$/, '');
             
-            // 1. Check if model is loaded (optional but helpful for logging)
-            try {
-                const psResponse = await fetch(`${baseUrl}/api/ps`);
-                if (psResponse.ok) {
-                    const psData = await psResponse.json() as any;
-                    const isLoaded = (psData.models || []).some((m: any) => m.name === model || m.name.startsWith(model + ':'));
-                    if (!isLoaded) {
-                        logger.info(`Ollama: Model "${model}" is not in memory. Triggering load...`);
+            // 1. Check if model is loaded (skip for remote bridge models)
+            const isRemoteBridge = model.includes('gemini') || model.includes('openai');
+            if (!isRemoteBridge) {
+                try {
+                    const psResponse = await fetch(`${baseUrl}/api/ps`);
+                    if (psResponse.ok) {
+                        const psData = await psResponse.json() as any;
+                        const isLoaded = (psData.models || []).some((m: any) => m.name === model || m.name.startsWith(model + ':'));
+                        if (!isLoaded) {
+                            logger.info(`Ollama: Model "${model}" is not in memory. Triggering load...`);
+                        }
                     }
+                } catch (e) {
+                    // Ignore ps errors
                 }
-            } catch (e) {
-                // Ignore ps errors
             }
 
             const url = `${baseUrl}/v1/chat/completions`;
-            logger.info(`MultiLLM: Calling Ollama model "${model}" for reasoning (this may take time on low-RAM systems)...`);
+            if (!isRemoteBridge) {
+                logger.info(`MultiLLM: Calling Ollama model "${model}" for reasoning...`);
+            }
             
             // Use a longer timeout for local Ollama calls (3 minutes) to allow for model loading/swapping
             const controller = new AbortController();

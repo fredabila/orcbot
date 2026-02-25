@@ -3189,8 +3189,22 @@ async function showOllamaMenu() {
     if (action === 'refresh') return showOllamaMenu();
 
     if (action === 'download') {
-        helper.openDownloadPage();
-        console.log(green('\n  ✓ Opening ollama.com/download in your browser...'));
+        if (process.platform === 'linux' || process.platform === 'darwin') {
+            console.log(yellow('\n  Running Ollama installation script (requires sudo)...'));
+            const success = await helper.installOllama((output) => {
+                process.stdout.write(dim(output));
+            });
+            if (success) {
+                console.log(green('\n  ✓ Ollama installed successfully.'));
+            } else {
+                console.log(red('\n  ✗ Installation failed. You may need to run the command manually:'));
+                console.log(cyan('  curl -fsSL https://ollama.com/install.sh | sh'));
+            }
+        } else {
+            console.log(yellow('\n  Opening Ollama download page in your browser...'));
+            helper.openDownloadPage();
+            console.log(dim('  Once installed, restart OrcBot.'));
+        }
         await waitKeyPress();
         return showOllamaMenu();
     }

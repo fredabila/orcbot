@@ -116,6 +116,34 @@ export class OllamaHelper {
     }
 
     /**
+     * Install Ollama using terminal commands for Linux or opening the download page for others.
+     */
+    public async installOllama(onOutput?: (data: string) => void): Promise<boolean> {
+        if (process.platform === 'linux' || process.platform === 'darwin') {
+            return new Promise((resolve) => {
+                logger.info('OllamaHelper: Starting terminal installation...');
+                const child = spawn('sh', ['-c', 'curl -fsSL https://ollama.com/install.sh | sh']);
+                
+                child.stdout.on('data', (data) => {
+                    if (onOutput) onOutput(data.toString());
+                });
+
+                child.stderr.on('data', (data) => {
+                    if (onOutput) onOutput(data.toString());
+                });
+
+                child.on('close', (code) => {
+                    resolve(code === 0);
+                });
+            });
+        } else {
+            // Windows: Open the download page as there's no single-line reliable terminal install script
+            this.openDownloadPage();
+            return true;
+        }
+    }
+
+    /**
      * Open the browser to the Ollama download page.
      */
     public openDownloadPage(): void {
