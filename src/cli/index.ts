@@ -3139,10 +3139,18 @@ async function showOllamaMenu() {
     console.log('');
     const statusLines = [
         `${dim('Status')}     ${isRunning ? green('● ONLINE') : red('○ OFFLINE')}`,
-        `${dim('Installed')}  ${isInstalled ? green('Yes') : yellow('No (Download at ollama.com)')}`,
+        `${dim('Installed')}  ${isInstalled ? green('Yes') : yellow('No (Download below)')}`,
         `${dim('URL')}        ${ollamaUrl}`,
     ];
     box(statusLines, { title: '📡 OLLAMA STATUS', width: 52, color: isRunning ? c.brightGreen : c.brightRed });
+
+    if (!isRunning && !isInstalled) {
+        console.log(yellow('\n  ⚠ Ollama is not detected on your system.'));
+        console.log(dim('  To use local models, please download Ollama and install it first.'));
+    } else if (!isRunning) {
+        console.log(yellow('\n  ⚠ Ollama is installed but the server is not running.'));
+        console.log(dim('  Select "Start Ollama Server" below to launch it.'));
+    }
 
     if (isRunning && localModels.length > 0) {
         console.log('');
@@ -3162,7 +3170,9 @@ async function showOllamaMenu() {
                 { name: `  ⭐ ${bold('Set as Primary Provider')}`, value: 'set_primary', disabled: !isRunning },
                 { name: `  📦 ${bold('Select Local Model')}`, value: 'select_model', disabled: !isRunning || localModels.length === 0 },
                 { name: `  ⬇️  ${bold('Pull New Model')}`, value: 'pull_model', disabled: !isRunning },
-                { name: `  🚀 ${bold('Start Ollama Server')}`, value: 'start_server', disabled: isRunning || !isInstalled },
+                { name: `  🚀 ${bold('Start Ollama Server')}`, value: 'start_server', disabled: isRunning },
+                { name: `  🌐 ${bold('Download Ollama')} ${dim('(ollama.com)')}`, value: 'download' },
+                { name: `  🔄 ${bold('Refresh Status')}`, value: 'refresh' },
                 new inquirer.Separator(gradient('  ─── Configuration ────────────────', [c.cyan, c.gray])),
                 { name: `  ⚙️  Set API URL ${dim(`(${ollamaUrl})`)}`, value: 'set_url' },
                 new inquirer.Separator(gradient('  ──────────────────────────────────', [c.cyan, c.gray])),
@@ -3172,6 +3182,14 @@ async function showOllamaMenu() {
     ]);
 
     if (action === 'back') return showModelsMenu();
+    if (action === 'refresh') return showOllamaMenu();
+
+    if (action === 'download') {
+        helper.openDownloadPage();
+        console.log(green('\n  ✓ Opening ollama.com/download in your browser...'));
+        await waitKeyPress();
+        return showOllamaMenu();
+    }
 
     if (action === 'set_primary') {
         agent.config.set('llmProvider', 'ollama');
