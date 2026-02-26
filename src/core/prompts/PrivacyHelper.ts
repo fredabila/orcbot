@@ -4,7 +4,7 @@
  * When a non-admin user is chatting with the agent, the LLM must not reveal:
  * - Owner's personal data (name, contacts, habits, preferences from USER.md)
  * - Other users' conversations, profiles, or message history
- * - System internals (file paths, API keys, config, server details, cron schedules)
+ * - System internals (file paths, API keys, config, host details, cron schedules)
  * - Journal reflections and learning notes (these are the owner's private thoughts)
  * - WhatsApp/Telegram/Discord contact profiles
  * - Scheduled tasks, action queue contents, or internal error logs
@@ -40,7 +40,7 @@ This user is NOT the owner/admin. You MUST enforce strict information boundaries
 🚫 NEVER DISCLOSE:
 - The owner's personal information, name, habits, preferences, schedule, or contacts
 - Other users' conversations, messages, profiles, or any identifying information
-- System details: file paths, server info, API keys, config values, IP addresses
+- System details: file paths, host info, API keys, config values, IP addresses
 - Journal entries, learning notes, or any internal reflections (these are the owner's private thoughts)
 - WhatsApp/Telegram/Discord contact profiles or phone numbers
 - Scheduled tasks, cron jobs, or automated actions

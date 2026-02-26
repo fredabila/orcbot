@@ -794,8 +794,10 @@ export class WebBrowser {
 
             logger.info(`Browser: Navigating to ${targetUrl} (engine=${this.browserEngine}, headless=${this.headlessMode})`);
             this._consoleLogs = []; // Clear logs for new navigation
-            await this._page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-            await this.waitForStablePage(15000);
+            
+            // Use 'load' + stable wait instead of 'domcontentloaded' which is too early for modern SPAs
+            await this._page.goto(targetUrl, { waitUntil: 'load', timeout: 60000 });
+            await this.waitForStablePage(25000);
             this.lastNavigateTimestamp = Date.now();
 
             const bodyTextLength = await this._page.evaluate(() => document.body?.innerText?.trim().length ?? 0).catch(() => 0);
@@ -804,15 +806,17 @@ export class WebBrowser {
             logger.info(`Browser: Loaded ${targetUrl} in ${navElapsed}ms (title="${navTitle}", text=${bodyTextLength})`);
             
             // If page appears empty and we're in headless mode, retry headful (only if display available)
-            if (bodyTextLength < 100 && this.headlessMode && allowHeadfulRetry && !this.isHeadlessEnvironment()) {
+            // Increased threshold from 100 to 500 to catch 'Loading...' or thin splash screens
+            if (bodyTextLength < 500 && this.headlessMode && allowHeadfulRetry && !this.isHeadlessEnvironment()) {
                 logger.warn(`Browser: Page appears blocked/empty (${bodyTextLength} chars). Retrying in headful mode...`);
                 await this.ensureBrowser(false);
                 return this.navigate(url, waitSelectors, false);
             }
             
-            if (bodyTextLength === 0) {
-                // Give SPAs extra time to hydrate before giving up
-                await this._page.waitForTimeout(3000);
+            if (bodyTextLength < 200) {
+                // Give modern sites extra time to hydrate if they're still thin
+                await this._page.waitForTimeout(5000);
+                await this._page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
             }
 
             const effectiveWaitSelectors = [...waitSelectors];
@@ -832,7 +836,14 @@ export class WebBrowser {
             const captcha = await this.detectCaptcha();
             const title = await this._page.title();
             const content = await this._page.content();
-            const looksBlank = (!title || title.trim().length === 0) && content.replace(/\s+/g, '').length < 1200;
+            
+            // Refined looksBlank: 
+            // 1. No title AND very little content
+            // 2. OR Content length < 2500 bytes (typical for a "Access Denied" or "Loading" page)
+            // 3. OR Body has no visible text (already checked via bodyTextLength)
+            const looksBlank = ((!title || title.trim().length === 0) && content.replace(/\s+/g, '').length < 2000) || 
+                               content.length < 1500 || 
+                               bodyTextLength < 100;
 
             if (this.debugAlwaysSaveArtifacts) {
                 await this.saveDebugArtifacts('navigate', content).catch(() => null);
@@ -2669,8 +2680,8 @@ export class WebBrowser {
         const savedUrl = this.lastNavigatedUrl; // preserve so search doesn't stomp browse context
         try {
             await this.ensureBrowser();
-            await this.page!.goto(url, { waitUntil: 'load' });
-            await this.page!.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => { });
+            await this.page!.goto(url, { waitUntil: 'load', timeout: 45000 });
+            await this.page!.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => { });
 
             const content = await this.page!.content();
             if (content.includes('recaptcha') || content.includes('unusual traffic')) {
@@ -2732,8 +2743,8 @@ export class WebBrowser {
         const savedUrl = this.lastNavigatedUrl;
         try {
             await this.ensureBrowser();
-            await this.page!.goto(url, { waitUntil: 'load' });
-            await this.page!.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => { });
+            await this.page!.goto(url, { waitUntil: 'load', timeout: 45000 });
+            await this.page!.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => { });
 
             const results = await this.page!.evaluate(() => {
                 // Strategy 1: Standard Bing selectors
@@ -2791,7 +2802,7 @@ export class WebBrowser {
         for (const url of urls) {
             try {
                 await this.ensureBrowser();
-                await this.page!.goto(url, { waitUntil: 'load' });
+                await this.page!.goto(url, { waitUntil: 'load', timeout: 45000 });
                 await this.waitForStablePage();
 
                 const results = await this.page!.evaluate(() => {

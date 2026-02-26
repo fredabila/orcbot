@@ -15,6 +15,7 @@ import { ResponseValidator } from './ResponseValidator';
 import { BootstrapManager } from './BootstrapManager';
 import { PromptRouter, PromptHelperContext } from './prompts';
 import { KnowledgeStore } from '../memory/KnowledgeStore';
+import { BookLogManager } from '../memory/BookLogManager';
 import { ToolsManager } from './ToolsManager';
 import { Environment } from './utils/Environment';
 
@@ -28,6 +29,7 @@ export class DecisionEngine {
     private enableAutoCompaction: boolean;
     private bootstrap?: BootstrapManager;
     private knowledgeStore?: KnowledgeStore;
+    private bookLog?: BookLogManager;
     private tools?: ToolsManager;
     private repoContext: string;
 
@@ -67,6 +69,13 @@ export class DecisionEngine {
      */
     setKnowledgeStore(store: KnowledgeStore): void {
         this.knowledgeStore = store;
+    }
+
+    /**
+     * Set the BookLogManager for high-level resource tracking.
+     */
+    setBookLog(log: BookLogManager): void {
+        this.bookLog = log;
     }
 
     /**
@@ -988,7 +997,7 @@ ${this.repoContext}`,
                 if (m.id) shownIds.add(m.id);
             }
 
-            const [recallResult, episodicResult, ragResult] = await Promise.allSettled([
+            const [recallResult, episodicResult, ragResult, bookLogResult] = await Promise.allSettled([
                 // 1. Semantic long-term recall
                 (async () => {
                     if (!this.memory.vectorMemory?.isEnabled()) return '';
@@ -1029,12 +1038,26 @@ ${this.repoContext}`,
                         logger.info(`DecisionEngine: RAG retrieved ${result.split('\n---').length} knowledge chunks for task`);
                     }
                     return result || '';
+                })(),
+                // 4. Book Log retrieval
+                (async () => {
+                    if (!this.bookLog) return '';
+                    const results = this.bookLog.search(taskDescription).slice(0, 3);
+                    if (results.length === 0) return '';
+                    const formatted = this.bookLog.formatForPrompt(results);
+                    logger.info(`DecisionEngine: Retrieved ${results.length} relevant entries from Book Log`);
+                    return formatted;
                 })()
             ]);
 
             semanticRecallString = recallResult.status === 'fulfilled' ? recallResult.value : '';
             semanticEpisodicString = episodicResult.status === 'fulfilled' ? episodicResult.value : '';
             ragContext = ragResult.status === 'fulfilled' ? ragResult.value : '';
+            const bookLogContext = bookLogResult.status === 'fulfilled' ? bookLogResult.value : '';
+
+            if (bookLogContext) {
+                ragContext = `## RELEVANT BOOK LOG SUMMARIES\n${bookLogContext}\n\n${ragContext}`;
+            }
         }
 
         // Channel instructions and contact profiles — irrelevant for heartbeats (source='autonomy')
@@ -1357,8 +1380,17 @@ ${safeOtherContext ? `RECENT BACKGROUND CONTEXT (reference only — may describe
             fileIntent: inferredFileIntent
         });
 
+        const isUserFacing = metadata.source === 'telegram' || metadata.source === 'whatsapp' || 
+                           metadata.source === 'discord' || metadata.source === 'slack' || 
+                           metadata.source === 'gateway-chat';
+
         // Termination review layer (always enabled)
-        const isTerminating = piped?.verification?.goals_met === true && (!piped.tools || piped.tools.length === 0);
+        // We review if:
+        // 1. Agent says it's done (goals_met: true AND no tools)
+        // 2. Agent says it's done but hasn't sent a message to a human user yet (Silent Success)
+        const isTerminating = (piped?.verification?.goals_met === true && (!piped.tools || piped.tools.length === 0)) ||
+                             (piped?.verification?.goals_met === true && isUserFacing && (metadata.messagesSent || 0) === 0);
+
         if (isTerminating) {
             // Reuse the same core instructions so the review layer remembers its capabilities
             const reviewPrompt = `
@@ -1369,11 +1401,10 @@ Your job is to decide if the agent should truly terminate or continue working.
 
 ADDITIONAL REVIEW RULES:
 - If the task is TRULY complete (user got their answer, file downloaded, message sent, etc.), return goals_met=true with no tools.
-- If the task is NOT complete and the agent stopped prematurely, return goals_met=false and include the WORK tools needed to continue (e.g., browser_navigate, web_search, run_command, send_telegram, etc.).
+- If the task is NOT complete and the agent stopped prematurely, return goals_met=false and include the WORK tools needed to continue.
 - CRITICAL: If this task came from a messaging channel (Telegram/WhatsApp/Discord/Slack/Gateway) and messagesSent is 0, the user has received NOTHING. The agent's text reasoning is invisible to the user. You MUST return goals_met=false and include the appropriate send skill (send_telegram, send_whatsapp, send_discord, send_slack, send_gateway_chat) with the response message.
-- Do NOT default to asking questions. Only use request_supporting_data if genuinely missing critical info that cannot be inferred.
+- If the agent's proposed response is just a status update (e.g. "I'm working on it") but it wants to stop, return goals_met=false and force it to continue with real work.
 - Prefer ACTION over CLARIFICATION. If the agent can make progress with available context, it should.
-${metadata.robustReasoningMode ? `- ROBUST MODE: if checklist items remain unresolved, if outputs were not delivered to the user, or if the response is only a status update, you MUST return goals_met=false and continue with concrete tools.` : ''}
 
 TASK:
 ${taskDescription}

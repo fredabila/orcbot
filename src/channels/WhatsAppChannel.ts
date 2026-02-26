@@ -175,7 +175,6 @@ export class WhatsAppChannel implements IChannel {
 
         this.sock = makeWASocket({
             version,
-            printQRInTerminal: true,
             auth: state,
             logger: pino({ level: 'silent' }) as any
         });
@@ -199,6 +198,7 @@ export class WhatsAppChannel implements IChannel {
 
             if (qr) {
                 logger.info('WhatsApp: New QR Code generated. Scan to link.');
+                qrcode.generate(qr, { small: true });
                 eventBus.emit('whatsapp:qr', qr);
             }
 
@@ -210,7 +210,9 @@ export class WhatsAppChannel implements IChannel {
                 }
             } else if (connection === 'open') {
                 const ownerJid = this.sock.user.id.split(':')[0] + '@s.whatsapp.net';
-                this.agent.config.set('whatsappOwnerJID', ownerJid);
+                if (this.agent.config.get('whatsappOwnerJID') !== ownerJid) {
+                    this.agent.config.set('whatsappOwnerJID', ownerJid);
+                }
                 logger.info(`WhatsApp: Connection opened successfully. Owner: ${ownerJid}`);
                 eventBus.emit('whatsapp:status', 'connected');
             }
@@ -306,6 +308,8 @@ export class WhatsAppChannel implements IChannel {
 
                         // Skip group chats for now unless mentioned or requested (simpler for now)
                         if (!isGroup) this.recordContactJid(senderId);
+                        // Update last seen timestamp for reply suppression logic
+                        if (senderId && !isFromMe) this.lastUserMessageTimestamps.set(senderId, Date.now());
                         if (isGroup) return;
 
                         // Special handling for Status Updates
@@ -322,42 +326,20 @@ export class WhatsAppChannel implements IChannel {
                             this.statusRepliesByParticipant.set(participant, statusMetadata);
                             this.statusRepliesById.set(messageId, statusMetadata);
 
-                            // Record it in memory so the agent knows.
-                            this.agent.memory.saveMemory({
-                                id: `wa-status-${messageId}`,
-                                type: 'short',
-                                content: `WhatsApp STATUS from ${participant}: ${text}`,
-                                timestamp: new Date().toISOString(),
+                            // Dispatch via MessageBus for unified memory and task creation
+                            await this.agent.messageBus.dispatch({
+                                source: 'whatsapp',
+                                sourceId: participant,
+                                senderName: participant,
+                                content: text,
+                                messageId,
                                 metadata: {
-                                    source: 'whatsapp',
                                     type: 'status',
-                                    messageId,
-                                    senderId: participant,
                                     statusContentType: statusMetadata.contentType,
                                     statusHasMedia: statusMetadata.hasMedia,
                                     statusTimestamp: statusMetadata.timestamp
                                 }
                             });
-
-                            // Only trigger a task if Status Interactions are enabled
-                            if (this.statusReplyEnabled) {
-                                await this.agent.pushTask(
-                                    `WhatsApp STATUS update from ${participant} (ID: ${messageId}): "${text}". \n\nGoal: Decide if you should reply to this status. If yes, use 'reply_whatsapp_status' with the JID '${participant}' and a short, conversational reply message. The reply will appear as a proper status reply to the person, not as a regular DM.`,
-                                    3,
-                                    {
-                                        source: 'whatsapp',
-                                        sourceId: participant,
-                                        senderName: participant,
-                                        type: 'status',
-                                        messageId,
-                                        statusContentType: statusMetadata.contentType,
-                                        statusHasMedia: statusMetadata.hasMedia,
-                                        statusTimestamp: statusMetadata.timestamp
-                                    }
-                                );
-                            } else {
-                                logger.info(`WhatsApp: Status reply skipped - statusReplyEnabled is false`);
-                            }
                             return;
                         }
 
@@ -397,77 +379,51 @@ export class WhatsAppChannel implements IChannel {
                             }
                         }
 
-                        logger.info(`WhatsApp Msg: ${senderName} (${senderId}): ${text || transcription || '[Media]'} [ID: ${messageId}] | autoReply=${this.autoReplyEnabled}`);
-                        const sessionScopeId = this.agent.resolveSessionScopeId('whatsapp', {
-                            sourceId: senderId
-                        });
-
-                        // Build content string that includes media info + transcription/analysis
-                        const voiceLabel = transcription ? ` [Voice message transcription: "${transcription}"]` : '';
-                        const mediaLabel = mediaAnalysis ? ` [Media analysis: ${mediaAnalysis}]` : '';
-                        const contentStr = text
-                            ? `User ${senderName} (${senderId}) said on WhatsApp: ${text}${voiceLabel}${mediaLabel}${replyContext ? ' ' + replyContext : ''}`
-                            : transcription
-                                ? `User ${senderName} (${senderId}) sent a voice message on WhatsApp: "${transcription}"${replyContext ? ' ' + replyContext : ''}`
-                                : mediaAnalysis
-                                    ? `User ${senderName} (${senderId}) sent media on WhatsApp: ${path.basename(mediaPath)} [Media analysis: ${mediaAnalysis}]${replyContext ? ' ' + replyContext : ''}`
-                                    : `User ${senderName} (${senderId}) sent a file on WhatsApp: ${path.basename(mediaPath)}${replyContext ? ' ' + replyContext : ''}`;
-
-                        // Save to memory for context
-                        this.agent.memory.saveMemory({
-                            id: `wa-${messageId}`,
-                            type: 'short',
-                            content: contentStr,
-                            timestamp: new Date().toISOString(),
-                            metadata: {
-                                source: 'whatsapp',
-                                role: 'user',
-                                sessionScopeId,
-                                messageId,
-                                senderId,
-                                senderName,
-                                mediaPath: mediaPath || undefined,
-                                quotedMessageId,
-                                replyContext: replyContext || undefined
-                            }
-                        });
-
-                        const reactInstruction = this.autoReactEnabled ? " or 'react_whatsapp'" : "";
-                        const profileInstruction = this.profilingEnabled ? "\n- Also, evaluate if you've learned something new about this person and update their profile using 'update_contact_profile' if needed." : "";
-                        const replyNote = replyContext ? ` ${replyContext}` : '';
-
-                        // Treat as Command if from Owner (self-chat - message from yourself on another device)
-                        // Note: isSelfChat means the remoteJid equals owner's JID (messaging yourself)
-                        const mediaNote = mediaPath ? ` (File stored at: ${mediaPath})` : '';
-                        const mediaContext = mediaAnalysis ? ` [Media analysis: ${mediaAnalysis}]` : '';
-                        const displayText = text || (transcription ? `[Voice: "${transcription}"]` : '[Media]');
-
-                        if (isSelfChat && this.autoReplyEnabled) {
-                            await this.agent.pushTask(
-                                `WhatsApp command from yourself (ID: ${messageId}): "${displayText}"${mediaContext}${replyNote}${mediaNote}${profileInstruction}
-                                
-CRITICAL: You MUST use 'send_whatsapp' to reply. Do NOT send cross-channel Telegram notifications.`,
-                                10,
-                                { source: 'whatsapp', sourceId: senderId, sessionScopeId, senderName: senderName, isOwner: true, messageId, quotedMessageId, replyContext: replyContext || undefined, mediaPath: mediaPath || undefined }
-                            );
-                        } else if (this.autoReplyEnabled) {
-                            // Suppress agent reply if user is active in chat
+                        // Suppress agent reply if user is active in chat (already checked senderId)
+                        if (!isSelfChat) {
                             const lastUserTs = this.lastUserMessageTimestamps.get(senderId) || 0;
                             const now = Date.now();
                             const userActiveWindowMs = 60 * 1000; // 1 minute window
                             if (now - lastUserTs < userActiveWindowMs) {
-                                logger.info(`WhatsAppChannel: User is active in chat (${senderId}), suppressing agent reply.`);
+                                logger.info(`WhatsAppChannel: User is active in chat (${senderId}), suppressing agent task.`);
+                                // We still record the message in memory via MessageBus, but we disable auto-reply for this dispatch
+                                await this.agent.messageBus.dispatch({
+                                    source: 'whatsapp',
+                                    sourceId: senderId,
+                                    senderName,
+                                    content: text || transcription || '[Media]',
+                                    messageId,
+                                    replyContext,
+                                    mediaPaths: mediaPath ? [mediaPath] : [],
+                                    mediaAnalysis,
+                                    metadata: { 
+                                        quotedMessageId,
+                                        suppressReply: true 
+                                    }
+                                });
                                 return;
                             }
-                            // Treat as External Interaction for AI to decide on
-                            await this.agent.pushTask(
-                                `EXTERNAL WHATSAPP MESSAGE from ${senderName} (ID: ${messageId}): "${displayText}"${mediaContext}${replyNote}${mediaNote}. \n\nGoal: Decide if you should respond${reactInstruction} to this person on my behalf based on our history and my persona. If yes, use 'send_whatsapp'${reactInstruction}.${profileInstruction}`,
-                                5,
-                                { source: 'whatsapp', sourceId: senderId, sessionScopeId, senderName: senderName, isExternal: true, messageId, quotedMessageId, replyContext: replyContext || undefined, mediaPath: mediaPath || undefined }
-                            );
-                        } else {
-                            logger.info(`WhatsApp: Message from ${senderName} not queued - autoReplyEnabled is false`);
                         }
+
+                        // Dispatch via unified MessageBus
+                        await this.agent.messageBus.dispatch({
+                            source: 'whatsapp',
+                            sourceId: senderId,
+                            senderName,
+                            content: text || transcription || (mediaPath ? `[Media: ${path.basename(mediaPath)}]` : ''),
+                            messageId,
+                            replyContext,
+                            mediaPaths: mediaPath ? [mediaPath] : [],
+                            mediaAnalysis,
+                            isOwner: isSelfChat,
+                            isExternal: !isSelfChat && !isGroup,
+                            metadata: {
+                                quotedMessageId,
+                                isSelfChat,
+                                autoReact: this.autoReactEnabled,
+                                profiling: this.profilingEnabled
+                            }
+                        });
                     }
                 }
             }
@@ -690,6 +646,12 @@ CRITICAL: You MUST use 'send_whatsapp' to reply. Do NOT send cross-channel Teleg
                 throw new Error(`File not found: ${filePath}`);
             }
 
+            // Ensure JID is properly formatted
+            let jid = to;
+            if (!jid.includes('@')) {
+                jid = `${jid}@s.whatsapp.net`;
+            }
+
             const fileName = path.basename(filePath);
             const buffer = fs.readFileSync(filePath);
             const mime = getMimeType(filePath);
@@ -711,8 +673,8 @@ CRITICAL: You MUST use 'send_whatsapp' to reply. Do NOT send cross-channel Teleg
                 };
             }
 
-            await this.sock.sendMessage(to, messageContent);
-            logger.info(`WhatsAppChannel: Sent file ${filePath} to ${to}`);
+            await this.sock.sendMessage(jid, messageContent);
+            logger.info(`WhatsAppChannel: Sent file ${filePath} to ${jid}`);
         } catch (error) {
             logger.error(`WhatsAppChannel: Error sending file: ${error}`);
             throw error;
@@ -742,7 +704,7 @@ CRITICAL: You MUST use 'send_whatsapp' to reply. Do NOT send cross-channel Teleg
                 mimetype,
                 ptt: true  // Push-to-talk = voice note bubble
             });
-            logger.info(`WhatsAppChannel: Sent voice note ${filePath} to ${to}`);
+            logger.info(`WhatsAppChannel: Sent voice note ${filePath} to ${jid}`);
         } catch (error) {
             logger.error(`WhatsAppChannel: Error sending voice note: ${error}`);
             throw error;

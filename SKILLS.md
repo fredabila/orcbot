@@ -26,8 +26,8 @@ This file lists the available skills for the agent.
 - **get_discord_channels(guild_id)**: Get the list of text channels in a Discord server.
 
 ## System & Configuration
-- **run_command(command, cwd?)**: Execute shell commands (subject to allow/deny lists). Automatically extracts directory from "cd /path && command" or "cd /path ; command" patterns and uses as working directory.
-- **get_system_info()**: Return server time/date and OS info.
+- **run_command(command, cwd?)**: Execute shell commands on the host system (subject to allow/deny lists). Automatically extracts directory from "cd /path && command" or "cd /path ; command" patterns and uses as working directory.
+- **get_system_info()**: Return system time/date and OS info.
 - **set_config(key, value)**: Persist configuration values.
 - **execute_typescript(code, args?)**: Compile and execute a free-form TypeScript block in the agent's Node.js environment. Saves to a persistent `scratchpad.ts` file, allowing you to build up complex reusable logic or import arbitrary NPM modules without creating a formal plugin.
 - **manage_skills(skill_definition)**: Append new skill definitions to SKILLS.md.

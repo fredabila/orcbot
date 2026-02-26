@@ -77,7 +77,7 @@ export class Environment {
 - RAM: ${info.totalMemoryGB}GB total (${info.freeMemoryGB}GB free)
 - Load Average: ${info.loadAvg.map(l => l.toFixed(2)).join(', ')} (1m, 5m, 15m)
 - Node.js: ${info.nodeVersion}
-- Server Uptime: ${info.uptimeDays} days
+- System Uptime: ${info.uptimeDays} days
 - Docker: ${info.isDocker ? 'Yes' : 'No'}
 - Default Shell: ${info.shell}
 

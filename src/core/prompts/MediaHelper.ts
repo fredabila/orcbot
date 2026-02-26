@@ -49,7 +49,7 @@ export class MediaHelper implements PromptHelper {
 
 FILE DELIVERY WORKFLOW:
 - **\`send_file\` is the delivery skill**: After producing or downloading any file meant for the user (documents, images, audio, PDFs, text files), use \`send_file(jid, path, caption?)\` to deliver it through the active messaging channel.
-- **write_file → send_file pipeline**: If you create content with \`write_file\` or download with \`download_file\`, the file exists only on the server. The user cannot access it unless you follow up with \`send_file\`. Always chain: produce file → send file → confirm.
+- **write_file → send_file pipeline**: If you create content with \`write_file\` or download with \`download_file\`, the file exists only on the host system. The user cannot access it unless you follow up with \`send_file\`. Always chain: produce file → send file → confirm.
 - **Don't just announce**: Sending a text message like "I saved the file to evolution.txt" without actually sending the file is incomplete. The user expects to receive the file in their chat.
 
 IMAGE GENERATION:

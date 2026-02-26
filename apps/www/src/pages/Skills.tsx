@@ -53,7 +53,7 @@ const SKILLS: Skill[] = [
   { name: 'get_discord_channels',sig: 'get_discord_channels(guild_id)',              desc: 'Get the list of text channels in a Discord server.',                               tags: ['messaging'] },
   // ── System & Config ──
   { name: 'run_command',         sig: 'run_command(command, cwd?)',                  desc: 'Execute shell commands with allow/deny list safety. Auto-extracts working dir.',   tags: ['system'] },
-  { name: 'get_system_info',     sig: 'get_system_info()',                           desc: 'Return server time, date, and OS information.',                                    tags: ['system'] },
+  { name: 'get_system_info',     sig: 'get_system_info()',                           desc: 'Return system time, date, and OS information.',                                    tags: ['system'] },
   { name: 'set_config',          sig: 'set_config(key, value)',                      desc: 'Persist configuration values to the config store.',                                tags: ['system'] },
   { name: 'manage_skills',       sig: 'manage_skills(skill_definition)',             desc: 'Append new skill definitions to SKILLS.md.',                                       tags: ['system'] },
   { name: 'self_repair_skill',   sig: 'self_repair_skill(skillName, errorMessage)',  desc: 'Diagnose and automatically fix a failing plugin skill.',                           tags: ['system', 'ai'] },

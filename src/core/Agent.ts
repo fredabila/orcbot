@@ -40,9 +40,12 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { SyntaxChecker } from '../utils/SyntaxChecker';
+import { isDeepEqual } from '../utils/ObjectUtils';
 import { shellSessions } from '../utils/ShellSession';
 import { TForceSystem } from '../codes/tforce/TForceSystem';
 import { MessageBus } from './MessageBus';
+import { BookLogManager } from '../memory/BookLogManager';
+import { registerBookLogSkills } from '../skills/bookLogTools';
 
 /**
  * Tracks users who have interacted with the bot across channels.
@@ -84,6 +87,7 @@ export class Agent {
     public knowledgeStore: KnowledgeStore;
     public messageBus: MessageBus;
     public tforce: TForceSystem;
+    public bookLog: BookLogManager;
     public isRunning: boolean = false;
     private lastActionTime: number;
     private lastHeartbeatAt: number = 0;
@@ -237,12 +241,6 @@ export class Agent {
             fallbackModelNames: this.config.get('fallbackModelNames'),
         });
 
-        // Configure fast model for internal reasoning (reviews, reflections, classification)
-        const fastModel = this.config.get('fastModelName');
-        if (fastModel) {
-            this.llm.setFastModel(fastModel);
-        }
-
         this.skills = new SkillsManager(
             this.config.get('skillsPath') || './SKILLS.md',
             this.config.get('pluginsPath') || './plugins',
@@ -253,6 +251,14 @@ export class Agent {
                 logger: logger
             }
         );
+
+        this.bookLog = new BookLogManager(this.config.getDataHome());
+
+        // Configure fast model for internal reasoning (reviews, reflections, classification)
+        const fastModel = this.config.get('fastModelName');
+        if (fastModel) {
+            this.llm.setFastModel(fastModel);
+        }
 
         // Initialize Bootstrap Manager for workspace files early
         this.bootstrap = new BootstrapManager(this.config.getDataHome());
@@ -271,6 +277,7 @@ export class Agent {
             this.tools
         );
         this.decisionEngine.setKnowledgeStore(this.knowledgeStore);
+        this.decisionEngine.setBookLog(this.bookLog);
         this.simulationEngine = new SimulationEngine(this.llm);
         this.actionQueue = new ActionQueue(this.config.get('actionQueuePath') || './actions.json', {
             completedTTL: this.config.get('actionQueueCompletedTTL'),
@@ -764,9 +771,11 @@ export class Agent {
         return { allowed: true };
     }
 
-    private registerInternalSkills() {
-        // ═══════════════════════════════════════════
-        // Channel Messaging & Reaction Skills
+        private registerInternalSkills() {
+            registerBookLogSkills(this);
+    
+            // ═══════════════════════════════════════════
+            // Channel Messaging & Reaction Skills
         // Workers don't have channel connections — skip these.
         // ═══════════════════════════════════════════
         if (!this.isWorker) {
@@ -2564,7 +2573,7 @@ export class Agent {
         // Skill: Run Shell Command
         this.skills.registerSkill({
             name: 'run_command',
-            description: 'Execute a shell command on the server. On Windows, commands run in PowerShell — use PowerShell syntax (Get-ChildItem, Get-Command, Start-MpScan, etc.), NOT cmd.exe syntax (dir, where, etc.). For file creation, use write_file skill. To run commands in a specific directory, pass cwd parameter. For long-running commands, tune timeoutMs/retries and timeoutBackoffFactor to adapt to slower environments.',
+            description: 'Execute a shell command on the host system. On Windows, commands run in PowerShell — use PowerShell syntax (Get-ChildItem, Get-Command, Start-MpScan, etc.), NOT cmd.exe syntax (dir, where, etc.). For file creation, use write_file skill. To run commands in a specific directory, pass cwd parameter. For long-running commands, tune timeoutMs/retries and timeoutBackoffFactor to adapt to slower environments.',
             usage: 'run_command(command, cwd?, timeoutMs?, retries?, timeoutBackoffFactor?, maxTimeoutMs?)',
             isDeep: true,
             isResearch: true,
@@ -2991,7 +3000,7 @@ export class Agent {
 
                 return `🖥️ SYSTEM INFORMATION
 ━━━━━━━━━━━━━━━━━━━━━━
-Server Time: ${new Date().toLocaleString()}
+System Time: ${new Date().toLocaleString()}
 Platform: ${platformName}
 OS Version: ${os.release()}
 Architecture: ${os.arch()}
@@ -4459,7 +4468,7 @@ Output JSON now:`;
         // Skill: Computer Screenshot
         this.skills.registerSkill({
             name: 'computer_screenshot',
-            description: 'Take a screenshot and describe what is on screen. Set context to "browser" or "system". Returns a visual description so you can see the current screen state before acting. NOTE: "system" context requires a display server (X11/Wayland) — it will NOT work on headless servers. Use "browser" context or browser_vision instead on servers.',
+            description: 'Take a screenshot and describe what is on screen. Set context to "browser" or "system". Returns a visual description so you can see the current screen state before acting. NOTE: "system" context requires a display server (X11/Wayland) — it will NOT work on headless environments. Use "browser" context or browser_vision instead on headless systems.',
             usage: 'computer_screenshot(context?)',
             handler: async (args: any) => {
                 const ctx = args.context || args.mode || 'system';
@@ -4482,9 +4491,9 @@ Output JSON now:`;
                     return result;
                 } catch (e) {
                     const errMsg = String(e);
-                    // On headless servers, guide the agent to use browser-based alternatives
-                    if (errMsg.includes('display') || errMsg.includes('DISPLAY') || errMsg.includes('headless server')) {
-                        return `Screenshot failed (no display server): ${e}\n\n⚠️ This is a headless server — system-level computer_* tools (computer_screenshot, computer_click, computer_vision_click, etc.) with context="system" will NOT work. Use these alternatives instead:\n• browser_screenshot — take a screenshot of the browser page\n• browser_vision(prompt) — get AI-powered visual description of the browser page\n• browser_examine_page() — get semantic snapshot of interactive elements\n• computer_screenshot(context="browser") — screenshot in browser context only\nDo NOT retry system-context computer_* tools.`;
+                    // On headless environments, guide the agent to use browser-based alternatives
+                    if (errMsg.includes('display') || errMsg.includes('DISPLAY') || errMsg.includes('headless environment')) {
+                        return `Screenshot failed (no display server): ${e}\n\n⚠️ This is a headless environment — system-level computer_* tools (computer_screenshot, computer_click, computer_vision_click, etc.) with context="system" will NOT work. Use these alternatives instead:\n• browser_screenshot — take a screenshot of the browser page\n• browser_vision(prompt) — get AI-powered visual description of the browser page\n• browser_examine_page() — get semantic snapshot of interactive elements\n• computer_screenshot(context="browser") — screenshot in browser context only\nDo NOT retry system-context computer_* tools.`;
                     }
                     return `Screenshot failed: ${e}`;
                 }
@@ -4494,7 +4503,7 @@ Output JSON now:`;
         // Skill: Computer Click (vision-guided)
         this.skills.registerSkill({
             name: 'computer_click',
-            description: 'Click at pixel coordinates (x, y) or describe what to click and vision will locate it. Use context "browser" for in-page clicks or "system" for desktop clicks. NOTE: "system" context requires a display server — use browser_click on headless servers.',
+            description: 'Click at pixel coordinates (x, y) or describe what to click and vision will locate it. Use context "browser" for in-page clicks or "system" for desktop clicks. NOTE: "system" context requires a display server — use browser_click on headless environments.',
             usage: 'computer_click(x?, y?, description?, button?, context?)',
             handler: async (args: any) => {
                 const ctx = args.context || args.mode || 'system';
@@ -4510,8 +4519,8 @@ Output JSON now:`;
                     return await this.computerUse.mouseClick({ x, y, button, description });
                 } catch (e) {
                     const errMsg = String(e);
-                    if (errMsg.includes('display') || errMsg.includes('DISPLAY') || errMsg.includes('headless server')) {
-                        return `Computer click failed (headless server — no display): ${e}\nUse browser_click with ref IDs instead, or browser_vision_click for visual element targeting. Do NOT retry system-context computer_* tools.`;
+                    if (errMsg.includes('display') || errMsg.includes('DISPLAY') || errMsg.includes('headless environment')) {
+                        return `Computer click failed (headless environment — no display): ${e}\nUse browser_click with ref IDs instead, or browser_vision_click for visual element targeting. Do NOT retry system-context computer_* tools.`;
                     }
                     return `Computer click failed: ${e}`;
                 }
@@ -4521,7 +4530,7 @@ Output JSON now:`;
         // Skill: Computer Vision Click (always uses vision to find element)
         this.skills.registerSkill({
             name: 'computer_vision_click',
-            description: 'Click an element by describing it visually. Takes a screenshot, uses AI vision to locate the element, and clicks at the detected coordinates. Best for canvas apps, custom UIs, or when DOM selectors fail. NOTE: On headless servers, use context="browser" only.',
+            description: 'Click an element by describing it visually. Takes a screenshot, uses AI vision to locate the element, and clicks at the detected coordinates. Best for canvas apps, custom UIs, or when DOM selectors fail. NOTE: On headless environments, use context="browser" only.',
             usage: 'computer_vision_click(description, button?, context?)',
             handler: async (args: any) => {
                 const description = args.description || args.element || args.target;
@@ -4534,8 +4543,8 @@ Output JSON now:`;
                     return await this.computerUse.visionClick(description, args.button || 'left');
                 } catch (e) {
                     const errMsg = String(e);
-                    if (errMsg.includes('display') || errMsg.includes('DISPLAY') || errMsg.includes('headless server')) {
-                        return `Vision click failed (headless server — no display): ${e}\nUse browser_click with ref IDs from browser_examine_page, or browser_vision for visual analysis. Do NOT retry system-context computer_* tools.`;
+                    if (errMsg.includes('display') || errMsg.includes('DISPLAY') || errMsg.includes('headless environment')) {
+                        return `Vision click failed (headless environment — no display): ${e}\nUse browser_click with ref IDs from browser_examine_page, or browser_vision for visual analysis. Do NOT retry system-context computer_* tools.`;
                     }
                     return `Vision click failed: ${e}`;
                 }
@@ -7145,14 +7154,15 @@ The plugin handles all logic internally. See the plugin source for implementatio
         try {
             const taskDescription = action.payload?.description || 'Unknown task';
 
-            // Fast-path: if a message was already successfully delivered and this is a
+            // Fast-path: if a substantive message was already successfully delivered and this is a
             // simple/trivial channel response, don't waste an LLM call — just terminate.
             if (
-                deliveryContext?.anyUserDeliverySuccess &&
+                deliveryContext &&
+                deliveryContext.substantiveDeliveriesSent > 0 &&
                 reason === 'max_steps' &&
                 deliveryContext.messagesSent > 0
             ) {
-                logger.info(`Agent: Forced termination review (${reason}): terminate — message already delivered, fast-path exit.`);
+                logger.info(`Agent: Forced termination review (${reason}): terminate — substantive message already delivered, fast-path exit.`);
                 return 'terminate';
             }
 
@@ -7169,20 +7179,21 @@ The plugin handles all logic internally. See the plugin source for implementatio
 
             const reviewPrompt = `You are a task completion reviewer. A hard safety guardrail is about to TERMINATE a task. Your job is to decide if the task is truly done or if it should continue.
 
+ACTION ID: ${action.id}
 TASK: "${taskDescription}"
 TERMINATION REASON: ${reason} — ${details}
 CURRENT STEP: ${currentStep}
 DELIVERY STATUS: ${deliverySummary}
 
-RECENT STEP HISTORY:
+RECENT STEP HISTORY (Focus ONLY on Action ${action.id}):
 ${stepHistory || 'No step history available.'}
 
 RULES:
-- If a message has already been SUCCESSFULLY DELIVERED to the user (Delivery Status shows Successful delivery: true), return "terminate" — the task is done.
-- If the task was a RESEARCH or DEEP WORK task (gathering info, writing reports, building something) and meaningful progress has been made but it's not done yet, return "continue".
-- If the agent is truly stuck in a loop making NO progress at all (same exact calls with same results), return "terminate".
-- If the agent has already gathered enough information to deliver a useful response to the user, return "terminate" (it should compile and send what it has).
-- If the agent hasn't delivered ANY results to the user yet but has gathered data, return "continue" (it needs to compile and send).
+- Focus ONLY on Action ${action.id}. Ignore "COMPLETED" status from previous actions or historical context.
+- If Action ${action.id} has already DELIVERED a SUBSTANTIVE result to the user (Substantive deliveries > 0), return "terminate".
+- If Action ${action.id} is a RESEARCH or DEEP WORK task and meaningful progress has been made but the FINAL RESULT hasn't been sent yet, return "continue".
+- If the agent is stuck in a loop for Action ${action.id} (same exact calls with same results), return "terminate".
+- If the agent hasn't delivered ANY substantive results for Action ${action.id} yet but has gathered data, return "continue".
 - Prefer "continue" when in doubt — it's better to let the agent wrap up than to leave the user hanging.
 
 Respond with ONLY valid JSON:
@@ -8261,12 +8272,17 @@ REFLECTION: <1-2 sentences>`;
         const normalized = (message || '').toLowerCase().trim();
         if (!normalized) return false;
 
-        if (normalized.length > 220) return false;
+        // Acknowledgments are usually short, but can be a bit longer if they set expectations
+        if (normalized.length > 280) return false;
 
         const ackPatterns = this.getGuidanceRegexList('guidanceAckPatterns', [
             '^(understood|got it|on it|acknowledged|okay|ok|alright|sure|perfect)\\b',
             '^thanks?[,.!\\s]',
-            "\\bi\\s*(am|'m)\\s*(ready|working on|going to|about to)\\b",
+            "\\bi\\s*(am|'m|'ll|ll| will)\\s*(ready|working on|going to|about to|check|fetch|search|start|figure|look)\\b",
+            '^checking\\b',
+            '^looking into\\b',
+            '^one moment\\b',
+            '^hang tight\\b',
             '\\bi\\s*will\\s*now\\b',
             '\\bworking on it\\b',
             '\\blet me\\b'
@@ -8308,9 +8324,29 @@ REFLECTION: <1-2 sentences>`;
             '^sorry[,\\s]',
             '^(understood|acknowledged)[,.!\\s]',
             "\\bi\\s*(am|'m)\\s*ready\\s*to\\b",
-            '\\bi\\s*will\\s*now\\b'
+            '\\bi\\s*will\\s*now\\b',
+            '\\bi\\s*will\\s*let\\s*you\\s*know\\b',
+            '\\bi\\s*am\\s*starting\\s*the\\s*search\\b',
+            '\\bi\\s*will\\s*search\\b',
+            '\\bi\\s*am\\s*figuring\\s*that\\s*out\\b',
+            '\\bi\\s*am\\s*acknowledging\\s*the\\s*request\\b',
+            '\\bi\\s*am\\s*setting\\s*expectations\\b',
+            '\\bthis\\s*is\\s*the\\s*first\\s*step\\b',
+            '\\bi\\s*need\\s*to\\s*research\\b',
+            '\\bi\\s*will\\s*let\\s*you\\s*know\\s*once\\b',
+            '\\bi\\s*will\\s*investigate\\b',
+            '\\bi\\s*will\\s*look\\s*into\\b',
+            '\\bexpectations\\s*about\\s*the\\s*process\\b'
         ]);
         if (lowValuePatterns.some(p => p.test(normalized))) return false;
+
+        // Pattern: "I'll let you know once X is complete" or "Searching for X"
+        if (/\bi'll let you know once\b/i.test(normalized)) return false;
+        if (/\bi'll figure that out\b/i.test(normalized)) return false;
+        if (/\bi'll start the search\b/i.test(normalized)) return false;
+        if (/\backnowledging the request\b/i.test(normalized)) return false;
+        if (/\bsetting expectations\b/i.test(normalized)) return false;
+        if (/\bfirst part of the execution plan\b/i.test(normalized)) return false;
 
         return true;
     }
@@ -8340,8 +8376,13 @@ REFLECTION: <1-2 sentences>`;
         // Listen for config changes and reload relevant components
         eventBus.on('config:changed', async (data: any) => {
             try {
-                logger.info('Agent: Config changed, reloading affected components...');
                 const { oldConfig, newConfig } = data;
+                // Use deep comparison for keys to handle objects/arrays accurately
+                const changedKeys = Object.keys(newConfig).filter(k => !isDeepEqual(oldConfig[k], newConfig[k]));
+                
+                if (changedKeys.length === 0) return;
+                
+                logger.info(`Agent: Config changed (keys: ${changedKeys.join(', ')}), reloading affected components...`);
 
                 // 1. Hot-reload LLM (Models, Providers, API Keys)
                 const llmKeys = [
@@ -8356,12 +8397,12 @@ REFLECTION: <1-2 sentences>`;
                 }
 
                 // 2. Hot-reload Channels (Telegram, Discord, etc.)
-                const channelKeys = [
+                const channelEnablingKeys = [
                     'telegramToken', 'discordToken', 'slackBotToken', 'slackAppToken',
                     'whatsappEnabled', 'emailEnabled'
                 ];
-                const channelsChanged = channelKeys.some(key => oldConfig[key] !== newConfig[key]);
-                if (channelsChanged && (this.isRunning || !this.isCLI)) {
+                const coreChannelsChanged = channelEnablingKeys.some(key => !isDeepEqual(oldConfig[key], newConfig[key]));
+                if (coreChannelsChanged && (this.isRunning || !this.isCLI)) {
                     await this.hotReloadChannels(oldConfig, newConfig);
                 }
 
@@ -11135,7 +11176,12 @@ Respond with a single actionable task description (one sentence). Be specific ab
             const classificationTarget = action.payload.lastUserMessageText
                 ? `message: "${action.payload.lastUserMessageText}"`
                 : (action.payload.description || '');
-            let taskComplexity = isHeartbeatTask ? 'trivial' as const
+            
+            // HEARTBEAT HEURISTIC: If heartbeat is generic, it's trivial. 
+            // If it has a custom description (e.g. follow-up), classify it.
+            const isGenericHeartbeat = isHeartbeatTask && (!action.payload.description || action.payload.description.includes('Proactive Heartbeat'));
+            
+            let taskComplexity = isGenericHeartbeat ? 'trivial' as const
                 : await this.classifyTaskComplexity(classificationTarget);
 
             const descForComplexity = String(action.payload.description || '').toLowerCase();
@@ -11143,6 +11189,17 @@ Respond with a single actionable task description (one sentence). Be specific ab
             if (isPreferenceMemoryTask) {
                 taskComplexity = 'trivial';
             }
+
+            // BROWSING ESCALATION: Browsing is never trivial or simple.
+            const needsBrowsing = descForComplexity.includes('browser') || 
+                                 descForComplexity.includes('navigate') || 
+                                 descForComplexity.includes('url') || 
+                                 descForComplexity.includes('http') ||
+                                 descForComplexity.includes('download');
+            if (needsBrowsing && (taskComplexity === 'trivial' || taskComplexity === 'simple')) {
+                taskComplexity = 'standard';
+            }
+
             logger.info(`Agent: Task complexity="${taskComplexity}" for action ${action.id}`);
 
             const isSimpleTask = taskComplexity === 'trivial' || taskComplexity === 'simple' || isHeartbeatTask;
@@ -11183,10 +11240,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
             // Meta-helper to retrieve skill flags from registry with legacy fallbacks
             const getSkillMeta = (name: string) => {
                 const s = this.skills.getSkill(name);
-                if (s) return s;
                 
                 // Legacy fallbacks for built-in skills if they aren't fully registered with flags yet
-                const isResearch = [
+                const isResearchDefault = [
                     'web_search', 'browser_navigate', 'browser_click', 'browser_type',
                     'browser_examine_page', 'browser_screenshot', 'browser_back',
                     'browser_scroll', 'browser_hover', 'browser_select',
@@ -11200,7 +11256,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     'generate_image', 'send_image'
                 ].includes(name);
 
-                const isDeep = ![
+                const isDeepDefault = ![
                     'send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat',
                     'update_journal', 'update_user_profile', 'update_agent_identity',
                     'get_system_info', 'system_check', 'read_bootstrap_file',
@@ -11208,18 +11264,18 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     'request_supporting_data'
                 ].includes(name);
 
-                const isSideEffect = [
+                const isSideEffectDefault = [
                     'send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat',
                     'telegram_send_buttons', 'telegram_edit_message', 'telegram_send_poll', 'telegram_react', 'telegram_pin_message',
                     'send_file', 'send_image', 'send_discord_file', 'send_slack_file'
                 ].includes(name);
 
-                const isDangerous = [
+                const isDangerousDefault = [
                     'run_command', 'write_to_file', 'write_file', 'create_file', 
                     'install_npm_dependency', 'delete_file', 'manage_skills'
                 ].includes(name);
 
-                const isElevated = [
+                const isElevatedDefault = [
                     'run_command',
                     'shell_start', 'shell_read', 'shell_send', 'shell_stop', 'shell_list',
                     'orcbot_control',
@@ -11233,22 +11289,28 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     'install_tool', 'approve_tool', 'run_tool_command', 'uninstall_tool', 'activate_tool', 'read_tool_readme',
                 ].includes(name);
 
-                return { isResearch, isDeep, isSideEffect, isDangerous, isElevated };
+                return { 
+                    isResearch: s?.isResearch ?? isResearchDefault, 
+                    isDeep: s?.isDeep ?? isDeepDefault, 
+                    isSideEffect: s?.isSideEffect ?? isSideEffectDefault, 
+                    isDangerous: s?.isDangerous ?? isDangerousDefault, 
+                    isElevated: s?.isElevated ?? isElevatedDefault 
+                };
             };
 
             // Dynamic limits driven by task complexity classification
             const rawConfigMaxSteps = Number(this.config.get('maxStepsPerAction') || 25);
             const rawConfigMaxMessages = Number(this.config.get('maxMessagesPerAction') || 5);
-            const configMaxSteps = Math.max(6, Number.isFinite(rawConfigMaxSteps) ? rawConfigMaxSteps : 25);
-            const configMaxMessages = Math.max(3, Number.isFinite(rawConfigMaxMessages) ? rawConfigMaxMessages : 5);
+            const configMaxSteps = Math.max(10, Number.isFinite(rawConfigMaxSteps) ? rawConfigMaxSteps : 25);
+            const configMaxMessages = Math.max(4, Number.isFinite(rawConfigMaxMessages) ? rawConfigMaxMessages : 5);
 
-            if (rawConfigMaxSteps < 6 || rawConfigMaxMessages < 3) {
+            if (rawConfigMaxSteps < 10 || rawConfigMaxMessages < 4) {
                 logger.warn(`Agent: Runtime limits were too low (steps=${rawConfigMaxSteps}, messages=${rawConfigMaxMessages}). Applying safety floor to prevent premature looping (steps=${configMaxSteps}, messages=${configMaxMessages}).`);
             }
 
             const COMPLEXITY_LIMITS: Record<string, { steps: number; messages: number }> = {
-                trivial: { steps: 2, messages: 1 },
-                simple: { steps: 5, messages: 2 },
+                trivial: { steps: 4, messages: 2 },
+                simple: { steps: 8, messages: 3 },
                 standard: { steps: configMaxSteps, messages: configMaxMessages },
                 complex: { steps: configMaxSteps, messages: Math.max(configMaxMessages, 8) },
             };
@@ -12828,12 +12890,12 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
             const isUserFacingAction = action.payload?.source === 'telegram' || action.payload?.source === 'whatsapp' ||
                 action.payload?.source === 'discord' || action.payload?.source === 'slack' || action.payload?.source === 'email' || action.payload?.source === 'gateway-chat';
-            if (!goalsMet && isUserFacingAction && anyUserDeliverySuccess) {
+            if (!goalsMet && isUserFacingAction && substantiveDeliveriesSent > 0) {
                 logger.warn(`Agent: Reconciled final status to completed for ${action.id} because user delivery succeeded.`);
                 this.memory.saveMemory({
                     id: `${action.id}-delivery-reconciled`,
                     type: 'short',
-                    content: `[SYSTEM: Final-state reconciliation: delivery/send succeeded in this action. Marking task completed to avoid false failure due to guardrail exhaustion.]`,
+                    content: `[SYSTEM: Final-state reconciliation: a substantive delivery/message was sent in this action. Marking task completed to avoid false failure due to guardrail exhaustion.]`,
                     metadata: { actionId: action.id, deliveryReconciled: true, messagesSent, substantiveDeliveriesSent }
                 });
                 goalsMet = true;

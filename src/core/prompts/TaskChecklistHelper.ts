@@ -65,7 +65,7 @@ ${isEarlyPhase ? `
 - Identify dependencies between steps — which steps must complete before others can start.
 - Estimate which steps can be parallelized (use multi-tool calls for independent steps).
 - If the task has more than 3 steps, briefly share the plan with the user before starting.
-- **ENVIRONMENT CHECK**: If any step involves running commands, CLI tools, or interacting with the server environment, include a verification step FIRST (e.g., check OS with get_system_info, then use an OS-appropriate tool-existence check: on Unix, verify with run_command("which <tool>") or run_command("command -v <tool>"); on Windows/PowerShell, verify with run_command("Get-Command <tool>")).
+- **ENVIRONMENT CHECK**: If any step involves running commands, CLI tools, or interacting with the host environment, include a verification step FIRST (e.g., check OS with get_system_info, then use an OS-appropriate tool-existence check: on Unix, verify with run_command("which <tool>") or run_command("command -v <tool>"); on Windows/PowerShell, verify with run_command("Get-Command <tool>")).
 ` : ''}
 **PROGRESS TRACKING:**
 - Note what was done and what remains after each step; adjust the plan on failures.

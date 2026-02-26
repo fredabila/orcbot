@@ -34,7 +34,7 @@ Think about:
 5. What is the success criteria?
 6. DELIVERY: If the task produces a file or downloadable content for the user, the plan MUST include a step to SEND the file to the user via their channel using \`send_file\`, NOT just save it locally. A file saved to disk without being sent is a dead end — the user cannot access the agent's filesystem.
 7. ERROR RECOVERY: For each step, briefly note what to do if it fails (alternative tool, different parameters, fallback approach). The agent MUST adapt, not repeat the same failing call.
-8. ENVIRONMENT AWARENESS: If the task involves running commands or CLI tools, the plan should account for the server OS/shell environment. Include a verification step (e.g., check OS, check if tool is installed) before running environment-dependent commands.
+8. ENVIRONMENT AWARENESS: If the task involves running commands or CLI tools, the plan should account for the host OS/shell environment. Include a verification step (e.g., check OS, check if tool is installed) before running environment-dependent commands.
 9. BATCHING: Group tools into dependency-aware batches when possible (e.g., [search -> open] then [extract -> deliver]). This minimizes repeated LLM round-trips. If any tool in a batch fails, pause the remaining batch and re-plan from the failure.
 10. PROGRESS CHECKPOINTS: For tasks with 3+ steps, include explicit checkpoints where the agent should update the user on progress. The user cannot see internal work — silence feels like failure.
 

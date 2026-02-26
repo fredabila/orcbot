@@ -15,6 +15,7 @@ export interface InboundMessage {
     isCommand?: boolean; // For explicit commands (e.g. /cmd)
     isMention?: boolean; // For mentions in group chats
     isExternal?: boolean; // For WhatsApp "someone else" logic
+    isOwner?: boolean; // For self-chat / owner messages
     metadata?: Record<string, any>; // Extra channel-specific metadata
 }
 
@@ -69,8 +70,9 @@ export class MessageBus {
         // 4. Auto-Reply & Privacy Check
         // Explicit commands usually bypass auto-reply disable
         const autoReplyEnabled = this.agent.config.get(`${msg.source}AutoReplyEnabled`) ?? true;
-        if (!autoReplyEnabled && !msg.isCommand) {
-            logger.debug(`MessageBus: Suppressed reply to ${msg.source} message (auto-reply disabled)`);
+        if ((!autoReplyEnabled || msg.metadata?.suppressReply) && !msg.isCommand) {
+            const reason = msg.metadata?.suppressReply ? 'suppressReply flag' : 'auto-reply disabled';
+            logger.debug(`MessageBus: Suppressed reply to ${msg.source} message (${reason})`);
             return;
         }
 
@@ -78,9 +80,14 @@ export class MessageBus {
         let priority = 10;
         let taskDescription = '';
 
-        if (msg.isCommand) {
-            priority = 20;
-            taskDescription = `${msg.source} command: "${msg.content}"`;
+        if (msg.isCommand || msg.isOwner) {
+            priority = msg.isOwner ? 15 : 20;
+            const label = msg.isOwner ? 'command from yourself' : 'command';
+            taskDescription = `${msg.source} ${label}: "${msg.content}"`;
+            
+            if (msg.isOwner && msg.source === 'whatsapp') {
+                taskDescription += `\n\nCRITICAL: You MUST use 'send_whatsapp' to reply. Do NOT send cross-channel notifications.`;
+            }
         } else if (msg.isExternal) {
             priority = 5; // Lower priority for external observation
             taskDescription = `EXTERNAL ${msg.source.toUpperCase()} MESSAGE from ${sender} (ID: ${msg.messageId}): "${baseContent}"${msg.mediaAnalysis ? ` [Media analysis: ${msg.mediaAnalysis}]` : ''}${msg.replyContext ? ' ' + msg.replyContext : ''}. 

@@ -8,6 +8,8 @@ import { AgentConfig, AgentConfigSchema } from '../types/AgentConfig';
 
 export { AgentConfig };
 
+import { isDeepEqual } from '../utils/ObjectUtils';
+
 export class ConfigManager {
     private configPath: string;
     private config: AgentConfig;
@@ -380,6 +382,11 @@ export class ConfigManager {
     }
 
     public set(key: string, value: any) {
+        // Optimization: skip if value is identical (deep check for objects/arrays)
+        if (isDeepEqual((this.config as any)[key], value)) {
+            return;
+        }
+
         const oldConfig = { ...this.config };
 
         // Apply requested change first
@@ -420,6 +427,9 @@ export class ConfigManager {
 
     public saveConfig() {
         try {
+            // Save the current config as-is. 
+            // Stripping defaults is causing 'Key Churn' loops where keys disappear 
+            // and reappear in the merge, triggering redundant reloads.
             fs.writeFileSync(this.configPath, yaml.stringify(this.config));
             logger.info(`Configuration saved to ${this.configPath}`);
             this.syncConfigAcrossPaths();
