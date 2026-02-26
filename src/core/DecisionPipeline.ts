@@ -78,7 +78,9 @@ class LastMessageCache {
         for (const prev of history.slice(-5)) { // Check last 5 messages
             const prevFingerprint = this.getSemanticFingerprint(prev);
             // Check for high similarity (common substring)
-            if (this.stringSimilarity(fingerprint, prevFingerprint) > threshold) {
+            // Relax threshold for messaging to allow more natural flow
+            const effectiveThreshold = threshold;
+            if (this.stringSimilarity(fingerprint, prevFingerprint) > effectiveThreshold) {
                 return true;
             }
         }
@@ -352,23 +354,19 @@ export class DecisionPipeline {
 
         const browserNavigateCounts = new Map<string, number>();
         const browserToolCounts = new Map<string, number>();
-        let hasBrowserNavigate = false;
-        let hasBrowserInspect = false;
-        let hasBrowserExtract = false;
+        let browserCycleCount = 0;
         let hasAnyTextDelivery = false;
         for (const m of recentActionToolMemories) {
             const toolName = (m.metadata?.tool || '').toString().toLowerCase();
             if (!toolName) continue;
             browserToolCounts.set(toolName, (browserToolCounts.get(toolName) || 0) + 1);
 
-            if (toolName === 'browser_navigate') hasBrowserNavigate = true;
-            if (toolName === 'browser_examine_page' || toolName === 'browser_screenshot' || toolName === 'browser_vision') hasBrowserInspect = true;
-            if (toolName === 'browser_extract_content' || toolName === 'browser_extract_data' || toolName === 'web_search' || toolName === 'http_fetch') hasBrowserExtract = true;
             if (toolName === 'send_telegram' || toolName === 'send_whatsapp' || toolName === 'send_discord' || toolName === 'send_slack' || toolName === 'send_gateway_chat') {
                 hasAnyTextDelivery = true;
             }
 
             if (toolName === 'browser_navigate') {
+                browserCycleCount++;
                 const input = m.metadata?.input || {};
                 const rawUrl = (input.url || input.link || input.site || '').toString().trim().toLowerCase();
                 if (rawUrl) {
@@ -394,7 +392,7 @@ export class DecisionPipeline {
         }
 
         // Message budget and duplicate suppression
-        const maxMessages = this.config.get('maxMessagesPerAction') || 0;
+        const maxMessages = this.config.get('maxMessagesPerAction') || 8;
         let allowedMessages = 0;
         const filteredTools: ToolCall[] = [];
 
@@ -407,7 +405,7 @@ export class DecisionPipeline {
         const hasAnyFileSend = uniqueTools.some(t => (t.name || '').toLowerCase().trim() === 'send_file');
         const suppressFileOnlyByIntent = ctx.fileIntent === 'not_requested' && hasAnyFileSend && !hasAnyTextSend;
 
-        const maxToolLoops = this.config.get('maxToolLoops') || 3;
+        const maxToolLoops = this.config.get('maxToolLoops') || 5;
 
         for (const tool of uniqueTools) {
             const toolName = (tool.name || '').toLowerCase().trim();
@@ -441,11 +439,11 @@ export class DecisionPipeline {
                     continue;
                 }
 
-                // Phase guard: once we already navigated+inspected+extracted in this action,
+                // Phase guard: once we already navigated multiple times in this action,
                 // block additional navigate loops and push toward final response.
-                if (hasBrowserNavigate && hasBrowserInspect && hasBrowserExtract && !hasAnyTextDelivery) {
+                if (browserCycleCount >= 3 && !hasAnyTextDelivery) {
                     dropped.push(`browser-phase-loop:${tool.name}`);
-                    notes.push('Suppressed browser_navigate: phase guard requires summarizing and replying instead of restarting navigation');
+                    notes.push('Suppressed browser_navigate: phase guard requires summarizing and replying instead of continuing navigation');
                     continue;
                 }
             }

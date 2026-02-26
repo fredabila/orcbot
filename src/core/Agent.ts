@@ -8380,30 +8380,30 @@ REFLECTION: <1-2 sentences>`;
             '^quick update[:\\-]?\\s*$',
             '^sorry[,\\s]',
             '^(understood|acknowledged)[,.!\\s]',
-            "\\bi\\s*(am|'m)\\s*ready\\s*to\\b",
-            '\\bi\\s*will\\s*now\\b',
-            '\\bi\\s*will\\s*let\\s*you\\s*know\\b',
-            '\\bi\\s*am\\s*starting\\s*the\\s*search\\b',
-            '\\bi\\s*will\\s*search\\b',
-            '\\bi\\s*am\\s*figuring\\s*that\\s*out\\b',
-            '\\bi\\s*am\\s*acknowledging\\s*the\\s*request\\b',
-            '\\bi\\s*am\\s*setting\\s*expectations\\b',
-            '\\bthis\\s*is\\s*the\\s*first\\s*step\\b',
-            '\\bi\\s*need\\s*to\\s*research\\b',
-            '\\bi\\s*will\\s*let\\s*you\\s*know\\s*once\\b',
-            '\\bi\\s*will\\s*investigate\\b',
-            '\\bi\\s*will\\s*look\\s*into\\b',
-            '\\bexpectations\\s*about\\s*the\\s*process\\b'
+            "^\\bi\\s*(am|'m)\\s*ready\\s*to\\b",
+            "^\\bi\\s*will\\s*now\\b",
+            "^\\bi\\s*will\\s*let\\s*you\\s*know\\b",
+            "^\\bi\\s*am\\s*starting\\s*the\\s*search\\b",
+            "^\\bi\\s*will\\s*search\\b",
+            "^\\bi\\s*am\\s*figuring\\s*that\\s*out\\b",
+            "^\\bi\\s*am\\s*acknowledging\\s*the\\s*request\\b",
+            "^\\bi\\s*am\\s*setting\\s*expectations\\b",
+            "^\\bthis\\s*is\\s*the\\s*first\\s*step\\b",
+            "^\\bi\\s*need\\s*to\\s*research\\b",
+            "^\\bi\\s*will\\s*let\\s*you\\s*know\\s*once\\b",
+            "^\\bi\\s*will\\s*investigate\\b",
+            "^\\bi\\s*will\\s*look\\s*into\\b",
+            "^\\bexpectations\\s*about\\s*the\\s*process\\b"
         ]);
         if (lowValuePatterns.some(p => p.test(normalized))) return false;
 
         // Pattern: "I'll let you know once X is complete" or "Searching for X"
-        if (/\bi'll let you know once\b/i.test(normalized)) return false;
-        if (/\bi'll figure that out\b/i.test(normalized)) return false;
-        if (/\bi'll start the search\b/i.test(normalized)) return false;
-        if (/\backnowledging the request\b/i.test(normalized)) return false;
-        if (/\bsetting expectations\b/i.test(normalized)) return false;
-        if (/\bfirst part of the execution plan\b/i.test(normalized)) return false;
+        if (/^i'll let you know once\b/i.test(normalized)) return false;
+        if (/^i'll figure that out\b/i.test(normalized)) return false;
+        if (/^i'll start the search\b/i.test(normalized)) return false;
+        if (/^acknowledging the request\b/i.test(normalized)) return false;
+        if (/^setting expectations\b/i.test(normalized)) return false;
+        if (/^first part of the execution plan\b/i.test(normalized)) return false;
 
         return true;
     }
@@ -11356,20 +11356,20 @@ Respond with a single actionable task description (one sentence). Be specific ab
             };
 
             // Dynamic limits driven by task complexity classification
-            const rawConfigMaxSteps = Number(this.config.get('maxStepsPerAction') || 25);
-            const rawConfigMaxMessages = Number(this.config.get('maxMessagesPerAction') || 5);
-            const configMaxSteps = Math.max(10, Number.isFinite(rawConfigMaxSteps) ? rawConfigMaxSteps : 25);
-            const configMaxMessages = Math.max(4, Number.isFinite(rawConfigMaxMessages) ? rawConfigMaxMessages : 5);
+            const rawConfigMaxSteps = Number(this.config.get('maxStepsPerAction') || 30);
+            const rawConfigMaxMessages = Number(this.config.get('maxMessagesPerAction') || 8);
+            const configMaxSteps = Math.max(15, Number.isFinite(rawConfigMaxSteps) ? rawConfigMaxSteps : 30);
+            const configMaxMessages = Math.max(6, Number.isFinite(rawConfigMaxMessages) ? rawConfigMaxMessages : 8);
 
-            if (rawConfigMaxSteps < 10 || rawConfigMaxMessages < 4) {
+            if (rawConfigMaxSteps < 15 || rawConfigMaxMessages < 6) {
                 logger.warn(`Agent: Runtime limits were too low (steps=${rawConfigMaxSteps}, messages=${rawConfigMaxMessages}). Applying safety floor to prevent premature looping (steps=${configMaxSteps}, messages=${configMaxMessages}).`);
             }
 
             const COMPLEXITY_LIMITS: Record<string, { steps: number; messages: number }> = {
-                trivial: { steps: 4, messages: 2 },
-                simple: { steps: 8, messages: 3 },
+                trivial: { steps: 6, messages: 3 },
+                simple: { steps: 12, messages: 4 },
                 standard: { steps: configMaxSteps, messages: configMaxMessages },
-                complex: { steps: configMaxSteps, messages: Math.max(configMaxMessages, 8) },
+                complex: { steps: configMaxSteps + 10, messages: Math.max(configMaxMessages, 12) },
             };
             const limits = COMPLEXITY_LIMITS[taskComplexity] || COMPLEXITY_LIMITS.standard;
             const MAX_STEPS = limits.steps;
@@ -11377,7 +11377,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             const isResearchTask = taskComplexity === 'complex';
             const MAX_NO_TOOLS_RETRIES = 3; // Max retries when LLM returns no tools but goals_met=false
             const MAX_SKILL_REPEATS = this.config.get('maxToolRepeats') || 5; 
-            const MAX_RESEARCH_SKILL_REPEATS = this.config.get('maxResearchToolRepeats') || 15;
+            const MAX_RESEARCH_SKILL_REPEATS = this.config.get('maxResearchToolRepeats') || 20;
             const MAX_CONSECUTIVE_FAILURES = 3; // Max consecutive failures of same skill before aborting
             let currentStep = 0;
             let messagesSent = 0;
@@ -11627,8 +11627,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     const hasDeepToolThisTurn = decision.tools.some((t: any) => getSkillMeta(t.name).isDeep);
                     if (!hasDeepToolThisTurn) {
                         consecutiveNonDeepTurns++;
-                        if (consecutiveNonDeepTurns >= 5) {
-                            logger.warn(`Agent: Detected planning loop (5 turns without deep action). Terminating action ${action.id}.`);
+                        if (consecutiveNonDeepTurns >= 8) {
+                            logger.warn(`Agent: Detected planning loop (8 turns without deep action). Terminating action ${action.id}.`);
                             break;
                         }
                     } else {
@@ -11639,8 +11639,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     const currentStepSignatures = decision.tools.map(t => `${t.name}:${JSON.stringify(t.metadata)}`).join('|');
                     if (currentStepSignatures === lastStepToolSignatures) {
                         loopCounter++;
-                        if (loopCounter >= 3) {
-                            logger.warn(`Agent: Detected persistent redundant logic loop (3x). Breaking action ${action.id}.`);
+                        const loopLimit = hasDeepToolThisTurn ? 5 : 3;
+                        if (loopCounter >= loopLimit) {
+                            logger.warn(`Agent: Detected persistent redundant logic loop (${loopLimit}x). Breaking action ${action.id}.`);
 
                             // PROGRESS FEEDBACK: Let user know we got stuck
                             await this.sendProgressFeedback(action, 'recovering', 'Got stuck in a loop. Learning from this to improve...');
