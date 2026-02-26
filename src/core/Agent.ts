@@ -46,6 +46,8 @@ import { TForceSystem } from '../codes/tforce/TForceSystem';
 import { MessageBus } from './MessageBus';
 import { BookLogManager } from '../memory/BookLogManager';
 import { registerBookLogSkills } from '../skills/bookLogTools';
+import { registerChannelManagementSkills } from '../skills/channelManagement';
+import { ChannelRegistry } from '../channels/ChannelRegistry';
 
 /**
  * Tracks users who have interacted with the bot across channels.
@@ -88,6 +90,7 @@ export class Agent {
     public messageBus: MessageBus;
     public tforce: TForceSystem;
     public bookLog: BookLogManager;
+    public channelRegistry: ChannelRegistry;
     public isRunning: boolean = false;
     private lastActionTime: number;
     private lastHeartbeatAt: number = 0;
@@ -253,6 +256,8 @@ export class Agent {
         );
 
         this.bookLog = new BookLogManager(this.config.getDataHome());
+        this.channelRegistry = new ChannelRegistry(path.join(this.config.getDataHome(), 'plugins', 'channels'));
+        this.channelRegistry.setAgent(this);
 
         // Configure fast model for internal reasoning (reviews, reflections, classification)
         const fastModel = this.config.get('fastModelName');
@@ -377,6 +382,7 @@ export class Agent {
             this.setupChannels();
         }
         this.registerInternalSkills();
+        this.channelRegistry.discoverPlugins().catch(e => logger.error(`Failed to discover channel plugins: ${e}`));
     }
 
     private initializeStorage() {
@@ -510,8 +516,11 @@ export class Agent {
             if (newConfig.telegramToken) {
                 logger.info('Agent: Starting new Telegram instance...');
                 this.telegram = new TelegramChannel(newConfig.telegramToken, this);
+                this.channelRegistry.register('telegram', this.telegram);
                 this.telegram.start().catch(e => logger.error(`Failed to start Telegram: ${e}`));
             }
+        } else if (this.telegram) {
+            this.channelRegistry.register('telegram', this.telegram);
         }
 
         // 2. Discord
@@ -519,13 +528,17 @@ export class Agent {
             if (this.discord) {
                 logger.info('Agent: Discord token changed, stopping old instance...');
                 await this.discord.stop();
+                this.channelRegistry.remove('discord');
                 this.discord = undefined;
             }
             if (newConfig.discordToken) {
                 logger.info('Agent: Starting new Discord instance...');
                 this.discord = new DiscordChannel(newConfig.discordToken, this);
+                this.channelRegistry.register('discord', this.discord);
                 this.discord.start().catch(e => logger.error(`Failed to start Discord: ${e}`));
             }
+        } else if (this.discord) {
+            this.channelRegistry.register('discord', this.discord);
         }
 
         // 3. Slack
@@ -533,13 +546,17 @@ export class Agent {
             if (this.slack) {
                 logger.info('Agent: Slack token changed, stopping old instance...');
                 await this.slack.stop();
+                this.channelRegistry.remove('slack');
                 this.slack = undefined;
             }
             if (newConfig.slackBotToken) {
                 logger.info('Agent: Starting new Slack instance...');
                 this.slack = new SlackChannel(newConfig.slackBotToken, newConfig.slackAppToken, this);
+                this.channelRegistry.register('slack', this.slack);
                 this.slack.start().catch(e => logger.error(`Failed to start Slack: ${e}`));
             }
+        } else if (this.slack) {
+            this.channelRegistry.register('slack', this.slack);
         }
 
         // 4. WhatsApp
@@ -547,12 +564,16 @@ export class Agent {
             if (oldConfig.whatsappEnabled && this.whatsapp) {
                 logger.info('Agent: WhatsApp disabled, stopping...');
                 await this.whatsapp.stop();
+                this.channelRegistry.remove('whatsapp');
                 this.whatsapp = undefined;
             } else if (newConfig.whatsappEnabled && !this.whatsapp) {
                 logger.info('Agent: WhatsApp enabled, starting...');
                 this.whatsapp = new WhatsAppChannel(this);
+                this.channelRegistry.register('whatsapp', this.whatsapp);
                 this.whatsapp.start().catch(e => logger.error(`Failed to start WhatsApp: ${e}`));
             }
+        } else if (this.whatsapp) {
+            this.channelRegistry.register('whatsapp', this.whatsapp);
         }
 
         // 5. Email
@@ -560,12 +581,16 @@ export class Agent {
             if (oldConfig.emailEnabled && this.email) {
                 logger.info('Agent: Email disabled, stopping...');
                 await this.email.stop();
+                this.channelRegistry.remove('email');
                 this.email = undefined;
             } else if (newConfig.emailEnabled && !this.email) {
                 logger.info('Agent: Email enabled, starting...');
                 this.email = new EmailChannel(this);
+                this.channelRegistry.register('email', this.email);
                 this.email.start().catch(e => logger.error(`Failed to start Email: ${e}`));
             }
+        } else if (this.email) {
+            this.channelRegistry.register('email', this.email);
         }
     }
 
@@ -589,6 +614,31 @@ export class Agent {
         if (match?.metadata?.chatId && /^-?\d+$/.test(String(match.metadata.chatId))) {
             logger.info(`resolveTelegramChatId: Resolved "${trimmed}" → ${match.metadata.chatId}`);
             return { id: String(match.metadata.chatId), resolved: true };
+        }
+        return null;
+    }
+
+    /**
+     * Resolve an Email address — if the agent passed a name instead of an address,
+     * look up the real address from recent memory.
+     * Returns the email address string, or null if unresolvable.
+     */
+    private resolveEmailAddress(input: string): string | null {
+        const trimmed = String(input).trim().toLowerCase();
+        // Simple regex check for email format
+        if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+            return trimmed;
+        }
+        // Name passed — search memory for the real address
+        const recentMemories = this.memory.searchMemory('short');
+        const match = recentMemories.find((m: any) =>
+            m.metadata?.source === 'email' &&
+            (m.metadata?.senderName?.toLowerCase() === trimmed ||
+                m.content?.toLowerCase().includes(trimmed))
+        );
+        if (match?.metadata?.sourceId && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(match.metadata.sourceId))) {
+            logger.info(`resolveEmailAddress: Resolved "${trimmed}" → ${match.metadata.sourceId}`);
+            return String(match.metadata.sourceId);
         }
         return null;
     }
@@ -771,11 +821,11 @@ export class Agent {
         return { allowed: true };
     }
 
-        private registerInternalSkills() {
-            registerBookLogSkills(this);
-    
-            // ═══════════════════════════════════════════
-            // Channel Messaging & Reaction Skills
+            private registerInternalSkills() {
+                registerBookLogSkills(this);
+                registerChannelManagementSkills(this);
+        
+                // ═══════════════════════════════════════════            // Channel Messaging & Reaction Skills
         // Workers don't have channel connections — skip these.
         // ═══════════════════════════════════════════
         if (!this.isWorker) {
@@ -1076,13 +1126,20 @@ export class Agent {
                 description: 'Send an email via configured SMTP account',
                 usage: 'send_email(to, subject, message, inReplyTo?, references?) (Note: inReplyTo should be the Message-ID of the email you are responding to for threading)',
                 handler: async (args: any) => {
-                    const to = args.to || args.email || args.recipient;
+                    let to = args.to || args.email || args.recipient;
                     const subject = args.subject || this.config.get('emailDefaultSubject') || 'OrcBot response';
                     const message = args.message || args.content || args.text || args.body;
                     const inReplyTo = args.inReplyTo;
                     const references = args.references;
 
-                    if (!to) return 'Error: Missing recipient email address (to).';
+                    // Resolve 'to' address contextually if vague or missing
+                    if (!to || to === 'Frederick' || to === 'user' || to === 'sender' || to === '12345') {
+                        to = this.resolveContextualChatId(to, 'email');
+                    } else {
+                        to = this.resolveEmailAddress(String(to));
+                    }
+
+                    if (!to) return 'Error: Missing or unresolvable recipient email address (to).';
                     if (!message) return 'Error: Missing message content.';
                     const emailChannel = this.getOrCreateEmailChannel();
                     if (!emailChannel) return 'Email channel not available. Configure SMTP first.';

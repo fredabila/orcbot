@@ -88,6 +88,22 @@ export class MessageBus {
             if (msg.isOwner && msg.source === 'whatsapp') {
                 taskDescription += `\n\nCRITICAL: You MUST use 'send_whatsapp' to reply. Do NOT send cross-channel notifications.`;
             }
+        } else if (msg.source === 'email') {
+            const subject = msg.metadata?.subject || '(no subject)';
+            taskDescription = `Respond to email from ${sender} with subject "${subject}": "${msg.content}"${msg.replyContext ? ' ' + msg.replyContext : ''}
+
+Goal: Provide a professional and helpful response. 
+Technical Instructions:
+- Use 'send_email' to respond.
+- **SUBJECT**: Use the same subject "${subject}" (optionally prepended with "Re: ").
+- **THREADING**: Pass the original message ID "${msg.messageId}" as 'inReplyTo' and 'references' to ensure the reply threads correctly.`;
+        } else if (msg.metadata?.type === 'status' && msg.source === 'whatsapp') {
+            priority = 3;
+            taskDescription = `WhatsApp STATUS update from ${sender} (ID: ${msg.messageId}): "${msg.content}". 
+
+Goal: Decide if you should reply to this status based on our history and my persona. 
+If yes, you MUST use 'reply_whatsapp_status' with the JID '${msg.sourceId}' and a short, conversational reply message. 
+The reply will appear as a proper status reply inside their status thread, not as a standalone DM.`;
         } else if (msg.isExternal) {
             priority = 5; // Lower priority for external observation
             taskDescription = `EXTERNAL ${msg.source.toUpperCase()} MESSAGE from ${sender} (ID: ${msg.messageId}): "${baseContent}"${msg.mediaAnalysis ? ` [Media analysis: ${msg.mediaAnalysis}]` : ''}${msg.replyContext ? ' ' + msg.replyContext : ''}. 

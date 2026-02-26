@@ -3,6 +3,8 @@ import { logger } from '../utils/logger';
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
+import fs from 'fs';
+import path from 'path';
 
 interface ParsedEmail {
     from: string;
@@ -12,6 +14,7 @@ interface ParsedEmail {
     text: string;
     uid: string;
     headers?: any;
+    attachments?: string[];
 }
 
 export class EmailChannel implements IChannel {
@@ -56,8 +59,36 @@ export class EmailChannel implements IChannel {
         await this.sendEmail(to, subject, message);
     }
 
-    public async sendFile(_to: string, _filePath: string, _caption?: string): Promise<void> {
-        throw new Error('Email attachments are not supported yet');
+    public async sendFile(to: string, filePath: string, caption?: string): Promise<void> {
+        if (!fs.existsSync(filePath)) {
+            throw new Error(`File not found: ${filePath}`);
+        }
+
+        const subject = this.agent.config.get('emailDefaultSubject') || 'File from OrcBot';
+        const transporter = this.createSmtpTransporter();
+        const fromAddress = this.agent.config.get('emailAddress') || this.agent.config.get('smtpUsername');
+        const fromName = this.agent.config.get('emailFromName') || this.agent.config.get('agentName') || 'OrcBot';
+
+        const mailOptions: any = {
+            from: `"${fromName}" <${fromAddress}>`,
+            to,
+            subject,
+            text: caption || 'Please find the attached file.',
+            attachments: [
+                {
+                    filename: path.basename(filePath),
+                    path: filePath
+                }
+            ]
+        };
+
+        try {
+            await transporter.sendMail(mailOptions);
+            logger.info(`EmailChannel: Sent file ${filePath} to ${to}`);
+        } catch (error: any) {
+            logger.error(`EmailChannel: Failed to send file to ${to}: ${error.message}`);
+            throw error;
+        }
     }
 
     public async sendTypingIndicator(_to: string): Promise<void> {
@@ -365,7 +396,31 @@ export class EmailChannel implements IChannel {
                             const text = parsed.text || '(no text content)';
                             const headers = parsed.headers;
 
-                            const emailInfo: ParsedEmail = { from, subject, messageId, inReplyTo, text, uid: String(message.uid), headers };
+                            // Handle attachments
+                            const mediaPaths: string[] = [];
+                            if (parsed.attachments && parsed.attachments.length > 0) {
+                                const downloadsDir = path.join(this.agent.config.getDataHome(), 'downloads');
+                                if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
+
+                                for (const att of parsed.attachments) {
+                                    const safeName = att.filename ? att.filename.replace(/[^a-z0-9.]/gi, '_') : `email_att_${Date.now()}`;
+                                    const attPath = path.join(downloadsDir, safeName);
+                                    fs.writeFileSync(attPath, att.content);
+                                    mediaPaths.push(attPath);
+                                    logger.info(`EmailChannel: Saved attachment to ${attPath}`);
+                                }
+                            }
+
+                            const emailInfo: ParsedEmail = { 
+                                from, 
+                                subject, 
+                                messageId, 
+                                inReplyTo, 
+                                text, 
+                                uid: String(message.uid), 
+                                headers,
+                                attachments: mediaPaths
+                            };
 
                             // Process the email
                             await this.handleInboundEmail(emailInfo);
@@ -389,58 +444,33 @@ export class EmailChannel implements IChannel {
     }
 
     private async handleInboundEmail(email: ParsedEmail): Promise<void> {
-        const autoReplyEnabled = this.agent.config.get('emailAutoReplyEnabled') === true;
-        const sessionScopeId = `scope:channel-peer:email:${email.from.toLowerCase()}`;
-
-        this.agent.memory.saveMemory({
-            id: `email-${email.uid}`,
-            type: 'short',
-            content: `Email from ${email.from}: "${(email.text || '').slice(0, 250)}"`,
-            timestamp: new Date().toISOString(),
-            metadata: {
-                source: 'email',
-                sourceId: email.from,
-                senderName: email.from,
-                sessionScopeId,
-                subject: email.subject,
-                messageId: email.messageId,
-                inReplyTo: email.inReplyTo,
-                uid: email.uid
-            }
-        });
-
-        if (!autoReplyEnabled) {
-            logger.info(`EmailChannel: Auto-reply is disabled. Email from ${email.from} ("${email.subject}") recorded in memory but no task pushed.`);
-            return;
-        }
-
-        const skipReason = this.shouldSkipAutoReply(email);
-        if (skipReason) {
-            logger.info(`EmailChannel: Skipping auto-reply for "${email.subject}" - Reason: ${skipReason}`);
-            return;
-        }
-
         // Run fast AI classifier to check if the email actually needs a response (filters newsletters, pure info emails, etc.)
+        // We do this BEFORE dispatching to determine if we should suppress the automated task.
         const aiSkipReason = await this.classifyEmailNeed(email);
+        const shouldSuppressTask = !!aiSkipReason || !!this.shouldSkipAutoReply(email);
+
         if (aiSkipReason) {
             logger.info(`EmailChannel: AI Classifier skipped auto-reply for "${email.subject}" - Reason: ${aiSkipReason}`);
-            return;
         }
 
-        await this.agent.pushTask(
-            `Respond to email from ${email.from} with subject "${email.subject}" (MsgID: ${email.messageId}): "${(email.text || '').slice(0, 1000)}"`,
-            10,
-            {
-                source: 'email',
-                sourceId: email.from,
-                senderName: email.from,
-                sessionScopeId,
+        // Dispatch via unified MessageBus
+        await this.agent.messageBus.dispatch({
+            source: 'email',
+            sourceId: email.from,
+            senderName: email.from,
+            content: email.text,
+            messageId: email.messageId || `uid-${email.uid}`,
+            replyContext: email.inReplyTo ? `[In reply to: ${email.inReplyTo}]` : undefined,
+            mediaPaths: email.attachments || [],
+            metadata: {
                 subject: email.subject,
-                inReplyTo: email.messageId,
-                references: email.messageId,
-                requiresResponse: true
+                uid: email.uid,
+                inReplyTo: email.inReplyTo,
+                references: email.headers?.get('references'),
+                suppressReply: shouldSuppressTask,
+                aiSkipReason: aiSkipReason || undefined
             }
-        );
+        });
     }
 
     private shouldSkipAutoReply(email: ParsedEmail): string | false {

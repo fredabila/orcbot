@@ -42,6 +42,8 @@ export class WhatsAppChannel implements IChannel {
     private profilingEnabled: boolean = false;
     // Track last user message timestamps for suppressing agent replies when user is active
     private lastUserMessageTimestamps: Map<string, number> = new Map();
+    // Track last status task timestamps to avoid piling up status replies
+    private lastStatusTaskTimestamps: Map<string, number> = new Map();
 
     constructor(agent: Agent) {
         this.agent = agent;
@@ -326,20 +328,32 @@ export class WhatsAppChannel implements IChannel {
                             this.statusRepliesByParticipant.set(participant, statusMetadata);
                             this.statusRepliesById.set(messageId, statusMetadata);
 
-                            // Dispatch via MessageBus for unified memory and task creation
-                            await this.agent.messageBus.dispatch({
-                                source: 'whatsapp',
-                                sourceId: participant,
-                                senderName: participant,
-                                content: text,
-                                messageId,
-                                metadata: {
-                                    type: 'status',
-                                    statusContentType: statusMetadata.contentType,
-                                    statusHasMedia: statusMetadata.hasMedia,
-                                    statusTimestamp: statusMetadata.timestamp
-                                }
-                            });
+                            // COOL DOWN: Don't pile up tasks for every status update.
+                            // Default to 12 hours between status-check tasks for the same person.
+                            const minIntervalHrs = Number(this.agent.config.get('whatsappStatusTaskMinIntervalHours') || 12);
+                            const lastTaskAt = this.lastStatusTaskTimestamps.get(participant) || 0;
+                            const now = Date.now();
+                            
+                            if (now - lastTaskAt < minIntervalHrs * 60 * 60 * 1000) {
+                                logger.debug(`WhatsApp: Skipping status task for ${participant} (cooldown active)`);
+                            } else {
+                                this.lastStatusTaskTimestamps.set(participant, now);
+                                
+                                // Dispatch via MessageBus for unified memory and task creation
+                                await this.agent.messageBus.dispatch({
+                                    source: 'whatsapp',
+                                    sourceId: participant,
+                                    senderName: participant,
+                                    content: text,
+                                    messageId,
+                                    metadata: {
+                                        type: 'status',
+                                        statusContentType: statusMetadata.contentType,
+                                        statusHasMedia: statusMetadata.hasMedia,
+                                        statusTimestamp: statusMetadata.timestamp
+                                    }
+                                });
+                            }
                             return;
                         }
 
@@ -607,25 +621,34 @@ export class WhatsAppChannel implements IChannel {
             throw new Error('WhatsApp socket not connected');
         }
 
+        // Ensure JID is properly formatted
+        let jid = participantJid;
+        if (!jid.includes('@')) {
+            jid = `${jid}@s.whatsapp.net`;
+        }
+
         // Look up the cached message key for this participant's latest status
-        const statusMetadata = this.statusRepliesByParticipant.get(participantJid);
+        const statusMetadata = this.statusRepliesByParticipant.get(jid);
         if (!statusMetadata) {
-            logger.warn(`WhatsAppChannel: No cached status key for ${participantJid}. Falling back to regular DM.`);
+            logger.warn(`WhatsAppChannel: No cached status key for ${jid}. Falling back to regular DM.`);
             // Graceful degradation: send as a DM with context prefix so user knows it's related to their status
-            await this.sendMessage(participantJid, `[Re: your status] ${message}`);
+            await this.sendMessage(jid, `[Re: your status] ${message}`);
             return;
         }
 
-        const ownerJid = this.sock.user?.id;
-
         try {
+            // Convert markdown to WhatsApp-native formatting
+            const formatted = hasMarkdown(message) ? renderMarkdown(message, 'whatsapp') : message;
+            // Add agent prefix
+            const prefixedMessage = `${this.AGENT_MESSAGE_PREFIX}${formatted}`;
+
             // The correct Baileys method to reply to a status so it appears as a DM reply:
             // - Send to the participantJid (the DM thread)
             // - Provide `quoted` pointing to the original status message
             await this.sock.sendMessage(
-                participantJid,
+                jid,
                 {
-                    text: message,
+                    text: prefixedMessage,
                     // `quoted` creates the contextual reply bubble referencing the original status
                     quoted: {
                         key: statusMetadata.key,
@@ -633,9 +656,9 @@ export class WhatsAppChannel implements IChannel {
                     }
                 }
             );
-            logger.info(`WhatsAppChannel: Sent status reply to ${participantJid}'s status`);
+            logger.info(`WhatsAppChannel: Sent status reply to ${jid}'s status`);
         } catch (error) {
-            logger.error(`WhatsAppChannel: Error sending status reply to ${participantJid}: ${error}`);
+            logger.error(`WhatsAppChannel: Error sending status reply to ${jid}: ${error}`);
             throw error;
         }
     }
