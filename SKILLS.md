@@ -29,7 +29,9 @@ This file lists the available skills for the agent.
 - **run_command(command, cwd?)**: Execute shell commands on the host system (subject to allow/deny lists). Automatically extracts directory from "cd /path && command" or "cd /path ; command" patterns and uses as working directory.
 - **get_system_info()**: Return system time/date and OS info.
 - **set_config(key, value)**: Persist configuration values.
-- **execute_typescript(code, args?)**: Compile and execute a free-form TypeScript block in the agent's Node.js environment. Saves to a persistent `scratchpad.ts` file, allowing you to build up complex reusable logic or import arbitrary NPM modules without creating a formal plugin.
+- **execute_typescript(code?, args?, filename?)**: Compile and execute a free-form TypeScript block in the agent's Node.js environment. If `filename` is not provided, code is saved to a persistent `scratchpad.ts` file. If `filename` (e.g., "script.ts") is provided with `code`, it saves the script to a scripts directory for reuse. If only `filename` is provided without `code`, it executes the previously saved script. Allowing you to build up complex reusable logic or import arbitrary NPM modules without creating a formal plugin.
+- **execute_python_code(code?, filename?)**: Execute Python code in an isolated local virtual environment. Provide `code` to run it directly. Optionally provide `filename` (e.g., "script.py") to save the code for future reuse. If you only provide `filename` without `code`, it will execute the previously saved script.
+- **install_python_package(package)**: Install a Python package (via pip) into the local virtual environment so it can be used by execute_python_code.
 - **manage_skills(skill_definition)**: Append new skill definitions to SKILLS.md.
 - **self_repair_skill(skillName, errorMessage)**: Diagnose and fix a failing plugin skill.
 - **tweak_skill(skillName, issue, fix?)**: Patch any skill — built-in or plugin — that keeps failing. Generates and saves a replacement wrapper plugin, reloads it immediately. Use when a core skill has a fixable argument-shape or API error.

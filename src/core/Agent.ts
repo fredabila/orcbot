@@ -24,6 +24,7 @@ import { UsagePing } from './UsagePing';
 import { AgenticUser } from './AgenticUser';
 import { KnowledgeStore } from '../memory/KnowledgeStore';
 import { memoryToolsSkills } from '../skills/memoryTools';
+import { pythonToolsSkills } from '../skills/pythonTools';
 import { canvasToolsSkills } from '../skills/canvasTools';
 import { ToolsManager } from './ToolsManager';
 import { Cron } from 'croner';
@@ -4750,35 +4751,50 @@ Output JSON now:`;
                     // Skill: Execute TypeScript
                     this.skills.registerSkill({
                         name: 'execute_typescript',
-                        description: 'Write, compile, and execute TypeScript code on the fly within the agent\'s Node.js environment. The code is saved to a persistent `scratchpad.ts` file in the data directory before execution. This allows you to import installed modules, write complex custom logic, and interact with the filesystem or APIs natively without creating a formal plugin. The code MUST export a default async function: `export default async function(args, context) { ... }`.',
-                        usage: 'execute_typescript(code: string, args?: object)',
+                        description: 'Write, compile, and execute TypeScript code on the fly within the agent\'s Node.js environment. If "filename" is not provided, code is saved to a persistent `scratchpad.ts` file in the data directory. If "filename" (e.g., "myscript.ts") is provided with "code", it saves the script to a scripts directory for reuse. If only "filename" is provided without "code", it executes the previously saved script. The code MUST export a default async function: `export default async function(args, context) { ... }`.',
+                        usage: 'execute_typescript(code?: string, args?: object, filename?: string)',
                         isResearch: true,
                         isDeep: true,
                         isDangerous: true,
                         isElevated: true,
                         handler: async (args: any) => {
                             const code = args.code || args.text || args.script;
-                            if (!code) return 'Error: Missing code to execute.';
+                            const filename = args.filename || args.name;
+                            
+                            if (!code && !filename) return 'Error: Missing code or filename to execute.';
         
-                            const scratchpadPath = path.join(this.config.getDataHome(), 'scratchpad.ts');
+                            const scriptsDir = path.join(this.config.getDataHome(), 'scripts');
+                            let targetScriptPath = path.join(this.config.getDataHome(), 'scratchpad.ts'); // Default
+                            
+                            if (filename) {
+                                const safeFilename = path.basename(filename);
+                                if (!safeFilename.endsWith('.ts')) {
+                                    return 'Error: Filename must end with .ts';
+                                }
+                                targetScriptPath = path.join(scriptsDir, safeFilename);
+                            }
                             
                             try {
                                 // Ensure directory exists
-                                const dir = path.dirname(scratchpadPath);
+                                const dir = path.dirname(targetScriptPath);
                                 if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
         
-                                fs.writeFileSync(scratchpadPath, code);
+                                if (code) {
+                                    fs.writeFileSync(targetScriptPath, code);
+                                } else if (!fs.existsSync(targetScriptPath)) {
+                                    return `Error: Script '${filename}' does not exist and no code was provided to create it.`;
+                                }
                                 
                                 // Clear require cache so we can run new code
                                 try {
-                                    const resolvedPath = require.resolve(scratchpadPath);
+                                    const resolvedPath = require.resolve(targetScriptPath);
                                     delete require.cache[resolvedPath];
                                 } catch (e) {
                                     // First time require.resolve might fail if it's not cached yet, which is fine
                                 }
                                 
                                 // This relies on ts-node being registered by SkillsManager
-                                const module = require(scratchpadPath);
+                                const module = require(targetScriptPath);
                                 const func = module.default || module.handler || (typeof module === 'function' ? module : null);
                                 
                                 if (typeof func !== 'function') {
@@ -6497,6 +6513,12 @@ Be thorough and academic.`;
         for (const skill of canvasToolsSkills) {
             this.skills.registerSkill(skill);
             logger.info(`Registered canvas tool: ${skill.name}`);
+        }
+
+        // Python Environment Tools
+        for (const skill of pythonToolsSkills) {
+            this.skills.registerSkill(skill);
+            logger.info(`Registered python tool: ${skill.name}`);
         }
 
         // ─── RAG Knowledge Store Skills ──────────────────────────────────
