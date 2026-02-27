@@ -25,6 +25,13 @@ This file lists the available skills for the agent.
 - **get_discord_guilds()**: [CORE MESSAGING] Get the list of Discord servers (guilds) the bot is in.
 - **get_discord_channels(guild_id)**: [CORE MESSAGING] Get the list of text channels in a Discord server.
 
+## Email Management
+- **send_email(to, subject, message, inReplyTo?, references?)**: [CORE MESSAGING] Send an email via configured SMTP account.
+- **search_emails({ query?, sender?, subject?, daysAgo?, unreadOnly?, limit? })**: [EMAIL TOOL] Search for emails in the inbox. Use `query` for body/text search.
+- **fetch_email(uid)**: [EMAIL TOOL] Fetch the full content of a specific email by its IMAP UID.
+- **index_emails_to_knowledge_base({ query?, sender?, subject?, daysAgo?, limit?, collection? })**: [EMAIL TOOL] Search and ingest emails into the RAG Knowledge Store for semantic search.
+- **generate_email_report({ topic, emails?, sender?, subject?, query?, daysAgo? })**: [EMAIL TOOL] Analyze multiple emails and generate a synthesized report/summary.
+
 ## System & Configuration
 - **run_command(command, cwd?)**: [SYSTEM/OS LEVEL] Execute shell commands on the host system (subject to allow/deny lists). Automatically extracts directory from "cd /path && command" or "cd /path ; command" patterns and uses as working directory.
 - **get_system_info()**: [SYSTEM/OS LEVEL] Return system time/date and OS info.

@@ -89,6 +89,7 @@ export class MessageBus {
                 taskDescription += `\n\nCRITICAL: You MUST use 'send_whatsapp' to reply. Do NOT send cross-channel notifications.`;
             }
         } else if (msg.source === 'email') {
+            priority = 5; // Lower priority than direct IMs
             const subject = msg.metadata?.subject || '(no subject)';
             taskDescription = `Respond to email from ${sender} with subject "${subject}": "${msg.content}"${msg.replyContext ? ' ' + msg.replyContext : ''}
 

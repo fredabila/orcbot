@@ -1177,19 +1177,20 @@ export class Agent {
             // Skill: Search Emails
             this.skills.registerSkill({
                 name: 'search_emails',
-                description: 'Search for and read emails from the inbox. Useful for checking if a specific email arrived or reading recent history.',
-                usage: 'search_emails({ sender?, subject?, daysAgo:number?, unreadOnly:boolean?, limit:number? })',
+                description: 'Search for and read emails from the inbox. Useful for checking if a specific email arrived or reading recent history. Use query to search the email body.',
+                usage: 'search_emails({ query?, sender?, subject?, daysAgo:number?, unreadOnly:boolean?, limit:number? })',
                 handler: async (args: any) => {
                     const emailChannel = this.getOrCreateEmailChannel();
                     if (!emailChannel) return 'Email channel not available. Configure IMAP first.';
 
                     try {
                         const emails = await emailChannel.searchEmails({
+                            query: args.query || args.text || args.content,
                             sender: args.sender,
                             subject: args.subject,
                             daysAgo: args.daysAgo ? Number(args.daysAgo) : undefined,
-                            unreadOnly: args.unreadOnly === true || args.unreadOnly === 'true',
-                            limit: args.limit ? Number(args.limit) : 5
+                            unreadOnly: args.unreadOnly === true || args.unreadOnly === 'true' || args.unread === true,
+                            limit: args.limit ? Number(args.limit) : 10
                         });
 
                         if (!emails || emails.length === 0) {
@@ -1206,6 +1207,138 @@ export class Agent {
                         return result;
                     } catch (err: any) {
                         return `Error searching emails: ${err.message}`;
+                    }
+                }
+            });
+
+            // Skill: Fetch Email
+            this.skills.registerSkill({
+                name: 'fetch_email',
+                description: 'Fetch the full content of a specific email by its UID (which you get from search_emails).',
+                usage: 'fetch_email(uid)',
+                handler: async (args: any) => {
+                    const emailChannel = this.getOrCreateEmailChannel();
+                    if (!emailChannel) return 'Email channel not available. Configure IMAP first.';
+                    const uid = args.uid || args.id;
+                    if (!uid) return 'Error: Missing email UID.';
+
+                    try {
+                        const email = await emailChannel.getEmailByUid(String(uid));
+                        if (!email) return `Email with UID ${uid} not found.`;
+
+                        let result = `--- EMAIL (UID: ${email.uid}) ---\n`;
+                        result += `From: ${email.from}\n`;
+                        result += `Subject: ${email.subject}\n\n`;
+                        result += email.text;
+                        return result;
+                    } catch (err: any) {
+                        return `Error fetching email: ${err.message}`;
+                    }
+                }
+            });
+
+            // Skill: Index Emails to Knowledge Base
+            this.skills.registerSkill({
+                name: 'index_emails_to_knowledge_base',
+                description: 'Search for emails and index their content into the Knowledge Store for semantic search. This allows you to perform semantic search on emails later using rag_search.',
+                usage: 'index_emails_to_knowledge_base({ query?, sender?, subject?, daysAgo:number?, limit:number?, collection? })',
+                handler: async (args: any) => {
+                    const emailChannel = this.getOrCreateEmailChannel();
+                    if (!emailChannel) return 'Email channel not available. Configure IMAP first.';
+                    
+                    if (!this.knowledgeStore || !this.knowledgeStore.isEnabled()) {
+                        return 'Knowledge Store is not enabled. Configure embedding API key first.';
+                    }
+
+                    try {
+                        const emails = await emailChannel.searchEmails({
+                            query: args.query,
+                            sender: args.sender,
+                            subject: args.subject,
+                            daysAgo: args.daysAgo ? Number(args.daysAgo) : undefined,
+                            unreadOnly: false,
+                            limit: args.limit ? Number(args.limit) : 10
+                        });
+
+                        if (!emails || emails.length === 0) {
+                            return 'No emails found matching your criteria to index.';
+                        }
+
+                        let indexedCount = 0;
+                        const collection = args.collection || 'emails';
+
+                        for (const email of emails) {
+                            const content = `From: ${email.from}\nSubject: ${email.subject}\n\n${email.text}`;
+                            const source = `email:${email.uid}`;
+                            // Use ingest method which is already part of KnowledgeStore
+                            await this.knowledgeStore.ingest(content, source, collection, {
+                                title: email.subject,
+                                format: 'email',
+                                tags: ['email', email.from]
+                            });
+                            indexedCount++;
+                        }
+
+                        return `Successfully indexed ${indexedCount} emails into collection "${collection}". You can now search them using rag_search.`;
+                    } catch (err: any) {
+                        return `Error indexing emails: ${err.message}`;
+                    }
+                }
+            });
+
+            // Skill: Generate Email Report
+            this.skills.registerSkill({
+                name: 'generate_email_report',
+                description: 'Analyze multiple emails and generate a synthesized report/summary based on their content.',
+                usage: 'generate_email_report({ topic, emails: array_of_uids?, sender?, subject?, query?, daysAgo:number? })',
+                handler: async (args: any) => {
+                    const emailChannel = this.getOrCreateEmailChannel();
+                    if (!emailChannel) return 'Email channel not available. Configure IMAP first.';
+
+                    try {
+                        let targetEmails: any[] = [];
+
+                        if (args.emails && Array.isArray(args.emails)) {
+                            // Fetch specific UIDs
+                            for (const uid of args.emails) {
+                                try {
+                                    const email = await emailChannel.getEmailByUid(String(uid));
+                                    if (email) targetEmails.push(email);
+                                } catch (e) {}
+                            }
+                        }
+
+                        // If no UIDs provided or we still want to search
+                        if (targetEmails.length === 0) {
+                            targetEmails = await emailChannel.searchEmails({
+                                query: args.query,
+                                sender: args.sender,
+                                subject: args.subject,
+                                daysAgo: args.daysAgo ? Number(args.daysAgo) : 7,
+                                limit: args.limit ? Number(args.limit) : 20
+                            });
+                        }
+
+                        if (!targetEmails || targetEmails.length === 0) {
+                            return 'No emails found to generate a report from.';
+                        }
+
+                        const topic = args.topic || 'General summary of these emails';
+                        // Limit individual email text to avoid overwhelming context
+                        const emailsContext = targetEmails.map((e, i) => 
+                            `--- EMAIL ${i+1} (UID: ${e.uid}) ---\nFrom: ${e.from}\nSubject: ${e.subject}\n\n${e.text.substring(0, 4000)}`
+                        ).join('\n\n');
+
+                        const systemPrompt = `You are an expert analyst. Your task is to generate a detailed, structured report based on the provided email thread/content.
+The report should focus on: ${topic}
+Organize the report with clear headings, bullet points, and a summary. Focus on action items, key decisions, and timelines if available.`;
+
+                        // Use the agent's LLM to generate the report
+                        const report = await this.llm.callFast(emailsContext, systemPrompt);
+                        return `## Email Synthesis Report\n\nTopic: ${topic}\nBased on ${targetEmails.length} emails.\n\n${report}`;
+
+                    } catch (err: any) {
+                        return `Error generating report: ${err.message}`;
                     }
                 }
             });
@@ -12558,10 +12691,14 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         }
 
                         if (isChannelSend && isRecoveryDeliveryTask && wasSuccessful && remainingToolsInBatch === 0) {
-                            logger.info(`Agent: Channel message sent for recovery task ${action.id}. Terminating immediately to prevent duplicate recovery sends.`);
-                            goalsMet = true;
-                            forceBreak = true;
-                            break;
+                            if (goalsMet || taskComplexity === 'trivial') {
+                                logger.info(`Agent: Channel message sent for recovery task ${action.id}. Terminating as goals are met.`);
+                                goalsMet = true;
+                                forceBreak = true;
+                                break;
+                            } else {
+                                logger.info(`Agent: Channel message sent for recovery task ${action.id}, but goals not yet met. Continuing to next step.`);
+                            }
                         }
 
                         // HARD BREAK after successful file delivery for file-centric tasks

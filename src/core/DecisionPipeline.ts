@@ -403,7 +403,24 @@ export class DecisionPipeline {
             return n === 'send_telegram' || n === 'send_whatsapp' || n === 'send_discord' || n === 'send_slack' || n === 'send_gateway_chat';
         });
         const hasAnyFileSend = uniqueTools.some(t => (t.name || '').toLowerCase().trim() === 'send_file');
-        const suppressFileOnlyByIntent = ctx.fileIntent === 'not_requested' && hasAnyFileSend && !hasAnyTextSend;
+        
+        // Check if we've already sent text in a previous step of this action.
+        // If we have, the "answer-first" requirement is satisfied for the action as a whole.
+        const hasAlreadySentTextInAction = ctx.messagesSent > 0;
+        
+        // Proof-of-work exception: If the agent actually created/generated something in this action,
+        // we should allow sending it even if text hasn't been sent yet.
+        const fileCreationTools = ['execute_python_code', 'generate_image', 'write_file', 'browser_screenshot'];
+        const hasCreatedFileInAction = (ctx.recentMemories || []).some(
+            m => m.id && m.id.startsWith(actionPrefix) && 
+            m.metadata?.tool && fileCreationTools.includes(String(m.metadata.tool))
+        );
+        
+        const suppressFileOnlyByIntent = ctx.fileIntent === 'not_requested' && 
+                                        hasAnyFileSend && 
+                                        !hasAnyTextSend && 
+                                        !hasAlreadySentTextInAction && 
+                                        !hasCreatedFileInAction;
 
         const maxToolLoops = this.config.get('maxToolLoops') || 5;
 

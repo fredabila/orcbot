@@ -4,21 +4,28 @@ import fs from 'fs';
 import os from 'os';
 import { logger } from '../utils/logger';
 
-const PYTHON_ENV_DIR = path.join(process.cwd(), 'src', 'plugins', 'python-env');
-const PYTHON_SCRIPTS_DIR = path.join(PYTHON_ENV_DIR, 'scripts');
-const PYTHON_EXEC = process.platform === 'win32' 
-    ? path.join(PYTHON_ENV_DIR, '.venv', 'Scripts', 'python.exe')
-    : path.join(PYTHON_ENV_DIR, '.venv', 'bin', 'python');
+function getPaths(context: any) {
+    const dataHome = context?.config?.getDataHome?.() || path.join(os.homedir(), '.orcbot');
+    const envDir = path.join(dataHome, 'plugins', 'python-env');
+    const scriptsDir = path.join(envDir, 'scripts');
+    const exec = process.platform === 'win32' 
+        ? path.join(envDir, '.venv', 'Scripts', 'python.exe')
+        : path.join(envDir, '.venv', 'bin', 'python');
+    const pip = process.platform === 'win32'
+        ? path.join(envDir, '.venv', 'Scripts', 'pip.exe')
+        : path.join(envDir, '.venv', 'bin', 'pip');
+    return { envDir, scriptsDir, exec, pip };
+}
 
 /**
  * Ensures the python environment directory exists
  */
-function ensureEnvDir() {
-    if (!fs.existsSync(PYTHON_ENV_DIR)) {
-        fs.mkdirSync(PYTHON_ENV_DIR, { recursive: true });
+function ensureEnvDir(envDir: string, scriptsDir: string) {
+    if (!fs.existsSync(envDir)) {
+        fs.mkdirSync(envDir, { recursive: true });
     }
-    if (!fs.existsSync(PYTHON_SCRIPTS_DIR)) {
-        fs.mkdirSync(PYTHON_SCRIPTS_DIR, { recursive: true });
+    if (!fs.existsSync(scriptsDir)) {
+        fs.mkdirSync(scriptsDir, { recursive: true });
     }
 }
 
@@ -27,6 +34,7 @@ function ensureEnvDir() {
  */
 export async function executePythonCodeSkill(args: any, context: any): Promise<string> {
     try {
+        const { envDir, scriptsDir, exec: PYTHON_EXEC } = getPaths(context);
         const code = args.code || args.script;
         const filename = args.filename || args.name;
         
@@ -34,7 +42,7 @@ export async function executePythonCodeSkill(args: any, context: any): Promise<s
             return 'Error: No Python code or filename provided. Use: execute_python_code code="print(\'hello\')" or execute_python_code filename="myscript.py"';
         }
 
-        ensureEnvDir();
+        ensureEnvDir(envDir, scriptsDir);
 
         // Check if venv exists
         if (!fs.existsSync(PYTHON_EXEC)) {
@@ -50,7 +58,7 @@ export async function executePythonCodeSkill(args: any, context: any): Promise<s
             if (!safeFilename.endsWith('.py')) {
                 return 'Error: Filename must end with .py';
             }
-            targetScriptPath = path.join(PYTHON_SCRIPTS_DIR, safeFilename);
+            targetScriptPath = path.join(scriptsDir, safeFilename);
 
             if (code) {
                 // If code is provided with filename, save/overwrite it
@@ -62,7 +70,7 @@ export async function executePythonCodeSkill(args: any, context: any): Promise<s
             }
         } else {
             // Create an ephemeral temporary file for the script
-            targetScriptPath = path.join(PYTHON_ENV_DIR, `temp_script_${Date.now()}.py`);
+            targetScriptPath = path.join(envDir, `temp_script_${Date.now()}.py`);
             fs.writeFileSync(targetScriptPath, code, 'utf-8');
             isEphemeral = true;
         }
@@ -94,7 +102,8 @@ export async function executePythonCodeSkill(args: any, context: any): Promise<s
                 if (code !== 0) {
                     resolve(`Python execution failed with exit code ${code}\n\nStandard Error:\n${stderr}\n\nStandard Output:\n${stdout}`);
                 } else {
-                    resolve(stdout || 'Execution completed successfully with no output.');
+                    const savedPathInfo = filename ? `\n[FILE SAVED AT: ${targetScriptPath}]` : '';
+                    resolve((stdout || 'Execution completed successfully with no output.') + savedPathInfo);
                 }
             });
             
@@ -121,6 +130,7 @@ export async function executePythonCodeSkill(args: any, context: any): Promise<s
  */
 export async function installPythonPackageSkill(args: any, context: any): Promise<string> {
     try {
+        const { envDir, pip: pipExec, exec: PYTHON_EXEC } = getPaths(context);
         const packageName = args.package || args.name;
         if (!packageName) {
             return 'Error: No package name provided. Use: install_python_package package="requests"';
@@ -131,11 +141,6 @@ export async function installPythonPackageSkill(args: any, context: any): Promis
         }
 
         return new Promise((resolve) => {
-            // pip install command
-            const pipExec = process.platform === 'win32'
-                ? path.join(PYTHON_ENV_DIR, '.venv', 'Scripts', 'pip.exe')
-                : path.join(PYTHON_ENV_DIR, '.venv', 'bin', 'pip');
-
             const pipProcess = spawn(pipExec, ['install', packageName]);
             
             let stdout = '';

@@ -71,6 +71,9 @@ export class Environment {
         const info = Environment.getInfo();
         const isWindows = info.platform === 'Windows';
         
+        // Resolve orcbot data home for agent awareness
+        const orcbotDataHome = process.env.ORCBOT_DATA_DIR || require('path').join(require('os').homedir(), '.orcbot');
+
         let prompt = `SYSTEM ENVIRONMENT:
 - Platform: ${info.platform} (${info.release}, ${info.arch})
 - CPU: ${info.cpuCount}x ${info.cpuModel}
@@ -80,10 +83,13 @@ export class Environment {
 - System Uptime: ${info.uptimeDays} days
 - Docker: ${info.isDocker ? 'Yes' : 'No'}
 - Default Shell: ${info.shell}
+- OrcBot Data Home: ${orcbotDataHome}
 
 WORKFLOW OPTIMIZATION:
 - If RAM is low (< 1GB free), favor streaming or chunked operations for large files.
 - If CPU load is high (> 2.0), prioritize essential tasks and avoid heavy parallelization.
+- **Internal Storage**: Use 'OrcBot Data Home' for your internal scratchpad, generated scripts, and persistent plugin data.
+- **Working Files**: When creating temporary scripts (e.g. for Python/Node), prefer subdirectories within 'OrcBot Data Home'.
 - Use your environment knowledge to inform the user if a requested task is likely to fail due to resource constraints.
 - You are encouraged to "complain" (provide feedback in reasoning) if the environment is severely constrained for the task at hand.
 

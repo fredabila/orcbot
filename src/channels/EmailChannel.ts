@@ -24,6 +24,8 @@ export class EmailChannel implements IChannel {
     private imapClient: ImapFlow | null = null;
     private imapReconnectTimer: NodeJS.Timeout | null = null;
     private processing = false;
+    private connectionTime = new Date();
+    private firstFetchDone = false;
 
     constructor(agent: any) {
         this.agent = agent;
@@ -34,6 +36,8 @@ export class EmailChannel implements IChannel {
             throw new Error('Email channel not configured. Set SMTP + IMAP credentials first.');
         }
         this.started = true;
+        this.connectionTime = new Date();
+        this.firstFetchDone = false;
         await this.connectImapWithRetry();
         logger.info('Email channel started (Event-Driven IMAP IDLE)');
     }
@@ -377,9 +381,16 @@ export class EmailChannel implements IChannel {
             logger.debug('EmailChannel: Acquiring mailbox lock for INBOX...');
             lock = await this.imapClient.getMailboxLock('INBOX');
 
-            // Search for unread messages
-            const searchObj = { seen: false };
+            // Search for unread messages.
+            // On first fetch after connection, only look for emails arrived after connectionTime
+            // to avoid processing thousands of old unread emails.
+            const searchObj: any = { seen: false };
+            if (!this.firstFetchDone) {
+                searchObj.since = this.connectionTime;
+            }
+            
             const uids = await this.imapClient.search(searchObj, { uid: true });
+            this.firstFetchDone = true;
 
             if (uids && uids.length > 0) {
                 logger.info(`EmailChannel: Found ${uids.length} unread messages.`);
@@ -423,10 +434,13 @@ export class EmailChannel implements IChannel {
                             };
 
                             // Process the email
-                            await this.handleInboundEmail(emailInfo);
+                            const suppressed = await this.handleInboundEmail(emailInfo);
 
-                            // Mark as seen
-                            await this.imapClient.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+                            // Mark as seen only if it wasn't suppressed.
+                            // This ensures that triaged/skipped emails stay 'unread' in the mailbox.
+                            if (!suppressed) {
+                                await this.imapClient.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+                            }
                         }
                     } catch (fetchErr: any) {
                         logger.error(`EmailChannel: Failed to process message UID ${uid}: ${fetchErr.message}`);
@@ -443,7 +457,7 @@ export class EmailChannel implements IChannel {
         }
     }
 
-    private async handleInboundEmail(email: ParsedEmail): Promise<void> {
+    private async handleInboundEmail(email: ParsedEmail): Promise<boolean> {
         // Run fast AI classifier to check if the email actually needs a response (filters newsletters, pure info emails, etc.)
         // We do this BEFORE dispatching to determine if we should suppress the automated task.
         const aiSkipReason = await this.classifyEmailNeed(email);
@@ -471,6 +485,8 @@ export class EmailChannel implements IChannel {
                 aiSkipReason: aiSkipReason || undefined
             }
         });
+
+        return shouldSuppressTask;
     }
 
     private shouldSkipAutoReply(email: ParsedEmail): string | false {
@@ -555,13 +571,13 @@ Output ONLY valid JSON.`;
             }
             return false;
         } catch (error: any) {
-            logger.warn(`EmailChannel: AI Classification failed for "${email.subject}": ${error.message}. Defaulting to process email.`);
-            // Fail open: if the classifier fails, we let the main agent handle it so we don't drop important emails
-            return false;
+            logger.warn(`EmailChannel: AI Classification failed for "${email.subject}": ${error.message}. Defaulting to suppress reply for safety.`);
+            // Fail closed: if classifier fails in a high-traffic environment, suppress to avoid queue flooding
+            return 'AI Classification Error';
         }
     }
 
-    public async searchEmails(params: { sender?: string, subject?: string, daysAgo?: number, unreadOnly?: boolean, limit?: number }): Promise<ParsedEmail[]> {
+    public async searchEmails(params: { sender?: string, subject?: string, query?: string, daysAgo?: number, unreadOnly?: boolean, limit?: number }): Promise<ParsedEmail[]> {
         if (!this.imapClient || !this.started) {
             throw new Error('IMAP is not connected');
         }
@@ -569,7 +585,7 @@ Output ONLY valid JSON.`;
         let lock = await this.imapClient.getMailboxLock('INBOX');
         try {
             const searchObj: any = {};
-            if (params.unreadOnly) {
+            if (params.unreadOnly === true) {
                 searchObj.seen = false;
             }
             if (params.sender) {
@@ -578,20 +594,24 @@ Output ONLY valid JSON.`;
             if (params.subject) {
                 searchObj.subject = params.subject;
             }
+            if (params.query) {
+                // IMAP 'TEXT' search searches both headers and body
+                searchObj.text = params.query;
+            }
             if (params.daysAgo) {
                 searchObj.since = new Date(Date.now() - params.daysAgo * 24 * 60 * 60 * 1000);
             }
 
-            // If no search criteria passed, get all
-            if (Object.keys(searchObj).length === 0) {
-                searchObj.all = true;
-            }
+            logger.debug(`EmailChannel: Executing IMAP search with criteria: ${JSON.stringify(searchObj)}`);
 
             const uids = await this.imapClient.search(searchObj, { uid: true });
 
             if (!uids || uids.length === 0) {
+                logger.info('EmailChannel: IMAP search returned no results.');
                 return [];
             }
+
+            logger.info(`EmailChannel: IMAP search found ${uids.length} messages.`);
 
             // Sort uids descending to get newest first. Note: IMAP sequence numbers aren't strictly chronological
             // but UIDs generally monotonic increase for a given mailbox session
@@ -620,6 +640,30 @@ Output ONLY valid JSON.`;
 
         } catch (error: any) {
             logger.error(`EmailChannel: Error searching emails: ${error.message}`);
+            throw error;
+        } finally {
+            if (lock) lock.release();
+        }
+    }
+
+    public async getEmailByUid(uid: string): Promise<ParsedEmail | null> {
+        if (!this.imapClient || !this.started) {
+            throw new Error('IMAP is not connected');
+        }
+
+        let lock = await this.imapClient.getMailboxLock('INBOX');
+        try {
+            const message = await this.imapClient.fetchOne(uid, { source: true, uid: true });
+            if (message && message.source) {
+                const parsed = await simpleParser(message.source);
+                const from = parsed.from?.value[0]?.address || 'Unknown';
+                const subject = parsed.subject || '(no subject)';
+                const text = parsed.text ? parsed.text.trim() : '(no text content)';
+                return { from, subject, messageId: parsed.messageId, inReplyTo: parsed.inReplyTo, text, uid: String(message.uid) };
+            }
+            return null;
+        } catch (error: any) {
+            logger.error(`EmailChannel: Error fetching email UID ${uid}: ${error.message}`);
             throw error;
         } finally {
             if (lock) lock.release();
