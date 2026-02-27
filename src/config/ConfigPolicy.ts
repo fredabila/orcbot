@@ -307,6 +307,12 @@ export class ConfigPolicy {
             description: 'Safe mode enabled',
             reason: 'Security-critical configuration',
         }],
+        ['enableSelfModification', {
+            key: 'enableSelfModification',
+            level: ConfigChangeLevel.LOCKED,
+            description: 'Allow agent to modify its own source code',
+            reason: 'Security-critical — grants the agent access to its own implementation',
+        }],
         ['sudoMode', {
             key: 'sudoMode',
             level: ConfigChangeLevel.LOCKED,

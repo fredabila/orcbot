@@ -5676,6 +5676,7 @@ async function showSecurityMenu() {
     const safeMode = agent.config.get('safeMode');
     const sudoMode = agent.config.get('sudoMode');
     const overrideMode = agent.config.get('overrideMode');
+    const selfModEnabled = agent.config.get('enableSelfModification') || false;
     const allowList = (agent.config.get('commandAllowList') || []) as string[];
     const denyList = (agent.config.get('commandDenyList') || []) as string[];
     const adminUsers = agent.config.get('adminUsers') as any || {};
@@ -5689,11 +5690,13 @@ async function showSecurityMenu() {
     console.log('');
     const safeBadge = safeMode ? red(bold('🔒 LOCKED')) : green(bold('🔓 OPEN'));
     const sudoBadge = sudoMode ? yellow(bold('⚠️  ENABLED')) : green(bold('✅ OFF'));
+    const selfModBadge = selfModEnabled ? red(bold('🛠️  ENABLED')) : green(bold('✅ OFF'));
     const overrideBadge = overrideMode ? red(bold('☠️  ACTIVE')) : green(bold('✅ OFF'));
     const adminBadge = adminConfigured ? green(bold(`👤 ${totalAdmins} admin(s)`)) : yellow(bold('⚠️  OPEN'));
     const secLines = [
         `${dim('Safe Mode')}     ${safeBadge}     ${dim(safeMode ? 'commands disabled' : 'commands allowed')}`,
         `${dim('Sudo Mode')}     ${sudoBadge}  ${dim(sudoMode ? 'all commands allowed' : 'allowList enforced')}`,
+        `${dim('Self-Mod')}      ${selfModBadge}  ${dim(selfModEnabled ? 'codebase access allowed' : 'codebase access blocked')}`,
         `${dim('Override')}      ${overrideBadge}  ${dim(overrideMode ? 'persona boundaries OFF' : 'persona boundaries enforced')}`,
         `${dim('Admin Users')}   ${adminBadge}  ${dim(adminConfigured ? `TG:${tgAdmins.length} DC:${dcAdmins.length} WA:${waAdmins.length}` : 'everyone has full access')}`,
         ``,
@@ -5712,6 +5715,7 @@ async function showSecurityMenu() {
                 new inquirer.Separator(gradient('  ─── Mode Toggles ─────────────────', [c.red, c.gray])),
                 { name: safeMode ? `  🔓 ${bold('Disable Safe Mode')} ${dim('(allow commands)')}` : `  🔒 ${bold('Enable Safe Mode')} ${dim('(block all commands)')}`, value: 'toggle_safe' },
                 { name: sudoMode ? `  ✅ ${bold('Disable Sudo Mode')} ${dim('(enforce allowList)')}` : `  ⚠️  ${bold('Enable Sudo Mode')} ${dim('(allow ALL commands)')}`, value: 'toggle_sudo' },
+                { name: selfModEnabled ? `  🛠️  ${bold('Disable Self-Modification')} ${dim('(block codebase access)')}` : `  🛠️  ${bold('Enable Self-Modification')} ${dim('(allow codebase access)')}`, value: 'toggle_self_mod' },
                 new inquirer.Separator(gradient('  ─── Dangerous ────────────────────', [c.red, c.brightRed || c.red])),
                 { name: overrideMode ? `  ☠️  ${bold('Disable Override')} ${dim('(restore persona boundaries)')}` : `  ☠️  ${bold('Enable Override')} ${dim('(remove ALL behavioral limits)')}`, value: 'toggle_override' },
                 new inquirer.Separator(gradient('  ─── Allow List ───────────────────', [c.green, c.gray])),
@@ -5749,6 +5753,25 @@ async function showSecurityMenu() {
             } else {
                 agent.config.set('sudoMode', false);
                 console.log('\n✅ Sudo Mode disabled. AllowList is now enforced.');
+            }
+            break;
+        case 'toggle_self_mod':
+            if (!selfModEnabled) {
+                const { confirm } = await inquirer.prompt([
+                    { 
+                        type: 'confirm', 
+                        name: 'confirm', 
+                        message: `⚠️  ${bold('Self-Modification')} allows the agent to read and EDIT its own source code.\nThis is a high-autonomy feature that could lead to unexpected changes or bugs.\nAre you sure you want to enable this?`, 
+                        default: false 
+                    }
+                ]);
+                if (confirm) {
+                    agent.config.set('enableSelfModification', true);
+                    console.log('\n🛠️  Self-Modification enabled. Agent can now access and modify its own codebase.');
+                }
+            } else {
+                agent.config.set('enableSelfModification', false);
+                console.log('\n✅ Self-Modification disabled. Codebase access is now blocked.');
             }
             break;
         case 'toggle_override':

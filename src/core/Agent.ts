@@ -6119,6 +6119,114 @@ Be thorough and academic.`;
                 }
             });
 
+            // ==================== SELF-MODIFICATION SKILLS ====================
+            // These skills allow the agent to read, search, and edit its own codebase.
+            // ONLY active if 'enableSelfModification' is true in config.
+
+            // Skill: Read Codebase File
+            this.skills.registerSkill({
+                name: 'read_codebase_file',
+                description: 'Read the contents of a source file in the project codebase. Requires enableSelfModification to be true.',
+                usage: 'read_codebase_file(path)',
+                handler: async (args: any) => {
+                    if (!this.config.get('enableSelfModification')) {
+                        return 'Error: Self-Modification is disabled. To enable codebase access, ask the user to toggle "Self-Modification" in the TUI security menu.';
+                    }
+                    const filePath = args.path || args.file;
+                    if (!filePath) return 'Error: Missing file path.';
+                    const fullPath = path.resolve(process.cwd(), filePath);
+                    
+                    // Security: Ensure it's within the project directory
+                    if (!fullPath.startsWith(process.cwd())) {
+                        return 'Error: Access denied. Path must be within the project directory.';
+                    }
+
+                    try {
+                        if (!fs.existsSync(fullPath)) return `Error: File not found: ${filePath}`;
+                        const content = fs.readFileSync(fullPath, 'utf-8');
+                        // Truncate if too large for context
+                        if (content.length > 20000) {
+                            return `[Truncated - File is ${content.length} bytes]\n\n${content.substring(0, 20000)}...`;
+                        }
+                        return content;
+                    } catch (e: any) {
+                        return `Error reading file: ${e.message}`;
+                    }
+                }
+            });
+
+            // Skill: Search Codebase
+            this.skills.registerSkill({
+                name: 'search_codebase',
+                description: 'Search for a string or regex across the project source code. Requires enableSelfModification to be true.',
+                usage: 'search_codebase(query, include?)',
+                handler: async (args: any) => {
+                    if (!this.config.get('enableSelfModification')) {
+                        return 'Error: Self-Modification is disabled. To enable codebase access, ask the user to toggle "Self-Modification" in the TUI security menu.';
+                    }
+                    const query = args.query || args.text || args.pattern;
+                    const include = args.include || 'src/**/*.ts';
+                    if (!query) return 'Error: Missing search query.';
+
+                    try {
+                        const { execSync } = require('child_process');
+                        // Use a safe grep-like approach (powershell compatible)
+                        const cmd = `git grep -n "${query.replace(/"/g, '\\"')}" -- "${include}"`;
+                        const output = execSync(cmd, { encoding: 'utf-8', timeout: 10000 });
+                        return output || 'No matches found.';
+                    } catch (e: any) {
+                        return `No matches found or search error: ${e.message}`;
+                    }
+                }
+            });
+
+            // Skill: Edit Codebase File
+            this.skills.registerSkill({
+                name: 'edit_codebase_file',
+                description: 'Replace text in a codebase file. Use specific, unique old_text to avoid accidental matches. Requires enableSelfModification to be true.',
+                usage: 'edit_codebase_file(path, old_text, new_text)',
+                handler: async (args: any) => {
+                    if (!this.config.get('enableSelfModification')) {
+                        return 'Error: Self-Modification is disabled. To enable codebase access, ask the user to toggle "Self-Modification" in the TUI security menu.';
+                    }
+                    const filePath = args.path || args.file;
+                    const oldText = args.old_text || args.old;
+                    const newText = args.new_text || args.new;
+
+                    if (!filePath || oldText === undefined || newText === undefined) {
+                        return 'Error: Missing path, old_text, or new_text.';
+                    }
+
+                    const fullPath = path.resolve(process.cwd(), filePath);
+                    if (!fullPath.startsWith(process.cwd())) {
+                        return 'Error: Access denied. Path must be within the project directory.';
+                    }
+
+                    try {
+                        if (!fs.existsSync(fullPath)) return `Error: File not found: ${filePath}`;
+                        let content = fs.readFileSync(fullPath, 'utf-8');
+                        
+                        if (!content.includes(oldText)) {
+                            return 'Error: The exact old_text was not found in the file. Check for whitespace/indentation issues.';
+                        }
+
+                        // Check for multiple occurrences to avoid ambiguity
+                        const occurrences = content.split(oldText).length - 1;
+                        if (occurrences > 1) {
+                            return `Error: Found ${occurrences} occurrences of old_text. Please provide more context to identify a unique replacement.`;
+                        }
+
+                        const newContent = content.replace(oldText, newText);
+                        fs.writeFileSync(fullPath, newContent);
+                        
+                        logger.warn(`Agent: Modified codebase file: ${filePath} (Self-Modification)`);
+                        return `Successfully modified ${filePath}. You should now verify the change by running a build or tests.`;
+                    } catch (e: any) {
+                        return `Error editing file: ${e.message}`;
+                    }
+                }
+            });
+
             // Skill: Delegate Task
             this.skills.registerSkill({
                 name: 'delegate_task',

@@ -25,6 +25,11 @@ This file lists the available skills for the agent.
 - **get_discord_guilds()**: [CORE MESSAGING] Get the list of Discord servers (guilds) the bot is in.
 - **get_discord_channels(guild_id)**: [CORE MESSAGING] Get the list of text channels in a Discord server.
 
+## Self-Modification & Core Access
+- **read_codebase_file(path)**: [SYSTEM] Read any source file in the project. (Requires `enableSelfModification` toggle in TUI).
+- **search_codebase(query, include?)**: [SYSTEM] Search across the entire codebase for patterns. (Requires `enableSelfModification` toggle in TUI).
+- **edit_codebase_file(path, old_text, new_text)**: [SYSTEM] Modify its own source code to fix bugs or extend functionality. (Requires `enableSelfModification` toggle in TUI).
+
 ## Email Management
 - **send_email(to, subject, message, inReplyTo?, references?)**: [CORE MESSAGING] Send an email via configured SMTP account.
 - **search_emails({ query?, sender?, subject?, daysAgo?, unreadOnly?, limit? })**: [EMAIL TOOL] Search for emails in the inbox. Use `query` for body/text search.
