@@ -163,13 +163,13 @@ export async function installPythonPackageSkill(args: any, context: any): Promis
 export const pythonToolsSkills = [
     {
         name: 'execute_python_code',
-        description: 'Execute Python code in an isolated local virtual environment. Provide "code" to run it directly. Optionally provide "filename" (e.g., "script.py") to save the code for future reuse. If you only provide "filename" without "code", it will execute the previously saved script.',
+        description: '[ADVANCED DATA/MATH TOOL] Execute Python code in an isolated local virtual environment. ONLY use this for data analysis, complex math, or tasks requiring Python-specific libraries (pandas, numpy, etc.) after standard tools or simple TypeScript fail. Provide "code" to run it directly. Optionally provide "filename" (e.g., "script.py") to save the code for future reuse. If you only provide "filename" without "code", it will execute the previously saved script.',
         usage: "execute_python_code code=\"print('hello')\" filename=\"myscript.py\"",
         handler: executePythonCodeSkill
     },
     {
         name: 'install_python_package',
-        description: 'Install a Python package (via pip) into the local virtual environment so it can be used by execute_python_code.',
+        description: '[ADVANCED TOOL DEPENDENCY] Install a Python package (via pip) into the local virtual environment. ONLY use this when you specifically need a library for the execute_python_code tool.',
         usage: 'install_python_package package="numpy"',
         handler: installPythonPackageSkill
     }

@@ -4751,7 +4751,7 @@ Output JSON now:`;
                     // Skill: Execute TypeScript
                     this.skills.registerSkill({
                         name: 'execute_typescript',
-                        description: 'Write, compile, and execute TypeScript code on the fly within the agent\'s Node.js environment. If "filename" is not provided, code is saved to a persistent `scratchpad.ts` file in the data directory. If "filename" (e.g., "myscript.ts") is provided with "code", it saves the script to a scripts directory for reuse. If only "filename" is provided without "code", it executes the previously saved script. The code MUST export a default async function: `export default async function(args, context) { ... }`.',
+                        description: '[DYNAMIC EXECUTION TOOL] Write, compile, and execute TypeScript code on the fly. USE THIS WHEN YOU NEED TO BUILD CUSTOM LOGIC, hit undocumented APIs, or process data in ways standard tools cannot handle. If "filename" is not provided, code is saved to a persistent `scratchpad.ts` file in the data directory. If "filename" (e.g., "myscript.ts") is provided with "code", it saves the script to a scripts directory for reuse. If only "filename" is provided without "code", it executes the previously saved script. The code MUST export a default async function: `export default async function(args, context) { ... }`.',
                         usage: 'execute_typescript(code?: string, args?: object, filename?: string)',
                         isResearch: true,
                         isDeep: true,
