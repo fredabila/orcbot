@@ -42,6 +42,7 @@ export class WebBrowser {
     private traceSnapshots: boolean;
     private tracePath?: string;
     public _blankUrlHistory: Map<string, number> = new Map(); // domain → consecutive blank count
+    private _resourceBlockingEnabled: boolean = true; // Can be toggled off for sites that need images/fonts
     private _consoleLogs: string[] = []; // Capture recent console logs
     private _viewportMode: 'desktop' | 'mobile' = 'desktop';
 
@@ -317,25 +318,28 @@ export class WebBrowser {
 
             this._page = await this.context.newPage();
             
-            // Aggressive resource blocking for speed
+            // Selective resource blocking — only block tracking/ads, allow images and fonts
+            // since many sites need them for CAPTCHAs, icon-fonts, and layout
             await this._page.route('**/*', route => {
                 const type = route.request().resourceType();
-                // Block heavy media. Strictly allow scripts, styles, and data (fetch/xhr).
-                if (['image', 'media', 'font'].includes(type)) {
-                    return route.abort();
-                }
-                
-                // Allow everything else (script, stylesheet, document, xhr, fetch, other)
-                // "other" is often critical JSON data in SPAs.
-                
-                // Block known ad/tracking domains, but BE CAREFUL with "google" as it breaks Docs
                 const url = route.request().url();
+
+                // Block known ad/tracking domains (never needed for functionality)
                 if (
-                    (url.includes('google-analytics') || url.includes('doubleclick') || url.includes('facebook.com/tr')) &&
-                    !url.includes('docs.google.com') // Whitelist Docs just in case
+                    url.includes('google-analytics') || url.includes('googletagmanager.com') ||
+                    url.includes('doubleclick') || url.includes('facebook.com/tr') ||
+                    url.includes('connect.facebook.net') || url.includes('analytics.') ||
+                    url.includes('adservice.google') || url.includes('pagead2.googlesyndication')
                 ) {
                     return route.abort();
                 }
+
+                // Only block media (video/audio) — images and fonts are needed for
+                // CAPTCHA rendering, icon-font buttons, and layout-dependent sites
+                if (this._resourceBlockingEnabled && type === 'media') {
+                    return route.abort();
+                }
+
                 route.continue();
             });
 
@@ -751,15 +755,23 @@ export class WebBrowser {
             }
 
             // Check if this domain has repeatedly returned blank pages
+            // Threshold is 5 to avoid premature blocking — many sites need multiple
+            // attempts with different strategies (headful, ephemeral, resource unblocking)
             try {
                 const blankCheckUrl = url.startsWith('http') ? url : 'https://' + url;
                 const blankDomain = new URL(blankCheckUrl).hostname.replace('www.', '');
                 const blankCount = this._blankUrlHistory.get(blankDomain) || 0;
-                if (blankCount >= 2) {
+                if (blankCount >= 5) {
                     const error = `This site (${blankDomain}) has returned blank/empty pages ${blankCount} time(s). It likely requires JavaScript rendering that is unavailable in this browser mode.`;
                     logger.warn(`Browser: Blocking navigation to ${blankDomain} — ${blankCount} prior blank pages`);
                     this.stateManager.recordNavigation(url, 'navigate', false, error);
-                    return `Error: ${error}\n\nSuggestion: STOP browsing this site. Use web_search or extract_article to get the information instead. If you must interact with this site, try computer_vision_click for visual-based interaction.`;
+                    return `Error: ${error}\n\nSuggestion: Try extract_article(url) or http_fetch(url) as alternatives. If you must interact with this site, try computer_vision_click for visual-based interaction.`;
+                }
+                // On 3rd blank attempt, disable resource blocking for this navigation
+                // (some sites need images/fonts to render properly)
+                if (blankCount >= 2) {
+                    this._resourceBlockingEnabled = false;
+                    logger.info(`Browser: Disabling resource blocking for ${blankDomain} (${blankCount} prior blanks)`);
                 }
             } catch {}
 
@@ -797,7 +809,7 @@ export class WebBrowser {
             
             // Use 'load' + stable wait instead of 'domcontentloaded' which is too early for modern SPAs
             await this._page.goto(targetUrl, { waitUntil: 'load', timeout: 60000 });
-            await this.waitForStablePage(25000);
+            await this.waitForStablePage(15000);
             this.lastNavigateTimestamp = Date.now();
 
             const bodyTextLength = await this._page.evaluate(() => document.body?.innerText?.trim().length ?? 0).catch(() => 0);
@@ -805,18 +817,17 @@ export class WebBrowser {
             const navElapsed = Date.now() - navStart;
             logger.info(`Browser: Loaded ${targetUrl} in ${navElapsed}ms (title="${navTitle}", text=${bodyTextLength})`);
             
-            // If page appears empty and we're in headless mode, retry headful (only if display available)
-            // Increased threshold from 100 to 500 to catch 'Loading...' or thin splash screens
-            if (bodyTextLength < 500 && this.headlessMode && allowHeadfulRetry && !this.isHeadlessEnvironment()) {
+            // If page appears truly empty and we're in headless mode, retry headful (only if display available)
+            if (bodyTextLength < 50 && this.headlessMode && allowHeadfulRetry && !this.isHeadlessEnvironment()) {
                 logger.warn(`Browser: Page appears blocked/empty (${bodyTextLength} chars). Retrying in headful mode...`);
                 await this.ensureBrowser(false);
                 return this.navigate(url, waitSelectors, false);
             }
             
-            if (bodyTextLength < 200) {
-                // Give modern sites extra time to hydrate if they're still thin
-                await this._page.waitForTimeout(5000);
-                await this._page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+            if (bodyTextLength < 50) {
+                // Give modern sites extra time to hydrate if they're truly empty
+                await this._page.waitForTimeout(3000);
+                await this._page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
             }
 
             const effectiveWaitSelectors = [...waitSelectors];
@@ -833,17 +844,25 @@ export class WebBrowser {
                 await this._page.waitForSelector(selector, { timeout: 10000 }).catch(() => { });
             }
 
+            // Auto-handle Cloudflare challenges before checking content
+            await this.handleCloudflareChallenge();
+
+            // Auto-dismiss cookie consent banners and overlays
+            await this.autoDismissOverlays();
+
             const captcha = await this.detectCaptcha();
             const title = await this._page.title();
             const content = await this._page.content();
             
-            // Refined looksBlank: 
-            // 1. No title AND very little content
-            // 2. OR Content length < 2500 bytes (typical for a "Access Denied" or "Loading" page)
-            // 3. OR Body has no visible text (already checked via bodyTextLength)
-            const looksBlank = ((!title || title.trim().length === 0) && content.replace(/\s+/g, '').length < 2000) || 
-                               content.length < 1500 || 
-                               bodyTextLength < 100;
+            // looksBlank: conservative check — only flag truly empty pages.
+            // Many legitimate pages have short content (login forms, redirects, SPAs hydrating).
+            // Require BOTH no title AND very little visible text to flag as blank.
+            const strippedContentLen = content.replace(/\s+/g, '').length;
+            const looksBlank = (
+                bodyTextLength < 30 && strippedContentLen < 800
+            ) || (
+                (!title || title.trim().length === 0) && bodyTextLength < 50 && strippedContentLen < 1200
+            );
 
             if (this.debugAlwaysSaveArtifacts) {
                 await this.saveDebugArtifacts('navigate', content).catch(() => null);
@@ -880,7 +899,9 @@ export class WebBrowser {
                     this._blankUrlHistory.set(trackDomain, prevCount + 1);
                     logger.warn(`Browser: Domain ${trackDomain} returned blank page (count: ${prevCount + 1})`);
                 } else {
+                    // Success — clear blank history for this domain and re-enable resource blocking
                     this._blankUrlHistory.delete(trackDomain);
+                    this._resourceBlockingEnabled = true;
                 }
             } catch {}
 
@@ -893,7 +914,7 @@ export class WebBrowser {
                     logger.warn(`Browser: Blank page diagnostics saved (${debug.screenshotPath || 'no screenshot'}, ${debug.htmlPath || 'no html'})`);
                 }
             }
-            const blankWarning = looksBlank ? '\n\n[WARNING: Page appears blank or nearly empty. The site may require JavaScript that cannot render. Consider using web_search or extract_article instead. Do NOT keep navigating to this site.]' : '';
+            const blankWarning = looksBlank ? '\n\n[WARNING: Page appears blank or nearly empty. Try: (1) browser_wait(3000) then browser_examine_page(), (2) extract_article(url), (3) http_fetch(url). The site may need more time to render or may block automated browsers.]' : '';
             return `Page Loaded: ${title}\nURL: ${url}${captcha ? `\n[WARNING: ${captcha}]` : ''}${blankWarning}`;
         } catch (e) {
             const classified = this.classifyNavigateError(e);
@@ -963,8 +984,8 @@ export class WebBrowser {
             });
 
             const page = await context.newPage();
-            await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-            await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => { });
+            await page.goto(targetUrl, { waitUntil: 'load', timeout: 30000 });
+            await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => { });
 
             for (const selector of waitSelectors) {
                 await page.waitForSelector(selector, { timeout: 10000 }).catch(() => { });
@@ -972,8 +993,9 @@ export class WebBrowser {
 
             const title = await page.title();
             const content = await page.content();
-            const looksBlank = (!title || title.trim().length === 0) && content.replace(/\s+/g, '').length < 1200;
-            if (looksBlank) return null;
+            const ephBodyText = await page.evaluate(() => document.body?.innerText?.trim().length ?? 0).catch(() => 0);
+            const ephLooksBlank = ephBodyText < 30 && content.replace(/\s+/g, '').length < 800;
+            if (ephLooksBlank) return null;
 
             return `Page Loaded: ${title}\nURL: ${targetUrl}\n[NOTE: Loaded via stateless context]`;
         } catch (e) {
@@ -981,6 +1003,129 @@ export class WebBrowser {
             return null;
         } finally {
             if (tempBrowser) await tempBrowser.close();
+        }
+    }
+
+    /**
+     * Auto-dismiss cookie consent banners and common overlays that block content.
+     * Runs after navigation to clear the way for content extraction.
+     */
+    private async autoDismissOverlays(): Promise<void> {
+        if (!this._page) return;
+        try {
+            await this._page.evaluate(() => {
+                // Common cookie consent / overlay selectors and text patterns
+                const dismissSelectors = [
+                    // Cookie consent buttons
+                    '[id*="cookie"] button', '[class*="cookie"] button',
+                    '[id*="consent"] button', '[class*="consent"] button',
+                    '[id*="gdpr"] button', '[class*="gdpr"] button',
+                    '[aria-label*="cookie" i]', '[aria-label*="consent" i]',
+                    '[aria-label*="accept" i]',
+                    // Common cookie banner frameworks
+                    '.cc-btn.cc-dismiss', '#onetrust-accept-btn-handler',
+                    '.js-cookie-consent-agree', '#cookie-notice .btn',
+                    '.cookie-banner button', '.cookie-popup button',
+                    '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+                    '[data-testid="cookie-policy-dialog-accept-button"]',
+                    '.fc-cta-consent', // Funding Choices
+                ];
+
+                const acceptTexts = [
+                    'accept all', 'accept cookies', 'accept', 'agree',
+                    'got it', 'ok', 'i agree', 'allow all', 'allow cookies',
+                    'continue', 'dismiss', 'close',
+                ];
+
+                // Try selector-based dismissal first
+                for (const sel of dismissSelectors) {
+                    const els = Array.from(document.querySelectorAll(sel)) as HTMLElement[];
+                    for (const el of els) {
+                        const text = (el.innerText || el.textContent || '').toLowerCase().trim();
+                        if (acceptTexts.some(t => text.includes(t)) || el.tagName === 'BUTTON') {
+                            const rect = el.getBoundingClientRect();
+                            if (rect.width > 0 && rect.height > 0) {
+                                el.click();
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                // Fallback: find any visible button with accept-like text
+                const allButtons = Array.from(document.querySelectorAll('button, [role="button"], a.btn, a.button')) as HTMLElement[];
+                for (const btn of allButtons) {
+                    const text = (btn.innerText || btn.textContent || '').toLowerCase().trim();
+                    if (acceptTexts.some(t => text === t || text.startsWith(t))) {
+                        const rect = btn.getBoundingClientRect();
+                        // Only click if it's in a likely overlay position (top or bottom of viewport)
+                        if (rect.width > 0 && rect.height > 0 && (rect.top > window.innerHeight * 0.6 || rect.top < window.innerHeight * 0.3)) {
+                            btn.click();
+                            return;
+                        }
+                    }
+                }
+            });
+        } catch {
+            // Best effort — don't fail navigation over overlay dismissal
+        }
+    }
+
+    /**
+     * Handle Cloudflare challenges — wait for the challenge to auto-resolve
+     * (Turnstile often resolves automatically with a real browser).
+     */
+    private async handleCloudflareChallenge(): Promise<boolean> {
+        if (!this._page) return false;
+        try {
+            const content = await this._page.content();
+            const isCloudflare = content.includes('cf-turnstile') || 
+                                 content.includes('challenges.cloudflare.com') ||
+                                 content.includes('Just a moment') ||
+                                 content.includes('Checking your browser');
+            
+            if (!isCloudflare) return false;
+
+            logger.info('Browser: Cloudflare challenge detected, waiting for auto-resolution...');
+            
+            // Cloudflare Turnstile often resolves automatically in a real browser.
+            // Wait up to 15s for the challenge page to redirect.
+            for (let i = 0; i < 15; i++) {
+                await this._page.waitForTimeout(1000);
+                const currentContent = await this._page.content().catch(() => '');
+                const stillChallenge = currentContent.includes('cf-turnstile') || 
+                                       currentContent.includes('challenges.cloudflare.com') ||
+                                       currentContent.includes('Just a moment');
+                if (!stillChallenge) {
+                    logger.info('Browser: Cloudflare challenge resolved automatically');
+                    await this.waitForStablePage(5000);
+                    return true;
+                }
+                
+                // Try clicking the Turnstile checkbox if visible
+                if (i === 3) {
+                    await this._page.evaluate(() => {
+                        const iframe = document.querySelector('iframe[src*="challenges.cloudflare"]') as HTMLIFrameElement;
+                        if (iframe) {
+                            // Can't access cross-origin iframe, but clicking near it sometimes helps
+                            const rect = iframe.getBoundingClientRect();
+                            if (rect.width > 0 && rect.height > 0) {
+                                const clickEvent = new MouseEvent('click', {
+                                    clientX: rect.left + rect.width / 2,
+                                    clientY: rect.top + rect.height / 2,
+                                    bubbles: true
+                                });
+                                document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)?.dispatchEvent(clickEvent);
+                            }
+                        }
+                    }).catch(() => {});
+                }
+            }
+            
+            logger.warn('Browser: Cloudflare challenge did not resolve within timeout');
+            return false;
+        } catch {
+            return false;
         }
     }
 
@@ -2675,21 +2820,54 @@ export class WebBrowser {
         }
     }
 
+    /**
+     * Create an isolated page for search operations so we don't clobber the user's
+     * current browsing context. Returns the page and a cleanup function.
+     */
+    private async createSearchPage(): Promise<{ page: Page; cleanup: () => Promise<void> }> {
+        await this.ensureBrowser();
+        if (!this.context) throw new Error('No browser context');
+        
+        const searchPage = await this.context.newPage();
+        
+        // Block heavy resources on search pages for speed
+        await searchPage.route('**/*', route => {
+            const type = route.request().resourceType();
+            if (['image', 'media', 'font'].includes(type)) {
+                return route.abort();
+            }
+            const url = route.request().url();
+            if (url.includes('google-analytics') || url.includes('doubleclick') || url.includes('facebook.com/tr')) {
+                return route.abort();
+            }
+            route.continue();
+        });
+
+        return {
+            page: searchPage,
+            cleanup: async () => {
+                try { await searchPage.close(); } catch {}
+            }
+        };
+    }
+
     private async searchGoogle(query: string): Promise<string> {
         const url = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
-        const savedUrl = this.lastNavigatedUrl; // preserve so search doesn't stomp browse context
+        let searchCtx: { page: Page; cleanup: () => Promise<void> } | null = null;
         try {
-            await this.ensureBrowser();
-            await this.page!.goto(url, { waitUntil: 'load', timeout: 45000 });
-            await this.page!.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => { });
+            searchCtx = await this.createSearchPage();
+            const searchPage = searchCtx.page;
+            
+            await searchPage.goto(url, { waitUntil: 'load', timeout: 45000 });
+            await searchPage.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => { });
 
-            const content = await this.page!.content();
+            const content = await searchPage.content();
             if (content.includes('recaptcha') || content.includes('unusual traffic')) {
                 return 'Error: Blocked by Google CAPTCHA';
             }
 
             // Try multiple selector strategies for resilience
-            const results = await this.page!.evaluate(() => {
+            const results = await searchPage.evaluate(() => {
                 // Strategy 1: Modern Google selectors
                 let items = Array.from(document.querySelectorAll('div.g'));
                 
@@ -2733,20 +2911,21 @@ export class WebBrowser {
         } catch (e) {
             return `Google Search Error: ${e}`;
         } finally {
-            // Restore so browser context stays on the page the agent was working on
-            if (savedUrl) this.lastNavigatedUrl = savedUrl;
+            if (searchCtx) await searchCtx.cleanup();
         }
     }
 
     private async searchBing(query: string): Promise<string> {
         const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
-        const savedUrl = this.lastNavigatedUrl;
+        let searchCtx: { page: Page; cleanup: () => Promise<void> } | null = null;
         try {
-            await this.ensureBrowser();
-            await this.page!.goto(url, { waitUntil: 'load', timeout: 45000 });
-            await this.page!.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => { });
+            searchCtx = await this.createSearchPage();
+            const searchPage = searchCtx.page;
+            
+            await searchPage.goto(url, { waitUntil: 'load', timeout: 45000 });
+            await searchPage.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => { });
 
-            const results = await this.page!.evaluate(() => {
+            const results = await searchPage.evaluate(() => {
                 // Strategy 1: Standard Bing selectors
                 let items = Array.from(document.querySelectorAll('li.b_algo'));
                 
@@ -2787,7 +2966,7 @@ export class WebBrowser {
         } catch (e) {
             return `Bing Search Error: ${e}`;
         } finally {
-            if (savedUrl) this.lastNavigatedUrl = savedUrl;
+            if (searchCtx) await searchCtx.cleanup();
         }
     }
 
@@ -2798,56 +2977,59 @@ export class WebBrowser {
             `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`
         ];
         
-        const savedUrl = this.lastNavigatedUrl;
-        for (const url of urls) {
-            try {
-                await this.ensureBrowser();
-                await this.page!.goto(url, { waitUntil: 'load', timeout: 45000 });
-                await this.waitForStablePage();
+        let searchCtx: { page: Page; cleanup: () => Promise<void> } | null = null;
+        try {
+            searchCtx = await this.createSearchPage();
+            const searchPage = searchCtx.page;
 
-                const results = await this.page!.evaluate(() => {
-                    // Strategy 1: HTML version selectors
-                    let items = Array.from(document.querySelectorAll('.result, .result__body'));
-                    
-                    // Strategy 2: Lite version selectors
-                    if (items.length === 0) {
-                        items = Array.from(document.querySelectorAll('tr')).filter(el => 
-                            el.querySelector('a.result-link') || el.querySelector('a[href^="http"]')
-                        );
-                    }
-                    
-                    // Strategy 3: Generic link-based extraction
-                    if (items.length === 0) {
-                        const links = Array.from(document.querySelectorAll('a[href^="http"]')).filter(a => {
-                            const href = (a as HTMLAnchorElement).href;
-                            return !href.includes('duckduckgo.com') && 
-                                   !href.includes('duck.co') &&
-                                   a.textContent && a.textContent.length > 10;
-                        });
-                        return links.slice(0, 5).map(a => ({
-                            title: a.textContent?.trim() || '',
-                            link: (a as HTMLAnchorElement).href,
-                            snippet: ''
-                        })).filter(r => r.title && r.link);
-                    }
+            for (const url of urls) {
+                try {
+                    await searchPage.goto(url, { waitUntil: 'load', timeout: 45000 });
+                    await searchPage.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
 
-                    return items.slice(0, 5).map(item => {
-                        // HTML version extraction
-                        const titleEl = item.querySelector('.result__title a, .result__a, a.result-link') as HTMLAnchorElement;
-                        if (titleEl) {
-                            return {
-                                title: titleEl.innerText || titleEl.textContent || '',
-                                link: titleEl.href,
-                                snippet: (item.querySelector('.result__snippet, .result__body') as HTMLElement)?.innerText || ''
-                            };
+                    const results = await searchPage.evaluate(() => {
+                        // Strategy 1: HTML version selectors
+                        let items = Array.from(document.querySelectorAll('.result, .result__body'));
+                        
+                        // Strategy 2: Lite version selectors
+                        if (items.length === 0) {
+                            items = Array.from(document.querySelectorAll('tr')).filter(el => 
+                                el.querySelector('a.result-link') || el.querySelector('a[href^="http"]')
+                            );
                         }
                         
-                        // Lite version extraction
-                        const liteLink = item.querySelector('a[href^="http"]') as HTMLAnchorElement;
-                        if (liteLink) {
-                            return {
-                                title: liteLink.textContent?.trim() || '',
-                                link: liteLink.href,
+                        // Strategy 3: Generic link-based extraction
+                        if (items.length === 0) {
+                            const links = Array.from(document.querySelectorAll('a[href^="http"]')).filter(a => {
+                                const href = (a as HTMLAnchorElement).href;
+                                return !href.includes('duckduckgo.com') && 
+                                       !href.includes('duck.co') &&
+                                       a.textContent && a.textContent.length > 10;
+                            });
+                            return links.slice(0, 5).map(a => ({
+                                title: a.textContent?.trim() || '',
+                                link: (a as HTMLAnchorElement).href,
+                                snippet: ''
+                            })).filter(r => r.title && r.link);
+                        }
+
+                        return items.slice(0, 5).map(item => {
+                            // HTML version extraction
+                            const titleEl = item.querySelector('.result__title a, .result__a, a.result-link') as HTMLAnchorElement;
+                            if (titleEl) {
+                                return {
+                                    title: titleEl.innerText || titleEl.textContent || '',
+                                    link: titleEl.href,
+                                    snippet: (item.querySelector('.result__snippet, .result__body') as HTMLElement)?.innerText || ''
+                                };
+                            }
+                            
+                            // Lite version extraction
+                            const liteLink = item.querySelector('a[href^="http"]') as HTMLAnchorElement;
+                            if (liteLink) {
+                                return {
+                                    title: liteLink.textContent?.trim() || '',
+                                    link: liteLink.href,
                                 snippet: ''
                             };
                         }
@@ -2856,19 +3038,22 @@ export class WebBrowser {
                     }).filter(Boolean);
                 });
 
-                if (results && results.length > 0) {
-                    const formatted = results.map((r: any) => `[${r.title}](${r.link})\n${r.snippet}`).join('\n\n');
-                    if (savedUrl) this.lastNavigatedUrl = savedUrl;
-                    return `Search Results (via DuckDuckGo):\n\n${formatted}`;
+                    if (results && results.length > 0) {
+                        const formatted = results.map((r: any) => `[${r.title}](${r.link})\n${r.snippet}`).join('\n\n');
+                        return `Search Results (via DuckDuckGo):\n\n${formatted}`;
+                    }
+                } catch (e) {
+                    logger.debug(`DuckDuckGo search failed for ${url}: ${e}`);
+                    continue;
                 }
-            } catch (e) {
-                logger.debug(`DuckDuckGo search failed for ${url}: ${e}`);
-                continue;
             }
-        }
 
-        if (savedUrl) this.lastNavigatedUrl = savedUrl;
-        return 'Error: No results found on DuckDuckGo.';
+            return 'Error: No results found on DuckDuckGo.';
+        } catch (e) {
+            return `DuckDuckGo Search Error: ${e}`;
+        } finally {
+            if (searchCtx) await searchCtx.cleanup();
+        }
     }
 
     /**
@@ -2890,6 +3075,24 @@ export class WebBrowser {
      */
     public resetState(): void {
         this.stateManager.reset();
+        this._blankUrlHistory.clear();
+        this._resourceBlockingEnabled = true;
         logger.info('Browser state reset');
+    }
+
+    /**
+     * Reset blank page tracking for a specific domain or all domains.
+     * Allows retrying sites that were previously flagged as blank.
+     */
+    public resetBlankHistory(domain?: string): void {
+        if (domain) {
+            this._blankUrlHistory.delete(domain);
+            this._blankUrlHistory.delete(domain.replace('www.', ''));
+            logger.info(`Browser: Reset blank history for ${domain}`);
+        } else {
+            this._blankUrlHistory.clear();
+            logger.info('Browser: Reset all blank history');
+        }
+        this._resourceBlockingEnabled = true;
     }
 }

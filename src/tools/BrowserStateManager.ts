@@ -30,8 +30,8 @@ export class BrowserStateManager {
     private failureCount: Map<string, number> = new Map(); // Track failures by action key
     private maxHistorySize: number = 50;
     private maxBreadcrumbSize: number = 100;
-    private circuitBreakerThreshold: number = 3; // Max failures before circuit opens
-    private circuitBreakerResetTime: number = 60000; // 1 minute
+    private circuitBreakerThreshold: number = 5; // Max failures before circuit opens
+    private circuitBreakerResetTime: number = 30000; // 30 seconds — reset faster to allow retries with new strategies
     private openCircuits: Map<string, number> = new Map(); // Circuit breaker states (key -> timestamp)
 
     constructor() {
@@ -154,14 +154,15 @@ export class BrowserStateManager {
     /**
      * Detect if we're in a navigation loop (visiting same URL repeatedly)
      */
-    detectNavigationLoop(url: string, windowMs: number = 30000): boolean {
+    detectNavigationLoop(url: string, windowMs: number = 20000): boolean {
         const now = Date.now();
         const recentNavs = this.navigationHistory.filter(
             n => n.url === url && now - n.timestamp < windowMs
         );
 
-        // If we've visited the same URL 3+ times in the window, it's a loop
-        if (recentNavs.length >= 3) {
+        // Only flag as loop if 5+ visits to the exact same URL in a short window.
+        // Lower thresholds block legitimate retry patterns (headful retry, ephemeral retry, etc.)
+        if (recentNavs.length >= 5) {
             logger.warn(`Navigation loop detected for ${url}: ${recentNavs.length} visits in ${windowMs}ms`);
             return true;
         }
@@ -172,7 +173,7 @@ export class BrowserStateManager {
     /**
      * Detect if we're repeating the same action on the same element
      */
-    detectActionLoop(action: string, selector: string | undefined, windowMs: number = 20000): boolean {
+    detectActionLoop(action: string, selector: string | undefined, windowMs: number = 15000): boolean {
         const now = Date.now();
         const recentActions = this.actionBreadcrumbs.filter(
             a => a.action === action && 
@@ -180,8 +181,9 @@ export class BrowserStateManager {
                  now - a.timestamp < windowMs
         );
 
-        // If we've done the same action 3+ times in the window, it's a loop
-        if (recentActions.length >= 3) {
+        // Only flag as loop if 5+ identical actions in a short window.
+        // Some interactions legitimately need retries (e.g., force-click after standard click fails).
+        if (recentActions.length >= 5) {
             logger.warn(`Action loop detected: ${action} on ${selector || 'N/A'}: ${recentActions.length} times in ${windowMs}ms`);
             return true;
         }
