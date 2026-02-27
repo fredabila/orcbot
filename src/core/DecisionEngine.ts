@@ -257,10 +257,13 @@ If the user asks for an opinion, explanation, summary, or normal chat response, 
             if (name === 'send_telegram') {
                 // Prefer the action sourceId when we're in a Telegram-sourced action.
                 // This prevents bad outputs like chatId="Frederick" causing "chat not found".
-                const hasChatId = !!toolMetadata.chatId;
-                const chatIdLooksInvalid = typeof toolMetadata.chatId === 'string' && /[a-zA-Z]/.test(toolMetadata.chatId);
+                const currentId = toolMetadata.chatId || toolMetadata.chat_id || toolMetadata.id;
+                const hasId = !!currentId;
+                const idLooksInvalid = typeof currentId === 'string' && /[a-zA-Z]/.test(currentId);
                 const preferredChatId = metadata?.chatId ?? sourceId;
-                if ((source === 'telegram') && preferredChatId && (!hasChatId || chatIdLooksInvalid)) {
+
+                if ((source === 'telegram') && preferredChatId && (!hasId || idLooksInvalid)) {
+                    // Normalize to the preferred key used by the Skill handler
                     toolMetadata.chatId = preferredChatId;
                 }
             }

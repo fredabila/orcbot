@@ -2768,6 +2768,7 @@ async function showGatewayMenu() {
     const currentPort = agent.config.get('gatewayPort') || 3100;
     const currentHost = agent.config.get('gatewayHost') || '0.0.0.0';
     const apiKey = agent.config.get('gatewayApiKey');
+    const autonomyAllowed = isAutonomyEnabledForChannel('gateway-chat');
 
     sectionHeader('🌐', 'Web Gateway');
     console.log('');
@@ -2777,6 +2778,7 @@ async function showGatewayMenu() {
         `${dim('Endpoint')}   ${cyan(`http://${currentHost}:${currentPort}/api`)}`,
         `${dim('WebSocket')}  ${cyan(`ws://${currentHost}:${currentPort}`)}`,
         `${dim('Auth')}       ${apiKey ? green('● API Key set') : yellow('○ No authentication')}`,
+        `${dim('Autonomy')}   ${autonomyAllowed ? green(bold('● ENABLED')) : gray('○ DISABLED')}`,
     ];
     box(gatewayLines, { title: '📡 GATEWAY CONFIG', width: 52, color: c.cyan });
     console.log('');
@@ -2793,6 +2795,7 @@ async function showGatewayMenu() {
                 { name: `  📌 Set Port ${dim(`(current: ${currentPort})`)}`, value: 'port' },
                 { name: `  🏠 Set Host ${dim(`(current: ${currentHost})`)}`, value: 'host' },
                 { name: `  🔑 ${apiKey ? 'Update' : 'Set'} API Key`, value: 'apikey' },
+                { name: `  🤖 ${autonomyAllowed ? 'Disable' : 'Enable'} Autonomous Messaging`, value: 'toggle_autonomy' },
                 { name: `  🔐 ${bold('Tailscale Setup & Status Guide')}`, value: 'tailscale' },
                 new inquirer.Separator(gradient('  ──────────────────────────────────', [c.cyan, c.gray])),
                 { name: dim('  ← Back'), value: 'back' }
@@ -2801,6 +2804,11 @@ async function showGatewayMenu() {
     ]);
 
     if (action === 'back') return showMainMenu();
+
+    if (action === 'toggle_autonomy') {
+        toggleAutonomyChannel('gateway-chat');
+        return showGatewayMenu();
+    }
 
     if (action === 'start' || action === 'start_with_agent') {
         // Ask for optional static dashboard directory before starting the gateway
@@ -4112,6 +4120,7 @@ async function showConnectionsMenu() {
 async function showTelegramConfig() {
     const currentToken = agent.config.get('telegramToken') || 'Not Set';
     const autoReply = agent.config.get('telegramAutoReplyEnabled');
+    const autonomyAllowed = isAutonomyEnabledForChannel('telegram');
     console.clear();
     banner();
     sectionHeader('✈️', 'Telegram Settings');
@@ -4119,6 +4128,7 @@ async function showTelegramConfig() {
     const tgLines = [
         `${dim('Token')}       ${currentToken === 'Not Set' ? gray('Not Set') : green(currentToken.substring(0, 12) + '…')}`,
         `${dim('Auto-Reply')}  ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
+        `${dim('Autonomy')}    ${autonomyAllowed ? green(bold('● ENABLED')) : gray('○ DISABLED')}`,
     ];
     box(tgLines, { title: '✈️  TELEGRAM', width: 46, color: c.cyan });
     console.log('');
@@ -4131,6 +4141,7 @@ async function showTelegramConfig() {
             choices: [
                 { name: 'Set Token', value: 'set' },
                 { name: autoReply ? 'Disable Auto-Reply' : 'Enable Auto-Reply', value: 'toggle_auto' },
+                { name: autonomyAllowed ? 'Disable Autonomous Messaging' : 'Enable Autonomous Messaging', value: 'toggle_autonomy' },
                 { name: 'Back', value: 'back' }
             ]
         }
@@ -4149,6 +4160,9 @@ async function showTelegramConfig() {
     } else if (action === 'toggle_auto') {
         agent.config.set('telegramAutoReplyEnabled', !autoReply);
         return showTelegramConfig();
+    } else if (action === 'toggle_autonomy') {
+        toggleAutonomyChannel('telegram');
+        return showTelegramConfig();
     }
 }
 
@@ -4159,6 +4173,7 @@ async function showWhatsAppConfig() {
     const autoReact = agent.config.get('whatsappAutoReactEnabled');
     const contextProfiling = agent.config.get('whatsappContextProfilingEnabled');
     const ownerJid = agent.config.get('whatsappOwnerJID') || 'Not Linked';
+    const autonomyAllowed = isAutonomyEnabledForChannel('whatsapp');
 
     console.clear();
     banner();
@@ -4168,6 +4183,7 @@ async function showWhatsAppConfig() {
     const waLines = [
         `${dim('Status')}            ${enabled ? green(bold('ENABLED')) : red(bold('DISABLED'))}`,
         `${dim('Linked Account')}    ${ownerJid === 'Not Linked' ? gray(ownerJid) : cyan(ownerJid)}`,
+        `${dim('Autonomy')}          ${autonomyAllowed ? green(bold('● ENABLED')) : gray('○ DISABLED')}`,
         ``,
         `${dim('Auto-Reply (1‑on‑1)')}  ${onOff(autoReply)}`,
         `${dim('Status Interactions')}  ${onOff(statusReply)}`,
@@ -4185,6 +4201,7 @@ async function showWhatsAppConfig() {
             choices: [
                 { name: enabled ? 'Disable WhatsApp' : 'Enable WhatsApp', value: 'toggle_enabled' },
                 { name: autoReply ? 'Disable Auto-Reply' : 'Enable Auto-Reply', value: 'toggle_auto' },
+                { name: autonomyAllowed ? 'Disable Autonomous Messaging' : 'Enable Autonomous Messaging', value: 'toggle_autonomy' },
                 { name: statusReply ? 'Disable Status Interactions' : 'Enable Status Interactions', value: 'toggle_status' },
                 { name: autoReact ? 'Disable Auto-React' : 'Enable Auto-React', value: 'toggle_react' },
                 { name: contextProfiling ? 'Disable Context Profiling' : 'Enable Context Profiling', value: 'toggle_profile' },
@@ -4203,6 +4220,9 @@ async function showWhatsAppConfig() {
             break;
         case 'toggle_auto':
             agent.config.set('whatsappAutoReplyEnabled', !autoReply);
+            break;
+        case 'toggle_autonomy':
+            toggleAutonomyChannel('whatsapp');
             break;
         case 'toggle_status':
             agent.config.set('whatsappStatusReplyEnabled', !statusReply);
@@ -4317,6 +4337,7 @@ async function showSlackConfig() {
     const currentAppToken = agent.config.get('slackAppToken') || 'Not Set';
     const currentSigningSecret = agent.config.get('slackSigningSecret') || 'Not Set';
     const autoReply = agent.config.get('slackAutoReplyEnabled');
+    const autonomyAllowed = isAutonomyEnabledForChannel('slack');
     console.clear();
     banner();
     sectionHeader('💼', 'Slack Settings');
@@ -4326,6 +4347,7 @@ async function showSlackConfig() {
         `${dim('App Token')}   ${currentAppToken === 'Not Set' ? gray('Not Set') : green(currentAppToken.substring(0, 8) + '…' + currentAppToken.slice(-4))}`,
         `${dim('Signing Secret')} ${currentSigningSecret === 'Not Set' ? gray('Not Set') : green(currentSigningSecret.substring(0, 6) + '…' + currentSigningSecret.slice(-4))}`,
         `${dim('Auto-Reply')}  ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
+        `${dim('Autonomy')}    ${autonomyAllowed ? green(bold('● ENABLED')) : gray('○ DISABLED')}`,
     ];
     box(slLines, { title: '💼 SLACK', width: 46, color: c.brightCyan });
     console.log('');
@@ -4340,6 +4362,7 @@ async function showSlackConfig() {
                 { name: 'Set App Token (Socket Mode)', value: 'set_app' },
                 { name: 'Set Signing Secret', value: 'set_signing' },
                 { name: autoReply ? 'Disable Auto-Reply' : 'Enable Auto-Reply', value: 'toggle_auto' },
+                { name: autonomyAllowed ? 'Disable Autonomous Messaging' : 'Enable Autonomous Messaging', value: 'toggle_autonomy' },
                 { name: 'Test Connection', value: 'test' },
                 { name: 'Back', value: 'back' }
             ]
@@ -4375,6 +4398,9 @@ async function showSlackConfig() {
     } else if (action === 'toggle_auto') {
         agent.config.set('slackAutoReplyEnabled', !autoReply);
         return showSlackConfig();
+    } else if (action === 'toggle_autonomy') {
+        toggleAutonomyChannel('slack');
+        return showSlackConfig();
     } else if (action === 'test') {
         if (!agent.slack) {
             console.log('Slack channel not initialized. Please set a token and restart.');
@@ -4404,6 +4430,7 @@ async function showEmailConfig() {
     const imapSecure = agent.config.get('imapSecure') !== false;
     const imapStartTls = agent.config.get('imapStartTls') !== false;
     const timeoutMs = Number(agent.config.get('emailSocketTimeoutMs') || 15000);
+    const autonomyAllowed = isAutonomyEnabledForChannel('email');
 
     console.clear();
     banner();
@@ -4412,6 +4439,7 @@ async function showEmailConfig() {
     const lines = [
         `${dim('Enabled')}      ${enabled ? green(bold('● ON')) : gray('○ OFF')}`,
         `${dim('Address')}      ${emailAddress === 'Not Set' ? gray('Not Set') : green(emailAddress)}`,
+        `${dim('Autonomy')}     ${autonomyAllowed ? green(bold('● ENABLED')) : gray('○ DISABLED')}`,
         `${dim('SMTP')}         ${smtpHost}`,
         `${dim('IMAP')}         ${imapHost}`,
         `${dim('SMTP Security')} ${smtpSecure ? green('Direct TLS (SMTPS)') : (smtpStartTls ? green('STARTTLS') : yellow('Plain (not recommended)'))}`,
@@ -4437,6 +4465,7 @@ async function showEmailConfig() {
                 { name: 'Set SMTP Settings', value: 'set_smtp' },
                 { name: 'Set IMAP Settings', value: 'set_imap' },
                 { name: autoReply ? 'Disable Auto-Reply' : 'Enable Auto-Reply', value: 'toggle_auto' },
+                { name: autonomyAllowed ? 'Disable Autonomous Messaging' : 'Enable Autonomous Messaging', value: 'toggle_autonomy' },
                 { name: 'Test SMTP Connection', value: 'test_smtp' },
                 { name: 'Test IMAP Connection', value: 'test_imap' },
                 { name: 'Test SMTP + IMAP Connection', value: 'test' },
@@ -4453,6 +4482,11 @@ async function showEmailConfig() {
         if (next && !agent.email) {
             agent.setupChannels();
         }
+        return showEmailConfig();
+    }
+
+    if (action === 'toggle_autonomy') {
+        toggleAutonomyChannel('email');
         return showEmailConfig();
     }
 
@@ -4543,6 +4577,7 @@ async function showEmailConfig() {
 async function showDiscordConfig() {
     const currentToken = agent.config.get('discordToken') || 'Not Set';
     const autoReply = agent.config.get('discordAutoReplyEnabled');
+    const autonomyAllowed = isAutonomyEnabledForChannel('discord');
     console.clear();
     banner();
     sectionHeader('🎮', 'Discord Settings');
@@ -4550,6 +4585,7 @@ async function showDiscordConfig() {
     const dcLines = [
         `${dim('Token')}       ${currentToken === 'Not Set' ? gray('Not Set') : green('***' + currentToken.slice(-8))}`,
         `${dim('Auto-Reply')}  ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
+        `${dim('Autonomy')}    ${autonomyAllowed ? green(bold('● ENABLED')) : gray('○ DISABLED')}`,
     ];
     box(dcLines, { title: '🎮 DISCORD', width: 46, color: c.magenta });
     console.log('');
@@ -4562,6 +4598,7 @@ async function showDiscordConfig() {
             choices: [
                 { name: 'Set Bot Token', value: 'set' },
                 { name: autoReply ? 'Disable Auto-Reply' : 'Enable Auto-Reply', value: 'toggle_auto' },
+                { name: autonomyAllowed ? 'Disable Autonomous Messaging' : 'Enable Autonomous Messaging', value: 'toggle_autonomy' },
                 { name: 'Test Connection', value: 'test' },
                 { name: 'Back', value: 'back' }
             ]
@@ -4580,6 +4617,9 @@ async function showDiscordConfig() {
         return showDiscordConfig();
     } else if (action === 'toggle_auto') {
         agent.config.set('discordAutoReplyEnabled', !autoReply);
+        return showDiscordConfig();
+    } else if (action === 'toggle_autonomy') {
+        toggleAutonomyChannel('discord');
         return showDiscordConfig();
     } else if (action === 'test') {
         if (!agent.discord) {
@@ -6768,6 +6808,31 @@ function showTokenUsage() {
 async function waitKeyPress() {
     // White text so the prompt is clearly visible (gray was nearly invisible on dark terminals)
     await inquirer.prompt([{ type: 'input', name: 'continue', message: `${c.brightCyan}›${c.reset} ${c.white}Press Enter to continue...${c.reset}` }]);
+}
+
+/**
+ * Toggle whether a channel is allowed to send messages autonomously.
+ */
+function toggleAutonomyChannel(channel: string) {
+    let allowedChannels = agent.config.get('autonomyAllowedChannels');
+    if (!Array.isArray(allowedChannels)) allowedChannels = [];
+    
+    // Create a new array to ensure config.set detects the change
+    let nextChannels: string[];
+    if (allowedChannels.includes(channel)) {
+        nextChannels = allowedChannels.filter(c => c !== channel);
+    } else {
+        nextChannels = [...allowedChannels, channel];
+    }
+    agent.config.set('autonomyAllowedChannels', nextChannels);
+}
+
+/**
+ * Check if a channel is allowed to send messages autonomously.
+ */
+function isAutonomyEnabledForChannel(channel: string): boolean {
+    const allowedChannels = agent.config.get('autonomyAllowedChannels');
+    return Array.isArray(allowedChannels) && allowedChannels.includes(channel);
 }
 
 program.parse(process.argv);

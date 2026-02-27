@@ -418,9 +418,14 @@ export class Agent {
                 if (key === 'actionQueue') defaultContent = '[]';
                 if (key === 'memory') defaultContent = '{"memories":[]}';
                 if (key === 'skills') {
+                    // Try process.cwd() first (if run locally in dev), then fallback to relative to __dirname (when built/installed globally)
                     const localSkillsPath = path.resolve(process.cwd(), 'SKILLS.md');
+                    const packageSkillsPath = path.resolve(__dirname, '../../SKILLS.md'); // __dirname is dist/core/ in prod
+                    
                     if (fs.existsSync(localSkillsPath)) {
                         defaultContent = fs.readFileSync(localSkillsPath, 'utf-8');
+                    } else if (fs.existsSync(packageSkillsPath)) {
+                        defaultContent = fs.readFileSync(packageSkillsPath, 'utf-8');
                     } else {
                         defaultContent = '# OrcBot Skills Registry\n\n(Workspace SKILLS.md not found. Populate this file manually.)\n';
                     }
@@ -655,17 +660,20 @@ export class Agent {
 
         // 1. Detect if the input is missing or a common placeholder
         const isPlaceholder = !id || id === '12345' || id === '123456789' || id === '0' || id === 'undefined' || id === 'null';
+        
+        // 2. Detect if the ID is invalid for the channel (e.g. non-numeric for Telegram)
+        const isInvalidForChannel = expectedChannel === 'telegram' && /[a-zA-Z]/.test(id);
 
-        // 2. If it's a placeholder and the action source matches, autofill from metadata
-        if (isPlaceholder && metadata.source === expectedChannel) {
+        // 3. If it's a placeholder/invalid and the action source matches, autofill from metadata
+        if ((isPlaceholder || isInvalidForChannel) && metadata.source === expectedChannel) {
             const autofilled = metadata.sourceId || metadata.chatId || metadata.channelId || metadata.jid;
             if (autofilled) {
-                logger.info(`resolveContextualChatId: Autofilled placeholder "${id}" with real ID "${autofilled}" from action ${this.currentActionId} metadata`);
+                logger.info(`resolveContextualChatId: Autofilled ${isInvalidForChannel ? 'invalid' : 'placeholder'} ID "${id}" with real ID "${autofilled}" from action ${this.currentActionId} metadata`);
                 return String(autofilled);
             }
         }
 
-        // 3. Special handling for Telegram name resolution
+        // 4. Special handling for Telegram name resolution
         if (expectedChannel === 'telegram') {
             const resolved = this.resolveTelegramChatId(id);
             if (resolved) return resolved.id;
@@ -7178,8 +7186,8 @@ The plugin handles all logic internally. See the plugin source for implementatio
         if (source !== 'gateway-chat' && !sourceId) return false;
 
         const message = reason
-            ? `⚠️ I ran into an internal issue while handling that request (${reason.slice(0, 120)}). Please retry, or ask me to continue from the last successful step.`
-            : '⚠️ I hit an internal issue before I could send a full answer. Please retry, or ask me to continue from the last successful step.';
+            ? `🔄 I encountered a slight technical hitch while processing that (${reason.slice(0, 80)}...). I'm attempting to resolve it or you can try rephrasing.`
+            : '🔄 I hit a brief snag before I could deliver my full response. I am looking into it now.';
 
         try {
             if (source === 'telegram' && this.telegram) {
@@ -7712,6 +7720,10 @@ REFLECTION: <1-2 sentences>`;
             return 'trivial';
         }
 
+        // Feature/Technical request detection
+        const techKeywords = ['build', 'create', 'search', 'find', 'connect', 'add', 'implement', 'update', 'fix', 'debug', 'script', 'python', 'typescript', 'channel', 'plugin', 'skill', 'install'];
+        const isTechRequest = techKeywords.some(k => payload.includes(k));
+
         try {
             const response = await this.llm.callFast(
                 `Classify this message's complexity for an AI assistant. Message: "${payload.slice(0, 200)}"\n\nReply with ONLY one word: trivial, simple, standard, or complex.\n- trivial: greetings, thanks, acknowledgments, single emoji, casual openers\n- simple: quick factual questions, yes/no, preferences, one-line answers\n- standard: normal requests, conversation, short tasks\n- complex: research, building, coding, multi-step work, browsing, file creation, image generation`,
@@ -7719,16 +7731,20 @@ REFLECTION: <1-2 sentences>`;
             );
             const normalized = response.trim().toLowerCase().replace(/[^a-z]/g, '');
             if (['trivial', 'simple', 'standard', 'complex'].includes(normalized)) {
-                logger.debug(`Agent: Task classified as "${normalized}" for: "${payload.slice(0, 60)}..."`);
-                return normalized as any;
+                let result = normalized as any;
+                // Escalation: Technical requests should at least be 'standard' to prevent accidental early termination
+                if (isTechRequest && (result === 'trivial' || result === 'simple')) {
+                    result = 'standard';
+                }
+                logger.debug(`Agent: Task classified as "${result}" (LLM said "${normalized}") for: "${payload.slice(0, 60)}..."`);
+                return result;
             }
         } catch (e) {
             logger.debug(`Agent: LLM task classification failed, using heuristic: ${e}`);
         }
 
         // Heuristic fallback
-        if (payload.length <= 50 && !payload.includes('build') && !payload.includes('create') &&
-            !payload.includes('search') && !payload.includes('find')) {
+        if (payload.length <= 50 && !isTechRequest) {
             return 'simple';
         }
         return 'standard';
@@ -12521,7 +12537,10 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         }
 
                         // HARD BREAK after successful channel message send for "respond to" tasks
-                        // This prevents duplicate messages when the LLM doesn't set goals_met correctly
+                        // This prevents duplicate messages when the LLM doesn't set goals_met correctly.
+                        // We ONLY force this for 'trivial' tasks (greetings/thanks) or when the agent
+                        // already agrees the goal is met. We don't force it for 'simple' tasks
+                        // to allow for multi-tool execution or follow-up logic in standard requests.
                         const isChannelSend = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat', 'telegram_send_buttons', 'telegram_send_poll'].includes(toolCall.name);
                         const isFileDelivery = toolCall.name === 'send_file' || toolCall.name === 'send_image';
                         const isResponseTask = action.payload?.description?.toLowerCase().includes('respond to') ||
@@ -12529,11 +12548,13 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         const isRecoveryDeliveryTask = action.payload?.trigger === 'completion_audit_recovery';
                         const wasSuccessful = toolResult && !JSON.stringify(toolResult).toLowerCase().includes('error');
 
-                        if (isChannelSend && isResponseTask && wasSuccessful && remainingToolsInBatch === 0 && isSimpleTask) {
-                            logger.info(`Agent: Channel message sent for simple response task ${action.id}. Terminating to prevent duplicates.`);
-                            goalsMet = true;
-                            forceBreak = true;
-                            break;
+                        if (isChannelSend && isResponseTask && wasSuccessful && remainingToolsInBatch === 0) {
+                            if (taskComplexity === 'trivial' || goalsMet) {
+                                logger.info(`Agent: Channel message sent for ${taskComplexity} response task ${action.id}. Terminating to prevent duplicates.`);
+                                goalsMet = true;
+                                forceBreak = true;
+                                break;
+                            }
                         }
 
                         if (isChannelSend && isRecoveryDeliveryTask && wasSuccessful && remainingToolsInBatch === 0) {
