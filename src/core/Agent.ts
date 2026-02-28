@@ -760,15 +760,31 @@ export class Agent {
         return resolved;
     }
 
+    private isPathRestricted(targetPath: string): boolean {
+        const normalized = path.normalize(targetPath).toLowerCase();
+        // Block access to node_modules and .git to prevent accidental modification
+        // or deep-inspection of system/dependency directories.
+        return normalized.split(path.sep).some(part => 
+            part === 'node_modules' || part === '.git'
+        );
+    }
+
     private resolveAgentWorkspacePath(targetPath: string): string {
         const raw = String(targetPath || '').trim();
+        let resolved: string;
         if (!raw) {
-            return this.getBuildWorkspacePath();
+            resolved = this.getBuildWorkspacePath();
+        } else if (path.isAbsolute(raw)) {
+            resolved = path.resolve(raw);
+        } else {
+            resolved = path.resolve(this.getBuildWorkspacePath(), raw);
         }
-        if (path.isAbsolute(raw)) {
-            return path.resolve(raw);
+
+        if (this.isPathRestricted(resolved)) {
+            throw new Error(`Access to restricted path "${resolved}" is blocked. Agent skills are not permitted to access node_modules or .git directories.`);
         }
-        return path.resolve(this.getBuildWorkspacePath(), raw);
+
+        return resolved;
     }
 
 
@@ -2779,160 +2795,186 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             isDangerous: true,
             isElevated: true,
             handler: async (args: any) => {
-                let command = args.command || args.cmd || args.text;
-                if (!command) return 'Error: Missing command string.';
+                try {
+                    let command = args.command || args.cmd || args.text;
+                    if (!command) return 'Error: Missing command string.';
 
-                // Log the command being executed
-                logger.info(`run_command: Executing command: ${command}`);
+                    // Log the command being executed
+                    logger.info(`run_command: Executing command: ${command}`);
 
-                const isWindows = process.platform === 'win32';
-                const trimmedCmd = String(command).trim();
+                    const isWindows = process.platform === 'win32';
+                    const trimmedCmd = String(command).trim();
 
-                // Detect problematic Unix-style commands on Windows
-                if (isWindows) {
-                    // Check for Unix-style multiline echo
-                    if (trimmedCmd.includes("echo '") && trimmedCmd.includes("\n")) {
-                        return `Error: Multiline echo commands don't work on Windows. Use the create_custom_skill to write files, or use PowerShell's Set-Content/Out-File, or write files one line at a time.`;
+                    // Detect problematic Unix-style commands on Windows
+                    if (isWindows) {
+                        // Check for Unix-style multiline echo
+                        if (trimmedCmd.includes("echo '") && trimmedCmd.includes("\n")) {
+                            return `Error: Multiline echo commands don't work on Windows. Use the create_custom_skill to write files, or use PowerShell's Set-Content/Out-File, or write files one line at a time.`;
+                        }
                     }
-                }
 
-                // Smart handling for "cd <path> ; <command>" or "cd <path> && <command>" patterns
-                // Extract the directory and convert to use cwd parameter instead
-                // Note: Only handles cd at the start of command. Multi-command chains like
-                // "git status && cd /path && git pull" are not supported.
-                let workingDir = args.cwd
-                    ? this.resolveAgentWorkspacePath(String(args.cwd))
-                    : this.config.get('commandWorkingDir')
-                        ? this.resolveAgentWorkspacePath(String(this.config.get('commandWorkingDir')))
-                        : this.getBuildWorkspacePath();
-                let actualCommand = command;
+                    // Smart handling for "cd <path> ; <command>" or "cd <path> && <command>" patterns
+                    // Extract the directory and convert to use cwd parameter instead
+                    // Note: Only handles cd at the start of command. Multi-command chains like
+                    // "git status && cd /path && git pull" are not supported.
+                    let workingDir = args.cwd
+                        ? this.resolveAgentWorkspacePath(String(args.cwd))
+                        : this.config.get('commandWorkingDir')
+                            ? this.resolveAgentWorkspacePath(String(this.config.get('commandWorkingDir')))
+                            : this.getBuildWorkspacePath();
+                    let actualCommand = command;
 
-                // Only attempt pattern extraction if explicit cwd is not already provided
-                if (!args.cwd) {
-                    // Match patterns like: "cd /path/to/dir ; command" or "cd C:\path ; command"
-                    // Supports paths with or without quotes
-                    const cdPattern = /^\s*cd\s+([^\s;&]+|'[^']+'|"[^"]+"|`[^`]+`)\s*[;&]+\s*(.+)$/i;
-                    const cdMatch = trimmedCmd.match(cdPattern);
+                    // Only attempt pattern extraction if explicit cwd is not already provided
+                    if (!args.cwd) {
+                        // Match patterns like: "cd /path/to/dir ; command" or "cd C:\path ; command"
+                        // Supports paths with or without quotes
+                        const cdPattern = /^\s*cd\s+([^\s;&]+|'[^']+'|"[^"]+"|`[^`]+`)\s*[;&]+\s*(.+)$/i;
+                        const cdMatch = trimmedCmd.match(cdPattern);
 
-                    if (cdMatch) {
-                        let targetDir = cdMatch[1].trim();
-                        const remainingCmd = cdMatch[2].trim();
+                        if (cdMatch) {
+                            let targetDir = cdMatch[1].trim();
+                            const remainingCmd = cdMatch[2].trim();
 
-                        // Remove surrounding quotes if present
-                        if ((targetDir.startsWith('"') && targetDir.endsWith('"')) ||
-                            (targetDir.startsWith("'") && targetDir.endsWith("'")) ||
-                            (targetDir.startsWith('`') && targetDir.endsWith('`'))) {
-                            targetDir = targetDir.slice(1, -1);
+                            // Remove surrounding quotes if present
+                            if ((targetDir.startsWith('"') && targetDir.endsWith('"')) ||
+                                (targetDir.startsWith("'") && targetDir.endsWith("'")) ||
+                                (targetDir.startsWith('`') && targetDir.endsWith('`'))) {
+                                targetDir = targetDir.slice(1, -1);
+                            }
+
+                            // Basic path validation to prevent directory traversal attacks
+                            // Resolve to absolute path and check for suspicious patterns
+                            const resolvedPath = path.resolve(workingDir, targetDir);
+
+                            // Safeguard: Check if the target directory is restricted
+                            if (this.isPathRestricted(resolvedPath)) {
+                                return `Error: Access to restricted directory "${resolvedPath}" is blocked. Manipulation of node_modules or .git is not allowed.`;
+                            }
+
+                            // Warn if path contains excessive parent directory references
+                            // Note: This is a heuristic check; the command will still execute
+                            // but administrators are alerted to review potentially suspicious activity
+                            const parentDirCount = (targetDir.match(/\.\./g) || []).length;
+                            if (parentDirCount > 2) {
+                                logger.warn(`run_command: Suspicious path with ${parentDirCount} parent directory references: ${targetDir}`);
+                            }
+
+                            // Use the extracted directory as cwd and run only the remaining command
+                            workingDir = resolvedPath;
+                            actualCommand = remainingCmd;
+
+                            logger.debug(`run_command: Detected directory change pattern. cwd="${workingDir}", actualCommand="${actualCommand}"`);
+                        }
+                    }
+
+                    const firstToken = actualCommand.trim().split(/\s+/)[0]?.toLowerCase() || '';
+                    
+                    // Direct manipulation check for restricted folders within the command string
+                    const normalizedCmd = actualCommand.toLowerCase();
+                    const targetsRestricted = normalizedCmd.includes('node_modules') || normalizedCmd.includes('.git');
+                    if (targetsRestricted) {
+                        // Allow common safe/read-only or maintenance commands
+                        const isNpm = firstToken === 'npm' || firstToken === 'pnpm' || firstToken === 'yarn';
+                        const isSafeGit = firstToken === 'git' && (normalizedCmd.includes('status') || normalizedCmd.includes('log') || normalizedCmd.includes('diff'));
+                        
+                        // But block any command that looks like it's trying to modify/delete those folders directly
+                        const isModifying = /\b(rm|del|remove|delete|mv|move|mkdir|touch|tee)\b/.test(normalizedCmd);
+                        
+                        if (isModifying && !isNpm && !isSafeGit) {
+                             return `Error: Command targets restricted paths (node_modules or .git). Manipulation of these directories is not allowed.`;
+                        }
+                    }
+
+                    const allowList = (this.config.get('commandAllowList') || []) as string[];
+                    const denyList = (this.config.get('commandDenyList') || []) as string[];
+                    const safeMode = this.config.get('safeMode');
+                    const sudoMode = this.config.get('sudoMode');
+
+                    if (safeMode) {
+                        return 'Error: Safe mode is enabled. run_command is disabled.';
+                    }
+
+                    if (!sudoMode) {
+                        if (denyList.map(s => s.toLowerCase()).includes(firstToken)) {
+                            return `Error: Command '${firstToken}' is blocked by commandDenyList.`;
                         }
 
-                        // Basic path validation to prevent directory traversal attacks
-                        // Resolve to absolute path and check for suspicious patterns
-                        const resolvedPath = path.resolve(workingDir, targetDir);
-
-                        // Warn if path contains excessive parent directory references
-                        // Note: This is a heuristic check; the command will still execute
-                        // but administrators are alerted to review potentially suspicious activity
-                        const parentDirCount = (targetDir.match(/\.\./g) || []).length;
-                        if (parentDirCount > 2) {
-                            logger.warn(`run_command: Suspicious path with ${parentDirCount} parent directory references: ${targetDir}`);
+                        if (allowList.length > 0 && !allowList.map(s => s.toLowerCase()).includes(firstToken)) {
+                            return `Error: Command '${firstToken}' is not in commandAllowList.`;
                         }
-
-                        // Use the extracted directory as cwd and run only the remaining command
-                        workingDir = resolvedPath;
-                        actualCommand = remainingCmd;
-
-                        logger.debug(`run_command: Detected directory change pattern. cwd="${workingDir}", actualCommand="${actualCommand}"`);
-                    }
-                }
-
-                const firstToken = actualCommand.trim().split(/\s+/)[0]?.toLowerCase() || '';
-                const allowList = (this.config.get('commandAllowList') || []) as string[];
-                const denyList = (this.config.get('commandDenyList') || []) as string[];
-                const safeMode = this.config.get('safeMode');
-                const sudoMode = this.config.get('sudoMode');
-
-                if (safeMode) {
-                    return 'Error: Safe mode is enabled. run_command is disabled.';
-                }
-
-                if (!sudoMode) {
-                    if (denyList.map(s => s.toLowerCase()).includes(firstToken)) {
-                        return `Error: Command '${firstToken}' is blocked by commandDenyList.`;
                     }
 
-                    if (allowList.length > 0 && !allowList.map(s => s.toLowerCase()).includes(firstToken)) {
-                        return `Error: Command '${firstToken}' is not in commandAllowList.`;
-                    }
-                }
+                    const baseTimeoutMs = parseInt(args.timeoutMs || args.timeout || this.config.get('commandTimeoutMs') || 120000, 10);
+                    const retries = parseInt(args.retries || this.config.get('commandRetries') || 1, 10);
+                    const timeoutBackoffFactor = Number(args.timeoutBackoffFactor || this.config.get('commandTimeoutBackoffFactor') || 1.5);
+                    const maxTimeoutMs = parseInt(args.maxTimeoutMs || this.config.get('commandMaxTimeoutMs') || 600000, 10);
 
-                const baseTimeoutMs = parseInt(args.timeoutMs || args.timeout || this.config.get('commandTimeoutMs') || 120000, 10);
-                const retries = parseInt(args.retries || this.config.get('commandRetries') || 1, 10);
-                const timeoutBackoffFactor = Number(args.timeoutBackoffFactor || this.config.get('commandTimeoutBackoffFactor') || 1.5);
-                const maxTimeoutMs = parseInt(args.maxTimeoutMs || this.config.get('commandMaxTimeoutMs') || 600000, 10);
+                    const { exec } = require('child_process');
 
-                const { exec } = require('child_process');
-
-                const runOnce = (attemptTimeoutMs: number) => new Promise<string>((resolve) => {
-                    const execOptions: any = { cwd: workingDir };
-                    // On Windows, use PowerShell as the shell so PowerShell cmdlets work.
-                    // Do NOT pass the `timeout` option here on Windows — it relies on SIGKILL
-                    // which doesn't work cross-platform.  We handle timeout manually below.
-                    if (process.platform === 'win32') {
-                        execOptions.shell = 'powershell.exe';
-                    }
-                    const child = exec(actualCommand, execOptions, (error: any, stdout: string, stderr: string) => {
-                        clearTimeout(killTimer);
-                        if (error) {
-                            if (error.killed || timedOut) {
-                                resolve(`Error: Command timed out after ${Math.round(attemptTimeoutMs / 1000)} seconds.`);
+                    const runOnce = (attemptTimeoutMs: number) => new Promise<string>((resolve) => {
+                        const execOptions: any = { cwd: workingDir };
+                        // On Windows, use PowerShell as the shell so PowerShell cmdlets work.
+                        // Do NOT pass the `timeout` option here on Windows — it relies on SIGKILL
+                        // which doesn't work cross-platform.  We handle timeout manually below.
+                        if (process.platform === 'win32') {
+                            execOptions.shell = 'powershell.exe';
+                        }
+                        const child = exec(actualCommand, execOptions, (error: any, stdout: string, stderr: string) => {
+                            clearTimeout(killTimer);
+                            if (error) {
+                                if (error.killed || timedOut) {
+                                    resolve(`Error: Command timed out after ${Math.round(attemptTimeoutMs / 1000)} seconds.`);
+                                    return;
+                                }
+                                resolve(`Error: ${error.message}\nStderr: ${stderr}`);
                                 return;
                             }
-                            resolve(`Error: ${error.message}\nStderr: ${stderr}`);
-                            return;
-                        }
-                        let out = stdout || stderr || 'Command executed successfully (no output)';
-                        // Cap output to prevent context flooding
-                        const MAX_OUT = 8_000;
-                        if (out.length > MAX_OUT) {
-                            out = out.substring(0, MAX_OUT) + `\n\n[...truncated — ${out.length} chars total. Pipe to a file or use tail/head to get a smaller slice.]`;
-                        }
-                        resolve(out);
+                            let out = stdout || stderr || 'Command executed successfully (no output)';
+                            // Cap output to prevent context flooding
+                            const MAX_OUT = 8_000;
+                            if (out.length > MAX_OUT) {
+                                out = out.substring(0, MAX_OUT) + `\n\n[...truncated — ${out.length} chars total. Pipe to a file or use tail/head to get a smaller slice.]`;
+                            }
+                            resolve(out);
+                        });
+
+                        let timedOut = false;
+                        const killTimer = setTimeout(() => {
+                            timedOut = true;
+                            if (process.platform === 'win32' && child.pid) {
+                                // On Windows exec() with PowerShell doesn't propagate SIGKILL to the
+                                // child tree.  Use taskkill /F /T to forcefully kill the whole tree.
+                                require('child_process').exec(`taskkill /PID ${child.pid} /T /F`, () => { });
+                            } else {
+                                child.kill('SIGKILL');
+                            }
+                        }, attemptTimeoutMs);
+
+                        child.on('error', (err: any) => {
+                            clearTimeout(killTimer);
+                            resolve(`Error: Failed to start command: ${err?.message || err}`);
+                        });
                     });
 
-                    let timedOut = false;
-                    const killTimer = setTimeout(() => {
-                        timedOut = true;
-                        if (process.platform === 'win32' && child.pid) {
-                            // On Windows exec() with PowerShell doesn't propagate SIGKILL to the
-                            // child tree.  Use taskkill /F /T to forcefully kill the whole tree.
-                            require('child_process').exec(`taskkill /PID ${child.pid} /T /F`, () => { });
-                        } else {
-                            child.kill('SIGKILL');
+                    let attempt = 0;
+                    let lastResult = '';
+                    while (attempt <= retries) {
+                        const attemptTimeoutMs = Math.min(
+                            maxTimeoutMs,
+                            Math.max(1000, Math.round(baseTimeoutMs * Math.pow(Math.max(timeoutBackoffFactor, 1), attempt)))
+                        );
+                        lastResult = await runOnce(attemptTimeoutMs);
+                        if (!lastResult.startsWith('Error:')) return lastResult;
+                        attempt++;
+                        if (attempt <= retries) {
+                            logger.warn(`run_command retry ${attempt}/${retries} (timeout=${attemptTimeoutMs}ms) after error: ${lastResult}`);
                         }
-                    }, attemptTimeoutMs);
-
-                    child.on('error', (err: any) => {
-                        clearTimeout(killTimer);
-                        resolve(`Error: Failed to start command: ${err?.message || err}`);
-                    });
-                });
-
-                let attempt = 0;
-                let lastResult = '';
-                while (attempt <= retries) {
-                    const attemptTimeoutMs = Math.min(
-                        maxTimeoutMs,
-                        Math.max(1000, Math.round(baseTimeoutMs * Math.pow(Math.max(timeoutBackoffFactor, 1), attempt)))
-                    );
-                    lastResult = await runOnce(attemptTimeoutMs);
-                    if (!lastResult.startsWith('Error:')) return lastResult;
-                    attempt++;
-                    if (attempt <= retries) {
-                        logger.warn(`run_command retry ${attempt}/${retries} (timeout=${attemptTimeoutMs}ms) after error: ${lastResult}`);
                     }
-                }
 
-                return lastResult;
+                    return lastResult;
+                } catch (e) {
+                    return `Error executing command: ${e}`;
+                }
             }
         });
 
@@ -2942,17 +2984,30 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             description: 'Spawn a long-running or interactive shell command in the background as a named session. Returns immediately — the process runs asynchronously. Use shell_read to see output later. Ideal for dev servers, build watchers, or any non-terminating command. On Windows uses PowerShell.',
             usage: 'shell_start(id, command, cwd?)',
             handler: async (args: any) => {
-                const id = args.id || args.name;
-                const command = args.command || args.cmd;
-                const cwd = args.cwd
-                    ? this.resolveAgentWorkspacePath(String(args.cwd))
-                    : this.getBuildWorkspacePath();
-
-                if (!id) return 'Error: Missing session id.';
-                if (!command) return 'Error: Missing command.';
-                if (this.config.get('safeMode')) return 'Error: Safe mode is enabled. shell_start is disabled.';
-
                 try {
+                    const id = args.id || args.name;
+                    const command = args.command || args.cmd;
+                    
+                    if (!id) return 'Error: Missing session id.';
+                    if (!command) return 'Error: Missing command.';
+                    if (this.config.get('safeMode')) return 'Error: Safe mode is enabled. shell_start is disabled.';
+
+                    const cwd = args.cwd
+                        ? this.resolveAgentWorkspacePath(String(args.cwd))
+                        : this.getBuildWorkspacePath();
+
+                    // Direct manipulation check for restricted folders within the command string
+                    const normalizedCmd = String(command).toLowerCase();
+                    if (normalizedCmd.includes('node_modules') || normalizedCmd.includes('.git')) {
+                        const firstToken = normalizedCmd.trim().split(/\s+/)[0]?.toLowerCase() || '';
+                        const isSafeException = ['npm', 'pnpm', 'yarn', 'git'].includes(firstToken);
+                        const isModifying = /\b(rm|del|remove|delete|mv|move|mkdir|touch|tee)\b/.test(normalizedCmd);
+                        
+                        if (isModifying && !isSafeException) {
+                             return `Error: Command targets restricted paths (node_modules or .git). Manipulation of these directories is not allowed.`;
+                        }
+                    }
+
                     const session = shellSessions.start(String(id), String(command), cwd);
                     // Give it 500ms to surface any immediate launch errors
                     await new Promise(r => setTimeout(r, 500));
@@ -2960,7 +3015,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                     const preview = session.read(5).join('\n');
                     return `Session "${id}" started (PID=${info.pid}, status=${info.status}).${preview ? `\n\nFirst output:\n${preview}` : '\n(No output yet — use shell_read to check later)'}`;
                 } catch (e) {
-                    return `Error starting session "${id}": ${e}`;
+                    return `Error starting session: ${e}`;
                 }
             }
         });
@@ -3305,6 +3360,11 @@ ${commandGuidance}`;
                     return `Error: Skill "${skillName}" not found or is a core skill that cannot be modified.`;
                 }
 
+                // Safeguard: Check if the plugin path is restricted
+                if (this.isPathRestricted(targetSkill.pluginPath)) {
+                    return `Error: Skill "${skillName}" is in a restricted path and cannot be modified.`;
+                }
+
                 try {
                     const pluginContent = fs.readFileSync(targetSkill.pluginPath, 'utf8');
                     let specContent = '';
@@ -3451,6 +3511,12 @@ Output the fixed CommonJS code now:`;
 
                     const patchFileName = `${skillName.replace(/[^a-zA-Z0-9_-]/g, '_')}_patch.js`;
                     const patchFilePath = path.resolve(pluginsDir, patchFileName);
+
+                    // Safeguard: Check if the patch path is restricted
+                    if (this.isPathRestricted(patchFilePath)) {
+                        return `Error: Cannot create patch in a restricted directory.`;
+                    }
+
                     fs.writeFileSync(patchFilePath, cleanCode, 'utf8');
 
                     // Reload plugins so the patch takes effect immediately
@@ -4992,6 +5058,11 @@ Output JSON now:`;
 
                 const fileName = `${name}.ts`;
                 const filePath = path.resolve(pluginsDir, fileName);
+
+                // Safeguard: Check if the target path is restricted
+                if (this.isPathRestricted(filePath)) {
+                    return `Error: Restricted path detected. Cannot create skills in node_modules or .git.`;
+                }
 
                 // Sanitize code: Remove outer function wrappers if the AI messed up
                 let sanitizedCode = code.trim();
