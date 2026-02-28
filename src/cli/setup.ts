@@ -367,6 +367,12 @@ export async function runSetup() {
         },
         {
             type: 'input',
+            name: 'projectRoot',
+            message: 'Project Root Directory (for search/edit skills):',
+            default: currentConfig.projectRoot || process.cwd()
+        },
+        {
+            type: 'input',
             name: 'pluginsPath',
             message: 'Plugins Directory:',
             default: currentConfig.pluginsPath || path.join(dataHome, 'plugins')
@@ -381,6 +387,7 @@ export async function runSetup() {
         agentName: answers.agentName,
         llmProvider: answers.llmProvider || undefined,
         modelName: answers.modelName,
+        projectRoot: answers.projectRoot || '.',
         pluginsPath: answers.pluginsPath || path.join(dataHome, 'plugins'),
         memoryPath: path.join(dataHome, 'memory.json'),
         userProfilePath: path.join(dataHome, 'USER.md'),

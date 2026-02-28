@@ -6197,7 +6197,7 @@ Be thorough and academic.`;
             // Skill: Read Codebase File
             this.skills.registerSkill({
                 name: 'read_codebase_file',
-                description: 'Read the contents of a source file in the project codebase. Requires enableSelfModification to be true.',
+                description: 'Read the contents of a source file in the project codebase. Requires enableSelfModification to be true. Cannot read from node_modules or .git.',
                 usage: 'read_codebase_file(path)',
                 handler: async (args: any) => {
                     if (!this.config.get('enableSelfModification')) {
@@ -6205,14 +6205,10 @@ Be thorough and academic.`;
                     }
                     const filePath = args.path || args.file;
                     if (!filePath) return 'Error: Missing file path.';
-                    const fullPath = path.resolve(process.cwd(), filePath);
-                    
-                    // Security: Ensure it's within the project directory
-                    if (!fullPath.startsWith(process.cwd())) {
-                        return 'Error: Access denied. Path must be within the project directory.';
-                    }
 
                     try {
+                        const fullPath = this.resolveAgentWorkspacePath(filePath);
+                        
                         if (!fs.existsSync(fullPath)) return `Error: File not found: ${filePath}`;
                         const content = fs.readFileSync(fullPath, 'utf-8');
                         // Truncate if too large for context
@@ -6228,25 +6224,86 @@ Be thorough and academic.`;
 
             // Skill: Search Codebase
             this.skills.registerSkill({
+            // Skill: Search Codebase
+            this.skills.registerSkill({
                 name: 'search_codebase',
-                description: 'Search for a string or regex across the project source code. Requires enableSelfModification to be true.',
-                usage: 'search_codebase(query, include?)',
+                description: 'Search for source code using multiple keywords or a regex. Supports context lines (contextLines) to see surrounding code. Use multiple terms in "query" (e.g., "login AND validate") to target specific logic. Excludes node_modules and .git.',
+                usage: 'search_codebase(query, include?, contextLines?)',
                 handler: async (args: any) => {
                     if (!this.config.get('enableSelfModification')) {
-                        return 'Error: Self-Modification is disabled. To enable codebase access, ask the user to toggle "Self-Modification" in the TUI security menu.';
+                        return 'Error: Self-Modification is disabled.';
                     }
-                    const query = args.query || args.text || args.pattern;
-                    const include = args.include || 'src/**/*.ts';
+                    let query = args.query || args.text || args.pattern;
+                    const include = args.include || '*';
+                    const contextLines = parseInt(args.contextLines || args.context || '0', 10);
+                    const projectRoot = this.config.get('projectRoot') || process.cwd();
+
                     if (!query) return 'Error: Missing search query.';
 
                     try {
                         const { execSync } = require('child_process');
-                        // Use a safe grep-like approach (powershell compatible)
-                        const cmd = `git grep -n "${query.replace(/"/g, '\\"')}" -- "${include}"`;
-                        const output = execSync(cmd, { encoding: 'utf-8', timeout: 10000 });
+                        
+                        // Advanced multi-term "AND" search:
+                        // We chain git grep -l to find files containing ALL terms, 
+                        // then run a final grep with context on those files.
+                        const terms = String(query).split(/\s+AND\s+/i).map(t => t.trim());
+                        let fileList = '';
+                        
+                        if (terms.length > 1) {
+                            // Find files containing all terms
+                            let grepChain = `git grep -l --exclude-standard "${terms[0].replace(/"/g, '\\"')}" -- "${include}" ":!node_modules" ":!.git"`;
+                            for (let i = 1; i < terms.length; i++) {
+                                grepChain += ` | xargs git grep -l "${terms[i].replace(/"/g, '\\"')}"`;
+                            }
+                            try {
+                                fileList = execSync(grepChain, { cwd: projectRoot, encoding: 'utf-8' }).trim();
+                            } catch (e) {
+                                return 'No matches found containing all specified terms.';
+                            }
+                        }
+
+                        // Final search with context
+                        const targetPattern = terms[terms.length - 1]; // Use the last term for highlighting
+                        const contextFlag = contextLines > 0 ? `-C ${contextLines}` : '';
+                        const targetFiles = fileList ? fileList.split('\n').map(f => `"${f}"`).join(' ') : `"${include}" ":!node_modules" ":!.git"`;
+                        
+                        const cmd = `git grep -n ${contextFlag} --exclude-standard "${targetPattern.replace(/"/g, '\\"')}" -- ${targetFiles}`;
+                        const output = execSync(cmd, { 
+                            cwd: projectRoot,
+                            encoding: 'utf-8', 
+                            timeout: 15000,
+                            maxBuffer: 2 * 1024 * 1024
+                        });
+                        
                         return output || 'No matches found.';
                     } catch (e: any) {
-                        return `No matches found or search error: ${e.message}`;
+                        if (e.status === 1) return 'No matches found.';
+                        return `Search error: ${e.message}`;
+                    }
+                }
+            });
+
+            // Skill: Locate Code Symbol
+            this.skills.registerSkill({
+                name: 'locate_code_symbol',
+                description: 'Quickly find the definition of a function, class, interface, or variable. Targets "export const/class/function" etc.',
+                usage: 'locate_code_symbol(symbolName)',
+                handler: async (args: any) => {
+                    const symbol = args.symbolName || args.symbol || args.name;
+                    if (!symbol) return 'Error: Missing symbol name.';
+                    const projectRoot = this.config.get('projectRoot') || process.cwd();
+
+                    try {
+                        const { execSync } = require('child_process');
+                        // Regex targets common JS/TS definition patterns
+                        const pattern = `(export\\s+)?(const|class|function|interface|type|let|var)\\s+\\b${symbol}\\b`;
+                        const cmd = `git grep -nEi "${pattern.replace(/"/g, '\\"')}" -- "*" ":!node_modules" ":!.git"`;
+                        
+                        const output = execSync(cmd, { cwd: projectRoot, encoding: 'utf-8', timeout: 10000 });
+                        return output || `Symbol "${symbol}" not found.`;
+                    } catch (e: any) {
+                        if (e.status === 1) return `Symbol "${symbol}" not found.`;
+                        return `Error locating symbol: ${e.message}`;
                     }
                 }
             });
@@ -6254,8 +6311,8 @@ Be thorough and academic.`;
             // Skill: Edit Codebase File
             this.skills.registerSkill({
                 name: 'edit_codebase_file',
-                description: 'Replace text in a codebase file. Use specific, unique old_text to avoid accidental matches. Requires enableSelfModification to be true.',
-                usage: 'edit_codebase_file(path, old_text, new_text)',
+                description: 'Replace text in a codebase file. Use specific, unique old_text to avoid accidental matches. Provide context (optional) to ensure the replacement happens only in the correct place. Requires enableSelfModification to be true. Cannot modify node_modules or .git.',
+                usage: 'edit_codebase_file(path, old_text, new_text, context?, expectedReplacements?)',
                 handler: async (args: any) => {
                     if (!this.config.get('enableSelfModification')) {
                         return 'Error: Self-Modification is disabled. To enable codebase access, ask the user to toggle "Self-Modification" in the TUI security menu.';
@@ -6263,32 +6320,47 @@ Be thorough and academic.`;
                     const filePath = args.path || args.file;
                     const oldText = args.old_text || args.old;
                     const newText = args.new_text || args.new;
+                    const context = args.context; // Optional block of code around the replacement
+                    const expectedCount = parseInt(args.expectedReplacements || args.expectedCount || '1', 10);
 
                     if (!filePath || oldText === undefined || newText === undefined) {
                         return 'Error: Missing path, old_text, or new_text.';
                     }
 
-                    const fullPath = path.resolve(process.cwd(), filePath);
-                    if (!fullPath.startsWith(process.cwd())) {
-                        return 'Error: Access denied. Path must be within the project directory.';
-                    }
-
                     try {
+                        // Use the new resolveAgentWorkspacePath which has node_modules/.git protection
+                        const fullPath = this.resolveAgentWorkspacePath(filePath);
+                        
                         if (!fs.existsSync(fullPath)) return `Error: File not found: ${filePath}`;
                         let content = fs.readFileSync(fullPath, 'utf-8');
                         
-                        if (!content.includes(oldText)) {
-                            return 'Error: The exact old_text was not found in the file. Check for whitespace/indentation issues.';
-                        }
+                        // If context is provided, verify the whole block exists
+                        if (context) {
+                            if (!content.includes(context)) {
+                                return 'Error: The provided context block was not found in the file. Replacement aborted for safety.';
+                            }
+                            if (!context.includes(oldText)) {
+                                return 'Error: The old_text is not contained within the provided context block.';
+                            }
+                            
+                            // Target replacement within context
+                            const newContext = context.replace(oldText, newText);
+                            const finalContent = content.replace(context, newContext);
+                            fs.writeFileSync(fullPath, finalContent);
+                        } else {
+                            // Standard replacement with uniqueness check
+                            if (!content.includes(oldText)) {
+                                return 'Error: The exact old_text was not found in the file. Check for whitespace/indentation issues.';
+                            }
 
-                        // Check for multiple occurrences to avoid ambiguity
-                        const occurrences = content.split(oldText).length - 1;
-                        if (occurrences > 1) {
-                            return `Error: Found ${occurrences} occurrences of old_text. Please provide more context to identify a unique replacement.`;
-                        }
+                            const occurrences = content.split(oldText).length - 1;
+                            if (occurrences !== expectedCount) {
+                                return `Error: Expected ${expectedCount} occurrence(s) of old_text but found ${occurrences}. Please provide more context or adjust expectedReplacements.`;
+                            }
 
-                        const newContent = content.replace(oldText, newText);
-                        fs.writeFileSync(fullPath, newContent);
+                            const finalContent = content.split(oldText).join(newText);
+                            fs.writeFileSync(fullPath, finalContent);
+                        }
                         
                         logger.warn(`Agent: Modified codebase file: ${filePath} (Self-Modification)`);
                         return `Successfully modified ${filePath}. You should now verify the change by running a build or tests.`;

@@ -78,6 +78,7 @@ export const AgentConfigSchema = z.object({
     commandRetries: coerceNumber.default(1),
     commandWorkingDir: z.string().optional(),
     buildWorkspacePath: z.string().optional(),
+    projectRoot: z.string().optional(),
     commandAllowList: z.array(z.string()).default([
         'npm', 'node', 'npx', 'git', 'python', 'pip', 'pip3', 'curl', 'wget', 'powershell',
         'pwsh', 'bash', 'apt', 'apt-get', 'yum', 'dnf', 'pacman', 'brew', 'sudo', 'systemctl',

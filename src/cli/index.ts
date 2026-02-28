@@ -6084,7 +6084,33 @@ async function showConfigMenu() {
 
     const config = agent.config.getAll();
     // Ensure we show explicit keys relative to core config
-    const keys = ['agentName', 'llmProvider', 'modelName', 'openaiApiKey', 'anthropicApiKey', 'openrouterApiKey', 'openrouterBaseUrl', 'openrouterReferer', 'openrouterAppName', 'googleApiKey', 'nvidiaApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl', 'searchProviderOrder', 'captchaApiKey', 'autonomyInterval', 'telegramToken', 'whatsappEnabled', 'slackBotToken', 'slackAutoReplyEnabled', 'whatsappAutoReplyEnabled', 'progressFeedbackEnabled', 'progressFeedbackStepInterval', 'progressFeedbackForceInitial', 'progressFeedbackTypingOnly', 'enforceExplicitFileRequestForSendFile', 'onboardingQuestionnaireEnabled', 'reconnectBriefingEnabled', 'reconnectBriefingThresholdDays', 'reconnectBriefingMaxCompletions', 'reconnectBriefingMaxPending', 'recoveryDedupWindowHours', 'memoryContentMaxLength', 'memoryFlushSoftThreshold', 'memoryFlushCooldownMinutes', 'memoryExtendedContextLimit', 'threadContextRecentN', 'threadContextRelevantN', 'threadContextMaxLineLen', 'threadContextOtherMemoriesN', 'journalContextLimit', 'learningContextLimit', 'userContextLimit', 'stepCompactionThreshold', 'stepCompactionPreserveFirst', 'stepCompactionPreserveLast', 'timeSignalHighRiskNoMessageSeconds', 'timeSignalMediumRiskSilentSteps', 'timeSignalMediumRiskSinceDeliverySeconds', 'memoryContextLimit', 'memoryEpisodicLimit', 'memoryConsolidationThreshold', 'memoryConsolidationBatch', 'maxStepsPerAction', 'maxMessagesPerAction', 'memoryPath', 'buildWorkspacePath', 'commandWorkingDir', 'commandAllowList', 'commandDenyList', 'safeMode', 'sudoMode', 'pluginAllowList', 'pluginDenyList', 'browserProfileDir', 'browserProfileName', 'sessionScope', 'guidanceMode', 'guidanceRepeatQuestionThreshold', 'guidanceShortReplyMaxWords', 'guidanceShortReplyMaxChars', 'guidanceAckPatterns', 'guidanceLowValuePatterns', 'guidanceClarificationKeywords', 'guidanceQuestionStopWords', 'robustReasoningMode', 'reasoningExposeChecklist', 'reasoningChecklistMaxItems', 'orcbotControlEnabled', 'orcbotControlCliAllowList', 'orcbotControlCliDenyList', 'orcbotControlTimeoutMs'] as const;
+    const keys = [
+        'agentName', 'llmProvider', 'modelName', 'projectRoot', 'openaiApiKey', 'anthropicApiKey',
+        'openrouterApiKey', 'openrouterBaseUrl', 'openrouterReferer', 'openrouterAppName',
+        'googleApiKey', 'nvidiaApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl',
+        'searchProviderOrder', 'captchaApiKey', 'autonomyInterval', 'telegramToken',
+        'whatsappEnabled', 'slackBotToken', 'slackAutoReplyEnabled', 'whatsappAutoReplyEnabled',
+        'progressFeedbackEnabled', 'progressFeedbackStepInterval', 'progressFeedbackForceInitial',
+        'progressFeedbackTypingOnly', 'enforceExplicitFileRequestForSendFile', 'onboardingQuestionnaireEnabled',
+        'reconnectBriefingEnabled', 'reconnectBriefingThresholdDays', 'reconnectBriefingMaxCompletions',
+        'reconnectBriefingMaxPending', 'recoveryDedupWindowHours', 'memoryContentMaxLength',
+        'memoryFlushSoftThreshold', 'memoryFlushCooldownMinutes', 'memoryExtendedContextLimit',
+        'threadContextRecentN', 'threadContextRelevantN', 'threadContextMaxLineLen',
+        'threadContextOtherMemoriesN', 'journalContextLimit', 'learningContextLimit',
+        'userContextLimit', 'stepCompactionThreshold', 'stepCompactionPreserveFirst',
+        'stepCompactionPreserveLast', 'timeSignalHighRiskNoMessageSeconds',
+        'timeSignalMediumRiskSilentSteps', 'timeSignalMediumRiskSinceDeliverySeconds',
+        'memoryContextLimit', 'memoryEpisodicLimit', 'memoryConsolidationThreshold',
+        'memoryConsolidationBatch', 'maxStepsPerAction', 'maxMessagesPerAction',
+        'memoryPath', 'buildWorkspacePath', 'commandWorkingDir', 'commandAllowList',
+        'commandDenyList', 'safeMode', 'sudoMode', 'pluginAllowList', 'pluginDenyList',
+        'browserProfileDir', 'browserProfileName', 'sessionScope', 'guidanceMode',
+        'guidanceRepeatQuestionThreshold', 'guidanceShortReplyMaxWords', 'guidanceShortReplyMaxChars',
+        'guidanceAckPatterns', 'guidanceLowValuePatterns', 'guidanceClarificationKeywords',
+        'guidanceQuestionStopWords', 'robustReasoningMode', 'reasoningExposeChecklist',
+        'reasoningChecklistMaxItems', 'orcbotControlEnabled', 'orcbotControlCliAllowList',
+        'orcbotControlCliDenyList', 'orcbotControlTimeoutMs'
+    ];
 
     const choices: { name: string, value: string }[] = keys.map(key => ({
         name: `${key}: ${config[key as keyof typeof config] || '(empty)'}`,

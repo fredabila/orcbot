@@ -290,6 +290,40 @@ export class ConfigManager {
             }
         }
 
+        // Smart resolution for projectRoot (Source Code Directory)
+        // This is separate from dataHome-relative paths because the source code
+        // is typically not inside the .orcbot data folder.
+        if (!out.projectRoot || out.projectRoot === '.') {
+            const cwd = process.cwd();
+            // Heuristic 1: Is CWD the project root?
+            if (fs.existsSync(path.join(cwd, 'package.json')) && fs.existsSync(path.join(cwd, 'src', 'core', 'Agent.ts'))) {
+                out.projectRoot = cwd;
+            } 
+            // Heuristic 2: Is there an 'orcbot' subdirectory? (Convenience for server users)
+            else if (fs.existsSync(path.join(cwd, 'orcbot', 'package.json'))) {
+                out.projectRoot = path.join(cwd, 'orcbot');
+            }
+            // Heuristic 3: Are we running from within a source tree?
+            else {
+                // If this file is at src/config/ConfigManager.ts, the root is two levels up
+                const sourceRoot = path.resolve(__dirname, '..', '..');
+                if (fs.existsSync(path.join(sourceRoot, 'package.json')) && fs.existsSync(path.join(sourceRoot, 'src', 'core', 'Agent.ts'))) {
+                    out.projectRoot = sourceRoot;
+                } else {
+                    out.projectRoot = cwd; // Ultimate fallback
+                }
+            }
+            
+            if (!silent && out.projectRoot && out.projectRoot !== '.') {
+                logger.info(`ConfigManager: Auto-detected project root at ${out.projectRoot}`);
+            }
+        }
+
+        // Ensure projectRoot is an absolute path
+        if (out.projectRoot) {
+            out.projectRoot = path.resolve(out.projectRoot);
+        }
+
         if (process.platform !== 'win32') return out;
 
         const pathKeys = Object.keys(pathDefaults) as Array<keyof AgentConfig>;
