@@ -1233,7 +1233,7 @@ Respond conversationally. If the user asks you to do something that requires ele
             : userContextStr));
 
         // Compact one-line runtime orientation — gives the LLM immediate context without burying it
-        const runtimeLine = `RUNTIME: channel=${source || 'internal'} | step=${metadata.currentStep || 1}/${this.config?.get('maxSteps') || 30} | mem=${recentContext.length} | model=${this.config?.get('modelName') || 'auto'} | isGroup=${!!(metadata as any).isGroupChat}`;
+        const runtimeLine = `RUNTIME: host_os=${process.platform} | channel=${source || 'internal'} | step=${metadata.currentStep || 1}/${this.config?.get('maxSteps') || 30} | mem=${recentContext.length} | model=${this.config?.get('modelName') || 'auto'} | isGroup=${!!(metadata as any).isGroupChat}`;
 
         // Quick user profile — first 4 significant lines of USER.md as a single-line orientator
         const quickUserProfile = (isAdmin && !isHeartbeat && trimmedUserContext)

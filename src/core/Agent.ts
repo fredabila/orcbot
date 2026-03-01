@@ -1195,6 +1195,7 @@ export class Agent {
                 name: 'search_emails',
                 description: 'Search for and read emails from the inbox. Useful for checking if a specific email arrived or reading recent history. Use query to search the email body.',
                 usage: 'search_emails({ query?, sender?, subject?, daysAgo:number?, unreadOnly:boolean?, limit:number? })',
+                isDeep: true,
                 handler: async (args: any) => {
                     const emailChannel = this.getOrCreateEmailChannel();
                     if (!emailChannel) return 'Email channel not available. Configure IMAP first.';
@@ -1258,6 +1259,7 @@ export class Agent {
                 name: 'index_emails_to_knowledge_base',
                 description: 'Search for emails and index their content into the Knowledge Store for semantic search. This allows you to perform semantic search on emails later using rag_search.',
                 usage: 'index_emails_to_knowledge_base({ query?, sender?, subject?, daysAgo:number?, limit:number?, collection? })',
+                isDeep: true,
                 handler: async (args: any) => {
                     const emailChannel = this.getOrCreateEmailChannel();
                     if (!emailChannel) return 'Email channel not available. Configure IMAP first.';
@@ -1307,6 +1309,7 @@ export class Agent {
                 name: 'generate_email_report',
                 description: 'Analyze multiple emails and generate a synthesized report/summary based on their content.',
                 usage: 'generate_email_report({ topic, emails: array_of_uids?, sender?, subject?, query?, daysAgo:number? })',
+                isDeep: true,
                 handler: async (args: any) => {
                     const emailChannel = this.getOrCreateEmailChannel();
                     if (!emailChannel) return 'Email channel not available. Configure IMAP first.';
@@ -1901,6 +1904,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             name: 'write_file',
             description: 'Write content to a file. Creates parent directories if needed. Use this instead of echo/run_command for creating files.',
             usage: 'write_file(path, content, append?)',
+            isDeep: true,
             handler: async (args: any) => {
                 const filePath = args.path || args.file_path || args.file;
                 const content = args.content || args.text || args.data || '';
@@ -1941,6 +1945,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             name: 'create_directory',
             description: 'Create a directory (and parent directories if needed). Does not error if directory already exists.',
             usage: 'create_directory(path)',
+            isDeep: true,
             handler: async (args: any) => {
                 const dirPath = args.path || args.dir || args.directory;
 
@@ -1966,6 +1971,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             name: 'read_file',
             description: 'Read the contents of a file. Supports optional line range (start_line, end_line) for large files. Returns up to 20 000 chars; use start_line/end_line to page through bigger files.',
             usage: 'read_file(path, start_line?, end_line?)',
+            isDeep: true,
             handler: async (args: any) => {
                 const filePath = args.path || args.file_path || args.file;
 
@@ -2023,6 +2029,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             name: 'list_directory',
             description: 'List files and subdirectories in a directory. Use this to explore the project structure and find relevant source code or configuration. Defaults to the project root. NOTE: Access to node_modules and .git is blocked.',
             usage: 'list_directory(path)',
+            isDeep: true,
             handler: async (args: any) => {
                 const dirPath = args.path || args.dir || args.directory || this.getBuildWorkspacePath();
 
@@ -2896,6 +2903,14 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                             // Unescape quotes that were doubled or backslash-escaped for the one-liner
                             actualCommand = inner.replace(/\\"/g, '"').replace(/""/g, '"');
                             logger.debug(`run_command: Unwrapped PowerShell one-liner to avoid double-escaping: "${actualCommand}"`);
+                        }
+
+                        const cmdMatch = actualCommand.match(/^cmd(?:\.exe)?\s+\/c\s+["']([\s\S]+)["']\s*$/i);
+                        if (cmdMatch) {
+                            const inner = cmdMatch[1].trim();
+                            // Unescape quotes
+                            actualCommand = inner.replace(/\\"/g, '"').replace(/""/g, '"');
+                            logger.debug(`run_command: Unwrapped CMD one-liner to avoid double-escaping: "${actualCommand}"`);
                         }
                     }
 
@@ -4072,6 +4087,7 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             name: 'browser_navigate',
             description: 'Navigate to a URL and return a fast readable summary. Use browser_examine_page when you need interactive ref IDs. If the site is bot-protected or JS-heavy and returns blank pages, switch to firecrawl_scrape(url) instead (requires firecrawl-cli installed).',
             usage: 'browser_navigate(url, include_snapshot?)',
+            isDeep: true,
             handler: async (args: any) => {
                 const url = args.url || args.link || args.site;
                 if (!url) return 'Error: Missing url.';
@@ -4213,6 +4229,7 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             name: 'browser_click',
             description: 'Click an element using a CSS selector or a numeric reference ID [ref=N] from the semantic snapshot. Returns a fresh snapshot of the page after clicking.',
             usage: 'browser_click(selector_or_ref)',
+            isDeep: true,
             handler: async (args: any) => {
                 const selector = args.selector_or_ref || args.selector || args.css || args.ref;
                 if (!selector) return 'Error: Missing selector or ref.';
@@ -4256,6 +4273,7 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             name: 'browser_type',
             description: 'Type text into an input field using a CSS selector or a numeric reference ID [ref=N].',
             usage: 'browser_type(selector_or_ref, text)',
+            isDeep: true,
             handler: async (args: any) => {
                 const selector = args.selector_or_ref || args.selector || args.css || args.ref;
                 const text = args.text || args.value;
@@ -4283,6 +4301,7 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             name: 'browser_press',
             description: 'Press a keyboard key (e.g. "Enter", "Tab")',
             usage: 'browser_press(key)',
+            isDeep: true,
             handler: async (args: any) => {
                 const key = args.key || args.name;
                 const useComputerUse = this.shouldUseGoogleComputerUse();
@@ -4305,6 +4324,7 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             name: 'browser_click_text',
             description: 'Find an element containing specific text (like "Login", "Submit", "Accept Cookies") and click it. Much easier than finding refs or selectors. Example: browser_click_text("Sign In").',
             usage: 'browser_click_text(text, type_hint?)',
+            isDeep: true,
             handler: async (args: any) => {
                 const text = args.text || args.label || args.value;
                 if (!text) return 'Error: Missing text.';
@@ -4328,6 +4348,7 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             name: 'browser_type_into_label',
             description: 'Find an input field by its label, placeholder, or name and type text into it. Example: browser_type_into_label("Email", "user@example.com").',
             usage: 'browser_type_into_label(label, text)',
+            isDeep: true,
             handler: async (args: any) => {
                 const label = args.label || args.field || args.placeholder;
                 const text = args.text || args.value;
@@ -4377,6 +4398,7 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             name: 'browser_perform',
             description: 'Perform a high-level task on the current page using natural language. It automatically identifies elements, clicks, types, and verifies results. Use this for complex sequences like "log in with credentials X and Y" or "find and click the first search result for Z". This is the most convenient way to browse.',
             usage: 'browser_perform(goal)',
+            isDeep: true,
             handler: async (args: any) => {
                 const goal = args.goal || args.task;
                 if (!goal) return 'Error: Missing goal.';
@@ -4502,6 +4524,7 @@ Output JSON now:`;
             name: 'browser_solve_captcha',
             description: 'Attempt to solve a detected CAPTCHA (reCAPTCHA, hCaptcha, etc.)',
             usage: 'browser_solve_captcha()',
+            isDeep: true,
             handler: async () => {
                 return this.browser.solveCaptcha();
             }
@@ -4512,6 +4535,7 @@ Output JSON now:`;
             name: 'browser_run_js',
             description: 'Run custom JavaScript on the current page.',
             usage: 'browser_run_js(script)',
+            isDeep: true,
             handler: async (args: any) => {
                 const script = args.script || args.code || args.js;
                 if (!script) return 'Error: Missing script.';
@@ -4524,6 +4548,7 @@ Output JSON now:`;
             name: 'browser_back',
             description: 'Navigate back to the previous page in browser history.',
             usage: 'browser_back()',
+            isDeep: true,
             handler: async () => {
                 return this.browser.goBack();
             }
@@ -4534,6 +4559,7 @@ Output JSON now:`;
             name: 'browser_scroll',
             description: 'Scroll the page up or down. Direction must be "up" or "down". Amount is optional pixels (default 600).',
             usage: 'browser_scroll(direction, amount?)',
+            isDeep: true,
             handler: async (args: any) => {
                 const direction = args.direction || 'down';
                 const amount = args.amount ? parseInt(args.amount, 10) : undefined;
@@ -4570,6 +4596,7 @@ Output JSON now:`;
             name: 'browser_hover',
             description: 'Hover over an element to trigger tooltips, menus, or hover effects. Use ref number from examine_page or a CSS selector.',
             usage: 'browser_hover(selector)',
+            isDeep: true,
             handler: async (args: any) => {
                 const selector = args.selector || args.ref || args.element;
                 if (!selector) return 'Error: Missing selector.';
@@ -4594,6 +4621,7 @@ Output JSON now:`;
             name: 'browser_select',
             description: 'Select an option from a dropdown (<select> or custom dropdown). Use the visible label text as the value.',
             usage: 'browser_select(selector, value)',
+            isDeep: true,
             handler: async (args: any) => {
                 const selector = args.selector || args.ref || args.element;
                 const value = args.value || args.option || args.label;
@@ -4744,6 +4772,7 @@ Output JSON now:`;
             name: 'browser_fill_form',
             description: 'Fill multiple form fields and optionally submit in one call. Much more efficient than individual click→type→click→type sequences. Pass fields as an array of {selector, value, action?} objects. Actions: fill (default), select, check, click.',
             usage: 'browser_fill_form(fields, submit_selector?)',
+            isDeep: true,
             handler: async (args: any) => {
                 let fields = args.fields;
                 if (!fields) return 'Error: Missing fields array.';
@@ -5255,6 +5284,7 @@ export default ${name};
             name: 'web_search',
             description: 'Search the web for information using multiple engines (APIs + browser fallback)',
             usage: 'web_search(query)',
+            isDeep: true,
             handler: async (args: any) => {
                 let query = args.query || args.text || args.search || args.q;
                 if (!query) return 'Error: Missing search query.';
@@ -7079,6 +7109,7 @@ Be thorough and academic.`;
             name: 'rag_search',
             description: 'Search the RAG knowledge store for information relevant to a query. Returns the most similar document chunks with relevance scores. Use this when you need to recall ingested knowledge — documentation, datasets, files, or web pages that were previously stored.',
             usage: 'rag_search(query, limit?, collection?, tags?)',
+            isDeep: true,
             handler: async (args: any) => {
                 try {
                     const query = args.query || args.q || args.search;
