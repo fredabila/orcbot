@@ -2009,7 +2009,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
         // Skill: List Directory
         this.skills.registerSkill({
             name: 'list_directory',
-            description: 'List files and subdirectories in a directory.',
+            description: 'List files and subdirectories in a directory. Use this to explore the project structure and find relevant source code or configuration. Defaults to the project root. NOTE: Access to node_modules and .git is blocked.',
             usage: 'list_directory(path)',
             handler: async (args: any) => {
                 const dirPath = args.path || args.dir || args.directory || this.getBuildWorkspacePath();
@@ -2788,7 +2788,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
         // Skill: Run Shell Command
         this.skills.registerSkill({
             name: 'run_command',
-            description: 'Execute a shell command on the host system. On Windows, commands run in PowerShell — use PowerShell syntax (Get-ChildItem, Get-Command, Start-MpScan, etc.), NOT cmd.exe syntax (dir, where, etc.). For file creation, use write_file skill. To run commands in a specific directory, pass cwd parameter. For long-running commands, tune timeoutMs/retries and timeoutBackoffFactor to adapt to slower environments.',
+            description: 'Execute a non-interactive shell command on the host system (supports Bash/Zsh on Unix and PowerShell on Windows). Use get_system_info first to detect the OS and environment. Commands run in the project root by default; use the "cwd" parameter for specific directories. Supports standard shell features like pipes, redirection, and chaining (&&, ||, ;). \n\nCRITICAL GUIDELINES:\n1. NON-INTERACTIVE: Always use "yes" flags (e.g., -y, --batch, --force) as you cannot provide input during execution.\n2. SECURITY: Access to node_modules and .git is strictly blocked and will throw an error.\n3. WINDOWS: Use PowerShell syntax (Get-ChildItem, Get-Command) rather than old cmd.exe syntax.\n4. OUTPUT: For very large outputs, pipe to "head", "tail", or a file to avoid context flooding.\n5. TUI/CLI: Avoid commands that launch interactive UIs or block indefinitely without a timeout.',
             usage: 'run_command(command, cwd?, timeoutMs?, retries?, timeoutBackoffFactor?, maxTimeoutMs?)',
             isDeep: true,
             isResearch: true,
@@ -2823,25 +2823,21 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                             ? this.resolveAgentWorkspacePath(String(this.config.get('commandWorkingDir')))
                             : this.getBuildWorkspacePath();
                     let actualCommand = command;
-
                     // Only attempt pattern extraction if explicit cwd is not already provided
                     if (!args.cwd) {
                         // Match patterns like: "cd /path/to/dir ; command" or "cd C:\path ; command"
                         // Supports paths with or without quotes
                         const cdPattern = /^\s*cd\s+([^\s;&]+|'[^']+'|"[^"]+"|`[^`]+`)\s*[;&]+\s*(.+)$/i;
                         const cdMatch = trimmedCmd.match(cdPattern);
-
                         if (cdMatch) {
                             let targetDir = cdMatch[1].trim();
                             const remainingCmd = cdMatch[2].trim();
-
                             // Remove surrounding quotes if present
                             if ((targetDir.startsWith('"') && targetDir.endsWith('"')) ||
                                 (targetDir.startsWith("'") && targetDir.endsWith("'")) ||
                                 (targetDir.startsWith('`') && targetDir.endsWith('`'))) {
                                 targetDir = targetDir.slice(1, -1);
                             }
-
                             // Basic path validation to prevent directory traversal attacks
                             // Resolve to absolute path and check for suspicious patterns
                             const resolvedPath = path.resolve(workingDir, targetDir);
@@ -2981,7 +2977,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
         // Skill: Start Interactive Shell Session
         this.skills.registerSkill({
             name: 'shell_start',
-            description: 'Spawn a long-running or interactive shell command in the background as a named session. Returns immediately — the process runs asynchronously. Use shell_read to see output later. Ideal for dev servers, build watchers, or any non-terminating command. On Windows uses PowerShell.',
+            description: 'Spawn a long-running or asynchronous shell command in the background as a named session (supports Bash/Zsh on Unix and PowerShell on Windows). Returns immediately while the process runs asynchronously. Use "shell_read" to check logs and "shell_send" to provide input to the running session later. Ideal for dev servers, background jobs, or build watchers. \n\nIMPORTANT: \n1. PERSISTENCE: Sessions remain active until explicitly killed via "shell_stop" or agent termination. \n2. WORKSPACE: Commands run in the project root by default; use "cwd" for specific subdirectories. \n3. SECURITY: Cannot target or start within node_modules or .git.',
             usage: 'shell_start(id, command, cwd?)',
             handler: async (args: any) => {
                 try {
@@ -6222,8 +6218,6 @@ Be thorough and academic.`;
                 }
             });
 
-            // Skill: Search Codebase
-            this.skills.registerSkill({
             // Skill: Search Codebase
             this.skills.registerSkill({
                 name: 'search_codebase',

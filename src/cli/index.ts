@@ -3495,19 +3495,24 @@ async function showPiAIConfig() {
 
         agent.config.set('modelName', finalModel);
         // Sync llmProvider so the Active Model box reflects the real provider
-        const legacyMap = {
+        const legacyMap: Record<string, string> = {
             openai: 'openai',
             google: 'google',
             anthropic: 'anthropic',
             openrouter: 'openrouter',
             'amazon-bedrock': 'bedrock',
+            groq: 'groq',
+            mistral: 'mistral',
+            deepseek: 'deepseek',
+            xai: 'xai',
+            perplexity: 'perplexity',
+            cerebras: 'cerebras'
         };
         const legacyProvider = legacyMap[catKey];
         if (legacyProvider !== undefined) {
-            agent.config.set('llmProvider', legacyProvider);
+            agent.config.set('llmProvider', legacyProvider as any);
         } else {
-            // Groq/Mistral/Cerebras/xAI — clear the legacy hint so display shows AUTO
-            // and toPiProvider() infers correctly from model name
+            // Unmapped provider — fallback to auto
             agent.config.set('llmProvider', undefined);
         }
         if (!piAiEnabled) agent.config.set('usePiAI', true);

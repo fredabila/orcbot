@@ -6,7 +6,7 @@ import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedroc
 import { TokenTracker } from './TokenTracker';
 import { piAiCall, piAiCallWithTools, getPiProviders, getPiModels, piAiLogin, isPiAiLinked, type PiAIAdapterOptions } from './PiAIAdapter';
 import { convertToWhisperCompatible, getMimeType as getAudioHelperMimeType, isAudioFile } from '../utils/AudioHelper';
-export type LLMProvider = 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia' | 'anthropic' | 'ollama';
+export type LLMProvider = 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia' | 'anthropic' | 'ollama' | 'groq' | 'mistral' | 'deepseek' | 'xai' | 'perplexity' | 'cerebras';
 export interface LLMMessage {
     role: 'system' | 'user' | 'assistant';
     content: string;
@@ -209,7 +209,16 @@ export class MultiLLM {
             case 'nvidia': return !!this.nvidiaKey && !this.nvidiaKey.startsWith('your_');
             case 'openrouter': return !!this.openrouterKey && !this.openrouterKey.startsWith('your_');
             case 'bedrock': return !!this.bedrockAccessKeyId;
-            default: return false;
+            case 'ollama': return true; // Local, no key needed usually
+            default:
+                // Check extended providers from MultiLLM state
+                if (provider === 'groq' as any) return !!this.groqKey && !this.groqKey.startsWith('your_');
+                if (provider === 'mistral' as any) return !!this.mistralKey && !this.mistralKey.startsWith('your_');
+                if (provider === 'xai' as any) return !!this.xaiKey && !this.xaiKey.startsWith('your_');
+                if (provider === 'cerebras' as any) return !!this.cerebrasKey && !this.cerebrasKey.startsWith('your_');
+                if (provider === 'deepseek' as any) return !!this.deepseekKey && !this.deepseekKey.startsWith('your_');
+                if (provider === 'perplexity' as any) return !!this.perplexityKey && !this.perplexityKey.startsWith('your_');
+                return false;
         }
     }
     /** Return a cheap/fast model name appropriate for the given provider. */
@@ -243,14 +252,30 @@ export class MultiLLM {
             if (p === 'nvidia') return this.callNvidia(prompt, systemMessage, m);
             if (p === 'anthropic') return this.callAnthropic(prompt, systemMessage, m);
             if (p === 'ollama') return this.callOllama(prompt, systemMessage, m);
-            throw new Error(`Provider ${p} not supported`);
+            
+            // Dynamic routing: If not a core provider, try routing through pi-ai
+            // This covers mistral, groq, xai, deepseek, perplexity, cerebras, etc.
+            try {
+                return await piAiCall(prompt, systemMessage, this.getPiAIOptions(m, p));
+            } catch (e) {
+                throw new Error(`Provider ${p} not supported by core MultiLLM and pi-ai routing failed: ${(e as Error).message}`);
+            }
         };
         const primaryModel = modelOverride || this.modelName;
         return ErrorHandler.withFallback(
-            () => ErrorHandler.withRetry(() => executeCall(primaryProvider, primaryModel), { maxRetries: 2 }),
+            async () => {
+                const primaryProviderResolved = provider || this.preferredProvider || this.inferProvider(primaryModel);
+                if (!this.hasKeyForProvider(primaryProviderResolved)) {
+                    throw new Error(`Primary provider (${primaryProviderResolved}) failed: API key not configured.`);
+                }
+                return ErrorHandler.withRetry(() => executeCall(primaryProviderResolved, primaryModel), { maxRetries: 2 });
+            },
             async () => {
                 if (!fallbackProvider) throw new Error(`Primary provider (${primaryProvider}) failed and no fallback available.`);
                 const fallbackModel = this.getDefaultModelForProvider(fallbackProvider);
+                if (!this.hasKeyForProvider(fallbackProvider)) {
+                    throw new Error(`Primary provider (${primaryProvider}) failed and fallback provider (${fallbackProvider}) is not configured.`);
+                }
                 logger.info(`MultiLLM: Falling back from ${primaryProvider} to ${fallbackProvider} (Using model: ${fallbackModel})`);
                 return ErrorHandler.withRetry(() => executeCall(fallbackProvider, fallbackModel), { maxRetries: 1 });
             }
@@ -301,16 +326,29 @@ export class MultiLLM {
                 case 'ollama':
                     return this.callOllamaWithTools(prompt, systemMessage, tools, m);
                 default:
-                    // Unsupported: fall back to text-based
-                    const text = await this.call(prompt, systemMessage, p, m);
-                    return { content: text, toolCalls: [] };
+                    // Dynamic routing via pi-ai for extended providers
+                    try {
+                        return await piAiCallWithTools(prompt, systemMessage, tools, this.getPiAIOptions(m, p));
+                    } catch (e) {
+                        // If pi-ai fails, fall back to text-based call
+                        const text = await this.call(prompt, systemMessage, p, m);
+                        return { content: text, toolCalls: [] };
+                    }
             }
         };
         const fallbackProvider = this.getFallbackProvider(primaryProvider);
         return ErrorHandler.withFallback(
-            () => ErrorHandler.withRetry(() => executeToolCall(primaryProvider, model), { maxRetries: 2 }),
+            async () => {
+                if (!this.hasKeyForProvider(primaryProvider)) {
+                    throw new Error(`Primary provider (${primaryProvider}) failed: API key not configured.`);
+                }
+                return ErrorHandler.withRetry(() => executeToolCall(primaryProvider, model), { maxRetries: 2 });
+            },
             async () => {
                 if (!fallbackProvider) throw new Error(`Primary provider (${primaryProvider}) failed and no fallback available.`);
+                if (!this.hasKeyForProvider(fallbackProvider)) {
+                    throw new Error(`Primary provider (${primaryProvider}) failed and fallback provider (${fallbackProvider}) is not configured.`);
+                }
                 const fallbackModel = this.getDefaultModelForProvider(fallbackProvider);
                 logger.info(`MultiLLM: Tool call falling back from ${primaryProvider} to ${fallbackProvider}`);
                 return ErrorHandler.withRetry(() => executeToolCall(fallbackProvider, fallbackModel), { maxRetries: 1 });
@@ -1072,10 +1110,19 @@ export class MultiLLM {
         if (lower.includes('claude') || lower.startsWith('anthropic:') || lower.startsWith('ant:')) return 'anthropic';
         if (lower.startsWith('openrouter:') || lower.startsWith('openrouter/') || lower.startsWith('or:')) return 'openrouter';
         if (lower.startsWith('nvidia:') || lower.startsWith('nv:')) return 'nvidia';
+        if (lower.startsWith('mistral:') || lower.startsWith('mi:')) return 'mistral';
+        if (lower.startsWith('groq:') || lower.startsWith('gr:')) return 'groq';
+        if (lower.startsWith('deepseek:') || lower.startsWith('ds:')) return 'deepseek';
+        if (lower.startsWith('xai:') || lower.startsWith('xi:')) return 'xai';
+        if (lower.startsWith('perplexity:') || lower.startsWith('pp:')) return 'perplexity';
+        if (lower.startsWith('cerebras:') || lower.startsWith('cb:')) return 'cerebras';
         
         // 3. Inference from common names (Cloud defaults)
         if (lower.includes('gemini')) return 'google';
         if (lower.includes('gpt-') || lower.includes('o1-')) return 'openai';
+        if (lower.includes('mistral') || lower.includes('mixtral')) return 'mistral';
+        if (lower.includes('deepseek')) return 'deepseek';
+        if (lower.includes('llama')) return 'groq'; // Default llama to groq if not specified otherwise
         
         return 'openai';
     }

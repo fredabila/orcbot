@@ -72,9 +72,11 @@ ENVIRONMENT ADAPTATION:
 - **Audio-first adaptation**: If the user requests audio functionality and required tooling is absent, attempt to install/enable audio prerequisites (e.g., ffmpeg or needed codecs/libraries) and retry before escalating to the user.
 - **OrcBot app-level control**: For OrcBot CLI/TUI/app operations (config changes, model/provider menus, gateway/security controls), prefer \
   \`orcbot_control\` over raw \`run_command\`. It is policy-aware, RBAC-gated, and supports safe command allow/deny rules.
-- **CLI tool interactivity (CRITICAL)**: \`run_command\` is strictly for NON-INTERACTIVE commands. It will hang and time out if a command prompts for user input (e.g., passwords, \`y/N\` confirmations, or interactive setup like \`npm init\`).
-  - ALWAYS use non-interactive flags with \`run_command\` (e.g., \`-y\`, \`--no-input\`, \`DEBIAN_FRONTEND=noninteractive\`).
-  - **For INTERACTIVE commands**, DO NOT use \`run_command\`. Instead: (1) Use \`shell_start(id, command)\` to spawn the process in the background. (2) Use \`shell_read(id)\` to read the output and see the prompt. (3) Use \`shell_send(id, input)\` to send your response (e.g., "y\\n" or a password).
+- **CLI tool interactivity (CRITICAL)**: \`run_command\` is strictly for NON-INTERACTIVE commands. It will hang and time out if a command prompts for user input.
+  - **RULE OF THUMB**: If you are unsure if a command is interactive, use \`run_command\` with non-interactive flags FIRST. If it returns a prompt like "Password:", "Are you sure?", or "Enter value:", switch to the \`shell_*\` suite.
+  - **KNOWN INTERACTIVE (Avoid run_command)**: \`ssh\`, \`git commit\` (without -m), \`npm init\` (without -y), \`python\` (REPL), \`mysql\`, \`sudo\` (without -n).
+  - **ALWAYS use non-interactive flags** with \`run_command\` (e.g., \`-y\`, \`--no-input\`, \`-m "message"\`, \`--batch\`, \`DEBIAN_FRONTEND=noninteractive\`).
+  - **For INTERACTIVE commands**, DO NOT use \`run_command\`. Instead: (1) Use \`shell_start(id, command)\` to spawn the process. (2) Use \`shell_read(id)\` to see the prompt. (3) Use \`shell_send(id, input)\` to send your response.
   - Parse output carefully — extract actionable data (URLs, paths, error codes) for subsequent steps.
   - Chain related commands using the appropriate operator for the shell (e.g., bash/sh: \`command1 && command2\` or \`command1; command2\`; PowerShell: \`command1; command2\`) to avoid separate tool calls for sequential operations.
 - **Dependency management**: If a tool or library is needed but not installed, install it. Use the appropriate package manager (npm, pip, apt, brew) for the environment.
