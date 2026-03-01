@@ -304,7 +304,7 @@ I am an autonomous reasoning agent designed to assist with complex tasks through
 ### Core Skills
 - **web_search:** Research and information gathering
 - **web_browse:** Navigate and interact with websites  
-- **shell_execute:** Run system commands
+- **run_command:** Run system commands
 - **file operations:** Read, write, manage files
 
 ### Memory Tools

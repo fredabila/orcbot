@@ -26,6 +26,41 @@ CURRENT DATE & TIME:
 - Timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}
 `;
 
+        // Check for placeholder identity/user content
+        const isPlaceholder = (text: string | undefined) => {
+            if (!text) return true;
+            const t = text.toLowerCase();
+            return t.includes('placeholder') || t.includes('add information about') || t.includes('defines the core personality') || (t.length < 50 && t.includes('soul.md'));
+        };
+
+        const hasNoIdentity = isPlaceholder(ctx.bootstrapContext.SOUL) && isPlaceholder(ctx.bootstrapContext.USER);
+        
+        // Safely check for "new user" (no bio/notes/meaningful history)
+        let isNewUser = !ctx.contactProfile;
+        if (ctx.contactProfile) {
+            try {
+                const profile = JSON.parse(ctx.contactProfile);
+                // If it's a JSON profile but has no bio/notes, we still treat them as "new" for onboarding
+                if (!profile.bio && !profile.notes && !profile.summary) {
+                    isNewUser = true;
+                }
+            } catch {
+                // Not JSON - if it's a very short string, it might just be a name/ID placeholder
+                if (ctx.contactProfile.length < 50) isNewUser = true;
+            }
+        }
+
+        let onboardingContext = '';
+        if (ctx.isFirstStep && (isNewUser || hasNoIdentity)) {
+            onboardingContext = `\n### ⚡ CRITICAL ONBOARDING PHASE:
+- STATUS: You are in "First Contact" mode. You have ZERO history and NO established persona.
+- YOUR GOAL: You must not only introduce yourself but also proactively help the user set you up.
+- USER IDENTITY: You don't know who this user is (even if you have their name). Ask about their role, what they do, and how they want you to perceive them.
+- AGENT PERSONA: Your SOUL.md is empty. Ask the user what kind of personality, tone, or "vibe" they want you to have. Do they want you to be a "No-nonsense commander", a "Creative collaborator", or a "Technical expert"?
+- ACTION: Do not just ask "How can I help?". Ask 1-2 specific questions to fill in these blanks so you can update your USER.md and SOUL.md.
+`;
+        }
+
         let bootstrapContext = '';
         if (ctx.bootstrapContext.IDENTITY) {
             bootstrapContext += `\n## IDENTITY (from IDENTITY.md)\n${ctx.bootstrapContext.IDENTITY}\n`;
@@ -58,6 +93,7 @@ ROLE: Browser Specialist
         }
 
         return `You are a highly intelligent, autonomous AI Agent. Your persona and identity are defined below.
+${onboardingContext}
 ${identityBlock}CONVERSATIONAL BASELINE:
 - Talk like a sharp, competent person — not a customer service bot.
 - Be concise by default. Elaborate only when the topic warrants it.

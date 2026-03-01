@@ -1975,7 +1975,19 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                     const resolvedPath = this.resolveAgentWorkspacePath(String(filePath));
 
                     if (!fs.existsSync(resolvedPath)) {
-                        return `Error: File not found: ${resolvedPath}`;
+                        const parent = path.dirname(resolvedPath);
+                        let suggestion = '';
+                        if (fs.existsSync(parent)) {
+                            const entries = fs.readdirSync(parent, { withFileTypes: true });
+                            const siblings = entries.filter(e => !e.isDirectory()).map(e => e.name).join(', ');
+                            suggestion = ` However, the parent directory exists and contains these files: ${siblings || '(no files)'}. Check for typos.`;
+                        }
+                        return `Error: File not found: ${resolvedPath}.${suggestion}`;
+                    }
+
+                    const stats = fs.statSync(resolvedPath);
+                    if (stats.isDirectory()) {
+                        return `Error: Path exists but is a directory, not a file: ${resolvedPath}. Use the 'list_directory' skill to see its contents.`;
                     }
 
                     const content = fs.readFileSync(resolvedPath, 'utf8');
@@ -2018,7 +2030,19 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                     const resolvedPath = this.resolveAgentWorkspacePath(String(dirPath));
 
                     if (!fs.existsSync(resolvedPath)) {
-                        return `Error: Directory not found: ${resolvedPath}`;
+                        const parent = path.dirname(resolvedPath);
+                        let suggestion = '';
+                        if (fs.existsSync(parent)) {
+                            const entries = fs.readdirSync(parent, { withFileTypes: true });
+                            const siblings = entries.map(e => e.name).join(', ');
+                            suggestion = ` However, the parent directory exists and contains: ${siblings || '(empty)'}. Check for typos or if the folder should have been created first.`;
+                        }
+                        return `Error: Directory not found: ${resolvedPath}.${suggestion}`;
+                    }
+
+                    const stats = fs.statSync(resolvedPath);
+                    if (!stats.isDirectory()) {
+                        return `Error: Path exists but is a file, not a directory: ${resolvedPath}. Use the 'read_file' skill to view its contents.`;
                     }
 
                     const entries = fs.readdirSync(resolvedPath, { withFileTypes: true });
@@ -2860,6 +2884,18 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                             actualCommand = remainingCmd;
 
                             logger.debug(`run_command: Detected directory change pattern. cwd="${workingDir}", actualCommand="${actualCommand}"`);
+                        }
+                    }
+
+                    // AUTO-CORRECT: If the command is a wrapped powershell one-liner on Windows, unwrap it.
+                    // This prevents double-escaping issues with $_ and quotes.
+                    if (process.platform === 'win32') {
+                        const psCommandMatch = actualCommand.match(/^powershell(?:\.exe)?\s+(?:-Command|-c)\s+["']([\s\S]+)["']\s*$/i);
+                        if (psCommandMatch) {
+                            const inner = psCommandMatch[1].trim();
+                            // Unescape quotes that were doubled or backslash-escaped for the one-liner
+                            actualCommand = inner.replace(/\\"/g, '"').replace(/""/g, '"');
+                            logger.debug(`run_command: Unwrapped PowerShell one-liner to avoid double-escaping: "${actualCommand}"`);
                         }
                     }
 
@@ -8099,19 +8135,23 @@ REFLECTION: <1-2 sentences>`;
         }
 
         // Feature/Technical request detection
-        const techKeywords = ['build', 'create', 'search', 'find', 'connect', 'add', 'implement', 'update', 'fix', 'debug', 'script', 'python', 'typescript', 'channel', 'plugin', 'skill', 'install'];
+        const techKeywords = ['build', 'create', 'search', 'find', 'connect', 'add', 'implement', 'update', 'fix', 'debug', 'script', 'python', 'typescript', 'channel', 'plugin', 'skill', 'install', 'sudo', 'elevation', 'admin', 'administrator', 'elevate'];
         const isTechRequest = techKeywords.some(k => payload.includes(k));
+
+        // Go-ahead detection: phrases that trigger the start of a previously discussed task
+        const goAheadKeywords = ['do it', 'go ahead', 'proceed', 'start', 'begin', 'execute', 'run it'];
+        const isGoAhead = goAheadKeywords.some(k => payload.includes(k));
 
         try {
             const response = await this.llm.callFast(
-                `Classify this message's complexity for an AI assistant. Message: "${payload.slice(0, 200)}"\n\nReply with ONLY one word: trivial, simple, standard, or complex.\n- trivial: greetings, thanks, acknowledgments, single emoji, casual openers\n- simple: quick factual questions, yes/no, preferences, one-line answers\n- standard: normal requests, conversation, short tasks\n- complex: research, building, coding, multi-step work, browsing, file creation, image generation`,
+                `Classify this message's complexity for an AI assistant. Message: "${payload.slice(0, 200)}"\n\nReply with ONLY one word: trivial, simple, standard, or complex.\n- trivial: greetings, thanks, acknowledgments, single emoji, casual openers\n- simple: quick factual questions, yes/no, preferences, one-line answers\n- standard: normal requests, conversation, short tasks, "go ahead" commands\n- complex: research, building, coding, multi-step work, browsing, file creation, image generation`,
                 'You are a task classifier. Reply with exactly one word: trivial, simple, standard, or complex. Nothing else.'
             );
             const normalized = response.trim().toLowerCase().replace(/[^a-z]/g, '');
             if (['trivial', 'simple', 'standard', 'complex'].includes(normalized)) {
                 let result = normalized as any;
-                // Escalation: Technical requests should at least be 'standard' to prevent accidental early termination
-                if (isTechRequest && (result === 'trivial' || result === 'simple')) {
+                // Escalation: Technical or go-ahead requests should at least be 'standard' to prevent accidental early termination
+                if ((isTechRequest || isGoAhead) && (result === 'trivial' || result === 'simple')) {
                     result = 'standard';
                 }
                 logger.debug(`Agent: Task classified as "${result}" (LLM said "${normalized}") for: "${payload.slice(0, 60)}..."`);
@@ -9905,8 +9945,19 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 if (fs.existsSync(bakPath)) fs.unlinkSync(bakPath);
             }
 
-            // Clear daily memory markdown logs
+            // Clear daily memory logs and long-term MEMORY.md
             const dailyMemoryDir = path.join(dataHome, 'memory');
+            const longTermPath = path.join(dataHome, 'MEMORY.md');
+
+            if (fs.existsSync(longTermPath)) {
+                try {
+                    fs.unlinkSync(longTermPath);
+                    logger.info('Agent: Cleared long-term memory (MEMORY.md)');
+                } catch (e) {
+                    logger.error(`Agent: Failed to clear MEMORY.md: ${e}`);
+                }
+            }
+
             if (fs.existsSync(dailyMemoryDir)) {
                 try {
                     const files = fs.readdirSync(dailyMemoryDir);
@@ -9934,6 +9985,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             this.lastUserActivityAt = 0;
             this.consecutiveIdleHeartbeats = 0;
             this.lastHeartbeatProductive = true;
+            this.processedMessages.clear();
 
             logger.info('Agent: Cleared memory.json, actions.json, vector_memory.json, and daily logs');
         }
@@ -11325,15 +11377,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
         // (dedup and waiting-action resume both return before the end of pushTask)
         this.trackKnownUser(metadata);
 
-        // Only trigger onboarding for admin/owner users in new chats, based on agent prompt/context
+        // Only trigger reconnection briefing for admin/owner users in new sessions
         if (lane === 'user' && metadata?.source && !metadata?.isHeartbeat) {
-            // If this is a new chat and user is admin/owner, let agent decide onboarding
-            const isAdmin = this.isUserAdmin(metadata);
-            const isOwner = metadata?.isOwner === true;
-            const isNewChat = !this.hasOnboardingQuestionnaireBeenSent(this.getOnboardingProfileKey(metadata));
-            if ((isAdmin || isOwner) && isNewChat) {
-                await this.sendOnboardingQuestionnaireIfNeeded(metadata);
-            }
             await this.maybeReconnectBriefing(metadata);
             const onboardingCapture = await this.maybeCaptureOnboardingQuestionnaireResponse(description, metadata);
             if (onboardingCapture.captured && onboardingCapture.onboardingOnly) {

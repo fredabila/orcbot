@@ -84,6 +84,22 @@ export class ActionQueue {
         // Load from disk into in-memory cache
         this.cache = this.readFromDisk();
 
+        // RECOVERY: If we just started, any 'in-progress' action is a ghost from a crash.
+        // Reset them to 'pending' so they don't block the session serialization logic.
+        let recovered = 0;
+        for (const action of this.cache) {
+            if (action.status === 'in-progress') {
+                action.status = 'pending';
+                action.updatedAt = new Date().toISOString();
+                recovered++;
+            }
+        }
+        if (recovered > 0) {
+            this.markDirty();
+            this.flush();
+            logger.info(`ActionQueue: Recovered ${recovered} ghost in-progress actions on startup`);
+        }
+
         eventBus.on('action:push', (action: Action) => {
             this.push(action);
         });

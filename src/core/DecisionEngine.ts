@@ -1163,7 +1163,8 @@ ACTIVE CHANNEL CONTEXT:
         } // end !isHeartbeat guard for channel instructions
 
         // Permission notice for non-admin users — tells the LLM what's off-limits
-        if (!isAdmin && channelInstructions) {
+        const sudoMode = this.config?.get('sudoMode') === true;
+        if (!isAdmin && !sudoMode && channelInstructions) {
             channelInstructions += `
 PERMISSION NOTICE: This user is NOT an admin. You can ONLY use messaging, search, and basic interaction skills.
 System-level tools (run_command, file operations, browser automation, scheduling, image generation, etc.) are RESTRICTED and will be blocked.
