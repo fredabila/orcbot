@@ -4343,6 +4343,44 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             }
         });
 
+        // Skill: Browser Find Element
+        this.skills.registerSkill({
+            name: 'browser_find_element',
+            description: 'Search for interactive elements on the current page by their label, text, placeholder, or ID. Returns matching elements with their current ref IDs for use with other tools (click, type). Use this when you know what you want to find but the semantic snapshot is too large or confusing.',
+            usage: 'browser_find_element(query)',
+            handler: async (args: any) => {
+                const query = args.query || args.text;
+                if (!query) return 'Error: Missing query.';
+                
+                if (!this.browser.page) {
+                    await this.browser.getSemanticSnapshot(); // Triggers browser launch
+                }
+                
+                return this.browser.page!.evaluate((q) => {
+                    const elements = Array.from(document.querySelectorAll('[data-orcbot-ref]')) as HTMLElement[];
+                    const matches = elements.filter(el => {
+                        const text = el.innerText || '';
+                        const aria = el.getAttribute('aria-label') || '';
+                        const ph = (el as HTMLInputElement).placeholder || '';
+                        const title = el.getAttribute('title') || '';
+                        const val = (el as HTMLInputElement).value || '';
+                        const combined = `${text} ${aria} ${ph} ${title} ${val} ${el.id}`.toLowerCase();
+                        return combined.includes(q.toLowerCase());
+                    });
+                    
+                    if (matches.length === 0) return `No interactive elements found matching "${q}". Try a different query or browser_examine_page().`;
+                    
+                    return matches.map(el => {
+                        const ref = el.getAttribute('data-orcbot-ref');
+                        const role = el.getAttribute('role') || el.tagName.toLowerCase();
+                        const label = el.getAttribute('aria-label') || (el as HTMLInputElement).placeholder || el.innerText.trim().slice(0, 80) || '(no label)';
+                        const typeAttr = (el as HTMLInputElement).type ? ` (${(el as HTMLInputElement).type})` : '';
+                        return `${role}${typeAttr} "${label.replace(/\n/g, ' ')}" [ref=${ref}]`;
+                    }).join('\n');
+                }, query);
+            }
+        });
+
         // Skill: Browser Type Into Label
         this.skills.registerSkill({
             name: 'browser_type_into_label',

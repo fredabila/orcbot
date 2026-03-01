@@ -60,14 +60,21 @@ export class BrowserHelper implements PromptHelper {
     6. After your initial summary, if the page has clear interactive elements (buttons, forms, tasks), mention what you can do next: "I can see a login form, a quiz section, and a settings panel. Want me to try any of these?"
 12. **Convenient Browsing (PREFERRED)**: Use these high-level tools to avoid micromanaging refs and selectors:
     - \`browser_perform(goal)\`: Best for multi-step tasks (e.g. "login with X and Y", "find the first search result"). It automatically identifies and interacts with elements.
+    - \`browser_find_element(query)\`: Search for specific elements by text, label, or placeholder. Returns matching elements with their current ref IDs. Use this when the semantic snapshot is too large, truncated, or confusing.
     - \`browser_click_text(text)\`: Click anything containing specific text (e.g. "Login", "Accept"). Much faster than finding refs.
     - \`browser_type_into_label(label, text)\`: Type into fields by their label or placeholder (e.g. "Email", "Password").
 13. **Semantic Web Navigation (Fallback)**: Use only when high-level tools fail or when you need precision.
     - Elements are formatted as: \`role "Label" [ref=N] [pos=v-h]\`.
+    - Improved Labeling: Semantic snapshots now include associated \`<label>\` text, placeholders, and ARIA descriptions to help you identify input fields correctly.
     - Use the numeric \`ref=N\` value as the selector.
     - Example: \`browser_click("1")\`.
     - **browser_click now returns a fresh snapshot** — no need for separate browser_examine_page.
-14. **Handling "Vision Snapshots" (Canvas/SPA Apps)**:
+14. **Large Page Strategy**:
+    - If a page has many elements (100+), the semantic snapshot might be truncated or overwhelming.
+    - **ACTION**: Use \`browser_find_element(query)\` to pinpoint the specific fields or buttons you need.
+    - **ACTION**: Use \`browser_scroll("down")\` and then \`browser_examine_page()\` to see elements below the fold.
+    - **ACTION**: Use \`browser_vision(prompt)\` to get a high-level spatial map of the page layout.
+15. **Handling "Vision Snapshots" (Canvas/SPA Apps)**:
     - If you see **[NOTE: DOM was empty, using Vision Analysis]**, it means the page uses Canvas (like Google Docs/Sheets) or complex shadow DOM where standard elements are hidden.
     - **DO NOT** look for \`[ref=N]\` IDs — they won't exist.
     - **DO NOT** reload the page — it won't help.

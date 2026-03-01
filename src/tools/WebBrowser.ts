@@ -1330,8 +1330,35 @@ export class WebBrowser {
                         let label = el.getAttribute('aria-label') ||
                             el.getAttribute('placeholder') ||
                             el.getAttribute('title') ||
+                            el.getAttribute('alt') ||
                             (el as any).value ||
-                            el.innerText.trim().slice(0, 60);
+                            el.innerText.trim().slice(0, 80);
+
+                        // IMPROVEMENT: Check for associated label elements or labelledby
+                        if (!label || label.trim().length === 0) {
+                            const labelledBy = el.getAttribute('aria-labelledby');
+                            if (labelledBy) {
+                                const lbEl = document.getElementById(labelledBy);
+                                if (lbEl) label = lbEl.innerText.trim();
+                            }
+                            
+                            // Check for <label for="...">
+                            if (!label && el.id) {
+                                const associatedLabel = document.querySelector(`label[for="${el.id}"]`) as HTMLElement;
+                                if (associatedLabel) label = associatedLabel.innerText.trim();
+                            }
+                            
+                            // Check for parent <label>
+                            if (!label) {
+                                const parentLabel = el.closest('label');
+                                if (parentLabel) label = (parentLabel as HTMLElement).innerText.trim();
+                            }
+
+                            // If still nothing, check for aria-description
+                            if (!label) {
+                                label = el.getAttribute('aria-description') || '';
+                            }
+                        }
 
                         if (!label || label.trim().length === 0) {
                             // Try to derive label from ID or class if desperately needed
