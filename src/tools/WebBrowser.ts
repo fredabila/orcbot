@@ -1281,22 +1281,7 @@ export class WebBrowser {
                 }
             }
             const buildSnapshot = async () => {
-                return this.page!.evaluate(() => {
-                    const interactiveSelectors = [
-                        'a', 'button', 'input', 'select', 'textarea', 'summary',
-                        '[contenteditable="true"]',
-                        '[tabindex]:not([tabindex="-1"])',
-                        '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="radio"]',
-                        '[role="switch"]', '[role="menuitem"]', '[role="menuitemcheckbox"]',
-                        '[role="menuitemradio"]', '[role="tab"]', '[role="tablist"]',
-                        '[role="combobox"]', '[role="listbox"]', '[role="option"]',
-                        '[role="textbox"]', '[role="searchbox"]', '[role="spinbutton"]',
-                        '[role="slider"]', '[role="progressbar"]', '[role="scrollbar"]',
-                        '[role="tree"]', '[role="treeitem"]', '[role="grid"]', '[role="row"]',
-                        '[role="cell"]', '[role="gridcell"]', '[role="columnheader"]', '[role="rowheader"]',
-                        '[role="dialog"]', '[role="alertdialog"]', '[role="tooltip"]',
-                        '[onclick]', '[onmousedown]', '[onmouseup]', '[onkeydown]', '[onkeyup]'
-                    ];
+                return this.page!.evaluate((interactiveSelectors: string[]) => {
 
                     const elements = Array.from(document.querySelectorAll(interactiveSelectors.join(','))) as HTMLElement[];
                     const visibleElements = elements.filter(el => {
@@ -1349,7 +1334,7 @@ export class WebBrowser {
                     });
 
                     return result.join('\n');
-                });
+                }, WebBrowser.INTERACTIVE_SELECTORS);
             };
 
             // Execute snapshot build early so we have metrics for the vision check
@@ -1512,13 +1497,66 @@ export class WebBrowser {
     }
 
     /**
-     * Resolve a selector — handles numeric ref IDs by looking up data-orcbot-ref attributes.
-     * If the ref attribute was removed by SPA re-render, attempts to re-attach it by
-     * finding the Nth interactive element (the ref assignment order matches snapshot order).
+     * The full list of interactive element selectors, shared between snapshot builder
+     * and ref re-attachment so they stay in sync.
+     */
+    private static readonly INTERACTIVE_SELECTORS = [
+        'a', 'button', 'input', 'select', 'textarea', 'summary',
+        '[contenteditable="true"]',
+        '[tabindex]:not([tabindex="-1"])',
+        '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="radio"]',
+        '[role="switch"]', '[role="menuitem"]', '[role="menuitemcheckbox"]',
+        '[role="menuitemradio"]', '[role="tab"]', '[role="tablist"]',
+        '[role="combobox"]', '[role="listbox"]', '[role="option"]',
+        '[role="textbox"]', '[role="searchbox"]', '[role="spinbutton"]',
+        '[role="slider"]', '[role="progressbar"]', '[role="scrollbar"]',
+        '[role="tree"]', '[role="treeitem"]', '[role="grid"]', '[role="row"]',
+        '[role="cell"]', '[role="gridcell"]', '[role="columnheader"]', '[role="rowheader"]',
+        '[role="dialog"]', '[role="alertdialog"]', '[role="tooltip"]',
+        '[onclick]', '[onmousedown]', '[onmouseup]', '[onkeydown]', '[onkeyup]'
+    ];
+
+    /**
+     * Resolve a selector — handles:
+     * - Numeric ref IDs (e.g. "5") → data-orcbot-ref lookup with re-attachment
+     * - Playwright text selectors (e.g. "text=Submit") → converted to XPath
+     * - Aria selectors (e.g. "aria/Search") → converted to CSS
+     * - CSS selectors (passed through as-is)
      */
     private async resolveSelector(selector: string): Promise<string | null> {
+        // Handle Playwright-style text selectors: text=Submit, text="Submit"
+        const textMatch = selector.match(/^text[=:]"?(.+?)"?$/i);
+        if (textMatch) {
+            const text = textMatch[1];
+            // Use XPath to find elements containing this text
+            const xpathSel = `//*[contains(text(), "${text.replace(/"/g, '\\"')}")]`;
+            const found = await this.page!.$(`xpath=${xpathSel}`).catch(() => null);
+            if (found) return `xpath=${xpathSel}`;
+            // Fallback: try case-insensitive via evaluate
+            const exists = await this.page!.evaluate((t: string) => {
+                const els = Array.from(document.querySelectorAll('*')) as HTMLElement[];
+                const match = els.find(el => {
+                    const inner = el.innerText?.trim().toLowerCase() || '';
+                    return inner === t.toLowerCase() || (inner.includes(t.toLowerCase()) && inner.length < 200);
+                });
+                if (match) { match.setAttribute('data-orcbot-text-match', 'true'); return true; }
+                return false;
+            }, text).catch(() => false);
+            if (exists) return '[data-orcbot-text-match="true"]';
+            return null;
+        }
+
+        // Handle aria selectors: aria/Label
+        const ariaMatch = selector.match(/^aria\/(.+)$/i);
+        if (ariaMatch) {
+            const label = ariaMatch[1];
+            return `[aria-label="${label}"], [aria-labelledby="${label}"], [title="${label}"]`;
+        }
+
+        // Non-numeric selector — pass through as CSS
         if (!/^\d+$/.test(selector)) return selector;
 
+        // Numeric ref ID — look up data-orcbot-ref
         const refSelector = `[data-orcbot-ref="${selector}"]`;
 
         // Fast path: ref attribute still present
@@ -1528,20 +1566,15 @@ export class WebBrowser {
         // Slow path: SPA re-rendered and cleared data-orcbot-ref attributes.
         // Re-run the same selector logic that getSemanticSnapshot uses and re-attach refs.
         logger.debug(`Browser: Ref ${selector} not found in DOM, re-attaching refs...`);
-        const reattached = await this.page!.evaluate((targetRef: number) => {
-            const selectors = [
-                'a', 'button', 'input', 'select', 'textarea', 'summary',
-                '[contenteditable="true"]', '[tabindex]:not([tabindex="-1"])',
-                '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="radio"]',
-                '[role="switch"]', '[role="menuitem"]', '[role="tab"]', '[role="combobox"]',
-                '[role="listbox"]', '[role="option"]', '[role="textbox"]', '[role="searchbox"]',
-                '[onclick]', '[onmousedown]', '[onkeydown]'
-            ];
-            const elements = Array.from(document.querySelectorAll(selectors.join(','))) as HTMLElement[];
+        const reattached = await this.page!.evaluate(({ targetRef, sels }: { targetRef: number; sels: string[] }) => {
+            const elements = Array.from(document.querySelectorAll(sels.join(','))) as HTMLElement[];
             const visible = elements.filter(el => {
                 const rect = el.getBoundingClientRect();
                 const style = window.getComputedStyle(el);
-                return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                if (rect.width <= 0 || rect.height <= 0) return false;
+                if (style.visibility === 'hidden' || style.display === 'none') return false;
+                if (rect.bottom < 0 || rect.right < 0 || rect.top > window.innerHeight || rect.left > window.innerWidth) return false;
+                return true;
             });
             let counter = 1;
             for (const el of visible) {
@@ -1550,25 +1583,12 @@ export class WebBrowser {
                 counter++;
             }
             return false;
-        }, parseInt(selector)).catch(() => false);
+        }, { targetRef: parseInt(selector), sels: WebBrowser.INTERACTIVE_SELECTORS }).catch(() => false);
 
         if (reattached) {
             logger.debug(`Browser: Successfully re-attached ref ${selector}`);
             return refSelector;
         }
-
-        // Second fallback: refresh semantic snapshot to re-attach refs, then re-check
-        // DISABLED: This causes reload loops on "blank" SPAs. Let the agent fail and retry cleanly.
-        /*
-        logger.warn(`Browser: Could not re-attach ref ${selector} — refreshing snapshot`);
-        try {
-            await this.getSemanticSnapshot();
-            const existsAfter = await this.page!.$(refSelector).catch(() => null);
-            if (existsAfter) return refSelector;
-        } catch (e) {
-            logger.debug(`Browser: Snapshot refresh failed while re-attaching ref ${selector}: ${e}`);
-        }
-        */
 
         logger.warn(`Browser: Ref ${selector} is stale — element may no longer exist`);
         return null;
@@ -1676,14 +1696,22 @@ export class WebBrowser {
                 : null;
             const waitAfterClick = settings?.waitAfterClick || 1500;
 
+            // Scroll element into view before any click attempt — prevents most
+            // "element is outside of the viewport" failures
+            await this.page!.evaluate((sel: string) => {
+                const el = document.querySelector(sel) as HTMLElement;
+                if (el) el.scrollIntoView({ block: 'center', behavior: 'instant' });
+            }, finalSelector).catch(() => {});
+            // Brief settle after scroll for any lazy-loaded overlays
+            await this.page!.waitForTimeout(150).catch(() => {});
+
             // MULTI-STRATEGY CLICK: try progressively more aggressive approaches
-            // Strategy 1: Standard Playwright click (waits for actionability — visible, stable, enabled)
             let clicked = false;
             let lastError: any;
 
+            // Strategy 1: Standard Playwright click (waits for actionability — visible, stable, enabled)
             try {
-                // Reduced timeout to failover to force-click faster (1.5s instead of 5s)
-                await this.page!.click(finalSelector, { timeout: 1500 });
+                await this.page!.click(finalSelector, { timeout: 2000 });
                 clicked = true;
             } catch (e1) {
                 lastError = e1;
@@ -1691,19 +1719,18 @@ export class WebBrowser {
 
                 // Strategy 2: Force click (skip actionability checks — works for overlapping/animated elements)
                 try {
-                    await this.page!.click(finalSelector, { force: true, timeout: 3000 });
+                    await this.page!.click(finalSelector, { force: true, timeout: 2000 });
                     clicked = true;
                     logger.debug(`Browser: Force click succeeded for ${selector}`);
                 } catch (e2) {
                     lastError = e2;
                     logger.debug(`Browser: Force click failed for ${selector}: ${e2}`);
 
-                    // Strategy 3: JavaScript click (bypasses Playwright entirely — works for custom web components)
+                    // Strategy 3: JavaScript .click() — bypasses Playwright entirely
                     try {
                         const jsClicked = await this.page!.evaluate((sel: string) => {
                             const el = document.querySelector(sel) as HTMLElement;
                             if (!el) return false;
-                            // Scroll into view first
                             el.scrollIntoView({ block: 'center', behavior: 'instant' });
                             el.click();
                             return true;
@@ -1717,7 +1744,34 @@ export class WebBrowser {
                         }
                     } catch (e3) {
                         lastError = e3;
-                        logger.debug(`Browser: JS click also failed for ${selector}: ${e3}`);
+                        logger.debug(`Browser: JS click failed for ${selector}: ${e3}`);
+
+                        // Strategy 4: Full event dispatch — for custom web components and shadow DOM hosts
+                        // that swallow .click() but respond to MouseEvent dispatches
+                        try {
+                            const dispatched = await this.page!.evaluate((sel: string) => {
+                                const el = document.querySelector(sel) as HTMLElement;
+                                if (!el) return false;
+                                el.scrollIntoView({ block: 'center', behavior: 'instant' });
+                                const rect = el.getBoundingClientRect();
+                                const cx = rect.left + rect.width / 2;
+                                const cy = rect.top + rect.height / 2;
+                                const opts = { bubbles: true, cancelable: true, clientX: cx, clientY: cy, view: window };
+                                el.dispatchEvent(new PointerEvent('pointerdown', opts));
+                                el.dispatchEvent(new MouseEvent('mousedown', opts));
+                                el.dispatchEvent(new PointerEvent('pointerup', opts));
+                                el.dispatchEvent(new MouseEvent('mouseup', opts));
+                                el.dispatchEvent(new MouseEvent('click', opts));
+                                return true;
+                            }, finalSelector);
+                            if (dispatched) {
+                                clicked = true;
+                                logger.debug(`Browser: Event dispatch click succeeded for ${selector}`);
+                            }
+                        } catch (e4) {
+                            lastError = e4;
+                            logger.debug(`Browser: Event dispatch click failed for ${selector}: ${e4}`);
+                        }
                     }
                 }
             }
@@ -1794,6 +1848,15 @@ export class WebBrowser {
             const useSlowTyping = settings?.useSlowTyping || false;
             const slowTypingDelay = settings?.slowTypingDelay || 50;
 
+            // Scroll into view before typing
+            await this.page!.evaluate((sel: string) => {
+                const el = document.querySelector(sel) as HTMLElement;
+                if (el) el.scrollIntoView({ block: 'center', behavior: 'instant' });
+            }, finalSelector).catch(() => {});
+
+            // Platform-aware select-all key
+            const selectAllKey = process.platform === 'darwin' ? 'Meta+a' : 'Control+a';
+
             // MULTI-STRATEGY TYPE: try progressively more approaches
             let typed = false;
             let lastError: any;
@@ -1801,7 +1864,7 @@ export class WebBrowser {
             // Strategy 1: Playwright fill() — fast, works on standard inputs/textareas
             if (!useSlowTyping) {
                 try {
-                    await this.page!.fill(finalSelector, text, { timeout: 5000 });
+                    await this.page!.fill(finalSelector, text, { timeout: 3000 });
                     typed = true;
                 } catch (e) {
                     lastError = e;
@@ -1812,10 +1875,11 @@ export class WebBrowser {
             // Strategy 2: Click + keyboard.type() — works for custom inputs, contenteditable
             if (!typed) {
                 try {
-                    // Try clicking with force to focus the element
-                    await this.page!.click(finalSelector, { force: true, timeout: 3000 });
-                    // Clear existing content first
-                    await this.page!.keyboard.press('Control+a');
+                    // Focus the element — try standard click first, then force
+                    await this.page!.click(finalSelector, { timeout: 1500 })
+                        .catch(() => this.page!.click(finalSelector, { force: true, timeout: 2000 }));
+                    // Clear existing content
+                    await this.page!.keyboard.press(selectAllKey);
                     await this.page!.keyboard.press('Backspace');
                     await this.page!.keyboard.type(text, { delay: slowTypingDelay });
                     typed = true;
@@ -1834,7 +1898,8 @@ export class WebBrowser {
                 }
             }
 
-            // Strategy 3: JS-based focus + input event dispatch — for highly custom components
+            // Strategy 3: JS-based focus + native setter + full event dispatch
+            // Uses Object.getOwnPropertyDescriptor to trigger React/Vue/Angular change detection
             if (!typed) {
                 try {
                     const jsTyped = await this.page!.evaluate(({ sel, val }: { sel: string; val: string }) => {
@@ -1843,9 +1908,26 @@ export class WebBrowser {
                         el.scrollIntoView({ block: 'center', behavior: 'instant' });
                         el.focus();
                         if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-                            el.value = val;
+                            // Use the native setter to bypass React's synthetic event system
+                            const nativeSetter = Object.getOwnPropertyDescriptor(
+                                window.HTMLInputElement.prototype, 'value'
+                            )?.set || Object.getOwnPropertyDescriptor(
+                                window.HTMLTextAreaElement.prototype, 'value'
+                            )?.set;
+                            if (nativeSetter) {
+                                nativeSetter.call(el, val);
+                            } else {
+                                el.value = val;
+                            }
+                            // Dispatch events that React/Vue/Angular listen for
                             el.dispatchEvent(new Event('input', { bubbles: true }));
                             el.dispatchEvent(new Event('change', { bubbles: true }));
+                            // Also dispatch InputEvent for frameworks that need inputType
+                            try {
+                                el.dispatchEvent(new InputEvent('input', {
+                                    bubbles: true, cancelable: true, inputType: 'insertText', data: val
+                                }));
+                            } catch { /* InputEvent not supported in all contexts */ }
                         } else if (el.isContentEditable) {
                             el.textContent = val;
                             el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1863,6 +1945,24 @@ export class WebBrowser {
                     }
                 } catch (e) {
                     lastError = e;
+                }
+            }
+
+            // Strategy 4: Focus via JS + keyboard.type() — for elements that reject programmatic value setting
+            if (!typed) {
+                try {
+                    await this.page!.evaluate((sel: string) => {
+                        const el = document.querySelector(sel) as HTMLElement;
+                        if (el) { el.scrollIntoView({ block: 'center', behavior: 'instant' }); el.focus(); }
+                    }, finalSelector);
+                    await this.page!.keyboard.press(selectAllKey);
+                    await this.page!.keyboard.press('Backspace');
+                    await this.page!.keyboard.type(text, { delay: Math.max(slowTypingDelay, 30) });
+                    typed = true;
+                    logger.debug(`Browser: JS focus + keyboard.type succeeded for ${selector}`);
+                } catch (e) {
+                    lastError = e;
+                    logger.debug(`Browser: JS focus + keyboard.type failed for ${selector}: ${e}`);
                 }
             }
 
@@ -1913,8 +2013,22 @@ export class WebBrowser {
             await this.ensureBrowser();
             const pixels = amount || 600;
             const delta = direction === 'down' ? pixels : -pixels;
+
+            // Capture page height before scroll to detect lazy-loaded content
+            const heightBefore = await this.page!.evaluate(() => document.documentElement.scrollHeight).catch(() => 0);
+
             await this.page!.evaluate((d: number) => window.scrollBy(0, d), delta);
-            await this.page!.waitForTimeout(300); // Brief settle for lazy-loaded content
+
+            // Wait for lazy-loaded content — use DOM settle to detect new elements appearing
+            await this.waitForDomSettle(200, 2000);
+
+            const heightAfter = await this.page!.evaluate(() => document.documentElement.scrollHeight).catch(() => 0);
+            const newContentLoaded = heightAfter > heightBefore + 100;
+
+            // If new content loaded (infinite scroll), wait a bit more for it to render
+            if (newContentLoaded) {
+                await this.waitForDomSettle(300, 1500);
+            }
 
             // Return scroll position info
             const info = await this.page!.evaluate(() => {
@@ -1926,9 +2040,43 @@ export class WebBrowser {
                 return { scrollTop: Math.round(scrollTop), scrollHeight, clientHeight, atBottom, atTop };
             }).catch(() => ({ scrollTop: 0, scrollHeight: 0, clientHeight: 0, atBottom: false, atTop: false }));
 
-            return `Scrolled ${direction} ${pixels}px. Position: ${info.scrollTop}/${info.scrollHeight}px${info.atTop ? ' (at top)' : ''}${info.atBottom ? ' (at bottom)' : ''}`;
+            const loadNote = newContentLoaded ? ' (new content loaded)' : '';
+            return `Scrolled ${direction} ${pixels}px. Position: ${info.scrollTop}/${info.scrollHeight}px${info.atTop ? ' (at top)' : ''}${info.atBottom ? ' (at bottom)' : ''}${loadNote}`;
         } catch (e) {
             return `Failed to scroll ${direction}: ${e}`;
+        }
+    }
+
+    /**
+     * Scroll a specific element into view by selector or ref ID.
+     */
+    public async scrollToElement(selector: string): Promise<string> {
+        try {
+            await this.ensureBrowser();
+            const finalSelector = await this.resolveSelector(selector);
+            if (!finalSelector) {
+                return `Error: Ref ${selector} is stale. Run browser_examine_page to get a new ref.`;
+            }
+
+            const result = await this.page!.evaluate((sel: string) => {
+                const el = document.querySelector(sel) as HTMLElement;
+                if (!el) return null;
+                el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                const rect = el.getBoundingClientRect();
+                return {
+                    tag: el.tagName.toLowerCase(),
+                    text: (el.innerText || el.textContent || '').trim().slice(0, 80),
+                    top: Math.round(rect.top),
+                    left: Math.round(rect.left)
+                };
+            }, finalSelector);
+
+            if (!result) return `Error: Element ${selector} not found in DOM.`;
+
+            await this.page!.waitForTimeout(300); // Settle after smooth scroll
+            return `Scrolled to ${result.tag} "${result.text}" at position (${result.left}, ${result.top})`;
+        } catch (e) {
+            return `Failed to scroll to ${selector}: ${e}`;
         }
     }
 
@@ -1939,22 +2087,57 @@ export class WebBrowser {
             if (!finalSelector) {
                 return `Error: Ref ${selector} is stale. Run browser_examine_page to get a new ref.`;
             }
+
+            // Scroll into view first
+            await this.page!.evaluate((sel: string) => {
+                const el = document.querySelector(sel) as HTMLElement;
+                if (el) el.scrollIntoView({ block: 'center', behavior: 'instant' });
+            }, finalSelector).catch(() => {});
             
             try {
-                await this.page!.hover(finalSelector, { timeout: 5000 });
+                await this.page!.hover(finalSelector, { timeout: 3000 });
             } catch {
-                // Fallback: force hover via JS
+                // Fallback: full hover event sequence via JS (mouseenter + mouseover + mousemove)
                 await this.page!.evaluate((sel: string) => {
                     const el = document.querySelector(sel) as HTMLElement;
                     if (el) {
                         el.scrollIntoView({ block: 'center', behavior: 'instant' });
-                        el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-                        el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+                        const rect = el.getBoundingClientRect();
+                        const cx = rect.left + rect.width / 2;
+                        const cy = rect.top + rect.height / 2;
+                        const opts = { bubbles: true, clientX: cx, clientY: cy, view: window };
+                        el.dispatchEvent(new MouseEvent('mouseenter', { ...opts, bubbles: false }));
+                        el.dispatchEvent(new MouseEvent('mouseover', opts));
+                        el.dispatchEvent(new MouseEvent('mousemove', opts));
                     }
                 }, finalSelector);
             }
-            await this.page!.waitForTimeout(500); // Wait for hover effects/tooltips/menus
-            return `Successfully hovered over: ${selector}`;
+
+            // Wait for hover effects (tooltips, dropdowns, menus)
+            await this.waitForDomSettle(200, 1000);
+
+            // Report what appeared after hover
+            const appeared = await this.page!.evaluate(() => {
+                // Check for newly visible tooltips, dropdowns, menus
+                const candidates = Array.from(document.querySelectorAll(
+                    '[role="tooltip"], [role="menu"], [role="listbox"], .tooltip, .dropdown-menu, ' +
+                    '.popover, [class*="tooltip"], [class*="dropdown"], [class*="popup"], [class*="menu"]'
+                )) as HTMLElement[];
+                const visible = candidates.filter(el => {
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                });
+                if (visible.length > 0) {
+                    return visible.map(el => (el.innerText || '').trim().slice(0, 100)).filter(t => t.length > 0).join('; ');
+                }
+                return '';
+            }).catch(() => '');
+
+            const hoverResult = appeared
+                ? `Successfully hovered over: ${selector}. Appeared: "${appeared}"`
+                : `Successfully hovered over: ${selector}`;
+            return hoverResult;
         } catch (e) {
             return `Failed to hover over ${selector}: ${e}`;
         }
@@ -1968,29 +2151,64 @@ export class WebBrowser {
                 return `Error: Ref ${selector} is stale. Run browser_examine_page to get a new ref.`;
             }
 
+            // Scroll into view first
+            await this.page!.evaluate((sel: string) => {
+                const el = document.querySelector(sel) as HTMLElement;
+                if (el) el.scrollIntoView({ block: 'center', behavior: 'instant' });
+            }, finalSelector).catch(() => {});
+
             try {
                 // Try Playwright's selectOption — works for <select> elements
-                const selected = await this.page!.selectOption(finalSelector, { label: value }, { timeout: 5000 })
-                    .catch(() => this.page!.selectOption(finalSelector, { value }, { timeout: 3000 }));
+                // Try by label first, then by value, then by index-text match
+                const selected = await this.page!.selectOption(finalSelector, { label: value }, { timeout: 3000 })
+                    .catch(() => this.page!.selectOption(finalSelector, { value }, { timeout: 2000 }))
+                    .catch(() => this.page!.selectOption(finalSelector, value, { timeout: 2000 }));
                 await this.waitAfterInteraction(1000);
                 this.lastInteractionTimestamp = Date.now();
                 return `Successfully selected "${value}" in ${selector} (values: ${selected.join(', ')})`;
             } catch {
                 // Fallback for custom dropdown components: click to open, then find and click the option
-                await this.page!.click(finalSelector, { force: true, timeout: 3000 }).catch(() => {});
-                await this.page!.waitForTimeout(500);
+                await this.page!.click(finalSelector, { force: true, timeout: 2000 }).catch(() => {});
+                // Wait for dropdown animation
+                await this.waitForDomSettle(300, 1500);
                 
-                // Look for the option text in visible elements
+                // Look for the option text in visible elements — expanded selector list
                 const optionClicked = await this.page!.evaluate((optionText: string) => {
+                    const lower = optionText.toLowerCase();
+                    // Broad selector list covering most custom dropdown implementations
                     const candidates = Array.from(document.querySelectorAll(
-                        '[role="option"], [role="listbox"] *, li, .option, [class*="option"], [class*="dropdown"] *'
+                        '[role="option"], [role="listbox"] *, [role="menuitem"], [role="menuitemradio"], ' +
+                        'li, .option, [class*="option"], [class*="dropdown"] *, [class*="select"] *, ' +
+                        '[class*="menu-item"], [class*="list-item"], [data-value], ' +
+                        'div[tabindex], span[tabindex], ul > *, ol > *'
                     )) as HTMLElement[];
+
+                    // First pass: exact match
                     for (const el of candidates) {
-                        if (el.innerText?.trim().toLowerCase() === optionText.toLowerCase() ||
-                            el.textContent?.trim().toLowerCase() === optionText.toLowerCase()) {
-                            el.scrollIntoView({ block: 'center' });
-                            el.click();
-                            return true;
+                        const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+                        const dataVal = (el.getAttribute('data-value') || '').toLowerCase();
+                        if (text === lower || dataVal === lower) {
+                            const rect = el.getBoundingClientRect();
+                            const style = window.getComputedStyle(el);
+                            if (rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none') {
+                                el.scrollIntoView({ block: 'center' });
+                                el.click();
+                                return true;
+                            }
+                        }
+                    }
+
+                    // Second pass: contains match (for options with extra text like icons)
+                    for (const el of candidates) {
+                        const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+                        if (text.includes(lower) && text.length < 200) {
+                            const rect = el.getBoundingClientRect();
+                            const style = window.getComputedStyle(el);
+                            if (rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none') {
+                                el.scrollIntoView({ block: 'center' });
+                                el.click();
+                                return true;
+                            }
                         }
                     }
                     return false;
@@ -1998,65 +2216,107 @@ export class WebBrowser {
 
                 if (optionClicked) {
                     await this.waitAfterInteraction(1000);
+                    this.lastInteractionTimestamp = Date.now();
                     return `Successfully selected "${value}" in ${selector} (custom dropdown)`;
                 }
-                return `Failed to select "${value}" in ${selector}: Option not found. Try browser_click on the specific option after opening the dropdown.`;
+                return `Failed to select "${value}" in ${selector}: Option not found. Try browser_examine_page() to see available options, then browser_click on the specific option.`;
             }
         } catch (e) {
             return `Failed to select option in ${selector}: ${e}`;
         }
     }
 
-    public async clickText(text: string, selectorHint: string = 'button, a, [role="button"], input[type="button"], input[type="submit"]'): Promise<string> {
+    public async clickText(text: string, selectorHint: string = 'button, a, [role="button"], input[type="button"], input[type="submit"], [role="link"], [role="menuitem"], [role="tab"], [role="option"]'): Promise<string> {
         try {
             await this.ensureBrowser();
             logger.info(`Browser: Click text "${text}" (hint=${selectorHint})`);
 
+            // Multi-pass text matching with priority:
+            // Pass 1: Interactive elements (hint selector) — exact match
+            // Pass 2: Interactive elements — contains match
+            // Pass 3: Any visible element — exact match (smallest element wins to avoid clicking containers)
+            // Pass 4: Any visible element — contains match (smallest element wins)
             const clicked = await this.page!.evaluate(({ txt, sel }) => {
-                const elements = Array.from(document.querySelectorAll(sel)) as HTMLElement[];
-                const target = elements.find(el => 
-                    el.innerText?.toLowerCase().includes(txt.toLowerCase()) || 
-                    el.textContent?.toLowerCase().includes(txt.toLowerCase()) ||
-                    (el as HTMLInputElement).value?.toLowerCase().includes(txt.toLowerCase()) ||
-                    el.getAttribute('aria-label')?.toLowerCase().includes(txt.toLowerCase()) ||
-                    el.getAttribute('title')?.toLowerCase().includes(txt.toLowerCase())
-                );
+                const lower = txt.toLowerCase();
 
-                if (target) {
-                    target.scrollIntoView({ block: 'center' });
-                    target.click();
+                const matchesText = (el: HTMLElement): 'exact' | 'contains' | false => {
+                    const inner = (el.innerText || '').trim().toLowerCase();
+                    const content = (el.textContent || '').trim().toLowerCase();
+                    const value = ((el as HTMLInputElement).value || '').toLowerCase();
+                    const ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
+                    const title = (el.getAttribute('title') || '').toLowerCase();
+                    const dataTestId = (el.getAttribute('data-testid') || '').toLowerCase();
+                    const name = (el.getAttribute('name') || '').toLowerCase();
+
+                    // Exact matches
+                    if (inner === lower || content === lower || value === lower ||
+                        ariaLabel === lower || title === lower || dataTestId === lower || name === lower) {
+                        return 'exact';
+                    }
+                    // Contains matches (only for short elements to avoid matching containers)
+                    if ((inner.includes(lower) && inner.length < 200) ||
+                        ariaLabel.includes(lower) || title.includes(lower) || value.includes(lower)) {
+                        return 'contains';
+                    }
+                    return false;
+                };
+
+                const isVisible = (el: HTMLElement): boolean => {
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 && rect.height > 0 &&
+                           style.visibility !== 'hidden' && style.display !== 'none' &&
+                           style.opacity !== '0';
+                };
+
+                const clickEl = (el: HTMLElement): boolean => {
+                    el.scrollIntoView({ block: 'center', behavior: 'instant' });
+                    el.click();
                     return true;
+                };
+
+                // Pass 1 & 2: Interactive elements from hint selector
+                const hintEls = Array.from(document.querySelectorAll(sel)) as HTMLElement[];
+                const visibleHints = hintEls.filter(isVisible);
+
+                // Exact match first
+                for (const el of visibleHints) {
+                    if (matchesText(el) === 'exact') return clickEl(el);
                 }
+                // Contains match
+                for (const el of visibleHints) {
+                    if (matchesText(el) === 'contains') return clickEl(el);
+                }
+
+                // Pass 3 & 4: Any visible element — prefer smallest matching element
+                // to avoid clicking a large container div when we want a button inside it
+                const allEls = Array.from(document.querySelectorAll(
+                    'a, button, span, label, td, th, li, h1, h2, h3, h4, h5, h6, ' +
+                    '[role="button"], [role="link"], [role="menuitem"], [role="tab"], [role="option"], ' +
+                    'input, select, summary, [tabindex], [onclick], div, p'
+                )) as HTMLElement[];
+                const visibleAll = allEls.filter(isVisible);
+
+                // Sort by element area (smallest first) to prefer specific elements over containers
+                const sorted = visibleAll.sort((a, b) => {
+                    const aRect = a.getBoundingClientRect();
+                    const bRect = b.getBoundingClientRect();
+                    return (aRect.width * aRect.height) - (bRect.width * bRect.height);
+                });
+
+                // Exact match (smallest element)
+                for (const el of sorted) {
+                    if (matchesText(el) === 'exact') return clickEl(el);
+                }
+                // Contains match (smallest element)
+                for (const el of sorted) {
+                    if (matchesText(el) === 'contains') return clickEl(el);
+                }
+
                 return false;
             }, { txt: text, sel: selectorHint });
 
-            if (!clicked) {
-                // Fallback: try any element if hint failed
-                const anyClicked = await this.page!.evaluate(({ txt }) => {
-                    // Expanded fallback list
-                    const elements = Array.from(document.querySelectorAll('a, button, span, div, p, li, h1, h2, h3, h4, h5, h6')) as HTMLElement[];
-                    
-                    // Prioritize: 
-                    // 1. Exact-ish match (trimmed)
-                    // 2. Contains match
-                    const target = elements.find(el => {
-                        const inner = el.innerText?.trim().toLowerCase() || '';
-                        const text = txt.toLowerCase();
-                        if (inner === text) return true;
-                        if (inner.includes(text) && inner.length < 200) return true;
-                        return false;
-                    });
-
-                    if (target) {
-                        target.scrollIntoView({ block: 'center' });
-                        target.click();
-                        return true;
-                    }
-                    return false;
-                }, { txt: text });
-
-                if (!anyClicked) return `Error: Could not find any element containing text "${text}".`;
-            }
+            if (!clicked) return `Error: Could not find any visible element containing text "${text}". Try browser_examine_page() to see available elements.`;
 
             await this.waitAfterInteraction(1500);
             this.lastInteractionTimestamp = Date.now();
@@ -2071,46 +2331,101 @@ export class WebBrowser {
             await this.ensureBrowser();
             logger.info(`Browser: Type into label "${label}" -> "${text}"`);
 
-            const typed = await this.page!.evaluate(({ lbl, val }) => {
-                // Try to find input associated with a label
+            // First, try to find and focus the input via JS
+            const foundSelector = await this.page!.evaluate(({ lbl }) => {
+                const lower = lbl.toLowerCase();
+
+                // Strategy 1: Find input associated with a <label> element
                 const labels = Array.from(document.querySelectorAll('label')) as HTMLLabelElement[];
-                const targetLabel = labels.find(l => l.innerText?.toLowerCase().includes(lbl.toLowerCase()));
+                const targetLabel = labels.find(l => (l.innerText || l.textContent || '').toLowerCase().includes(lower));
                 
-                let input: HTMLInputElement | null = null;
+                let input: HTMLElement | null = null;
                 if (targetLabel) {
                     if (targetLabel.htmlFor) {
-                        input = document.getElementById(targetLabel.htmlFor) as HTMLInputElement;
+                        input = document.getElementById(targetLabel.htmlFor);
                     }
                     if (!input) {
-                        input = targetLabel.querySelector('input, textarea, select');
+                        input = targetLabel.querySelector('input, textarea, select, [contenteditable="true"], [role="textbox"]');
+                    }
+                    // Also check the next sibling (common pattern: label followed by input)
+                    if (!input && targetLabel.nextElementSibling) {
+                        const sib = targetLabel.nextElementSibling as HTMLElement;
+                        if (sib.tagName === 'INPUT' || sib.tagName === 'TEXTAREA' || sib.getAttribute('contenteditable') === 'true') {
+                            input = sib;
+                        } else {
+                            input = sib.querySelector('input, textarea, [contenteditable="true"], [role="textbox"]');
+                        }
                     }
                 }
 
-                // If no label found, try placeholders or aria-labels
+                // Strategy 2: Find by placeholder, aria-label, name, title, or data-testid
                 if (!input) {
-                    const inputs = Array.from(document.querySelectorAll('input, textarea, [role="textbox"]')) as HTMLInputElement[];
-                    input = inputs.find(i => 
-                        i.placeholder?.toLowerCase().includes(lbl.toLowerCase()) || 
-                        i.getAttribute('aria-label')?.toLowerCase().includes(lbl.toLowerCase()) ||
-                        i.name?.toLowerCase().includes(lbl.toLowerCase())
-                    ) || null;
+                    const inputs = Array.from(document.querySelectorAll(
+                        'input, textarea, [role="textbox"], [role="searchbox"], [role="combobox"], ' +
+                        '[contenteditable="true"], select'
+                    )) as HTMLElement[];
+                    input = inputs.find(i => {
+                        const placeholder = (i.getAttribute('placeholder') || '').toLowerCase();
+                        const ariaLabel = (i.getAttribute('aria-label') || '').toLowerCase();
+                        const name = (i.getAttribute('name') || '').toLowerCase();
+                        const title = (i.getAttribute('title') || '').toLowerCase();
+                        const testId = (i.getAttribute('data-testid') || '').toLowerCase();
+                        const id = (i.id || '').toLowerCase();
+                        return placeholder.includes(lower) || ariaLabel.includes(lower) ||
+                               name.includes(lower) || title.includes(lower) ||
+                               testId.includes(lower) || id.includes(lower);
+                    }) || null;
+                }
+
+                // Strategy 3: Find by nearby text (label-like text before an input)
+                if (!input) {
+                    const allInputs = Array.from(document.querySelectorAll('input, textarea, [role="textbox"]')) as HTMLElement[];
+                    for (const inp of allInputs) {
+                        // Check previous sibling text
+                        const prev = inp.previousElementSibling as HTMLElement;
+                        if (prev && (prev.innerText || prev.textContent || '').toLowerCase().includes(lower)) {
+                            input = inp;
+                            break;
+                        }
+                        // Check parent's text content (for wrapped inputs)
+                        const parent = inp.parentElement;
+                        if (parent) {
+                            const parentText = Array.from(parent.childNodes)
+                                .filter(n => n.nodeType === Node.TEXT_NODE)
+                                .map(n => n.textContent || '')
+                                .join('')
+                                .toLowerCase();
+                            if (parentText.includes(lower)) {
+                                input = inp;
+                                break;
+                            }
+                        }
+                    }
                 }
 
                 if (input) {
-                    input.scrollIntoView({ block: 'center' });
-                    input.focus();
-                    input.value = val;
-                    input.dispatchEvent(new Event('input', { bubbles: true }));
-                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                    // Tag the found element so we can target it with Playwright
                     return true;
                 }
                 return false;
-            }, { lbl: label, val: text });
+            }, { lbl: label });
 
-            if (!typed) return `Error: Could not find input field associated with label/placeholder "${label}".`;
+            if (!foundSelector) return `Error: Could not find input field associated with label/placeholder "${label}". Try browser_examine_page() to see available fields.`;
 
-            await this.waitAfterInteraction(1000);
-            this.lastInteractionTimestamp = Date.now();
+            // Now use the full type() method which has multi-strategy support
+            // (fill, click+type, native setter, keyboard.type)
+            const typeResult = await this.type('[data-orcbot-label-match="true"]', text);
+
+            // Clean up the marker attribute
+            await this.page!.evaluate(() => {
+                const el = document.querySelector('[data-orcbot-label-match="true"]');
+                if (el) el.removeAttribute('data-orcbot-label-match');
+            }).catch(() => {});
+
+            if (typeResult.startsWith('Failed') || typeResult.startsWith('Error')) {
+                return `Failed to type into field "${label}": ${typeResult}`;
+            }
+
             return `Successfully typed into field "${label}": "${text}"`;
         } catch (e) {
             return `Failed to type into label "${label}": ${e}`;

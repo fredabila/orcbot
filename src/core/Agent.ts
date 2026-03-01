@@ -4285,23 +4285,36 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
 
                 logger.info(`Browser: Performing goal: "${goal}"`);
                 
-                // We use a specialized internal reasoning loop for this skill
+                // Get page state for planning
                 const snapshot = await this.browser.getSemanticSnapshot();
                 const prompt = `I need to achieve this goal on the current web page: "${goal}"
 
 CURRENT PAGE SNAPSHOT:
 ${snapshot}
 
-Instructions:
-1. Break down the goal into 1-3 immediate tool calls.
-2. You can use: click(ref), type(ref, text), press(key), wait(ms), scroll(dir).
-3. Output ONLY a JSON array of actions to perform.
-Example: [{"tool": "type", "ref": "12", "text": "my search"}, {"tool": "press", "key": "Enter"}]
+AVAILABLE TOOLS (use these in your action plan):
+- click(ref) — Click element by ref ID from snapshot. Example: {"tool": "click", "ref": "5"}
+- type(ref, text) — Type text into input by ref ID. Example: {"tool": "type", "ref": "3", "text": "hello"}
+- clickText(text) — Click element containing text (no ref needed). Example: {"tool": "clickText", "text": "Submit"}
+- typeIntoLabel(label, text) — Type into field by label/placeholder. Example: {"tool": "typeIntoLabel", "label": "Email", "text": "user@test.com"}
+- select(ref, value) — Select dropdown option. Example: {"tool": "select", "ref": "7", "value": "Option A"}
+- press(key) — Press keyboard key. Example: {"tool": "press", "key": "Enter"}
+- scroll(dir, amount?) — Scroll page. Example: {"tool": "scroll", "dir": "down"}
+- hover(ref) — Hover over element. Example: {"tool": "hover", "ref": "4"}
+- wait(ms) — Wait milliseconds. Example: {"tool": "wait", "ms": 2000}
+
+RULES:
+1. Break down the goal into 1-5 immediate actions.
+2. Prefer clickText/typeIntoLabel when you can identify elements by text — they're more reliable than ref IDs.
+3. Use ref IDs only when text matching won't work (e.g., icon buttons, unlabeled inputs).
+4. Output ONLY a JSON array of actions.
+
+Example: [{"tool": "typeIntoLabel", "label": "Username", "text": "admin"}, {"tool": "typeIntoLabel", "label": "Password", "text": "secret"}, {"tool": "clickText", "text": "Sign In"}]
 
 Output JSON now:`;
 
                 try {
-                    const response = await this.llm.callFast(prompt, "You are a web automation expert. Execute the goal using the provided snapshot.");
+                    const response = await this.llm.callFast(prompt, "You are a web automation expert. Output only a JSON array of actions.");
                     const jsonMatch = response.match(/\[[\s\S]*\]/);
                     if (!jsonMatch) return `Could not plan actions for goal: "${goal}".\n\nPlan response: ${response}`;
 
@@ -4310,13 +4323,20 @@ Output JSON now:`;
 
                     for (const action of actions) {
                         let res = '';
-                        if (action.tool === 'click') res = await this.browser.click(action.ref);
-                        else if (action.tool === 'type') res = await this.browser.type(action.ref, action.text);
-                        else if (action.tool === 'press') res = await this.browser.press(action.key);
-                        else if (action.tool === 'wait') res = await this.browser.wait(action.ms || 1000);
-                        else if (action.tool === 'scroll') res = await this.browser.scrollPage(action.dir || 'down');
+                        switch (action.tool) {
+                            case 'click': res = await this.browser.click(action.ref || action.selector); break;
+                            case 'type': res = await this.browser.type(action.ref || action.selector, action.text); break;
+                            case 'clickText': res = await this.browser.clickText(action.text, action.hint); break;
+                            case 'typeIntoLabel': res = await this.browser.typeIntoLabel(action.label, action.text); break;
+                            case 'select': res = await this.browser.selectOption(action.ref || action.selector, action.value); break;
+                            case 'press': res = await this.browser.press(action.key); break;
+                            case 'scroll': res = await this.browser.scrollPage(action.dir || 'down', action.amount); break;
+                            case 'hover': res = await this.browser.hover(action.ref || action.selector); break;
+                            case 'wait': res = await this.browser.wait(action.ms || 1000); break;
+                            default: res = `Unknown tool: ${action.tool}`;
+                        }
                         
-                        results.push(`- ${action.tool}(${action.ref || action.key || ''}): ${res.split('\n')[0]}`);
+                        results.push(`- ${action.tool}(${action.ref || action.text || action.label || action.key || ''}): ${res.split('\n')[0]}`);
                         if (res.startsWith('Error') || res.startsWith('Failed')) break;
                     }
 
@@ -4464,6 +4484,18 @@ Output JSON now:`;
                     return `${result}\n\n⚠️ You have reached the TOP of the page. Do NOT scroll up again — there is no more content above. Either scroll down, interact with visible elements, or try a different approach.`;
                 }
                 return result;
+            }
+        });
+
+        // Skill: Browser Scroll To Element
+        this.skills.registerSkill({
+            name: 'browser_scroll_to',
+            description: 'Scroll a specific element into view by ref ID or CSS selector. Use when an element is off-screen and you need to bring it into the viewport before interacting.',
+            usage: 'browser_scroll_to(selector)',
+            handler: async (args: any) => {
+                const selector = args.selector || args.ref || args.element;
+                if (!selector) return 'Error: Missing selector.';
+                return this.browser.scrollToElement(String(selector));
             }
         });
 
@@ -7550,7 +7582,7 @@ Respond with ONLY valid JSON:
         const coreSkills = new Set([
             'web_search', 'browser_navigate', 'browser_click', 'browser_type',
             'browser_examine_page', 'browser_screenshot', 'browser_back',
-            'browser_scroll', 'browser_hover', 'browser_select',
+            'browser_scroll', 'browser_scroll_to', 'browser_hover', 'browser_select',
             'browser_fill_form', 'browser_extract_data', 'browser_extract_content',
             'browser_api_intercept', 'browser_api_list',
             'computer_screenshot', 'computer_click', 'computer_vision_click',
@@ -11589,7 +11621,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 const isResearchDefault = [
                     'web_search', 'browser_navigate', 'browser_click', 'browser_type',
                     'browser_examine_page', 'browser_screenshot', 'browser_back',
-                    'browser_scroll', 'browser_hover', 'browser_select',
+                    'browser_scroll', 'browser_scroll_to', 'browser_hover', 'browser_select',
                     'browser_fill_form', 'browser_extract_data', 'browser_extract_content',
                     'browser_api_intercept', 'browser_api_list',
                     'computer_screenshot', 'computer_click', 'computer_vision_click',
