@@ -6,6 +6,7 @@ import App from './App.tsx'
 import Deploy from './pages/Deploy.tsx'
 import Robotics from './pages/Robotics.tsx'
 import Skills from './pages/Skills.tsx'
+import SaaSPage from './pages/SaaS/SaaSPage.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -15,6 +16,7 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/deploy" element={<Deploy />} />
         <Route path="/robotics" element={<Robotics />} />
         <Route path="/skills" element={<Skills />} />
+        <Route path="/saas" element={<SaaSPage />} />
       </Routes>
     </BrowserRouter>
   </StrictMode>,

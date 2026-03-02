@@ -91,6 +91,7 @@ function App() {
           <a href="#architecture" onClick={() => setMobileMenuOpen(false)}>Architecture</a>
           <a href="#docs" onClick={() => setMobileMenuOpen(false)}>Docs</a>
           <Link to="/skills" onClick={() => setMobileMenuOpen(false)}>Skills</Link>
+          <Link to="/saas" onClick={() => setMobileMenuOpen(false)}>SaaS Farm</Link>
           <Link to="/deploy" onClick={() => setMobileMenuOpen(false)}>Deploy</Link>
         </div>
 
