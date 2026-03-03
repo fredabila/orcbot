@@ -1507,7 +1507,7 @@ lightpandaCommand
         const pidPath = path.join(os.homedir(), '.orcbot', 'lightpanda.pid');
         const lightpandaPath = agent.config.get('lightpandaPath');
         const endpoint = agent.config.get('lightpandaEndpoint') || 'ws://127.0.0.1:9222';
-        const engineSetting = agent.config.get('browserEngine') || 'playwright';
+        const engineSetting = agent.config.get('browserEngine') || 'puppeteer';
 
         console.log('\n🐼 Lightpanda Status\n');
 
@@ -1554,10 +1554,10 @@ lightpandaCommand
 
 lightpandaCommand
     .command('disable')
-    .description('Switch back to Playwright (Chrome)')
+    .description('Switch back to Puppeteer (Chrome)')
     .action(() => {
-        agent.config.set('browserEngine', 'playwright');
-        console.log('✅ Browser engine set to Playwright (Chrome)');
+        agent.config.set('browserEngine', 'puppeteer');
+        console.log('✅ Browser engine set to Puppeteer (Chrome)');
     });
 
 // ── Latency Benchmark ──────────────────────────────────────────────────
@@ -2408,7 +2408,7 @@ async function openBuildWorkspaceFolder() {
 }
 
 async function showBrowserMenu() {
-    const currentEngine = agent.config.get('browserEngine') || 'playwright';
+    const currentEngine = agent.config.get('browserEngine') || 'puppeteer';
     const lightpandaPath = agent.config.get('lightpandaPath');
     const lightpandaEndpoint = agent.config.get('lightpandaEndpoint') || 'ws://127.0.0.1:9222';
     const pidPath = path.join(os.homedir(), '.orcbot', 'lightpanda.pid');
@@ -2437,7 +2437,7 @@ async function showBrowserMenu() {
     const computerUseModel = agent.config.get('googleComputerUseModel') || 'gemini-2.5-computer-use-preview-10-2025';
     const hasGoogleKey = !!agent.config.get('googleApiKey');
     const browserLines = [
-        `${dim('Engine')}     ${currentEngine === 'lightpanda' ? brightCyan(bold('🐼 Lightpanda')) : cyan(bold('🌐 Playwright (Chrome)'))}`,
+        `${dim('Engine')}     ${currentEngine === 'lightpanda' ? brightCyan(bold('🐼 Lightpanda')) : currentEngine === 'puppeteer' ? cyan(bold('🌐 Puppeteer (Chrome)')) : cyan(bold('🌐 Puppeteer (Chrome)'))}`,
         `${dim('Installed')}  ${isInstalled ? green('● Yes') : gray('○ No')}`,
         ...(isInstalled ? [
             `${dim('Server')}     ${isRunning ? green(`● Running ${dim(`(PID: ${runningPid})`)}`) : gray('○ Stopped')}`,
@@ -2449,7 +2449,8 @@ async function showBrowserMenu() {
     console.log('');
 
     const choices = [
-        { name: currentEngine === 'playwright' ? '🐼 Switch to Lightpanda (9x less RAM)' : '🌐 Switch to Playwright (Chrome)', value: 'toggle' },
+        { name: currentEngine === 'puppeteer' ? '🐼 Switch to Lightpanda (9x less RAM)' : '🌐 Switch to Puppeteer (Chrome)', value: 'toggle' },
+
         { name: computerUseEnabled ? `🤖 ${bold('Disable')} Gemini Computer Use` : `🤖 ${bold('Enable')} Gemini Computer Use ${dim('(vision-based browser control)')}`, value: 'computeruse' },
     ];
 
@@ -2477,7 +2478,7 @@ async function showBrowserMenu() {
     if (action === 'back') return showToolingMenu();
 
     if (action === 'toggle') {
-        if (currentEngine === 'playwright') {
+        if (currentEngine === 'puppeteer') {
             if (!isInstalled) {
                 console.log('\n⚠️  Lightpanda is not installed.');
                 const { install } = await inquirer.prompt([
@@ -2495,7 +2496,7 @@ async function showBrowserMenu() {
                 }
             }
         } else {
-            agent.config.set('browserEngine', 'playwright');
+            agent.config.set('browserEngine', 'puppeteer');
             console.log('\n✅ Switched to Playwright (Chrome)');
         }
     } else if (action === 'computeruse') {
@@ -2577,7 +2578,7 @@ async function showToolingMenu() {
     const hasBrave = !!agent.config.get('braveSearchApiKey');
     const hasSearxng = !!agent.config.get('searxngUrl');
     const hasCaptcha = !!agent.config.get('captchaApiKey');
-    const browserEngine = agent.config.get('browserEngine') || 'playwright';
+    const browserEngine = agent.config.get('browserEngine') || 'puppeteer';
     const computerUseOn = !!agent.config.get('googleComputerUseEnabled');
     const imageGenProvider = agent.config.get('imageGenProvider');
     const imageGenModel = agent.config.get('imageGenModel');

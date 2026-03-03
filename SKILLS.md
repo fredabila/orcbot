@@ -67,7 +67,7 @@ This file lists the available skills for the agent.
 - **browser_hover(selector)**: [BROWSER/WEB AUTOMATION] Hover over an element to trigger menus or tooltips.
 - **browser_select(selector, value)**: [BROWSER/WEB AUTOMATION] Select an option in a dropdown by visible label.
 - **switch_browser_profile(profileName, profileDir?)**: [BROWSER/WEB AUTOMATION] Switch to a persistent browser profile.
-- **switch_browser_engine(engine, endpoint?)**: [BROWSER/WEB AUTOMATION] Switch between Playwright and Lightpanda browser engines.
+- **switch_browser_engine(engine, endpoint?)**: [BROWSER/WEB AUTOMATION] Switch between Puppeteer and Lightpanda browser engines.
 - **extract_article(url?)**: [HIGH-LEVEL PREFERRED] Extract clean article text from a URL or the current page.
 - **http_fetch(url, method?, headers?, body?, timeout?)**: [HIGH-LEVEL PREFERRED] Lightweight HTTP request (no browser). Supports GET/POST/PUT/PATCH/DELETE. Returns status + body. Ideal for APIs and simple pages. USE THIS BEFORE RESORTING TO FULL BROWSER.
 - **youtube_trending(region?, category?)**: [HIGH-LEVEL PREFERRED] Fetch YouTube trending videos via API fallbacks.

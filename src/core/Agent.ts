@@ -4703,7 +4703,7 @@ Output JSON now:`;
         // Skill: Switch Browser Engine
         this.skills.registerSkill({
             name: 'switch_browser_engine',
-            description: 'Switch between browser engines: "playwright" (Chrome/Chromium via Playwright) or "lightpanda" (lightweight headless browser via CDP). Lightpanda uses 9x less RAM and is 11x faster than Chrome.',
+            description: 'Switch between browser engines: "puppeteer" (Chrome/Chromium via Puppeteer) or "lightpanda" (lightweight headless browser via CDP). Lightpanda uses 9x less RAM and is 11x faster than Chrome.',
             usage: 'switch_browser_engine(engine, endpoint?)',
             handler: async (args: any) => {
                 const engine = args.engine || args.browserEngine;

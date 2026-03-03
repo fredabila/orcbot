@@ -97,7 +97,7 @@ export const AgentConfigSchema = z.object({
     pluginHealthCheckIntervalMinutes: coerceNumber.default(15),
     browserProfileDir: z.string().optional(),
     browserProfileName: z.string().default('default'),
-    browserEngine: z.enum(['playwright', 'lightpanda']).default('playwright'),
+    browserEngine: z.enum(['playwright', 'lightpanda', 'puppeteer']).default('puppeteer'),
     lightpandaEndpoint: z.string().default('ws://127.0.0.1:9222'),
     lightpandaPath: z.string().optional(),
     browserDebugAlwaysSave: coerceBool.default(false),

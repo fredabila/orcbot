@@ -1,4 +1,5 @@
 import { chromium, Browser, Page, BrowserContext } from 'playwright';
+import puppeteer, { Browser as PuppeteerBrowser, Page as PuppeteerPage } from 'puppeteer';
 import { logger } from '../utils/logger';
 import { RuntimeTuner } from '../core/RuntimeTuner';
 import { BrowserStateManager } from './BrowserStateManager';
@@ -6,7 +7,7 @@ import path from 'path';
 import os from 'os';
 import fs from 'fs';
 
-export type BrowserEngine = 'playwright' | 'lightpanda';
+export type BrowserEngine = 'playwright' | 'lightpanda' | 'puppeteer';
 
 export interface InterceptedApi {
     url: string;
@@ -20,8 +21,8 @@ export interface InterceptedApi {
 }
 
 export class WebBrowser {
-    private browser: Browser | null = null;
-    private _page: Page | null = null; // Renamed from 'page' to '_page'
+    private browser: Browser | PuppeteerBrowser | null = null;
+    private _page: any = null; // Changed to any to support both Playwright and Puppeteer
     private searchCache: Map<string, { ts: number; result: string }> = new Map();
     private context: BrowserContext | null = null;
     private profileDir?: string;
@@ -52,6 +53,10 @@ export class WebBrowser {
     private _apiInterceptionMaxEntries: number = 50;
 
     public get page(): Page | null {
+        return this._page as Page | null;
+    }
+
+    private get p(): any {
         return this._page;
     }
 
@@ -98,7 +103,7 @@ export class WebBrowser {
         this.profileDir = browserProfileDir;
         this.profileName = browserProfileName || 'default';
         this.tuner = tuner;
-        this.browserEngine = browserEngine || 'playwright';
+        this.browserEngine = browserEngine || 'puppeteer';
         this.lightpandaEndpoint = lightpandaEndpoint || 'ws://127.0.0.1:9222';
         this.stateManager = new BrowserStateManager();
         this.debugAlwaysSaveArtifacts = Boolean(debugOptions?.alwaysSaveArtifacts);
@@ -153,6 +158,32 @@ export class WebBrowser {
         if (this.browserEngine === 'lightpanda') {
             if (!this.browser) {
                 await this.connectToLightpanda();
+            }
+            return;
+        }
+
+        if (this.browserEngine === 'puppeteer') {
+            if (!this.browser || !this._page || this._page.isClosed()) {
+                const profileRoot = this.profileDir || path.join(os.homedir(), '.orcbot', 'puppeteer-profiles');
+                const userDataDir = path.join(profileRoot, this.profileName);
+                if (!fs.existsSync(userDataDir)) fs.mkdirSync(userDataDir, { recursive: true });
+
+                this.browser = await puppeteer.launch({
+                    headless: headlessOverride !== undefined ? headlessOverride : this.headlessMode,
+                    userDataDir: userDataDir,
+                    args: [
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                        '--disable-dev-shm-usage',
+                        '--disable-blink-features=AutomationControlled'
+                    ]
+                });
+
+                const pages = await (this.browser as PuppeteerBrowser).pages();
+                this._page = pages.length > 0 ? pages[0] : await (this.browser as PuppeteerBrowser).newPage();
+                
+                await (this._page as PuppeteerPage).setViewport({ width: 1280, height: 720 });
+                await (this._page as PuppeteerPage).setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
             }
             return;
         }
@@ -728,19 +759,20 @@ export class WebBrowser {
     private async waitForStablePage(timeout = 10000) {
         if (!this._page) return;
         try {
-            // Phase 1: Wait for basic load events
-            // Focus on 'load' as the primary signal, with a shorter timeout for 'networkidle'
-            await this._page.waitForLoadState('load', { timeout: Math.min(timeout, 5000) });
-            
-            // Phase 2: Brief network idle wait (optional but helps with hydration)
-            await this._page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
+            if (this.browserEngine === 'puppeteer') {
+                // Puppeteer equivalent of waitForLoadState
+                await (this._page as PuppeteerPage).waitForNavigation({ waitUntil: 'load', timeout: Math.min(timeout, 5000) }).catch(() => {});
+                await (this._page as PuppeteerPage).waitForNetworkIdle({ timeout: 2000 }).catch(() => {});
+            } else {
+                // Playwright
+                await (this._page as Page).waitForLoadState('load', { timeout: Math.min(timeout, 5000) });
+                await (this._page as Page).waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
+            }
         } catch (e) {
             // Ignore timeouts, we'll proceed anyway
         }
 
         // Phase 3: Short DOM settle (debounce)
-        // Standard Puppeteer/Playwright scripts often just use a fixed sleep or networkidle.
-        // We'll use a very short settle wait.
         await this.waitForDomSettle(200, 3000);
     }
 
@@ -2032,19 +2064,24 @@ export class WebBrowser {
             }
 
             try {
-                // Try Playwright's selectOption — works for <select> elements
-                const selected = await this.page!.selectOption(finalSelector, { label: value }, { timeout: 5000 })
-                    .catch(() => this.page!.selectOption(finalSelector, { value }, { timeout: 3000 }));
+                let selected: string[] = [];
+                if (this.browserEngine === 'puppeteer') {
+                    selected = await (this._page as PuppeteerPage).select(finalSelector, value);
+                } else {
+                    selected = await (this._page as Page).selectOption(finalSelector, { label: value }, { timeout: 5000 })
+                        .catch(() => (this._page as Page).selectOption(finalSelector, { value }, { timeout: 3000 }));
+                }
+                
                 await this.waitAfterInteraction(1000);
                 this.lastInteractionTimestamp = Date.now();
                 return `Successfully selected "${value}" in ${selector} (values: ${selected.join(', ')})`;
             } catch {
                 // Fallback for custom dropdown components: click to open, then find and click the option
-                await this.page!.click(finalSelector, { force: true, timeout: 3000 }).catch(() => {});
-                await this.page!.waitForTimeout(500);
+                await this.p.click(finalSelector, { force: true, timeout: 3000 }).catch(() => {});
+                await this.p.waitForTimeout(500);
                 
                 // Look for the option text in visible elements
-                const optionClicked = await this.page!.evaluate((optionText: string) => {
+                const optionClicked = await this.p.evaluate((optionText: string) => {
                     const candidates = Array.from(document.querySelectorAll(
                         '[role="option"], [role="listbox"] *, li, .option, [class*="option"], [class*="dropdown"] *'
                     )) as HTMLElement[];
@@ -2567,112 +2604,51 @@ export class WebBrowser {
 
             for (const field of fields) {
                 const { value, action = 'fill' } = field;
-                const resolvedSelector = await this.resolveSelector(field.selector);
-                if (!resolvedSelector) {
-                    results.push(`SKIP ${field.selector}: stale ref`);
-                    failCount++;
-                    continue;
-                }
-
+                
                 try {
-                    const locator = this._page.locator(resolvedSelector).first();
-                    await locator.waitFor({ state: 'attached', timeout: 7000 });
-
+                    let fieldResult = '';
                     switch (action) {
-                        case 'fill': {
-                            await this.withRetries(`fill(${field.selector})`, async (attempt) => {
-                                await locator.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
-                                await locator.fill(value, { timeout: 4000 });
-                                const verified = await this.verifyFieldValue(resolvedSelector, value);
-                                if (!verified) {
-                                    await locator.click({ timeout: 3000, force: attempt > 1 });
-                                    await this._page!.keyboard.press('Control+a');
-                                    await this._page!.keyboard.press('Backspace');
-                                    await this._page!.keyboard.type(value, { delay: 20 });
-                                }
-
-                                const finalVerified = await this.verifyFieldValue(resolvedSelector, value);
-                                if (!finalVerified) {
-                                    throw new Error('Value verification failed after typing.');
-                                }
-                            }, { attempts: 3, baseDelayMs: 350 });
-                            results.push(`OK fill "${field.selector}" = "${value.slice(0, 30)}${value.length > 30 ? '...' : ''}"`);
+                        case 'fill':
+                            fieldResult = await this.type(field.selector, value);
                             break;
-                        }
-
-                        case 'select': {
-                            await this.withRetries(`select(${field.selector})`, async () => {
-                                await locator.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
-                                const selected = await this._page!.selectOption(resolvedSelector, { label: value }, { timeout: 4000 })
-                                    .catch(() => this._page!.selectOption(resolvedSelector, { value }, { timeout: 3000 }));
-                                if (!selected || selected.length === 0) throw new Error('No select value was applied.');
-                            }, { attempts: 2, baseDelayMs: 300 });
-                            results.push(`OK select "${field.selector}" = "${value}"`);
+                        case 'select':
+                            fieldResult = await this.selectOption(field.selector, value);
                             break;
-                        }
-
-                        case 'check': {
-                            const isChecked = await locator.isChecked();
-                            const wantChecked = value.toLowerCase() !== 'false' && value !== '0';
-                            if (isChecked !== wantChecked) {
-                                await this.withRetries(`check(${field.selector})`, async () => {
-                                    await locator.click({ force: true, timeout: 3500 });
-                                    const nowChecked = await locator.isChecked();
-                                    if (nowChecked !== wantChecked) throw new Error('Checkbox state did not change as expected.');
-                                }, { attempts: 2, baseDelayMs: 250 });
-                            }
-                            results.push(`OK check "${field.selector}" = ${wantChecked}`);
+                        case 'check':
+                            // For checkboxes, we can use click if we know the state, 
+                            // but simpler to just use click() and let the agent manage state
+                            fieldResult = await this.click(field.selector);
                             break;
-                        }
-
-                        case 'click': {
-                            await this.withRetries(`click(${field.selector})`, async (attempt) => {
-                                await locator.click({ timeout: 4500, force: attempt > 1 });
-                            }, { attempts: 2, baseDelayMs: 300 });
-                            results.push(`OK click "${field.selector}"`);
+                        case 'click':
+                            fieldResult = await this.click(field.selector);
                             break;
-                        }
+                    }
+
+                    if (fieldResult.includes('Error') || fieldResult.includes('Failed')) {
+                        results.push(`FAIL ${action} "${field.selector}": ${fieldResult}`);
+                        failCount++;
+                    } else {
+                        results.push(`OK ${action} "${field.selector}"`);
                     }
                 } catch (e) {
-                    const screenshotPath = await this.captureInteractionDiagnostics(`fillform-${action}-failure`);
-                    const screenshotNote = screenshotPath ? ` [diag: ${screenshotPath}]` : '';
-                    results.push(`FAIL ${action} "${field.selector}": ${String(e).slice(0, 120)}${screenshotNote}`);
+                    results.push(`FAIL ${action} "${field.selector}": ${e}`);
                     failCount++;
                 }
             }
 
             // Submit if requested
             if (submitSelector) {
-                const resolvedSubmit = await this.resolveSelector(submitSelector);
-                if (resolvedSubmit) {
-                    try {
-                        const beforeUrl = this._page.url();
-                        await this.withRetries(`submit(${submitSelector})`, async (attempt) => {
-                            const submitLocator = this._page!.locator(resolvedSubmit).first();
-                            await submitLocator.waitFor({ state: 'visible', timeout: 7000 });
-                            await submitLocator.click({ timeout: 6000, force: attempt > 1 });
-                        }, { attempts: 2, baseDelayMs: 400 });
-
-                        await Promise.race([
-                            this._page.waitForURL(url => url.toString() !== beforeUrl, { timeout: 8000 }).catch(() => null),
-                            this._page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => null),
-                            this._page.waitForSelector('[role="alert"], .error, .success, .notification, [aria-invalid="true"]', { timeout: 8000 }).catch(() => null)
-                        ]);
-
-                        await this.waitAfterInteraction(3000);
-                        const title = await this._page.title().catch(() => '');
-                        const url = this._page.url();
-                        const changed = beforeUrl !== url;
-                        results.push(`OK submit "${submitSelector}" → "${title}" (${url})${changed ? ' [url changed]' : ''}`);
-                    } catch (e) {
-                        const screenshotPath = await this.captureInteractionDiagnostics('fillform-submit-failure');
-                        const screenshotNote = screenshotPath ? ` [diag: ${screenshotPath}]` : '';
-                        results.push(`FAIL submit "${submitSelector}": ${e}${screenshotNote}`);
-                        failCount++;
-                    }
-                } else {
-                    results.push(`SKIP submit "${submitSelector}": stale ref`);
+                const beforeUrl = this._page.url();
+                const submitResult = await this.click(submitSelector);
+                
+                if (submitResult.includes('Error') || submitResult.includes('Failed')) {
+                    results.push(`FAIL submit "${submitSelector}": ${submitResult}`);
                     failCount++;
+                } else {
+                    const title = await this._page.title().catch(() => '');
+                    const url = this._page.url();
+                    const changed = beforeUrl !== url;
+                    results.push(`OK submit "${submitSelector}" → "${title}" (${url})${changed ? ' [url changed]' : ''}`);
                 }
             }
 
