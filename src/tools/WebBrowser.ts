@@ -52,8 +52,8 @@ export class WebBrowser {
     private _interceptedApis: InterceptedApi[] = [];
     private _apiInterceptionMaxEntries: number = 50;
 
-    public get page(): Page | null {
-        return this._page as Page | null;
+    public get page(): any {
+        return this._page;
     }
 
     private get p(): any {
@@ -2063,10 +2063,62 @@ export class WebBrowser {
     public async press(key: string): Promise<string> {
         try {
             await this.ensureBrowser();
-            await this.page!.keyboard.press(key);
+            if (!this._page) return 'Error: No browser page available.';
+
+            // Normalize key combos: "ctrl+end" → "Control+End"
+            const normalized = this.normalizeKey(key);
+            
+            try {
+                await this.p.keyboard.press(normalized);
+            } catch (e) {
+                // If press fails (Puppeteer doesn't recognize "Control+End" as a single string),
+                // fallback to explicit down/up for modifiers.
+                if (key.includes('+')) {
+                    const parts = key.split('+').map(p => this.normalizeKey(p.trim()));
+                    const mainKey = parts.pop()!;
+                    const modifiers = parts;
+
+                    for (const mod of modifiers) await this.p.keyboard.down(mod);
+                    await this.p.keyboard.press(mainKey);
+                    for (const mod of modifiers.slice().reverse()) await this.p.keyboard.up(mod);
+                } else {
+                    throw e;
+                }
+            }
+
             return `Successfully pressed key: ${key}`;
         } catch (e) {
             return `Failed to press key ${key}: ${e}`;
+        }
+    }
+
+    private normalizeKey(key: string): string {
+        const lower = key.toLowerCase().trim();
+        switch (lower) {
+            case 'ctrl': case 'control': return 'Control';
+            case 'alt': case 'option': return 'Alt';
+            case 'shift': return 'Shift';
+            case 'cmd': case 'command': case 'meta': return 'Meta';
+            case 'enter': return 'Enter';
+            case 'tab': return 'Tab';
+            case 'escape': case 'esc': return 'Escape';
+            case 'space': return ' ';
+            case 'backspace': return 'Backspace';
+            case 'delete': case 'del': return 'Delete';
+            case 'up': return 'ArrowUp';
+            case 'down': return 'ArrowDown';
+            case 'left': return 'ArrowLeft';
+            case 'right': return 'ArrowRight';
+            case 'home': return 'Home';
+            case 'end': return 'End';
+            case 'pageup': return 'PageUp';
+            case 'pagedown': return 'PageDown';
+            default:
+                // Capitalize first letter for other special keys, or return as is for single chars
+                if (key.length > 1) {
+                    return key.charAt(0).toUpperCase() + key.slice(1);
+                }
+                return key;
         }
     }
 

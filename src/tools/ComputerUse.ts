@@ -11,7 +11,7 @@
  * Falls back gracefully when vision or system control is unavailable.
  */
 
-import { Page } from 'playwright';
+import { Page, Browser } from 'puppeteer';
 import { logger } from '../utils/logger';
 import path from 'path';
 import os from 'os';
@@ -76,7 +76,7 @@ export class ComputerUse {
     }
 
     /**
-     * Set the Playwright page reference for browser-context operations.
+     * Set the Puppeteer page reference for browser-context operations.
      * Can be set directly or via a getter function that resolves the current page lazily.
      */
     public setPage(page: Page | null): void {
@@ -154,14 +154,8 @@ export class ComputerUse {
         await page.screenshot({ path: savePath, type: 'png', fullPage: false });
         this.lastScreenshot = savePath;
 
-        // Engine-agnostic viewport detection
-        let viewport: { width: number; height: number } | null = null;
-        if (typeof (page as any).viewportSize === 'function') {
-            viewport = (page as any).viewportSize();
-        } else if (typeof (page as any).viewport === 'function') {
-            viewport = (page as any).viewport();
-        }
-
+        // Puppeteer viewport detection
+        const viewport = page.viewport();
         if (viewport) {
             this.screenSize = { width: viewport.width, height: viewport.height };
         }
@@ -574,7 +568,7 @@ Respond with ONLY the JSON array, no other text.`;
         if (!page || page.isClosed()) return 'Error: No browser page.';
         // Normalize key combos: "ctrl+c" → "Control+c"
         const normalized = this.normalizeKey(key);
-        await page.keyboard.press(normalized);
+        await page.keyboard.press(normalized as any);
         return `Pressed: ${key}`;
     }
 
@@ -584,7 +578,7 @@ Respond with ONLY the JSON array, no other text.`;
         const pixels = amount * 120; // 120px per scroll "tick"
         const deltaX = direction === 'left' ? -pixels : direction === 'right' ? pixels : 0;
         const deltaY = direction === 'up' ? -pixels : direction === 'down' ? pixels : 0;
-        await page.mouse.wheel(deltaX, deltaY);
+        await page.mouse.wheel({ deltaX, deltaY });
         await this.sleep(300);
         return `Scrolled ${direction} ${amount} ticks (${pixels}px)`;
     }

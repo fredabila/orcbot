@@ -440,6 +440,51 @@ export class Agent {
                 } catch (e) {
                     logger.error(`Failed to initialize ${key} at ${filePath}: ${e}`);
                 }
+            } else if (key === 'skills') {
+                // AUTO-SYNC: If SKILLS.md exists, merge any NEW core skills from the package
+                try {
+                    const localSkillsPath = path.resolve(process.cwd(), 'SKILLS.md');
+                    const packageSkillsPath = path.resolve(__dirname, '../../SKILLS.md');
+                    const masterSkillsPath = fs.existsSync(localSkillsPath) ? localSkillsPath : (fs.existsSync(packageSkillsPath) ? packageSkillsPath : null);
+
+                    if (masterSkillsPath) {
+                        const masterContent = fs.readFileSync(masterSkillsPath, 'utf-8');
+                        const currentContent = fs.readFileSync(filePath, 'utf-8');
+                        
+                        // Simple sync logic: extract skill names (lines starting with - **name)
+                        // and append any that are in master but not in current.
+                        const extractSkillNames = (content: string) => {
+                            const regex = /- \*\*([a-zA-Z0-9_]+)\(/g;
+                            const names = new Set<string>();
+                            let match;
+                            while ((match = regex.exec(content)) !== null) {
+                                names.add(match[1]);
+                            }
+                            return names;
+                        };
+
+                        const masterSkills = extractSkillNames(masterContent);
+                        const currentSkills = extractSkillNames(currentContent);
+                        
+                        const missingSkills: string[] = [];
+                        for (const skill of masterSkills) {
+                            if (!currentSkills.has(skill)) {
+                                // Find the line in master content for this skill
+                                const lines = masterContent.split('\n');
+                                const skillLine = lines.find(l => l.startsWith(`- **${skill}(`));
+                                if (skillLine) missingSkills.push(skillLine);
+                            }
+                        }
+
+                        if (missingSkills.length > 0) {
+                            logger.info(`Agent: Syncing ${missingSkills.length} new core skills to ${filePath}`);
+                            const updatedContent = currentContent.trim() + '\n\n## Newly Added Core Skills\n' + missingSkills.join('\n') + '\n';
+                            fs.writeFileSync(filePath, updatedContent);
+                        }
+                    }
+                } catch (e) {
+                    logger.warn(`Agent: Failed to sync SKILLS.md: ${e}`);
+                }
             }
         }
     }
