@@ -1208,17 +1208,19 @@ export class MultiLLM {
                         const psData = await psResponse.json() as any;
                         const isLoaded = (psData.models || []).some((m: any) => m.name === model || m.name.startsWith(model + ':'));
                         if (!isLoaded) {
-                            logger.info(`Ollama: Model "${model}" is not in memory. Triggering load...`);
+                            logger.info(`Ollama: Model "${model}" is not currently in memory. This may take a moment to load from disk...`);
+                        } else {
+                            logger.debug(`Ollama: Model "${model}" is already loaded in memory.`);
                         }
                     }
                 } catch (e) {
-                    // Ignore ps errors
+                    logger.debug(`Ollama: Could not check model status via /api/ps: ${(e as Error).message}`);
                 }
             }
 
             const url = `${baseUrl}/v1/chat/completions`;
             if (!isRemoteBridge) {
-                logger.info(`MultiLLM: Calling Ollama model "${model}" for reasoning...`);
+                logger.info(`MultiLLM: Requesting response from local Ollama model "${model}"...`);
             }
             
             // Use a longer timeout for local Ollama calls (3 minutes) to allow for model loading/swapping
@@ -1230,11 +1232,15 @@ export class MultiLLM {
             const heartbeatId = setInterval(() => {
                 elapsed += 15;
                 if (elapsed < 180) {
-                    logger.info(`MultiLLM: Still waiting for Ollama response from "${model}" (elapsed: ${elapsed}s)...`);
+                    logger.info(`MultiLLM: Still waiting for Ollama ("${model}") to process... [Elapsed: ${elapsed}s]`);
+                    if (elapsed >= 60) {
+                        logger.warn(`MultiLLM: Local model "${model}" is taking longer than usual. This often happens if your RAM is full or the model is very large.`);
+                    }
                 }
             }, 15000);
 
             try {
+                const startTime = Date.now();
                 const response = await fetch(url, {
                     method: 'POST',
                     headers: {
@@ -1247,23 +1253,34 @@ export class MultiLLM {
                     }),
                     signal: controller.signal
                 });
+                
+                const endTime = Date.now();
+                const duration = ((endTime - startTime) / 1000).toFixed(1);
+
                 clearTimeout(timeoutId);
                 clearInterval(heartbeatId);
 
                 if (!response.ok) {
                     const err = await response.text();
+                    logger.error(`Ollama Error: Received ${response.status} from server. Detail: ${err}`);
                     throw new Error(`Ollama API Error: ${response.status} ${err}`);
                 }
+
                 const data = await response.json() as any;
-                this.recordUsage('ollama', model, prompt, data, data?.choices?.[0]?.message?.content);
-                return data.choices[0].message.content;
+                const content = data?.choices?.[0]?.message?.content || '';
+                
+                this.recordUsage('ollama', model, prompt, data, content);
+                logger.info(`MultiLLM: Ollama ("${model}") responded successfully in ${duration}s.`);
+                
+                return content;
             } catch (error: any) {
                 clearTimeout(timeoutId);
                 clearInterval(heartbeatId);
                 if (error.name === 'AbortError') {
-                    throw new Error(`Ollama request timed out after 180s. Your system (2GB RAM) might be struggling to run both OrcBot and the model.`);
+                    logger.error(`Ollama Timeout: Local model "${model}" failed to respond within 180s.`);
+                    throw new Error(`Ollama request timed out after 180s. Your system might be struggling to run both OrcBot and the model concurrently.`);
                 }
-                logger.error(`MultiLLM Ollama Error: ${error}`);
+                logger.error(`MultiLLM Ollama Connection Error: ${error.message || error}`);
                 throw error;
             }
         }
