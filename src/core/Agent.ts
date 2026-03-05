@@ -13103,9 +13103,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 return;
             }
 
-            // If we're waiting for clarification, don't mark as completed
+            // If we're waiting for clarification, update status so the queue can proceed
+            // and the session is not deadlocked.
             if (waitingForClarification) {
                 logger.info(`Agent: Action ${action.id} paused awaiting user clarification. Will resume when user responds.`);
+                this.actionQueue.updateStatus(action.id, 'waiting');
                 return; // Skip the completion logic - action stays waiting
             }
 

@@ -568,8 +568,16 @@ ${this.repoContext}`,
         let historyNotes = '';
         if (actionMemories.length > 0) {
             const lastStep = actionMemories[actionMemories.length - 1];
-            // Extract just the core observation/result to keep prompt clean
-            const lastContent = (lastStep.content || '').replace('[observation] ', '');
+            let lastContent = (lastStep.content || '').replace('[observation] ', '');
+            
+            // If the last step was a message, find the actual message text in memory
+            if (lastContent.toLowerCase().includes('sent message')) {
+                const lastMessage = recentContext.find(m => m.type === 'short' && m.metadata?.tool === lastStep.metadata?.tool);
+                if (lastMessage) {
+                    lastContent = `Sent Message: "${lastMessage.content}"`;
+                }
+            }
+
             historyNotes = `\n### 💡 IMMEDIATE HISTORY (Last Step):\nYou previously executed: ${lastContent}\nStatus: SUCCESS. The user has already seen this. If you sent a message, do NOT repeat it unless you are correcting a mistake.\n`;
         }
 
