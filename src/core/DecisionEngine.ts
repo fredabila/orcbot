@@ -560,6 +560,17 @@ ${this.repoContext}`,
         const userContext = this.memory.getUserContext();
         const recentContext = this.memory.getRecentContext();
 
+        // Filter context to only include memories for THIS action (step observations)
+        const actionPrefix = `${actionId}-step-`;
+        const actionMemories = recentContext.filter(c => c.id && c.id.startsWith(actionPrefix));
+
+        // HIGHLIGHT PREVIOUS STEPS: Ensure the model sees exactly what it just did
+        let historyNotes = '';
+        if (actionMemories.length > 0) {
+            const lastStep = actionMemories[actionMemories.length - 1];
+            historyNotes = `\n### 💡 IMMEDIATE HISTORY:\nIn the previous step, you executed: ${lastStep.content}\nStatus: SUCCESS. The user has already received any messages sent in that step. Check your goals carefully before sending more.\n`;
+        }
+
         // Filter out elevated skills for non-admin users
         const isAdmin = metadata.isAdmin !== false; // undefined = admin (backwards compatible)
         const excludeSkills = !isAdmin ? this.skills.getElevatedSkills() : undefined;
@@ -644,9 +655,6 @@ ${this.repoContext}`,
             } catch (e) { }
         }
 
-        // Filter context to only include memories for THIS action (step observations)
-        const actionPrefix = `${actionId}-step-`;
-        const actionMemories = recentContext.filter(c => c.id && c.id.startsWith(actionPrefix));
         // Include limited other context for background awareness (configurable)
         const otherContextN = Number(this.config?.get('threadContextOtherMemoriesN') ?? 5);
         const otherMemories = recentContext
@@ -1257,6 +1265,8 @@ ${quickUserProfile ? `USER: ${quickUserProfile}` : ''}
 
 ${coreInstructions}
 
+${historyNotes}
+
 EXECUTION STATE:
 - Action ID: ${actionId}
 - messagesSent: ${metadata.messagesSent || 0}
@@ -1407,7 +1417,7 @@ ${safeOtherContext ? `RECENT BACKGROUND CONTEXT (reference only — may describe
 
         // LOOP PROTECTION: Check if the agent is stuck in a repetitive cycle
         const actionState = this.executionStateManager.getState(actionId);
-        if (actionState.isRepeatingResponse(3)) {
+        if (actionState.isRepeatingResponse(4)) {
             logger.warn(`DecisionEngine: Loop detected for action ${actionId}. Forcing termination to prevent redundant messaging.`);
             
             // Mark that a loop was detected so the auditor can bypass the "unsent results" check

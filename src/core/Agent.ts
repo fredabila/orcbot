@@ -8296,7 +8296,13 @@ The plugin handles all logic internally. See the plugin source for implementatio
             // short replies that look like acks — don't penalise them.
             // Bypass this if a loop was detected to allow graceful termination.
             if (context.substantiveDeliveriesSent === 0 && hadResearchOrDeepOutput && !loopDetected) {
-                issues.push('Deep/research tools ran, but no substantive delivery message was sent.');
+                // If we hit a research limit, don't flag as an error - just let it finish
+                // so we don't trigger a recovery loop of more searching.
+                if (hadToolErrors || context.skillCallCounts?.web_search >= 10) {
+                    logger.warn(`Agent: Research limit reached or errors occurred. Allowing completion to prevent recovery loop.`);
+                } else {
+                    issues.push('Deep/research tools ran, but no substantive delivery message was sent.');
+                }
             }
 
             if (context.substantiveDeliveriesSent === 0 && hadAckOnlyMessages && hadResearchOrDeepOutput && !loopDetected) {

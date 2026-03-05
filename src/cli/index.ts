@@ -6682,7 +6682,7 @@ async function performUpdate() {
 
             // Fetch latest changes
             console.log('📡 Fetching latest changes from remote...');
-            execSync('git fetch origin', { cwd: orcbotDir, stdio: 'inherit' });
+            execSync('git fetch origin', { cwd: orcbotDir });
 
             // Check if updates are available
             const localHash = execSync('git rev-parse HEAD', { cwd: orcbotDir, encoding: 'utf8' }).trim();
@@ -6700,78 +6700,30 @@ async function performUpdate() {
 
             // Show what's changing
             console.log('\n📋 Changes to be applied:');
-            execSync('git log --oneline HEAD..origin/main', { cwd: orcbotDir, stdio: 'inherit' });
+            const logs = execSync('git log --oneline HEAD..origin/main', { cwd: orcbotDir, encoding: 'utf8' });
+            console.log(logs);
 
             // Force update: discard local changes and sync to origin/main
             console.log('\n⬇️  Applying latest changes (force update)...');
-            try {
-                const status = execSync('git status --porcelain', { cwd: orcbotDir, encoding: 'utf8' }).trim();
-                if (status) {
-                    console.log('⚠️  Local changes detected. Discarding to apply updates...');
-                }
-            } catch (e) {
-                // Ignore status errors and proceed with reset/clean
-            }
-            execSync('git reset --hard origin/main', { cwd: orcbotDir, stdio: 'inherit' });
-            execSync('git clean -fd', { cwd: orcbotDir, stdio: 'inherit' });
+            execSync('git reset --hard origin/main', { cwd: orcbotDir });
+            execSync('git clean -fd', { cwd: orcbotDir });
 
             // Install dependencies
             console.log('\n📦 Installing dependencies...');
-            execSync('npm install', { cwd: orcbotDir, stdio: 'inherit' });
-            // Ensure @mariozechner/pi-ai is present (may be absent on older installs)
-            try {
-                require.resolve('@mariozechner/pi-ai');
-            } catch {
-                console.log('🔄 Installing @mariozechner/pi-ai (new dependency)...');
-                execSync('npm install @mariozechner/pi-ai --legacy-peer-deps', { cwd: orcbotDir, stdio: 'inherit' });
-            }
-            // Ensure @mariozechner/pi-tui is present (TUI renderer)
-            try {
-                require.resolve('@mariozechner/pi-tui');
-            } catch {
-                console.log('🎨 Installing @mariozechner/pi-tui (new dependency)...');
-                execSync('npm install @mariozechner/pi-tui --legacy-peer-deps', { cwd: orcbotDir, stdio: 'inherit' });
-            }
-
-            // Install dependencies for subdirectories (apps/www, apps/dashboard)
-            const appsDir = path.join(orcbotDir, 'apps');
-            if (fs.existsSync(appsDir)) {
-                const subdirs = ['www', 'dashboard'];
-                for (const subdir of subdirs) {
-                    const subdirPath = path.join(appsDir, subdir);
-                    const packageJsonPath = path.join(subdirPath, 'package.json');
-                    if (fs.existsSync(packageJsonPath)) {
-                        console.log(`\n📦 Installing dependencies for apps/${subdir}...`);
-                        try {
-                            execSync('npm install', { cwd: subdirPath, stdio: 'inherit' });
-                        } catch (e) {
-                            console.log(`⚠️  Failed to install dependencies for apps/${subdir}, continuing...`);
-                        }
-                    }
-                }
-            }
-
-            // Rebuild (use fast build if available, fallback to tsc)
+            execSync('npm install', { cwd: orcbotDir });
+            
+            // Rebuild
             console.log('\n🔨 Rebuilding OrcBot...');
-            try {
-                execSync('npm run build:fast', { cwd: orcbotDir, stdio: 'inherit' });
-            } catch (e) {
-                console.log('⚠️  Fast build unavailable, using standard build...');
-                execSync('npm run build', { cwd: orcbotDir, stdio: 'inherit' });
-            }
+            execSync('npm run build', { cwd: orcbotDir });
 
-            // Re-link globally if needed
+            // Re-link globally
             const packageJson = JSON.parse(fs.readFileSync(path.join(orcbotDir, 'package.json'), 'utf8'));
             if (packageJson.bin) {
                 console.log('\n🔗 Re-installing global command...');
                 try {
-                    execSync('npm install -g .', { cwd: orcbotDir, stdio: 'inherit' });
+                    execSync('npm install -g .', { cwd: orcbotDir });
                 } catch (e) {
-                    // Try with sudo on Unix
-                    if (process.platform !== 'win32') {
-                        console.log('   Trying with sudo...');
-                        execSync('sudo npm install -g .', { cwd: orcbotDir, stdio: 'inherit' });
-                    }
+                    // Ignore global link errors in restricted environments
                 }
             }
 

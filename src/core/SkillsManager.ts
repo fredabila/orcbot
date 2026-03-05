@@ -1505,7 +1505,11 @@ main().catch(console.error);
         const keywords = taskKeywords.map(k => k.toLowerCase());
         
         // Always include core skills
-        const coreSkills = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_gateway_chat', 'web_search', 'run_command', 'request_supporting_data'];
+        const coreSkills = [
+            'send_telegram', 'send_whatsapp', 'send_discord', 'send_gateway_chat', 
+            'web_search', 'run_command', 'request_supporting_data',
+            'browser_navigate', 'browser_click', 'browser_type', 'browser_snapshot'
+        ];
         
         const relevant = allSkills.filter(s => {
             // Include if it's a core skill
