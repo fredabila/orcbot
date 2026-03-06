@@ -119,20 +119,8 @@ export class SkillsManager {
     }
 
     private ensureTsNodeRegistered() {
-        try {
-            if (!process[Symbol.for('ts-node.register.instance')]) {
-                // eslint-disable-next-line @typescript-eslint/no-require-imports
-                require('ts-node').register({
-                    transpileOnly: true,
-                    compilerOptions: {
-                        module: 'commonjs'
-                    }
-                });
-                logger.info('SkillsManager: Registered ts-node for plugin compilation.');
-            }
-        } catch (e) {
-            logger.debug(`SkillsManager: ts-node registration skipped or failed: ${e}`);
-        }
+        // No longer using ts-node. Jiti handles dynamic ESM/TS loading natively without global require hooks.
+        // We will instantiate Jiti when loading plugins.
     }
 
     private loadSkills() {
@@ -157,8 +145,6 @@ export class SkillsManager {
                 if (file.endsWith('.js') || file.endsWith('.ts')) {
                     const fullPath = path.resolve(this.pluginsDir, file);
                     try {
-                        // Clear from require cache
-                        delete require.cache[fullPath];
                         fs.unlinkSync(fullPath);
                         removed++;
                         logger.info(`SkillsManager: Removed plugin: ${file}`);
@@ -213,11 +199,15 @@ export class SkillsManager {
             return;
         }
 
-        // Try to register ts-node if we are loading .ts files
-        this.ensureTsNodeRegistered();
-
         const files = fs.readdirSync(this.pluginsDir);
         if (!verifyOnly) logger.info(`SkillsManager: Found ${files.length} files in ${this.pluginsDir}: ${files.join(', ')}`);
+
+        // Create a Jiti instance for robust ESM/TS module loading
+        const { createJiti } = require('jiti');
+        const jiti = createJiti(__filename, {
+            interopDefault: true,
+            cache: false // Disable cache for hot-reloading plugins
+        });
 
         for (const file of files) {
             if (file.endsWith('.js') || file.endsWith('.ts')) {
@@ -233,12 +223,8 @@ export class SkillsManager {
 
                     if (verifyOnly) continue;
 
-                    // HOT RELOAD: Clear cache to force re-read
-                    delete require.cache[fullPath];
-
                     logger.info(`SkillsManager: Attempting to load plugin from ${fullPath}`);
-                    // eslint-disable-next-line @typescript-eslint/no-require-imports
-                    const loadedModule = require(fullPath);
+                    const loadedModule = jiti(fullPath);
 
                     let registerable: any = null;
 

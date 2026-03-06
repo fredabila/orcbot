@@ -10,6 +10,7 @@ This file lists the available skills for the agent.
 - **send_gateway_chat(message)**: [CORE MESSAGING] Send a message to the Gateway Chat interface.
 - **send_file(jid, path, caption?)**: [CORE MESSAGING] Send a file to Telegram or WhatsApp.
 - **download_file(url, filename?)**: [MEDIA/FILE TOOL] Download a file to local storage.
+- **generate_pdf(content, output_path, is_html?)**: [MEDIA/FILE TOOL] Generate a PDF file from Markdown or HTML content. Use this to compile research, logs, or reports into a clean PDF document.
 - **analyze_media(path, prompt?)**: [MEDIA/FILE TOOL] Analyze an image, audio, or document file.
 - **text_to_speech(text, voice?, speed?)**: [MEDIA/FILE TOOL] Convert text to an audio file using AI voice synthesis. Available voices: OpenAI (alloy, echo, fable, onyx, nova, shimmer) or Google (achernar, achird, algenib, algieba, alnilam, aoede, autonoe, callirrhoe, charon, despina, enceladus, erinome, fenrir, gacrux, iapetus, kore, laomedeia, leda, orus, puck, pulcherrima, rasalgethi, sadachbia, sadaltager, schedar, sulafat, umbriel, vindemiatrix, zephyr, zubenelgenubi).
 - **send_voice_note(jid, text, voice?)**: [CORE MESSAGING] Convert text to speech and send as a voice note. Same voice options as text_to_speech.

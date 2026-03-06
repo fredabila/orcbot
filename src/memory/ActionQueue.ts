@@ -223,16 +223,25 @@ export class ActionQueue {
         const eligible = this.cache.filter(a => this.isEligiblePendingAction(a, now));
         if (eligible.length === 0) return undefined;
 
+        let action: Action | undefined;
+
         // Lane-filtered mode: used by dedicated lane workers
         if (lane !== undefined) {
-            return eligible.find(a => this.getLane(a) === lane);
+            action = eligible.find(a => this.getLane(a) === lane);
+        } else {
+            // Legacy single-worker mode: prefer user lane over autonomy
+            const nextUser = eligible.find(a => this.getLane(a) === 'user');
+            action = nextUser || eligible[0];
         }
 
-        // Legacy single-worker mode: prefer user lane over autonomy
-        const nextUser = eligible.find(a => this.getLane(a) === 'user');
-        if (nextUser) return nextUser;
+        if (action) {
+            action.status = 'in-progress';
+            action.updatedAt = new Date().toISOString();
+            this.markDirty();
+            this.flush();
+        }
 
-        return eligible[0];
+        return action;
     }
 
     public updateStatus(id: string, status: Action['status']) {

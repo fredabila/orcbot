@@ -48,6 +48,7 @@ import { MessageBus } from './MessageBus';
 import { BookLogManager } from '../memory/BookLogManager';
 import { registerBookLogSkills } from '../skills/bookLogTools';
 import { registerChannelManagementSkills } from '../skills/channelManagement';
+import { registerFileTools } from '../skills/fileTools';
 import { ChannelRegistry } from '../channels/ChannelRegistry';
 import { BlockReviewer, ReviewResult, BlockVerdict } from './BlockReviewer';
 
@@ -908,6 +909,7 @@ export class Agent {
             private registerInternalSkills() {
                 registerBookLogSkills(this);
                 registerChannelManagementSkills(this);
+                registerFileTools(this);
 
                 this.skills.registerSkill({
                     name: 'create_time_capsule',
@@ -10588,6 +10590,19 @@ Respond with a single actionable task description (one sentence). Be specific ab
         logger.info('Agent: Reset complete.');
     }
 
+    private getSkillMeta(name: string) {
+        const s = this.skills.getSkill(name);
+        const isSideEffectDefault = [
+            'send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat',
+            'telegram_send_buttons', 'telegram_edit_message', 'telegram_send_poll', 'telegram_react', 'telegram_pin_message',
+            'send_file', 'send_image', 'send_discord_file', 'send_slack_file', 'send_email'
+        ].includes(name);
+
+        return { 
+            isSideEffect: s?.isSideEffect ?? isSideEffectDefault
+        };
+    }
+
     /**
      * Run a single decision cycle (used by worker processes)
      * Processes the next action in the queue and returns the result
@@ -10603,8 +10618,6 @@ Respond with a single actionable task description (one sentence). Be specific ab
         this.currentActionStartAt = Date.now();
 
         try {
-            this.actionQueue.updateStatus(action.id, 'in-progress');
-
             // Run simulation and decision loop for this single action
             const simulationContext = this.buildSimulationContext(action.payload, { maxChars: 7000 });
             const sessionContinuityHint = this.buildSessionContinuityHint(action.payload);
@@ -10654,6 +10667,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     payload: {
                         ...action.payload,
                         currentStep,
+                        messagesSent: action.payload.messagesSent,
                         executionPlan,
                         robustReasoningMode,
                         sessionContinuityHint,
@@ -10765,8 +10779,6 @@ Respond with a single actionable task description (one sentence). Be specific ab
         }
 
         try {
-            this.actionQueue.updateStatus(action.id, 'in-progress');
-
             const simulationContext = this.buildSimulationContext(action.payload, { maxChars: 7000 });
             const sessionContinuityHint = this.buildSessionContinuityHint(action.payload);
             const executionPlan = await this.simulationEngine.simulate(
@@ -10782,6 +10794,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
             let noToolSteps = 0;
             let lastError: string | undefined;
             const MAX_NO_TOOL_STEPS = 3;
+
+            // Initialize or reset tracking in the payload
+            if (typeof action.payload.messagesSent !== 'number') {
+                action.payload.messagesSent = 0;
+            }
 
             while (currentStep < MAX_STEPS) {
                 currentStep++;
@@ -10805,7 +10822,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         recentTools: [],
                         lastError,
                         totalDurationMs: this.currentActionStartAt ? Date.now() - this.currentActionStartAt : 0,
-                        messagesSent: action.payload?.messagesSent || 0
+                        messagesSent: action.payload.messagesSent
                     });
                     logger.debug(`TForce[${lane}]: ${tforceSnapshot.conscienceGuidance}`);
                 }
@@ -10815,6 +10832,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     payload: {
                         ...action.payload,
                         currentStep,
+                        messagesSent: action.payload.messagesSent,
                         executionPlan,
                         robustReasoningMode,
                         sessionContinuityHint,
@@ -10826,7 +10844,15 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     result = decision.content || 'Task completed';
                     if (decision.tools && decision.tools.length > 0) {
                         for (const tool of decision.tools) {
-                            await this.skills.executeSkill(tool.name, tool.metadata || {});
+                            const toolMeta = this.getSkillMeta(tool.name);
+                            try {
+                                const toolResult = await this.skills.executeSkill(tool.name, tool.metadata || {});
+                                if (toolMeta.isSideEffect) {
+                                    action.payload.messagesSent++;
+                                }
+                            } catch (e) {
+                                logger.error(`Error executing skill ${tool.name}: ${e}`);
+                            }
                         }
                     }
                     break;
@@ -10850,7 +10876,16 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 } else {
                     noToolSteps = 0;
                     for (const tool of decision.tools) {
-                        await this.skills.executeSkill(tool.name, tool.metadata || {});
+                        const toolMeta = this.getSkillMeta(tool.name);
+                        try {
+                            const toolResult = await this.skills.executeSkill(tool.name, tool.metadata || {});
+                            if (toolMeta.isSideEffect) {
+                                action.payload.messagesSent++;
+                            }
+                        } catch (e) {
+                            logger.error(`Error executing skill ${tool.name}: ${e}`);
+                            lastError = String(e);
+                        }
                     }
                 }
 
@@ -12070,7 +12105,6 @@ Respond with a single actionable task description (one sentence). Be specific ab
         this.startPersistentTypingIndicator(action);
         try {
             this.updateLastActionTime();
-            this.actionQueue.updateStatus(action.id, 'in-progress');
 
             // HEARTBEAT FRESHNESS: Rebuild the heartbeat prompt at execution time.
             // Heartbeat prompts embed context (recent memories, task queue, timestamps)
@@ -12866,7 +12900,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                     break;
                                 }
 
-                                if (toolCall.name === 'schedule_task' || toolCall.name === 'send_image') {
+                                if ((toolCall.name === 'schedule_task' || toolCall.name === 'send_image' || toolCall.name === 'create_time_capsule') && !resultIndicatesError) {
                                     goalsMet = true;
                                     forceBreak = true;
                                     break;

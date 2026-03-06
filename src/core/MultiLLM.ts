@@ -1129,50 +1129,84 @@ export class MultiLLM {
 
     public async generateImage(prompt: string, outputPath: string, options?: { size?: string, quality?: string, provider?: LLMProvider, model?: string }): Promise<{ success: boolean; filePath?: string; revisedPrompt?: string; error?: string }> {
         const provider = options?.provider || this.preferredProvider || 'openai';
-        const model = options?.model || 'dall-e-3';
-        if (provider !== 'openai') {
-            // Currently only OpenAI is implemented for images in this core driver
-            return { success: false, error: `Image generation is not yet implemented for provider ${provider} in MultiLLM.` };
-        }
-        
-        if (!this.openaiKey) return { success: false, error: 'OpenAI API key not configured' };
         
         try {
-            const response = await fetch('https://api.openai.com/v1/images/generations', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${this.openaiKey}`,
-                },
-                body: JSON.stringify({
-                    model: 'dall-e-3',
-                    prompt,
-                    n: 1,
-                    size: options?.size || '1024x1024',
-                    quality: options?.quality || 'standard',
-                }),
-            });
+            if (provider === 'google') {
+                if (!this.googleKey) return { success: false, error: 'Google API key not configured' };
+                const model = options?.model || 'gemini-2.5-flash-image';
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.googleKey}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: prompt }] }],
+                        generationConfig: {
+                            responseModalities: ["IMAGE"]
+                        }
+                    }),
+                });
 
-            if (!response.ok) {
-                const err = await response.text();
-                return { success: false, error: `OpenAI API Error: ${response.status} ${err}` };
+                if (!response.ok) {
+                    const err = await response.text();
+                    return { success: false, error: `Google API Error: ${response.status} ${err}` };
+                }
+
+                const data = await response.json() as any;
+                const parts = data.candidates?.[0]?.content?.parts || [];
+                const imagePart = parts.find((p: any) => p.inlineData || p.inline_data);
+                const inlineData = imagePart?.inlineData || imagePart?.inline_data;
+                const base64Image = inlineData?.data;
+                
+                if (!base64Image) return { success: false, error: 'No image returned from Google' };
+
+                const buffer = Buffer.from(base64Image, 'base64');
+                const dir = path.dirname(outputPath);
+                if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+                fs.writeFileSync(outputPath, buffer);
+
+                return { success: true, filePath: outputPath };
+            } else if (provider === 'openai') {
+                const model = options?.model || 'dall-e-3';
+                if (!this.openaiKey) return { success: false, error: 'OpenAI API key not configured' };
+                
+                const response = await fetch('https://api.openai.com/v1/images/generations', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${this.openaiKey}`,
+                    },
+                    body: JSON.stringify({
+                        model,
+                        prompt,
+                        n: 1,
+                        size: options?.size || '1024x1024',
+                        quality: options?.quality || 'standard',
+                    }),
+                });
+
+                if (!response.ok) {
+                    const err = await response.text();
+                    return { success: false, error: `OpenAI API Error: ${response.status} ${err}` };
+                }
+
+                const data = await response.json() as any;
+                const imageUrl = data.data?.[0]?.url;
+                const revisedPrompt = data.data?.[0]?.revised_prompt;
+                
+                if (!imageUrl) return { success: false, error: 'No image URL returned from OpenAI' };
+
+                const imageResponse = await fetch(imageUrl);
+                const buffer = Buffer.from(await imageResponse.arrayBuffer());
+                
+                const dir = path.dirname(outputPath);
+                if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+                fs.writeFileSync(outputPath, buffer);
+
+                return { success: true, filePath: outputPath, revisedPrompt };
+            } else {
+                return { success: false, error: `Image generation is not yet implemented for provider ${provider} in MultiLLM.` };
             }
-
-            const data = await response.json() as any;
-            const imageUrl = data.data?.[0]?.url;
-            const revisedPrompt = data.data?.[0]?.revised_prompt;
-            
-            if (!imageUrl) return { success: false, error: 'No image URL returned from OpenAI' };
-
-            // Download the image to the local path
-            const imageResponse = await fetch(imageUrl);
-            const buffer = Buffer.from(await imageResponse.arrayBuffer());
-            
-            const dir = path.dirname(outputPath);
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-            fs.writeFileSync(outputPath, buffer);
-
-            return { success: true, filePath: outputPath, revisedPrompt };
         } catch (error: any) {
             logger.error(`MultiLLM: Image generation failed: ${error}`);
             return { success: false, error: error.message || String(error) };

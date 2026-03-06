@@ -1465,11 +1465,18 @@ ${safeOtherContext ? `RECENT BACKGROUND CONTEXT (reference only — may describe
         }
 
         // Termination review layer (always enabled)
-        // We review if:
-        // 1. Agent says it's done (goals_met: true AND no tools)
-        // 2. Agent says it's done but hasn't sent a message to a human user yet (Silent Success)
-        const isTerminating = (piped?.verification?.goals_met === true && (!piped.tools || piped.tools.length === 0)) ||
-                             (piped?.verification?.goals_met === true && isUserFacing && (metadata.messagesSent || 0) === 0);
+        // We only step in if the agent thinks it's done (goals_met: true) on a user-facing channel,
+        // but hasn't sent any messages yet AND isn't proposing to send one right now (Silent Success).
+        // In all other cases, we trust the agent's decision to terminate or execute its proposed tools.
+        const hasSendTool = (piped.tools || []).some(t => 
+            ['send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat'].includes(t.name)
+        );
+        const noMessagesSentYet = (metadata.messagesSent || 0) === 0;
+
+        const isTerminating = piped?.verification?.goals_met === true &&
+                              isUserFacing &&
+                              noMessagesSentYet &&
+                              !hasSendTool;
 
         if (isTerminating) {
             // Reuse the same core instructions so the review layer remembers its capabilities
