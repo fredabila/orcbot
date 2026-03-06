@@ -187,6 +187,77 @@ describe('DecisionEngine - System Prompt Persistence', () => {
 });
 
 describe('DecisionEngine - Thread Context Grounding', () => {
+  it('keeps working after prior send when task still needs non-send tools', async () => {
+    const llmCalls: Array<{ systemMessage?: string }> = [];
+
+    const mockLLM = {
+      supportsNativeToolCalling: () => false,
+      call: vi.fn(async (_prompt: string, systemMessage?: string) => {
+        llmCalls.push({ systemMessage });
+        return JSON.stringify({
+          verification: { goals_met: false, analysis: 'Continue with non-send tools' },
+          tools: [{ name: 'web_search', metadata: { query: 'follow-up work' } }]
+        });
+      })
+    } as any;
+
+    const mockMemory = {
+      getUserContext: () => ({ raw: 'Test user context' }),
+      getRecentContext: () => ([
+        {
+          id: 'action-123-step-1',
+          content: '[observation] Sent message: Looking into it now.',
+          metadata: { tool: 'send_telegram' }
+        }
+      ]),
+      getContactProfile: () => null,
+      searchMemory: () => []
+    } as any;
+
+    const mockSkills = {
+      getSkillsPrompt: () => 'Available Skills:\n- send_telegram\n- web_search',
+      getCompactSkillsPrompt: () => 'Tools: send_telegram, web_search',
+      getRelevantSkillsPrompt: () => 'Available Skills:\n- send_telegram\n- web_search',
+      getAllSkills: () => [{ name: 'send_telegram' }, { name: 'web_search' }],
+      matchSkillsForTask: () => [],
+      classifySkillsWithLLM: async () => [],
+      getAgentSkillsPrompt: () => '',
+      getActivatedSkillsContext: () => '',
+      getAgentSkills: () => [],
+      activateAgentSkill: () => {},
+      deactivateNonStickySkills: () => {}
+    } as any;
+
+    const mockConfig = {
+      get: () => undefined
+    } as any;
+
+    const engine = new DecisionEngine(
+      mockMemory,
+      mockLLM,
+      mockSkills,
+      '/tmp/journal.md',
+      '/tmp/learning.md',
+      mockConfig
+    );
+
+    await engine.decide({
+      id: 'action-123',
+      payload: {
+        description: 'Investigate issue and then report back',
+        messagesSent: 1,
+        currentStep: 2,
+        source: 'telegram',
+        sourceId: 'test-user'
+      }
+    });
+
+    const systemPrompt = llmCalls[0].systemMessage || '';
+    expect(systemPrompt).toContain('continue with NON-send tools');
+    expect(systemPrompt).toContain('Only set "goals_met": true now if that previous message already delivered the final answer.');
+    expect(systemPrompt).not.toContain('you MUST now set "goals_met": true and stop');
+  });
+
   it('should include same-chat user+assistant memories and filter tool noise', async () => {
     const llmCalls: Array<{ prompt: string; systemMessage?: string }> = [];
 

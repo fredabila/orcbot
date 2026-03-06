@@ -594,7 +594,9 @@ ${this.repoContext}`,
             }
 
             historyNotes = `\n### 💡 IMMEDIATE HISTORY (Last Step):\nYou previously executed: ${lastContent}\nStatus: SUCCESS.
-${lastTurnInvolvedMessage ? '⚠️ CONVERSATIONAL ETIQUETTE: You just sent a message to the user in the previous turn. To maintain professional boundaries and avoid spam, you MUST now set "goals_met": true and stop. Do NOT send another message until the user replies.' : 'If you sent a message, do NOT repeat it unless you are correcting a mistake.'}\n`;
+${lastTurnInvolvedMessage
+                ? '⚠️ CONVERSATIONAL ETIQUETTE: You sent a message in the previous turn. Do NOT send another message unless you have genuinely new user-facing value (new findings, blocker, or final result). If work is still pending, continue with NON-send tools. Only set "goals_met": true now if that previous message already delivered the final answer.'
+                : 'If you sent a message, do NOT repeat it unless you are correcting a mistake.'}\n`;
         }
 
         // Filter out elevated skills for non-admin users
