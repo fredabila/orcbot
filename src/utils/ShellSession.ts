@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from 'child_process';
+import { ChildProcess } from 'child_process';
 import { logger } from './logger';
 
 export type SessionStatus = 'running' | 'exited' | 'killed' | 'error';
@@ -22,7 +22,8 @@ export class ShellSession {
     public readonly cwd: string;
     public readonly startedAt: string;
 
-    private process: ChildProcess;
+    private process: any; // pty.IPty | ChildProcess
+    private isPty: boolean;
     private lines: string[] = [];
     private _status: SessionStatus = 'running';
     private _exitCode?: number;
@@ -33,50 +34,72 @@ export class ShellSession {
         this.command = command;
         this.cwd = cwd;
         this.startedAt = new Date().toISOString();
+        this.isPty = !existingProcess;
 
         if (existingProcess) {
             this.process = existingProcess;
-        } else {
-            const isWindows = process.platform === 'win32';
-            const shell = isWindows ? 'powershell.exe' : '/bin/sh';
-            const shellFlag = isWindows ? '-Command' : '-c';
+            this._pid = this.process.pid;
 
-            this.process = spawn(shell, [shellFlag, command], {
-                cwd,
-                stdio: ['pipe', 'pipe', 'pipe'],
-                detached: false,
-                windowsHide: true,
+            this.process.stdout?.on('data', (data: Buffer) => {
+                const text = data.toString();
+                const newLines = text.split('\n').filter(l => l !== '');
+                this.appendLines(newLines);
             });
+
+            this.process.stderr?.on('data', (data: Buffer) => {
+                const text = data.toString();
+                const newLines = text.split('\n').filter(l => l !== '').map(l => `[stderr] ${l}`);
+                this.appendLines(newLines);
+            });
+
+            this.process.on('close', (code: number | null) => {
+                this._status = code === null ? 'killed' : 'exited';
+                this._exitCode = code ?? undefined;
+                this.appendLines([`[session] Process exited with code ${code}`]);
+                logger.info(`ShellSession[${id}]: Process exited with code ${code}`);
+            });
+
+            this.process.on('error', (err: Error) => {
+                this._status = 'error';
+                this.appendLines([`[session] Process error: ${err.message}`]);
+                logger.error(`ShellSession[${id}]: Process error: ${err.message}`);
+            });
+            logger.info(`ShellSession[${id}]: Attached PID=${this._pid} command="${command}" cwd="${cwd}"`);
+        } else {
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            const pty = require('@lydell/node-pty');
+            const isWindows = process.platform === 'win32';
+            const shell = isWindows ? 'powershell.exe' : 'bash';
+            const shellArgs = isWindows ? ['-NoProfile', '-Command', command] : ['-c', command];
+
+            this.process = pty.spawn(shell, shellArgs, {
+                name: 'xterm-color',
+                cols: 120,
+                rows: 40,
+                cwd: cwd,
+                env: process.env
+            });
+
+            this._pid = this.process.pid;
+
+            this.process.onData((data: string) => {
+                const text = data.toString();
+                // strip basic ansi and carriage returns
+                // eslint-disable-next-line no-control-regex
+                const clean = text.replace(/\x1b\[[0-9;]*m/g, '').replace(/\r/g, '');
+                const newLines = clean.split('\n').filter(l => l !== '');
+                this.appendLines(newLines);
+            });
+
+            this.process.onExit((event: { exitCode: number, signal?: number }) => {
+                this._status = 'exited';
+                this._exitCode = event.exitCode;
+                this.appendLines([`[session] Process exited with code ${event.exitCode}`]);
+                logger.info(`ShellSession[${id}]: Process exited with code ${event.exitCode}`);
+            });
+            
+            logger.info(`ShellSession[${id}]: Started PTY PID=${this._pid} command="${command}" cwd="${cwd}"`);
         }
-
-        this._pid = this.process.pid;
-
-        this.process.stdout?.on('data', (data: Buffer) => {
-            const text = data.toString();
-            const newLines = text.split('\n').filter(l => l !== '');
-            this.appendLines(newLines);
-        });
-
-        this.process.stderr?.on('data', (data: Buffer) => {
-            const text = data.toString();
-            const newLines = text.split('\n').filter(l => l !== '').map(l => `[stderr] ${l}`);
-            this.appendLines(newLines);
-        });
-
-        this.process.on('close', (code) => {
-            this._status = code === null ? 'killed' : 'exited';
-            this._exitCode = code ?? undefined;
-            this.appendLines([`[session] Process exited with code ${code}`]);
-            logger.info(`ShellSession[${id}]: Process exited with code ${code}`);
-        });
-
-        this.process.on('error', (err) => {
-            this._status = 'error';
-            this.appendLines([`[session] Process error: ${err.message}`]);
-            logger.error(`ShellSession[${id}]: Process error: ${err.message}`);
-        });
-
-        logger.info(`ShellSession[${id}]: ${existingProcess ? 'Attached' : 'Started'} PID=${this._pid} command="${command}" cwd="${cwd}"`);
     }
 
     private appendLines(newLines: string[]): void {
@@ -113,12 +136,18 @@ export class ShellSession {
         if (this._status !== 'running') {
             throw new Error(`Session "${this.id}" is not running (status: ${this._status})`);
         }
-        if (!this.process.stdin) {
-            throw new Error(`Session "${this.id}" has no writable stdin`);
-        }
+        
         // Ensure newline termination
         const line = input.endsWith('\n') ? input : `${input}\n`;
-        this.process.stdin.write(line);
+        
+        if (this.isPty) {
+            this.process.write(line);
+        } else {
+            if (!this.process.stdin) {
+                throw new Error(`Session "${this.id}" has no writable stdin`);
+            }
+            this.process.stdin.write(line);
+        }
         logger.debug(`ShellSession[${this.id}]: Sent input: ${input.trim()}`);
     }
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import * as p from '@clack/prompts';
 import inquirer from 'inquirer';
 import { Agent } from '../core/Agent';
 import { logger } from '../utils/logger';
@@ -2287,42 +2288,42 @@ async function showMainMenu() {
     ], { title: 'DASHBOARD', width: 56 });
     console.log('');
 
-    const { action } = await inquirer.prompt([
-        {
-            type: 'list',
-            name: 'action',
-            message: `${c.bold}${c.brightWhite}What would you like to do?${c.reset}`,
-            choices: [
-                new inquirer.Separator(`${c.brightCyan} ── RUN ${'─'.repeat(35)}${c.reset}`),
-                { name: `  ${c.brightGreen}▶${c.reset}  ${c.bold}Start Agent Loop${c.reset}`, value: 'start' },
-                { name: `  ${c.yellow}📋${c.reset}  Push Task`, value: 'push' },
-                { name: `  ${c.cyan}📊${c.reset}  View Status`, value: 'status' },
-                new inquirer.Separator(`${c.brightCyan} ── CONFIGURE ${'─'.repeat(29)}${c.reset}`),
-                { name: `  ${c.magenta}🧠${c.reset}  Manage AI Models`, value: 'models' },
-                { name: `  ${c.brightBlue}🔌${c.reset}  Manage Connections`, value: 'connections' },
-                { name: `  ${c.brightCyan}⚡${c.reset}  Manage Skills  ${c.gray}(${agent.skills.getAgentSkills().length} installed)${c.reset}`, value: 'skills' },
-                { name: `  ${c.brightBlue}🌍${c.reset}  World Governance`, value: 'world' },
-                { name: `  ${c.brightMagenta}🧰${c.reset}  Manage Tools   ${c.gray}(${agent.tools.listTools().length} installed)${c.reset}`, value: 'tools' },
-                { name: `  ${c.yellow}🔧${c.reset}  Tooling & APIs`, value: 'tooling' },
-                new inquirer.Separator(`${c.brightCyan} ── ADVANCED ${'─'.repeat(30)}${c.reset}`),
-                { name: `  ${c.brightGreen}🌐${c.reset}  Web Gateway`, value: 'gateway' },
-                { name: `  ${c.brightMagenta}🪪${c.reset}   Worker Profile`, value: 'worker' },
-                { name: `  ${c.brightCyan}🐙${c.reset}  Multi-Agent Orchestration`, value: 'orchestration' },
-                { name: `  ${c.brightYellow}🤖${c.reset}  Agentic User ${c.gray}(HITL Proxy)${c.reset}`, value: 'agentic_user' },
-                { name: `  ${c.brightRed}🔒${c.reset}  Security & Permissions`, value: 'security' },
-                { name: `  ${c.brightGreen}📈${c.reset}  Token Usage`, value: 'tokens' },
-                { name: `  ${c.cyan}🧪${c.reset}  Guardrail Metrics`, value: 'metrics' },
-                { name: `  ${c.brightBlue}🌍${c.reset}  World Events Live`, value: 'world_events' },
-                { name: `  ${c.brightCyan}⏱️${c.reset}   Latency Benchmark`, value: 'latency' },
-                new inquirer.Separator(`${c.brightCyan} ── SYSTEM ${'─'.repeat(32)}${c.reset}`),
-                { name: `  ${c.white}📂${c.reset}  Open Build Workspace`, value: 'open_build_workspace' },
-                { name: `  ${c.white}⚙️${c.reset}   Configure Agent`, value: 'config' },
-                { name: `  ${c.white}⬆️${c.reset}   Update OrcBot`, value: 'update' },
-                { name: `  ${c.gray}← Exit${c.reset}`, value: 'exit' },
-            ],
-            pageSize: 24
-        },
-    ]);
+    const action = await p.select({
+        message: `${c.bold}${c.brightWhite}What would you like to do?${c.reset}`,
+        maxItems: 24,
+        options: [
+            { label: `── RUN ───────────────────────────────────`, value: 'separator_run', disabled: true },
+            { label: `  ${c.brightGreen}▶${c.reset}  ${c.bold}Start Agent Loop${c.reset}`, value: 'start' },
+            { label: `  ${c.yellow}📋${c.reset}  Push Task`, value: 'push' },
+            { label: `  ${c.cyan}📊${c.reset}  View Status`, value: 'status' },
+            { label: `── CONFIGURE ─────────────────────────────`, value: 'separator_config', disabled: true },
+            { label: `  ${c.magenta}🧠${c.reset}  Manage AI Models`, value: 'models' },
+            { label: `  ${c.brightBlue}🔌${c.reset}  Manage Connections`, value: 'connections' },
+            { label: `  ${c.brightCyan}⚡${c.reset}  Manage Skills  ${c.gray}(${agent.skills.getAgentSkills().length} installed)${c.reset}`, value: 'skills' },
+            { label: `  ${c.brightBlue}🌍${c.reset}  World Governance`, value: 'world' },
+            { label: `  ${c.brightMagenta}🧰${c.reset}  Manage Tools   ${c.gray}(${agent.tools.listTools().length} installed)${c.reset}`, value: 'tools' },
+            { label: `  ${c.yellow}🔧${c.reset}  Tooling & APIs`, value: 'tooling' },
+            { label: `── ADVANCED ──────────────────────────────`, value: 'separator_adv', disabled: true },
+            { label: `  ${c.brightGreen}🌐${c.reset}  Web Gateway`, value: 'gateway' },
+            { label: `  ${c.brightMagenta}🪪${c.reset}   Worker Profile`, value: 'worker' },
+            { label: `  ${c.brightCyan}🐙${c.reset}  Multi-Agent Orchestration`, value: 'orchestration' },
+            { label: `  ${c.brightYellow}🤖${c.reset}  Agentic User ${c.gray}(HITL Proxy)${c.reset}`, value: 'agentic_user' },
+            { label: `  ${c.brightRed}🔒${c.reset}  Security & Permissions`, value: 'security' },
+            { label: `  ${c.brightGreen}📈${c.reset}  Token Usage`, value: 'tokens' },
+            { label: `  ${c.cyan}🧪${c.reset}  Guardrail Metrics`, value: 'metrics' },
+            { label: `  ${c.brightBlue}🌍${c.reset}  World Events Live`, value: 'world_events' },
+            { label: `  ${c.brightCyan}⏱️${c.reset}   Latency Benchmark`, value: 'latency' },
+            { label: `── SYSTEM ────────────────────────────────`, value: 'separator_sys', disabled: true },
+            { label: `  ${c.white}📂${c.reset}  Open Build Workspace`, value: 'open_build_workspace' },
+            { label: `  ${c.white}⚙️${c.reset}   Configure Agent`, value: 'config' },
+            { label: `  ${c.white}⬆️${c.reset}   Update OrcBot`, value: 'update' },
+            { label: `  ${c.gray}← Exit${c.reset}`, value: 'exit' },
+        ]
+    });
+
+    if (p.isCancel(action)) {
+        process.exit(0);
+    }
 
     switch (action) {
         case 'start':

@@ -10,6 +10,7 @@
  */
 
 import { logger } from '../utils/logger';
+import JSON5 from 'json5';
 
 /** Minimal LLM interface â€” same contract as PromptRouter.RouterLLM */
 export interface ParserLLM {
@@ -82,7 +83,7 @@ Return ONLY a valid JSON object with the fields you found. If a field is not pre
                 return null;
             }
 
-            const parsed = JSON.parse(jsonMatch[0]);
+            const parsed = JSON5.parse(jsonMatch[0]);
 
             // Validate: must have at least one useful field
             if (!parsed.tool && !parsed.tools?.length && !parsed.action && !parsed.content) {
@@ -158,7 +159,7 @@ Rules:
                 return { intent: 'unknown', confidence: 0, suggestedHelpers: ['communication'] };
             }
 
-            const parsed = JSON.parse(jsonMatch[0]);
+            const parsed = JSON5.parse(jsonMatch[0]);
             const validIntents = ['action', 'question', 'scheduling', 'research', 'communication', 'development', 'unknown'];
             const validHelpers = ['communication', 'browser', 'research', 'scheduling', 'media', 'profile', 'development'];
 
@@ -205,7 +206,7 @@ Return ONLY a JSON object with the normalized fields. Preserve values exactly â€
             const jsonMatch = response.match(/\{[\s\S]*\}/);
             if (!jsonMatch) return rawMetadata;
 
-            const parsed = JSON.parse(jsonMatch[0]);
+            const parsed = JSON5.parse(jsonMatch[0]);
             if (typeof parsed !== 'object' || parsed === null) return rawMetadata;
 
             this.setCache(cacheKey, parsed);

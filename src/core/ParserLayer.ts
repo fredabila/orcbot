@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { logger } from '../utils/logger';
 import { LLMParser, ParserLLM } from './LLMParser';
+import JSON5 from 'json5';
 
 export const ToolCallSchema = z.object({
     name: z.string(),

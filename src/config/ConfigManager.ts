@@ -2,6 +2,7 @@ import fs from 'fs';
 import yaml from 'yaml';
 import path from 'path';
 import os from 'os';
+import chokidar from 'chokidar';
 import { logger } from '../utils/logger';
 import { eventBus } from '../core/EventBus';
 import { AgentConfig, AgentConfigSchema } from '../types/AgentConfig';
@@ -14,6 +15,7 @@ export class ConfigManager {
     private configPath: string;
     private config: AgentConfig;
     private dataHome: string;
+    private watcher: any = null;
 
     constructor(customPath?: string) {
         // Check for environment variable override first (used by worker processes)
@@ -48,22 +50,32 @@ export class ConfigManager {
     private startWatcher(customPath?: string) {
         if (!fs.existsSync(this.configPath)) return;
 
+        if (this.watcher) {
+            this.watcher.close();
+        }
+
         // Use a simple debounce to avoid double-loading on rapid saves
         let debounceTimer: NodeJS.Timeout | null = null;
 
-        fs.watch(this.configPath, (eventType) => {
-            if (eventType === 'change') {
-                if (debounceTimer) clearTimeout(debounceTimer);
-                debounceTimer = setTimeout(() => {
-                    logger.info(`ConfigManager: Config file changed on disk, reloading...`);
-                    const oldConfig = { ...this.config };
-                    // We load without logging the path again to keep it clean
-                    this.config = this.loadConfig(customPath, true);
-                    // Emit event for components to react to config changes
-                    eventBus.emit('config:changed', { oldConfig, newConfig: this.config });
-                    logger.info(`ConfigManager: Config reloaded and config:changed event emitted`);
-                }, 100);
+        this.watcher = chokidar.watch(this.configPath, {
+            persistent: true,
+            awaitWriteFinish: {
+                stabilityThreshold: 100,
+                pollInterval: 50
             }
+        });
+
+        this.watcher.on('change', () => {
+            if (debounceTimer) clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                logger.info(`ConfigManager: Config file changed on disk, reloading...`);
+                const oldConfig = { ...this.config };
+                // We load without logging the path again to keep it clean
+                this.config = this.loadConfig(customPath, true);
+                // Emit event for components to react to config changes
+                eventBus.emit('config:changed', { oldConfig, newConfig: this.config });
+                logger.info(`ConfigManager: Config reloaded and config:changed event emitted`);
+            }, 100);
         });
     }
 
@@ -586,3 +598,4 @@ export class ConfigManager {
         return { ...this.config };
     }
 }
+
