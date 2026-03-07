@@ -32,6 +32,7 @@
                 <button class="nav-item" data-view="memory"><i class="fas fa-brain"></i><span>Memory</span></button>
                 <button class="nav-item" data-view="logs"><i class="fas fa-wave-square"></i><span>Logs</span></button>
                 <button class="nav-item" data-view="api"><i class="fas fa-flask"></i><span>API Lab</span></button>
+                <button class="nav-item" data-view="security"><i class="fas fa-shield-halved"></i><span>Security</span></button>
                 <button class="nav-item" data-view="config"><i class="fas fa-sliders"></i><span>Config</span></button>
             </nav>
 
@@ -317,6 +318,7 @@
                         <div class="compose-stack">
                             <input id="dataHomeFilePath" class="field-input mono" placeholder="relative file path">
                             <textarea id="dataHomeEditor" class="text-area code-input data-home-editor" rows="18" placeholder="Select a text file to edit its contents."></textarea>
+                            <div class="data-home-preview" id="dataHomePreview"></div>
                             <div class="inline-actions">
                                 <button class="btn primary" id="dataHomeSaveBtn">Save File</button>
                                 <button class="btn ghost" id="dataHomeInspectBtn">Inspect Selection</button>
@@ -357,6 +359,7 @@
                             <button class="btn ghost small" id="refreshLogsBtn">Refresh</button>
                         </div>
                     </div>
+                    <div class="log-summary" id="logSummary"></div>
                     <pre class="log-surface" id="logSurface">Loading logs...</pre>
                 </article>
             </section>
@@ -389,14 +392,21 @@
             </section>
 
             <section class="content view" id="view-config">
+                <article class="panel panel-tall">
+                    <div class="panel-head"><div><div class="eyebrow">Safe Config</div><h3>Runtime configuration</h3></div><div class="inline-actions"><input id="configSearchInput" class="field-input compact wide-input" placeholder="filter config"><button class="btn ghost small" id="refreshConfigBtn">Refresh</button></div></div>
+                    <div class="config-grid compact-list scroll-region" id="configGrid"></div>
+                </article>
+            </section>
+
+            <section class="content view" id="view-security">
                 <div class="workspace-grid two-up">
                     <article class="panel">
-                        <div class="panel-head"><div><div class="eyebrow">Gateway Auth</div><h3>Token and connection state</h3></div></div>
+                        <div class="panel-head"><div><div class="eyebrow">Gateway Auth</div><h3>Token, policy, and execution controls</h3></div><div class="inline-actions"><button class="btn ghost small" id="refreshSecurityBtn">Refresh</button><button class="btn primary small" id="rotateGatewayTokenBtn">Rotate Token</button></div></div>
                         <div class="stack-list compact-list scroll-region" id="securitySummary"></div>
                     </article>
                     <article class="panel panel-tall">
-                        <div class="panel-head"><div><div class="eyebrow">Safe Config</div><h3>Runtime configuration</h3></div><div class="inline-actions"><input id="configSearchInput" class="field-input compact wide-input" placeholder="filter config"><button class="btn ghost small" id="refreshConfigBtn">Refresh</button></div></div>
-                        <div class="config-grid compact-list scroll-region" id="configGrid"></div>
+                        <div class="panel-head"><div><div class="eyebrow">Hardening</div><h3>Gateway security surface</h3></div></div>
+                        <div class="detail-stack compact-list scroll-region" id="securityGuidance"></div>
                     </article>
                 </div>
             </section>

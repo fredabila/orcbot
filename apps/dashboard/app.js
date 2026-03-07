@@ -13,6 +13,7 @@
         dataHomeSummary: null,
         dataHomeTree: null,
         dataHomeFile: null,
+        dataHomePreviewUrl: '',
         selectedDataHomePath: '',
         selectedDataHomeType: 'directory',
         selectedDataHomeEntry: null,
@@ -24,6 +25,7 @@
         config: {},
         security: null,
         logs: [],
+        logInfo: null,
         events: [],
         inspector: null,
         compactCanvas: false,
@@ -42,6 +44,7 @@
         memory: { eyebrow: 'Context', title: 'Memory' },
         logs: { eyebrow: 'Observability', title: 'Logs' },
         api: { eyebrow: 'Diagnostics', title: 'API Lab' },
+        security: { eyebrow: 'Administration', title: 'Security' },
         config: { eyebrow: 'Administration', title: 'Config' }
     };
 
@@ -70,16 +73,16 @@
             'taskComposerText', 'taskComposerPriority', 'taskComposerLane', 'taskComposerSource',
             'taskComposerMeta', 'taskListView', 'servicesGrid', 'serviceDetailTitle', 'serviceDetail',
             'dataHomeSummary', 'dataHomeBreadcrumbs', 'dataHomePathInput', 'dataHomeTree', 'dataHomeEditorTitle', 'dataHomeFilePath',
-            'dataHomeEditor', 'dataHomeMeta',
+            'dataHomeEditor', 'dataHomeMeta', 'dataHomePreview',
             'skillSearchInput', 'refreshSkillsBtn', 'skillsGrid', 'skillDetailTitle', 'skillDetail',
             'configSearchInput',
             'memorySearchInput', 'memorySearchType', 'memorySearchLimit', 'memoryTimeline',
-            'logLevel', 'logSearch', 'logSurface', 'apiMethod', 'apiEndpointInput', 'apiPayload',
-            'apiResponse', 'endpointCatalog', 'securitySummary', 'configGrid', 'toastStack',
+            'logLevel', 'logSearch', 'logSummary', 'logSurface', 'apiMethod', 'apiEndpointInput', 'apiPayload',
+            'apiResponse', 'endpointCatalog', 'securitySummary', 'securityGuidance', 'configGrid', 'toastStack',
             'refreshBtn', 'newTaskBtn', 'quickTaskSend', 'canvasCompactBtn', 'canvasResetBtn',
             'canvasEventClear', 'chatSendBtn', 'clearChatBtn', 'taskComposerSubmit', 'refreshTasksBtn',
             'memorySearchBtn', 'refreshMemoryBtn', 'refreshLogsBtn', 'runApiBtn', 'loadCapabilitiesBtn',
-            'refreshConfigBtn', 'clearEventsBtn', 'refreshDataHomeBtn', 'dataHomeUpBtn', 'dataHomeRootBtn', 'dataHomeBrowseBtn',
+            'refreshConfigBtn', 'refreshSecurityBtn', 'rotateGatewayTokenBtn', 'clearEventsBtn', 'refreshDataHomeBtn', 'dataHomeUpBtn', 'dataHomeRootBtn', 'dataHomeBrowseBtn',
             'dataHomeCreateDirBtn', 'dataHomeNewFileBtn', 'dataHomeRenameBtn', 'dataHomeDeleteBtn',
             'dataHomeSaveBtn', 'dataHomeInspectBtn'
         ].forEach((id) => {
@@ -124,6 +127,8 @@
         elements.runApiBtn?.addEventListener('click', runApiRequest);
         elements.loadCapabilitiesBtn?.addEventListener('click', loadCapabilities);
         elements.refreshConfigBtn?.addEventListener('click', loadConfig);
+        elements.refreshSecurityBtn?.addEventListener('click', loadSecurity);
+        elements.rotateGatewayTokenBtn?.addEventListener('click', rotateGatewayToken);
         elements.clearEventsBtn?.addEventListener('click', clearEvents);
         elements.canvasEventClear?.addEventListener('click', clearEvents);
         elements.canvasCompactBtn?.addEventListener('click', toggleCanvasCompact);
@@ -224,6 +229,13 @@
             apiFetch(`/data-home/tree?${params.toString()}`)
         ]);
 
+        if (treeResponse.entry?.type === 'file') {
+            const filePath = normalizeRelativePath(treeResponse.entry.path || normalizedPath);
+            await loadDataHome(parentRelativePath(filePath));
+            await loadDataHomeFile(filePath);
+            return treeResponse;
+        }
+
         state.dataHomeSummary = summary;
         state.dataHomeTree = treeResponse.entry || null;
         state.dataHomeBrowsePath = treeResponse.requestedPath || '';
@@ -231,13 +243,19 @@
             elements.dataHomePathInput.value = state.dataHomeBrowsePath;
         }
 
-        if (!state.selectedDataHomePath && state.dataHomeTree) {
+        const selectedEntry = state.selectedDataHomePath
+            ? findDataHomeEntry(state.dataHomeTree, state.selectedDataHomePath)
+            : null;
+
+        if (selectedEntry) {
+            state.selectedDataHomeEntry = selectedEntry;
+            state.selectedDataHomeType = selectedEntry.type || state.selectedDataHomeType;
+        } else if (state.dataHomeTree) {
             state.selectedDataHomePath = state.dataHomeTree.path || '';
             state.selectedDataHomeType = state.dataHomeTree.type || 'directory';
             state.selectedDataHomeEntry = state.dataHomeTree;
-        } else if (state.selectedDataHomePath) {
-            state.selectedDataHomeEntry = findDataHomeEntry(state.dataHomeTree, state.selectedDataHomePath)
-                || (state.selectedDataHomeType === 'directory' ? state.dataHomeTree : state.selectedDataHomeEntry);
+            state.dataHomeFile = null;
+            state.dataHomePreviewUrl = '';
         }
 
         renderDataHome();
@@ -253,6 +271,7 @@
 
         const response = await apiFetch(`/data-home/file?path=${encodeURIComponent(normalizedPath)}`);
         state.dataHomeFile = response;
+        state.dataHomePreviewUrl = buildDataHomeAssetUrl(response.path);
         state.selectedDataHomePath = response.path;
         state.selectedDataHomeType = 'file';
         state.selectedDataHomeEntry = {
@@ -261,6 +280,7 @@
             type: 'file',
             size: response.size,
             modifiedAt: response.modifiedAt,
+            mimeType: response.mimeType,
             protected: false
         };
 
@@ -317,6 +337,12 @@
         if (search) params.set('search', search);
         const response = await apiFetch(`/logs?${params.toString()}`);
         state.logs = response.logs || [];
+        state.logInfo = {
+            total: response.total || 0,
+            filtered: !!response.filtered,
+            source: response.source || null,
+            sources: Array.isArray(response.sources) ? response.sources : []
+        };
         renderLogs();
         return state.logs;
     }
@@ -659,6 +685,7 @@
         const isFileSelection = state.selectedDataHomeType === 'file';
         const filePath = state.dataHomeFile?.path || (isFileSelection ? selectedPath : '');
         const fileContent = state.dataHomeFile?.path === filePath ? state.dataHomeFile.content || '' : '';
+        const isTextFile = !!state.dataHomeFile?.isText;
         const directoryOverview = selectedEntry && selectedEntry.type === 'directory'
             ? describeDirectorySelection(selectedEntry)
             : 'Select a text file to edit its contents.';
@@ -667,15 +694,17 @@
             ? (filePath || 'File editor')
             : `Directory ${selectedPath || '(root)'}`;
         elements.dataHomeFilePath.value = filePath;
-        elements.dataHomeEditor.value = isFileSelection ? fileContent : directoryOverview;
-        elements.dataHomeEditor.readOnly = !isFileSelection;
-        elements.dataHomeSaveBtn.disabled = !isFileSelection;
+        elements.dataHomeEditor.value = isFileSelection ? (isTextFile ? fileContent : describeBinarySelection(state.dataHomeFile)) : directoryOverview;
+        elements.dataHomeEditor.readOnly = !isFileSelection || !isTextFile;
+        elements.dataHomeSaveBtn.disabled = !isFileSelection || !isTextFile;
+        renderDataHomePreview(isFileSelection ? state.dataHomeFile : null);
 
         const rows = selectedEntry ? [
             { label: 'Path', hint: 'relative to data home', value: selectedEntry.path || '(root)', mono: true },
             { label: 'Type', hint: 'entry kind', value: selectedEntry.type || '-', mono: false },
             { label: 'Modified', hint: 'last write timestamp', value: selectedEntry.modifiedAt || state.dataHomeFile?.modifiedAt || '-', mono: false },
             { label: 'Size', hint: 'file payload size', value: selectedEntry.type === 'file' ? formatBytes(selectedEntry.size || 0) : '-', mono: false },
+            { label: 'Media type', hint: 'detected mime type', value: state.dataHomeFile?.mimeType || selectedEntry.mimeType || '-', mono: true },
             { label: 'Protected', hint: 'gateway protection boundary', value: String(!!selectedEntry.protected), mono: false }
         ] : [
             { label: 'Selection', hint: 'current data-home focus', value: 'None', mono: false }
@@ -787,7 +816,25 @@
 
     function renderLogs() {
         const lines = state.logs;
-        elements.logSurface.textContent = lines.length ? lines.join('\n') : 'No matching logs';
+        const info = state.logInfo || { total: 0, filtered: false, source: null, sources: [] };
+        const rows = [
+            { label: 'Lines shown', value: String(lines.length), hint: info.filtered ? `filtered from ${info.total}` : `${info.total} available` },
+            { label: 'Source', value: info.source || 'No log file found', hint: 'active log file' },
+            { label: 'Other sources', value: info.sources.length ? info.sources.join('\n') : 'None detected', hint: 'discovered log files' }
+        ];
+
+        if (elements.logSummary) {
+            elements.logSummary.innerHTML = renderKeyValueRows(rows.map((row) => ({
+                label: row.label,
+                hint: row.hint,
+                value: row.value,
+                mono: true
+            })));
+        }
+
+        elements.logSurface.textContent = lines.length
+            ? lines.join('\n')
+            : (info.source ? 'No matching logs for the current filters.' : 'No log file was found. The gateway now checks workspace logs and the data-home foreground log.');
     }
 
     function renderCapabilities() {
@@ -827,6 +874,7 @@
         const security = state.security;
         if (!security) {
             elements.securitySummary.innerHTML = emptyState('Security details unavailable');
+            elements.securityGuidance.innerHTML = emptyState('Security guidance unavailable');
             return;
         }
 
@@ -845,6 +893,52 @@
             value: block.value,
             mono: false
         })));
+
+        const securityEndpoints = state.capabilities?.api?.security || [];
+        const hardeningCards = [
+            {
+                label: 'Gateway token',
+                body: security.token?.authEnabled
+                    ? 'Authentication is active. Rotating the token here updates the dashboard key and reconnects the WebSocket automatically.'
+                    : 'Gateway auth is disabled. Use Rotate Token to generate and enable a gateway API key.'
+            },
+            {
+                label: 'Execution policy',
+                body: `Safe mode is ${security.safeMode ? 'enabled' : 'disabled'} and auto-execute commands is ${security.autoExecuteCommands ? 'enabled' : 'disabled'}. Review these before exposing the gateway beyond trusted networks.`
+            },
+            {
+                label: 'Security endpoints',
+                body: Array.isArray(securityEndpoints) && securityEndpoints.length
+                    ? securityEndpoints.join('\n')
+                    : 'No security endpoints advertised by the gateway capabilities response.'
+            }
+        ];
+
+        elements.securityGuidance.innerHTML = hardeningCards.map((card) => `
+            <article class="detail-card">
+                <div class="mini-label">${escapeHtml(card.label)}</div>
+                <div>${formatMultiline(card.body)}</div>
+            </article>
+        `).join('');
+    }
+
+    async function rotateGatewayToken() {
+        const confirmed = window.confirm('Rotate the gateway API token? Existing clients using the old token will lose access until updated.');
+        if (!confirmed) return;
+
+        const response = await apiFetch('/gateway/token/rotate', {
+            method: 'POST',
+            body: JSON.stringify({})
+        });
+
+        if (response?.token) {
+            setApiKey(response.token);
+            connectWebSocket();
+        }
+
+        await loadSecurity();
+        await loadCapabilities();
+        toast('Gateway token rotated and dashboard credentials updated');
     }
 
     function renderEvents() {
@@ -1130,9 +1224,11 @@
             type: 'file',
             size: 0,
             modifiedAt: null,
+            mimeType: 'text/plain; charset=utf-8',
             protected: false
         };
-        state.dataHomeFile = { path: normalizedPath, content: '', size: 0, modifiedAt: null };
+        state.dataHomeFile = { path: normalizedPath, content: '', size: 0, modifiedAt: null, mimeType: 'text/plain; charset=utf-8', isText: true, previewKind: 'text' };
+        state.dataHomePreviewUrl = '';
         renderDataHome();
         elements.dataHomeEditor?.focus();
     }
@@ -1173,7 +1269,8 @@
         toast(`Renamed ${response.fromPath} to ${response.toPath}`);
         state.selectedDataHomePath = response.toPath;
         state.selectedDataHomeType = response.type;
-        state.dataHomeFile = response.type === 'file' ? { path: response.toPath, content: elements.dataHomeEditor?.value || '' } : null;
+        state.dataHomeFile = response.type === 'file' ? { ...(state.dataHomeFile || {}), path: response.toPath, content: elements.dataHomeEditor?.value || '' } : null;
+        state.dataHomePreviewUrl = response.type === 'file' ? buildDataHomeAssetUrl(response.toPath) : '';
         await loadDataHome(parentRelativePath(response.toPath));
         if (response.type === 'file') {
             await loadDataHomeFile(response.toPath);
@@ -1201,6 +1298,7 @@
         state.selectedDataHomeType = 'directory';
         state.selectedDataHomeEntry = null;
         state.dataHomeFile = null;
+        state.dataHomePreviewUrl = '';
         await loadDataHome(parentPath);
     }
 
@@ -1544,6 +1642,66 @@
         ].filter(Boolean).join('\n');
     }
 
+    function describeBinarySelection(file) {
+        return [
+            `File: ${file?.path || '-'}`,
+            `Type: ${file?.mimeType || 'application/octet-stream'}`,
+            `Size: ${formatBytes(file?.size || 0)}`,
+            '',
+            'This asset is not editable as plain text in the dashboard.',
+            'Use the preview below when supported, or open/download the file directly.'
+        ].join('\n');
+    }
+
+    function renderDataHomePreview(file) {
+        if (!elements.dataHomePreview) return;
+        if (!file || !file.path) {
+            elements.dataHomePreview.innerHTML = '';
+            elements.dataHomePreview.classList.remove('active');
+            return;
+        }
+
+        const assetUrl = state.dataHomePreviewUrl || buildDataHomeAssetUrl(file.path);
+        const downloadUrl = buildDataHomeAssetUrl(file.path, true);
+        let previewHtml = '';
+
+        if (file.isText) {
+            previewHtml = `
+                <div class="data-home-preview-card">
+                    <div class="mini-label">Text file</div>
+                    <div>Inline text editing is enabled for this file.</div>
+                </div>
+            `;
+        } else if (file.previewKind === 'image') {
+            previewHtml = `<img class="data-home-preview-image" src="${escapeAttribute(assetUrl)}" alt="${escapeAttribute(file.path)}">`;
+        } else if (file.previewKind === 'audio') {
+            previewHtml = `<audio class="data-home-preview-media" controls src="${escapeAttribute(assetUrl)}"></audio>`;
+        } else if (file.previewKind === 'video') {
+            previewHtml = `<video class="data-home-preview-media" controls src="${escapeAttribute(assetUrl)}"></video>`;
+        } else if (file.previewKind === 'pdf') {
+            previewHtml = `<iframe class="data-home-preview-frame" src="${escapeAttribute(assetUrl)}" title="${escapeAttribute(file.path)}"></iframe>`;
+        } else {
+            previewHtml = `
+                <div class="data-home-preview-card">
+                    <div class="mini-label">Binary file</div>
+                    <div>No inline preview is available for this format.</div>
+                </div>
+            `;
+        }
+
+        elements.dataHomePreview.innerHTML = `
+            <div class="data-home-preview-head">
+                <div class="mini-label">Asset preview</div>
+                <div class="inline-actions">
+                    <a class="btn ghost small" href="${escapeAttribute(assetUrl)}" target="_blank" rel="noreferrer">Open</a>
+                    <a class="btn ghost small" href="${escapeAttribute(downloadUrl)}" target="_blank" rel="noreferrer">Download</a>
+                </div>
+            </div>
+            ${previewHtml}
+        `;
+        elements.dataHomePreview.classList.add('active');
+    }
+
     function renderMetricPairs(metrics) {
         const pairs = Object.entries(metrics || {});
         if (!pairs.length) return '<div class="mini-label">No metrics</div>';
@@ -1682,6 +1840,13 @@
     function buildWebSocketUrl() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         return `${protocol}//${window.location.host}/`;
+    }
+
+    function buildDataHomeAssetUrl(filePath, download = false) {
+        const params = new URLSearchParams({ path: normalizeRelativePath(filePath) });
+        if (download) params.set('download', 'true');
+        if (state.apiKey) params.set('apiKey', state.apiKey);
+        return `${state.apiBase}/data-home/asset?${params.toString()}`;
     }
 
     function loadApiKey() {

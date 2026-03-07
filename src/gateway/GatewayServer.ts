@@ -36,6 +36,42 @@ export class GatewayServer {
     private clients: Set<WebSocket> = new Set();
     private requestBuckets: Map<string, { count: number; windowStart: number }> = new Map();
     private static readonly DATA_HOME_TEXT_LIMIT_BYTES = 1_000_000;
+    private static readonly DATA_HOME_MIME_TYPES: Record<string, string> = {
+        '.txt': 'text/plain; charset=utf-8',
+        '.md': 'text/markdown; charset=utf-8',
+        '.json': 'application/json; charset=utf-8',
+        '.jsonl': 'application/x-ndjson; charset=utf-8',
+        '.yaml': 'application/yaml; charset=utf-8',
+        '.yml': 'application/yaml; charset=utf-8',
+        '.xml': 'application/xml; charset=utf-8',
+        '.csv': 'text/csv; charset=utf-8',
+        '.log': 'text/plain; charset=utf-8',
+        '.ts': 'text/plain; charset=utf-8',
+        '.js': 'text/plain; charset=utf-8',
+        '.tsx': 'text/plain; charset=utf-8',
+        '.jsx': 'text/plain; charset=utf-8',
+        '.css': 'text/css; charset=utf-8',
+        '.html': 'text/html; charset=utf-8',
+        '.svg': 'image/svg+xml',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.bmp': 'image/bmp',
+        '.ico': 'image/x-icon',
+        '.mp3': 'audio/mpeg',
+        '.wav': 'audio/wav',
+        '.ogg': 'audio/ogg',
+        '.m4a': 'audio/mp4',
+        '.flac': 'audio/flac',
+        '.mp4': 'video/mp4',
+        '.webm': 'video/webm',
+        '.mov': 'video/quicktime',
+        '.avi': 'video/x-msvideo',
+        '.mkv': 'video/x-matroska',
+        '.pdf': 'application/pdf'
+    };
 
     constructor(agent: Agent, config: ConfigManager, gatewayConfig: Partial<GatewayConfig> = {}) {
         this.agent = agent;
@@ -287,12 +323,14 @@ export class GatewayServer {
     private describeDataHomeEntry(absolutePath: string, relativePath: string, depth: number): any {
         const stats = fs.statSync(absolutePath);
         const isDirectory = stats.isDirectory();
+        const mimeType = isDirectory ? undefined : this.getDataHomeMimeType(absolutePath);
         const entry: any = {
             name: relativePath ? path.basename(absolutePath) : path.basename(this.getDataHome()),
             path: relativePath,
             type: isDirectory ? 'directory' : 'file',
             size: isDirectory ? undefined : stats.size,
             modifiedAt: stats.mtime.toISOString(),
+            mimeType,
             protected: this.isProtectedDataHomePath(relativePath)
         };
 
@@ -322,6 +360,27 @@ export class GatewayServer {
         return entry;
     }
 
+    private getDataHomeMimeType(filePath: string): string {
+        const extension = path.extname(filePath).toLowerCase();
+        return GatewayServer.DATA_HOME_MIME_TYPES[extension] || 'application/octet-stream';
+    }
+
+    private isTextDataHomeFile(filePath: string, mimeType: string): boolean {
+        const extension = path.extname(filePath).toLowerCase();
+        if (mimeType.startsWith('text/')) return true;
+        if (mimeType.includes('json') || mimeType.includes('xml') || mimeType.includes('yaml')) return true;
+        return ['.ts', '.js', '.tsx', '.jsx', '.md', '.log', '.env', '.sh', '.ps1', '.bat'].includes(extension);
+    }
+
+    private getDataHomePreviewKind(mimeType: string): 'text' | 'image' | 'audio' | 'video' | 'pdf' | 'binary' {
+        if (mimeType.startsWith('image/')) return 'image';
+        if (mimeType.startsWith('audio/')) return 'audio';
+        if (mimeType.startsWith('video/')) return 'video';
+        if (mimeType === 'application/pdf') return 'pdf';
+        if (mimeType.startsWith('text/') || mimeType.includes('json') || mimeType.includes('xml') || mimeType.includes('yaml')) return 'text';
+        return 'binary';
+    }
+
     private getDataHomeSummary() {
         const root = this.getDataHome();
         const tree = this.describeDataHomeEntry(root, '', 1);
@@ -330,6 +389,19 @@ export class GatewayServer {
             protectedPatterns: ['.env', 'orcbot.lock', '*.pid'],
             tree
         };
+    }
+
+    private getAvailableLogFiles(): string[] {
+        const dataHome = this.getDataHome();
+        const workspaceRoot = process.cwd();
+        const candidates = [
+            path.join(workspaceRoot, 'logs', 'combined.log'),
+            path.join(dataHome, 'foreground.log'),
+            path.join(workspaceRoot, 'logs', 'error.log'),
+            path.join(workspaceRoot, 'foreground.log')
+        ];
+
+        return candidates.filter((candidate, index) => candidates.indexOf(candidate) === index && fs.existsSync(candidate));
     }
 
     private getConnectionsSummary() {
@@ -471,7 +543,7 @@ export class GatewayServer {
                 status: 'healthy',
                 description: 'Managed view over ~/.orcbot files including bootstrap docs, memory artifacts, tools, and workspace folders.',
                 metrics: { root: this.getDataHome() },
-                endpoints: ['/api/data-home/summary', '/api/data-home/tree', '/api/data-home/file', '/api/data-home/directory', '/api/data-home/rename', '/api/data-home/entry']
+                endpoints: ['/api/data-home/summary', '/api/data-home/tree', '/api/data-home/file', '/api/data-home/asset', '/api/data-home/directory', '/api/data-home/rename', '/api/data-home/entry']
             },
             {
                 id: 'skills',
@@ -711,7 +783,7 @@ export class GatewayServer {
             api: {
                 status: ['GET /api/status', 'GET /api/health', 'GET /api/gateway/capabilities', 'GET /api/system/info'],
                 dashboard: ['GET /api/dashboard/overview', 'GET /api/services', 'GET /api/services/:id'],
-                dataHome: ['GET /api/data-home/summary', 'GET /api/data-home/tree', 'GET /api/data-home/file', 'PUT /api/data-home/file', 'POST /api/data-home/directory', 'POST /api/data-home/rename', 'DELETE /api/data-home/entry'],
+                dataHome: ['GET /api/data-home/summary', 'GET /api/data-home/tree', 'GET /api/data-home/file', 'GET /api/data-home/asset', 'PUT /api/data-home/file', 'POST /api/data-home/directory', 'POST /api/data-home/rename', 'DELETE /api/data-home/entry'],
                 security: ['GET /api/gateway/token/status', 'POST /api/gateway/token/rotate'],
                 tasks: ['POST /api/tasks', 'GET /api/tasks', 'GET /api/tasks/:id', 'POST /api/tasks/:id/cancel', 'POST /api/tasks/clear', 'GET /api/queue/stats'],
                 chat: ['POST /api/chat/send', 'GET /api/chat/history', 'GET /api/chat/export', 'POST /api/chat/clear'],
@@ -840,17 +912,54 @@ export class GatewayServer {
                 if (!stats.isFile()) {
                     return res.status(400).json({ error: 'Requested path is not a file' });
                 }
-                if (stats.size > GatewayServer.DATA_HOME_TEXT_LIMIT_BYTES) {
-                    return res.status(413).json({ error: `File too large to read via gateway API (limit ${GatewayServer.DATA_HOME_TEXT_LIMIT_BYTES} bytes)` });
+                const mimeType = this.getDataHomeMimeType(target.absolutePath);
+                const isText = this.isTextDataHomeFile(target.absolutePath, mimeType);
+                const previewKind = this.getDataHomePreviewKind(mimeType);
+                let content: string | null = null;
+
+                if (isText) {
+                    if (stats.size > GatewayServer.DATA_HOME_TEXT_LIMIT_BYTES) {
+                        return res.status(413).json({ error: `File too large to read via gateway API (limit ${GatewayServer.DATA_HOME_TEXT_LIMIT_BYTES} bytes)` });
+                    }
+                    content = fs.readFileSync(target.absolutePath, 'utf8');
                 }
-                const content = fs.readFileSync(target.absolutePath, 'utf8');
+
                 res.json({
                     root: this.getDataHome(),
                     path: target.relativePath,
                     size: stats.size,
                     modifiedAt: stats.mtime.toISOString(),
+                    mimeType,
+                    isText,
+                    previewKind,
                     content
                 });
+            } catch (error: any) {
+                res.status(400).json({ error: error.message });
+            }
+        });
+
+        router.get('/data-home/asset', (req: Request, res: Response) => {
+            try {
+                const requestedPath = String(req.query.path || '').trim();
+                if (!requestedPath) {
+                    return res.status(400).json({ error: 'path query is required' });
+                }
+                const target = this.resolveDataHomeTarget(requestedPath);
+                if (!fs.existsSync(target.absolutePath)) {
+                    return res.status(404).json({ error: 'File not found' });
+                }
+                const stats = fs.statSync(target.absolutePath);
+                if (!stats.isFile()) {
+                    return res.status(400).json({ error: 'Requested path is not a file' });
+                }
+
+                const mimeType = this.getDataHomeMimeType(target.absolutePath);
+                const dispositionMode = String(req.query.download || '').toLowerCase() === 'true' ? 'attachment' : 'inline';
+                res.setHeader('Content-Type', mimeType);
+                res.setHeader('Content-Length', String(stats.size));
+                res.setHeader('Content-Disposition', `${dispositionMode}; filename="${path.basename(target.absolutePath).replace(/"/g, '')}"`);
+                res.sendFile(target.absolutePath);
             } catch (error: any) {
                 res.status(400).json({ error: error.message });
             }
@@ -1269,11 +1378,11 @@ export class GatewayServer {
             const lines = parseInt(req.query.lines as string) || 200;
             const level = req.query.level as string; // Filter by log level (info, error, warn, debug)
             const search = req.query.search as string; // Search term
-            const dataDir = this.getDataHome();
-            const logPath = path.join(dataDir, 'foreground.log');
+            const availableLogFiles = this.getAvailableLogFiles();
+            const logPath = availableLogFiles[0];
 
-            if (!fs.existsSync(logPath)) {
-                return res.json({ logs: [], total: 0 });
+            if (!logPath) {
+                return res.json({ logs: [], total: 0, source: null, sources: [] });
             }
 
             try {
@@ -1299,7 +1408,9 @@ export class GatewayServer {
                 res.json({ 
                     logs: recentLogs, 
                     total,
-                    filtered: !!level || !!search
+                    filtered: !!level || !!search,
+                    source: logPath,
+                    sources: availableLogFiles
                 });
             } catch (error: any) {
                 res.status(500).json({ error: error.message });

@@ -21,7 +21,7 @@
     --radius-lg: 20px;
     --radius-md: 14px;
     --radius-sm: 10px;
-    --sidebar-width: 260px;
+    --sidebar-width: 308px;
 }
 
 * {
@@ -71,7 +71,7 @@ pre {
     position: sticky;
     top: 0;
     height: calc(100vh - 32px);
-    padding: 26px 18px;
+    padding: 24px 20px;
     border-right: 1px solid var(--line);
     background: rgba(255, 250, 242, 0.72);
     backdrop-filter: blur(14px);
@@ -84,21 +84,39 @@ pre {
 .brand-block {
     display: flex;
     align-items: center;
-    gap: 14px;
-    padding: 8px 10px;
+    gap: 16px;
+    padding: 16px 18px;
+    border: 1px solid rgba(15, 138, 108, 0.12);
+    border-radius: 24px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(248, 243, 233, 0.9));
+    box-shadow: 0 16px 36px rgba(18, 30, 36, 0.08);
 }
 
 .brand-mark {
-    width: 48px;
-    height: 48px;
-    border-radius: 16px;
+    width: 60px;
+    height: 60px;
+    border-radius: 20px;
     display: grid;
     place-items: center;
     background: linear-gradient(145deg, var(--accent), #35b88f);
     color: white;
     font-weight: 700;
+    font-size: 26px;
     letter-spacing: 0.06em;
     box-shadow: 0 12px 24px rgba(15, 138, 108, 0.22);
+}
+
+.brand-block > div:last-child {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+}
+
+.brand-block h1 {
+    font-size: clamp(2.3rem, 2vw + 1rem, 3.35rem);
+    line-height: 0.9;
+    letter-spacing: -0.05em;
+    text-wrap: balance;
 }
 
 .eyebrow {
@@ -156,6 +174,7 @@ pre {
     margin-top: auto;
     display: grid;
     gap: 10px;
+    padding-top: 8px;
 }
 
 .connection-row {
@@ -247,7 +266,7 @@ pre {
     padding: 30px 36px 40px;
     gap: 20px;
     align-content: start;
-    max-width: 1680px;
+    max-width: 1880px;
     width: 100%;
     margin: 0 auto;
 }
@@ -665,8 +684,8 @@ pre {
 
 .ops-canvas {
     display: grid;
-    grid-template-columns: repeat(12, minmax(0, 1fr));
-    gap: 20px;
+    grid-template-columns: repeat(14, minmax(0, 1fr));
+    gap: 22px;
     align-items: stretch;
 }
 
@@ -676,7 +695,7 @@ pre {
 
 .canvas-panel {
     min-height: 0;
-    height: clamp(290px, 36vh, 390px);
+    height: clamp(340px, 41vh, 540px);
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
 }
@@ -686,11 +705,11 @@ pre {
 }
 
 .canvas-panel[data-panel="services"] {
-    grid-column: span 3;
+    grid-column: span 4;
 }
 
 .canvas-panel[data-panel="inspector"] {
-    grid-column: span 3;
+    grid-column: span 4;
 }
 
 .canvas-panel[data-panel="events"],
@@ -709,11 +728,23 @@ pre {
 .log-surface {
     background: #132028;
     color: #d4f6ee;
-    padding: 16px;
+    padding: 18px 20px;
     border-radius: var(--radius-md);
     border: 1px solid rgba(255, 255, 255, 0.06);
     white-space: pre-wrap;
     word-break: break-word;
+}
+
+.log-summary {
+    display: grid;
+    gap: 12px;
+    padding: 18px 20px 0;
+}
+
+.log-surface {
+    min-height: 62vh;
+    line-height: 1.6;
+    font-size: 13px;
 }
 
 .code-surface.tall {
@@ -873,7 +904,7 @@ pre {
 }
 
 .canvas-panel .code-surface {
-    max-height: 170px;
+    max-height: 260px;
     overflow: auto;
 }
 
@@ -1030,6 +1061,59 @@ pre {
     background: rgba(249, 245, 236, 0.92);
 }
 
+.data-home-preview {
+    display: none;
+    gap: 12px;
+}
+
+.data-home-preview.active {
+    display: grid;
+}
+
+.data-home-preview-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.data-home-preview-card,
+.data-home-preview-image,
+.data-home-preview-media,
+.data-home-preview-frame {
+    width: 100%;
+    border-radius: 16px;
+    border: 1px solid var(--line);
+    background: rgba(255, 252, 246, 0.98);
+}
+
+.data-home-preview-card {
+    padding: 16px;
+    display: grid;
+    gap: 8px;
+}
+
+.data-home-preview-image,
+.data-home-preview-media,
+.data-home-preview-frame {
+    min-height: 220px;
+}
+
+.data-home-preview-image {
+    object-fit: contain;
+    max-height: 420px;
+    background: rgba(18, 30, 36, 0.04);
+}
+
+.data-home-preview-media {
+    background: rgba(18, 30, 36, 0.04);
+}
+
+.data-home-preview-frame {
+    height: 460px;
+}
+
 @media (max-width: 1220px) {
     .split-grid,
     .workspace-grid.two-up,
@@ -1094,6 +1178,10 @@ pre {
         border-right: none;
         border-bottom: 1px solid var(--line);
         overflow: visible;
+    }
+
+    .brand-block {
+        padding: 14px 16px;
     }
 
     .topbar,
