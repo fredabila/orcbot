@@ -286,9 +286,10 @@ class AgentWorkerProcess {
 1. You are an INDEPENDENT worker agent. Complete this task using YOUR OWN capabilities (web_search, browser tools, write_file, create_directory, run_command, rag_ingest, rag_search, etc.).
 2. Do NOT repeatedly call 'get_agent_messages' expecting content from other agents - if content isn't there after 1-2 checks, PROCEED WITH YOUR OWN WORK.
 3. If the task mentions "content from another agent" but none exists, generate the content yourself or use placeholder content.
-4. When DONE, use 'complete_delegated_task("${taskId}", "<your_findings_summary>")' to report results.
+4. When DONE, finish with a clear final answer containing your findings or outcome. The parent orchestrator automatically captures your final result from task completion.
 5. DO NOT get stuck in loops checking for external data - take action with what you have.
-6. You have RAG capabilities: use 'rag_ingest' to store knowledge and 'rag_search' to retrieve it. Use 'update_learning', 'update_world', and 'update_journal' to record learnings and reflections.${platformNote}`;
+6. Do NOT rely on 'complete_delegated_task' or 'send_agent_message' from inside the worker unless the task explicitly provides a real working path for them.
+7. You have RAG capabilities: use 'rag_ingest' to store knowledge and 'rag_search' to retrieve it. Use 'update_learning', 'update_world', and 'update_journal' to record learnings and reflections.${platformNote}`;
 
 
             // Push the task to the worker's action queue and process it

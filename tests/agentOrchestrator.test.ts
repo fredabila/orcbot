@@ -228,4 +228,37 @@ describe('AgentOrchestrator worker synchronization safety', () => {
         expect(refreshedTask.error).toBe('Cancelled due to superseding user message');
         expect(cancelledReasons.has(task.id)).toBe(false);
     });
+
+    it('emits completed worker events with task metadata for follow-up routing', () => {
+        const dir = makeTempDir('orcbot-orch-');
+        dirs.push(dir);
+
+        const orchestrator = new AgentOrchestrator(dir, 'primary-test');
+        const agent = orchestrator.spawnAgent({
+            name: 'worker-sync-e',
+            role: 'worker',
+            autoStart: false
+        });
+
+        const task = orchestrator.createTask('Return a delegated result', 7, {
+            notifyParent: true,
+            replyContext: { source: 'telegram', sourceId: '12345' }
+        });
+
+        let completionEvent: any = null;
+        orchestrator.once('worker:task-completed', (event) => {
+            completionEvent = event;
+        });
+
+        const internal = orchestrator as any;
+        internal.handleWorkerMessage(agent.id, {
+            type: 'task-completed',
+            taskId: task.id,
+            payload: { result: 'done' }
+        });
+
+        expect(completionEvent?.task?.metadata?.notifyParent).toBe(true);
+        expect(completionEvent?.task?.metadata?.replyContext?.source).toBe('telegram');
+        expect(completionEvent?.result).toBe('done');
+    });
 });

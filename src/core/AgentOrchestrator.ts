@@ -32,6 +32,7 @@ export interface OrchestratorTask {
     error?: string;
     createdAt: string;
     completedAt?: string;
+    metadata?: Record<string, any>;
 }
 
 export interface AgentMessage {
@@ -347,12 +348,20 @@ export class AgentOrchestrator extends EventEmitter {
                             taskId: message.taskId,
                             taskDescription: task.description,
                             result: result || 'Task completed',
+                            metadata: task.metadata,
                             completedAt: new Date().toISOString()
                         });
                     }
+
+                    this.emit('worker:task-completed', {
+                        agentId,
+                        taskId: message.taskId,
+                        result,
+                        task
+                    });
+                    logger.info(`Orchestrator: Worker ${agentId} completed task ${message.taskId}`);
+                    break;
                 }
-                this.emit('worker:task-completed', { agentId, taskId: message.taskId, result: message.payload?.result });
-                logger.info(`Orchestrator: Worker ${agentId} completed task ${message.taskId}`);
                 break;
 
             case 'task-failed':
@@ -368,12 +377,20 @@ export class AgentOrchestrator extends EventEmitter {
                             taskId: message.taskId,
                             taskDescription: task.description,
                             error: message.error || 'Unknown error',
+                            metadata: task.metadata,
                             failedAt: new Date().toISOString()
                         });
                     }
+
+                    this.emit('worker:task-failed', {
+                        agentId,
+                        taskId: message.taskId,
+                        error: message.error,
+                        task
+                    });
+                    logger.warn(`Orchestrator: Worker ${agentId} failed task ${message.taskId}: ${message.error}`);
+                    break;
                 }
-                this.emit('worker:task-failed', { agentId, taskId: message.taskId, error: message.error });
-                logger.warn(`Orchestrator: Worker ${agentId} failed task ${message.taskId}: ${message.error}`);
                 break;
 
             case 'status':
@@ -595,14 +612,15 @@ export class AgentOrchestrator extends EventEmitter {
     /**
      * Create a task for distribution
      */
-    public createTask(description: string, priority: number = 5): OrchestratorTask {
+    public createTask(description: string, priority: number = 5, metadata?: Record<string, any>): OrchestratorTask {
         const task: OrchestratorTask = {
             id: `task-${uuidv4().slice(0, 8)}`,
             description,
             assignedTo: null,
             status: 'pending',
             priority,
-            createdAt: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            metadata
         };
 
         this.tasks.set(task.id, task);

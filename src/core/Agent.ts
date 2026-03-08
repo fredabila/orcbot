@@ -17,7 +17,7 @@ import { configManagementSkill } from '../skills/configManagement';
 import { WebBrowser } from '../tools/WebBrowser';
 import { ComputerUse } from '../tools/ComputerUse';
 import { WorkerProfileManager } from './WorkerProfile';
-import { AgentOrchestrator } from './AgentOrchestrator';
+import { AgentOrchestrator, OrchestratorTask } from './AgentOrchestrator';
 import { RuntimeTuner } from './RuntimeTuner';
 import { BootstrapManager } from './BootstrapManager';
 import { UsagePing } from './UsagePing';
@@ -55,6 +55,7 @@ import { BlockReviewer, ReviewResult, BlockVerdict } from './BlockReviewer';
 import { parseBrowserPerformActions } from './BrowserPerformParser';
 import { resolveBrowserScratchpadTarget } from './BrowserScratchpad';
 import { collectCompletionAuditIssues } from './CompletionAudit';
+import { buildDelegatedTaskFollowupAction } from './DelegatedTaskFollowup';
 
 /**
  * Tracks users who have interacted with the bot across channels.
@@ -804,6 +805,80 @@ export class Agent {
 
     public getCurrentActionId(): string | null {
         return this.currentActionId;
+    }
+
+    private getCurrentAction(): Action | undefined {
+        return this.currentActionId ? this.actionQueue.get(this.currentActionId) : undefined;
+    }
+
+    private buildDelegatedTaskMetadata(delegatedDescription: string, delegationKind: string): Record<string, any> | undefined {
+        const currentAction = this.getCurrentAction();
+        const payload = currentAction?.payload || {};
+        const source = String(payload.source || '').trim();
+        const sourceId = String(payload.sourceId || payload.chatId || '').trim();
+        const canNotifyParent = !!source && (source === 'gateway-chat' || !!sourceId);
+
+        if (!currentAction && !canNotifyParent) {
+            return undefined;
+        }
+
+        return {
+            delegationKind,
+            delegatedDescription,
+            originalRequest: String(payload.description || delegatedDescription || '').trim(),
+            createdByActionId: currentAction?.id,
+            notifyParent: canNotifyParent,
+            replyContext: canNotifyParent ? {
+                source,
+                sourceId,
+                chatId: payload.chatId,
+                userId: payload.userId,
+                senderName: payload.senderName,
+                sessionScopeId: payload.sessionScopeId,
+                subject: payload.subject,
+                inReplyTo: payload.inReplyTo,
+                references: payload.references,
+                isAdmin: payload.isAdmin
+            } : undefined
+        };
+    }
+
+    private async queueDelegatedTaskFollowup(params: {
+        task: OrchestratorTask;
+        agentId: string;
+        result?: string;
+        error?: string;
+    }): Promise<void> {
+        const agent = this.orchestrator.getAgent(params.agentId);
+        const outcome = params.error ? 'failed' as const : 'completed' as const;
+        const followupAction = buildDelegatedTaskFollowupAction({
+            task: params.task,
+            agentId: params.agentId,
+            workerName: agent?.name,
+            outcome,
+            result: params.result,
+            error: params.error
+        });
+
+        if (!followupAction) {
+            return;
+        }
+
+        const duplicate = this.actionQueue.getQueue().some(action =>
+            action.payload?.delegatedFollowup === true &&
+            action.payload?.delegatedTaskId === params.task.id &&
+            action.payload?.delegatedTaskOutcome === outcome &&
+            action.status !== 'failed' &&
+            action.status !== 'completed'
+        );
+
+        if (duplicate) {
+            logger.info(`Agent: Skipping duplicate delegated follow-up for task ${params.task.id}`);
+            return;
+        }
+
+        logger.info(`Agent: Queueing delegated follow-up for task ${params.task.id} from worker ${params.agentId}`);
+        this.actionQueue.push(followupAction);
     }
 
     public getBusyLanes(): Set<'user' | 'autonomy'> {
@@ -6854,7 +6929,11 @@ Be thorough and academic.`;
 
                     if (!description) return 'Error: Missing task description.';
 
-                    const task = this.orchestrator.createTask(description, priority);
+                    const task = this.orchestrator.createTask(
+                        description,
+                        priority,
+                        this.buildDelegatedTaskMetadata(description, 'delegate_task')
+                    );
 
                     if (agentId) {
                         const assigned = this.orchestrator.assignTask(task.id, agentId);
@@ -7050,11 +7129,15 @@ Be thorough and academic.`;
 
                     // 3. Delegate the task
                     // We wrap the goal in a specific instruction for the worker
-                    const workerInstruction = `BROWSING TASK: ${goal}\n\nINSTRUCTIONS:\n1. Use browser tools to achieve this goal.\n2. Be efficient - use browser_perform or browser_click_text where possible.\n3. When finished, use send_agent_message to report the result back to the primary agent.\n4. If you fail, report the error.`;
+                    const workerInstruction = `BROWSING TASK: ${goal}\n\nINSTRUCTIONS:\n1. Use browser tools to achieve this goal.\n2. Be efficient - use browser_perform or browser_click_text where possible.\n3. Finish with a clear final answer containing the useful result for the parent agent to relay.\n4. If you fail, explain the failure plainly.\n5. Do not rely on send_agent_message or complete_delegated_task unless the task explicitly provides a working path.`;
                     
                     try {
                         // Create task directly to get the ID
-                        const task = this.orchestrator.createTask(workerInstruction, 8); // High priority
+                        const task = this.orchestrator.createTask(
+                            workerInstruction,
+                            8,
+                            this.buildDelegatedTaskMetadata(goal, 'browse_async')
+                        ); // High priority
                         const assigned = this.orchestrator.assignTask(task.id, browserAgent.id);
                         
                         if (assigned) {
@@ -10157,6 +10240,28 @@ REFLECTION: <1-2 sentences>`;
     private setupEventListeners() {
         this.setupEventBusListeners();
 
+        this.orchestrator.on('worker:task-completed', (data: any) => {
+            const task = data?.task as OrchestratorTask | undefined;
+            if (!task) return;
+
+            void this.queueDelegatedTaskFollowup({
+                task,
+                agentId: String(data.agentId || ''),
+                result: typeof data.result === 'string' ? data.result : undefined
+            }).catch(e => logger.error(`Agent: Failed to queue delegated completion follow-up: ${e}`));
+        });
+
+        this.orchestrator.on('worker:task-failed', (data: any) => {
+            const task = data?.task as OrchestratorTask | undefined;
+            if (!task) return;
+
+            void this.queueDelegatedTaskFollowup({
+                task,
+                agentId: String(data.agentId || ''),
+                error: typeof data.error === 'string' ? data.error : task.error
+            }).catch(e => logger.error(`Agent: Failed to queue delegated failure follow-up: ${e}`));
+        });
+
         eventBus.on('scheduler:tick', async () => {
             try {
                 await this.processNextAction();
@@ -13186,7 +13291,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             // Skip for heartbeats — no user initiated this task
             // On retry attempts, say "trying again" rather than "working on it" so the
             // user knows this is a recovery pass, not a fresh start.
-            if (!isSimpleTask && action.payload.source) {
+            if (!isSimpleTask && action.payload.source && !action.payload?.suppressProgressFeedback) {
                 const isRetryAttempt = (action.retry?.attempts ?? 0) > 0;
                 if (isRetryAttempt) {
                     const progressSent = await this.sendProgressFeedback(action, 'retry', `Trying again on your request...`);
@@ -13402,7 +13507,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 // PERIODIC PROGRESS FEEDBACK: For long-running tasks, send the user
                 // periodic "still working" feedback so they know we haven't stalled.
                 // Fires once after 8 consecutive silent steps (stepsSinceLastMessage resets on send).
-                if (!isSimpleTask && currentStep > 1 && stepsSinceLastMessage >= progressIntervalSteps && action.payload.source) {
+                if (!isSimpleTask && currentStep > 1 && stepsSinceLastMessage >= progressIntervalSteps && action.payload.source && !action.payload?.suppressProgressFeedback) {
                     const progressSent = await this.sendProgressFeedback(action, 'working', `Still working on your request (step ${currentStep})...`);
                     if (progressSent) {
                         lastUserDeliveryAtMs = Date.now();
