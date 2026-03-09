@@ -467,9 +467,14 @@ export async function piAiLogin(providerKey: string): Promise<void> {
         if (creds) {
             savePiAiAuth(providerKey, creds);
             logger.info(`PiAIAdapter: Saved credentials for ${providerKey}`);
+            console.log(`\nSaved OAuth credentials for ${providerKey} to ${PI_AI_AUTH}`);
+            console.log(`You can now use ${providerKey} from this OrcBot instance.\n`);
+        } else {
+            console.log(`\nOAuth login for ${providerKey} did not return credentials.\n`);
         }
     } catch (e) {
         logger.error(`PiAIAdapter: Login failed — ${(e as Error).message}`);
+        console.error(`\nOAuth login failed for ${providerKey}: ${(e as Error).message}\n`);
     }
 }
 
