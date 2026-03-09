@@ -3716,7 +3716,7 @@ sudo journalctl -u orcbot-humanoid -f`}</CodeBlock>
           <a href="https://github.com/fredabila/orcbot" target="_blank" rel="noopener noreferrer">GitHub</a>
           <Link to="/">Home</Link>
           <Link to="/deploy">Deploy</Link>
-          <a href="https://fredabila.github.io/orcbot/docs/" target="_blank" rel="noopener noreferrer">Documentation</a>
+          <a href="https://docs.orcbot.buzzchat.site/" target="_blank" rel="noopener noreferrer">Documentation</a>
         </div>
       </main>
 

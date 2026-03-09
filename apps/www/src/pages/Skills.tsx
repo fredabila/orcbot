@@ -6,7 +6,7 @@ import './Skills.css';
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 
-type Tag = 'messaging' | 'browser' | 'system' | 'memory' | 'ai' | 'orchestration' | 'scheduling' | 'rag' | 'computer' | 'tuning';
+type Tag = 'messaging' | 'browser' | 'system' | 'memory' | 'ai' | 'orchestration' | 'scheduling' | 'rag' | 'computer' | 'tuning' | 'email';
 
 interface Skill {
   name: string;
@@ -25,6 +25,7 @@ const CATEGORIES: { id: Tag | 'all'; label: string; icon: string }[] = [
   { id: 'ai',           label: 'AI & Analysis',        icon: '🤖' },
   { id: 'computer',     label: 'Computer Use',         icon: '🖥️' },
   { id: 'orchestration',label: 'Multi-Agent',          icon: '👥' },
+  { id: 'email',        label: 'Email & Slack',         icon: '📧' },
   { id: 'scheduling',   label: 'Scheduling',           icon: '🗓️' },
   { id: 'tuning',       label: 'Self-Tuning',          icon: '🔧' },
 ];
@@ -132,6 +133,148 @@ const SKILLS: Skill[] = [
   { name: 'get_tuning_state',    sig: 'get_tuning_state()',                           desc: 'View current tuning configuration and all learned domain settings.',              tags: ['tuning'] },
   { name: 'get_tuning_history',  sig: 'get_tuning_history(limit?)',                   desc: 'See recent tuning changes and their impact outcomes.',                            tags: ['tuning'] },
   { name: 'reset_tuning',        sig: 'reset_tuning(category?)',                      desc: 'Reset browser, workflow, LLM, or all tuning to defaults.',                       tags: ['tuning'] },
+  // ── Telegram Advanced ──
+  { name: 'telegram_send_buttons',sig: 'telegram_send_buttons(chatId, message, buttons)',desc: 'Send Telegram message with inline keyboard buttons for user choice.',             tags: ['messaging'] },
+  { name: 'telegram_edit_message',sig: 'telegram_edit_message(chatId, messageId, newText)',desc: 'Edit a previously-sent Telegram message in-place.',                             tags: ['messaging'] },
+  { name: 'telegram_send_poll',  sig: 'telegram_send_poll(chatId, question, options, isAnonymous?)',desc: 'Create a native Telegram poll for structured user input.',              tags: ['messaging'] },
+  { name: 'telegram_react',      sig: 'telegram_react(chatId, messageId, emoji)',     desc: 'React to a Telegram message with an emoji.',                                      tags: ['messaging'] },
+  { name: 'telegram_pin_message',sig: 'telegram_pin_message(chatId, messageId, silent?)',desc: 'Pin a message in a Telegram chat.',                                             tags: ['messaging'] },
+  // ── Email & Slack ──
+  { name: 'send_email',          sig: 'send_email(to, subject, message, inReplyTo?, references?)',desc: 'Send email via configured SMTP with threading support.',                  tags: ['email'] },
+  { name: 'search_emails',       sig: 'search_emails({ query?, sender?, subject?, daysAgo?, unreadOnly?, limit? })',desc: 'Search inbox for emails matching criteria.',            tags: ['email'] },
+  { name: 'fetch_email',         sig: 'fetch_email(uid)',                             desc: 'Fetch the full content of a specific email by UID.',                               tags: ['email'] },
+  { name: 'index_emails_to_knowledge_base',sig: 'index_emails_to_knowledge_base({ query?, sender?, subject?, daysAgo?, limit?, collection? })',desc: 'Index emails into the Knowledge Store for semantic search.', tags: ['email', 'rag'] },
+  { name: 'generate_email_report',sig: 'generate_email_report({ topic, emails?, sender?, subject?, query?, daysAgo? })',desc: 'Analyze emails and generate a synthesized report.',  tags: ['email', 'ai'] },
+  { name: 'send_slack',          sig: 'send_slack(channel_id, message)',              desc: 'Send a message to a Slack channel or DM.',                                        tags: ['email'] },
+  { name: 'send_slack_file',     sig: 'send_slack_file(channel_id, file_path, caption?)',desc: 'Send a file to a Slack channel with optional caption.',                         tags: ['email'] },
+  { name: 'react_slack',         sig: 'react_slack(channel_id, message_id, emoji)',   desc: 'React to a Slack message with an emoji.',                                          tags: ['email'] },
+  // ── WhatsApp Advanced ──
+  { name: 'search_whatsapp_contacts',sig: 'search_whatsapp_contacts(query)',          desc: 'Search for WhatsApp contacts by name or number.',                                 tags: ['messaging'] },
+  // ── Memory Advanced ──
+  { name: 'memory_search',       sig: 'memory_search(query)',                         desc: 'Search across all memory files with semantic + keyword hybrid.',                   tags: ['memory'] },
+  { name: 'memory_get',          sig: 'memory_get(path)',                             desc: 'Retrieve full content of a specific memory file.',                                 tags: ['memory'] },
+  { name: 'memory_write',        sig: 'memory_write(content, type?, category?)',      desc: 'Write entry to daily log or long-term memory.',                                    tags: ['memory'] },
+  { name: 'memory_stats',        sig: 'memory_stats()',                               desc: 'Get statistics about the memory system.',                                          tags: ['memory'] },
+  { name: 'search_memory_logs',  sig: 'search_memory_logs(query)',                    desc: 'Search memory log files by keyword.',                                              tags: ['memory'] },
+  { name: 'list_memory_logs',    sig: 'list_memory_logs()',                           desc: 'List available memory log files.',                                                 tags: ['memory'] },
+  { name: 'read_memory_log',     sig: 'read_memory_log(file)',                        desc: 'Read a specific memory log file.',                                                 tags: ['memory'] },
+  // ── Canvas / Dashboard ──
+  { name: 'render_canvas',       sig: 'render_canvas({ html, js?, css?, title? })',   desc: 'Render live interactive HTML/JS workspace in the dashboard.',                      tags: ['ai', 'system'] },
+  // ── Image & Media Generation ──
+  { name: 'generate_image',      sig: 'generate_image(prompt, options?)',             desc: 'Generate an image from a text prompt using AI.',                                   tags: ['ai', 'messaging'] },
+  { name: 'send_image',          sig: 'send_image(to, image_path, caption?, channel?)',desc: 'Send an image to a specified channel.',                                           tags: ['messaging'] },
+  // ── Model Management ──
+  { name: 'list_available_models',sig: 'list_available_models()',                     desc: 'List all available LLM models configured.',                                        tags: ['ai', 'system'] },
+  { name: 'switch_model',        sig: 'switch_model(model_name)',                     desc: 'Switch to a different LLM model.',                                                 tags: ['ai', 'system'] },
+  // ── Shell & Terminal ──
+  { name: 'shell_start',         sig: 'shell_start(shell_type?)',                     desc: 'Start a new interactive shell session.',                                           tags: ['system'] },
+  { name: 'shell_poll',          sig: 'shell_poll(session_id)',                       desc: 'Poll for output from a running shell session.',                                    tags: ['system'] },
+  { name: 'shell_read',          sig: 'shell_read(session_id)',                       desc: 'Read all output from a shell session.',                                            tags: ['system'] },
+  { name: 'shell_send',          sig: 'shell_send(session_id, command)',              desc: 'Send a command to a running shell session.',                                       tags: ['system'] },
+  { name: 'shell_stop',          sig: 'shell_stop(session_id)',                       desc: 'Stop a shell session.',                                                            tags: ['system'] },
+  { name: 'shell_list',          sig: 'shell_list()',                                 desc: 'List all running shell sessions.',                                                 tags: ['system'] },
+  { name: 'orcbot_control',      sig: 'orcbot_control(action, args?)',                desc: 'Internal control for OrcBot daemon operations.',                                   tags: ['system'] },
+  { name: 'system_check',        sig: 'system_check()',                               desc: 'Run a comprehensive system health check.',                                         tags: ['system'] },
+  { name: 'manage_config',       sig: 'manage_config({ action, key?, value? })',      desc: 'Manage agent configuration with approval workflow.',                                tags: ['system'] },
+  // ── Tool Management ──
+  { name: 'install_tool',        sig: 'install_tool(tool_name, url)',                 desc: 'Install a new tool from URL or registry.',                                         tags: ['system'] },
+  { name: 'list_tools',          sig: 'list_tools()',                                 desc: 'List all installed tools and plugins.',                                             tags: ['system'] },
+  { name: 'activate_tool',       sig: 'activate_tool(tool_name)',                     desc: 'Activate an installed tool.',                                                      tags: ['system'] },
+  { name: 'approve_tool',        sig: 'approve_tool(tool_name)',                      desc: 'Approve a tool for use.',                                                          tags: ['system'] },
+  { name: 'read_tool_readme',    sig: 'read_tool_readme(tool_name)',                  desc: 'Read documentation for a tool.',                                                   tags: ['system'] },
+  { name: 'run_tool_command',    sig: 'run_tool_command(tool_name, command, args?)',   desc: 'Run a command via an installed tool.',                                             tags: ['system'] },
+  { name: 'uninstall_tool',      sig: 'uninstall_tool(tool_name)',                    desc: 'Uninstall a tool.',                                                                tags: ['system'] },
+  { name: 'tweak_skill',         sig: 'tweak_skill(skill_name, parameter, new_value)',desc: 'Tweak runtime parameters of an existing skill.',                                   tags: ['system', 'tuning'] },
+  // ── Agent Skill Management ──
+  { name: 'install_skill',       sig: 'install_skill(source)',                        desc: 'Install Agent Skill from GitHub, gist, URL, or npm package.',                      tags: ['system'] },
+  { name: 'create_skill',        sig: 'create_skill({ name, description, usage, content, category? })',desc: 'Create a knowledge-based skill (instructions/workflows).',          tags: ['system'] },
+  { name: 'activate_skill',      sig: 'activate_skill(skill_names)',                  desc: 'Enable or activate installed agent skills.',                                       tags: ['system'] },
+  { name: 'list_agent_skills',   sig: 'list_agent_skills()',                          desc: 'List all available agent skills.',                                                 tags: ['system'] },
+  { name: 'read_skill_resource', sig: 'read_skill_resource(skill_name, resource?)',   desc: 'Read a resource file from an agent skill.',                                        tags: ['system'] },
+  { name: 'validate_skill',      sig: 'validate_skill(skill_name)',                   desc: 'Validate the syntax and structure of a skill.',                                    tags: ['system'] },
+  { name: 'uninstall_agent_skill',sig: 'uninstall_agent_skill(skill_name)',           desc: 'Uninstall or remove an agent skill.',                                              tags: ['system'] },
+  { name: 'run_skill_script',    sig: 'run_skill_script(skill_name, script_name, args?)',desc: 'Execute a named script from a skill.',                                         tags: ['system'] },
+  { name: 'write_skill_file',    sig: 'write_skill_file(skill_name, file_path, content)',desc: 'Write a file into a skill\'s directory.',                                       tags: ['system'] },
+  // ── Browser Advanced ──
+  { name: 'browser_set_viewport',sig: 'browser_set_viewport(width, height, scale?)', desc: 'Set the browser viewport size.',                                                    tags: ['browser'] },
+  { name: 'browser_run_script',  sig: 'browser_run_script(script)',                   desc: 'Run JavaScript in the browser and return the result.',                              tags: ['browser'] },
+  { name: 'browser_debug_overlay',sig: 'browser_debug_overlay(action?, text?)',       desc: 'Show or hide a debug overlay on the page.',                                        tags: ['browser'] },
+  { name: 'browser_click_text',  sig: 'browser_click_text(text, options?)',           desc: 'Click an element containing specific text.',                                        tags: ['browser'] },
+  { name: 'browser_find_element',sig: 'browser_find_element(selector, options?)',     desc: 'Find an element and get its metadata.',                                             tags: ['browser'] },
+  { name: 'browser_type_into_label',sig: 'browser_type_into_label(label_text, value)',desc: 'Type into an input field associated with a label.',                                 tags: ['browser'] },
+  { name: 'browser_cleanup',     sig: 'browser_cleanup()',                            desc: 'Clean up browser resources and close the page.',                                    tags: ['browser'] },
+  { name: 'browser_perform',     sig: 'browser_perform(actions)',                     desc: 'Execute a batch of browser actions sequentially.',                                  tags: ['browser'] },
+  { name: 'browser_trace_start', sig: 'browser_trace_start()',                        desc: 'Start Playwright trace recording.',                                                 tags: ['browser'] },
+  { name: 'browser_trace_stop',  sig: 'browser_trace_stop()',                         desc: 'Stop trace recording and save the trace file.',                                     tags: ['browser'] },
+  { name: 'browser_api_intercept',sig: 'browser_api_intercept()',                     desc: 'Enable API interception to discover XHR/fetch endpoints.',                           tags: ['browser'] },
+  { name: 'browser_api_list',    sig: 'browser_api_list(json_only?)',                 desc: 'List all API endpoints discovered by interception.',                                 tags: ['browser'] },
+  { name: 'browser_extract_content',sig: 'browser_extract_content()',                 desc: 'Extract readable text from the current page.',                                      tags: ['browser'] },
+  { name: 'browser_extract_data',sig: 'browser_extract_data(selector, attribute?, limit?)',desc: 'Extract structured data from CSS-matched elements.',                            tags: ['browser'] },
+  { name: 'browser_fill_form',   sig: 'browser_fill_form(fields, submit_selector?)', desc: 'Batch fill multiple form fields and optionally submit.',                              tags: ['browser'] },
+  // ── Firecrawl Cloud Browsing ──
+  { name: 'firecrawl_scrape',    sig: 'firecrawl_scrape(url, format?, options?)',     desc: 'Scrape a URL using Firecrawl cloud renderer.',                                      tags: ['browser'] },
+  { name: 'firecrawl_search',    sig: 'firecrawl_search(query, limit?, sources?, scrape?, tbs?)',desc: 'Web search via Firecrawl with optional content scraping.',                tags: ['browser'] },
+  { name: 'firecrawl_browser',   sig: 'firecrawl_browser(command, session_id?)',      desc: 'Execute commands in a Firecrawl cloud browser sandbox.',                             tags: ['browser'] },
+  { name: 'firecrawl_crawl',     sig: 'firecrawl_crawl(url, limit?, max_depth?, wait?, output?)',desc: 'Crawl an entire website using Firecrawl.',                                tags: ['browser'] },
+  { name: 'firecrawl_agent',     sig: 'firecrawl_agent(prompt, urls?, schema?, wait?)',desc: 'AI-powered structured data extraction from the web.',                               tags: ['browser', 'ai'] },
+  // ── File System & Code Execution ──
+  { name: 'write_file',          sig: 'write_file(path, content, mode?)',             desc: 'Write or append content to a file.',                                                tags: ['system'] },
+  { name: 'read_file',           sig: 'read_file(path, startLine?, endLine?)',        desc: 'Read a file with optional line range.',                                             tags: ['system'] },
+  { name: 'create_directory',    sig: 'create_directory(path)',                       desc: 'Create a directory and parent directories.',                                        tags: ['system'] },
+  { name: 'list_directory',      sig: 'list_directory(path)',                         desc: 'List all files in a directory.',                                                    tags: ['system'] },
+  { name: 'generate_pdf',        sig: 'generate_pdf(content, output_path, is_html?)', desc: 'Generate a PDF from Markdown or HTML content.',                                    tags: ['system'] },
+  { name: 'execute_typescript',  sig: 'execute_typescript(code?, args?, filename?)',  desc: 'Write, compile, and execute TypeScript code on-the-fly.',                           tags: ['system', 'ai'] },
+  { name: 'execute_python_code', sig: 'execute_python_code(code, filename?)',         desc: 'Execute Python code in an isolated virtual environment.',                           tags: ['system', 'ai'] },
+  { name: 'install_python_package',sig: 'install_python_package(package)',            desc: 'Install a Python package via pip into the venv.',                                   tags: ['system'] },
+  { name: 'create_custom_skill', sig: 'create_custom_skill({ name, description, usage, code })',desc: 'Create a code-based plugin skill (.ts) for runnable logic.',              tags: ['system', 'ai'] },
+  // ── Action Queue Management ──
+  { name: 'cancel_action',       sig: 'cancel_action(action_id)',                    desc: 'Cancel a specific action in the queue.',                                             tags: ['system'] },
+  { name: 'clear_action_queue',  sig: 'clear_action_queue(status?)',                 desc: 'Clear the action queue, optionally filtered by status.',                              tags: ['system'] },
+  // ── Scheduling Advanced ──
+  { name: 'schedule_list',       sig: 'schedule_list()',                              desc: 'List all scheduled tasks.',                                                         tags: ['scheduling'] },
+  { name: 'schedule_remove',     sig: 'schedule_remove(schedule_id)',                 desc: 'Remove a scheduled task.',                                                          tags: ['scheduling'] },
+  { name: 'scheduler_add',       sig: 'scheduler_add(cronPattern, description, payload?)',desc: 'Add a cron-based scheduled task.',                                              tags: ['scheduling'] },
+  { name: 'heartbeat_schedule',  sig: 'heartbeat_schedule({ contact, interval, instructions, message? })',desc: 'Create a recurring heartbeat check-in schedule.',                tags: ['scheduling'] },
+  { name: 'heartbeat_list',      sig: 'heartbeat_list()',                             desc: 'List all heartbeat schedules.',                                                     tags: ['scheduling'] },
+  { name: 'heartbeat_mark_check',sig: 'heartbeat_mark_check(heartbeat_id, status)',   desc: 'Mark a heartbeat check as done.',                                                  tags: ['scheduling'] },
+  { name: 'heartbeat_instructions',sig: 'heartbeat_instructions(heartbeat_id)',       desc: 'Get instructions for a heartbeat.',                                                 tags: ['scheduling'] },
+  { name: 'heartbeat_remove',    sig: 'heartbeat_remove(heartbeat_id)',               desc: 'Remove a heartbeat schedule.',                                                      tags: ['scheduling'] },
+  // ── Polling ──
+  { name: 'register_polling_job',sig: 'register_polling_job({ description, interval, config? })',desc: 'Register a recurring polling task.',                                     tags: ['scheduling'] },
+  { name: 'cancel_polling_job',  sig: 'cancel_polling_job(job_id)',                   desc: 'Cancel a polling job.',                                                             tags: ['scheduling'] },
+  { name: 'get_polling_status',  sig: 'get_polling_status(job_id?)',                  desc: 'Get status of polling jobs.',                                                       tags: ['scheduling'] },
+  { name: 'list_polling_jobs',   sig: 'list_polling_jobs()',                          desc: 'List all registered polling jobs.',                                                  tags: ['scheduling'] },
+  { name: 'get_polling_job_status',sig: 'get_polling_job_status(job_id)',             desc: 'Get the status of a specific polling job.',                                          tags: ['scheduling'] },
+  // ── Agent Peer & Worker Management ──
+  { name: 'create_peer_agent',   sig: 'create_peer_agent({ name, personality, skills?, channels? })',desc: 'Create a peer agent instance.',                                      tags: ['orchestration'] },
+  { name: 'configure_peer_agent',sig: 'configure_peer_agent({ agentId, configuration })',desc: 'Configure peer agent settings.',                                                  tags: ['orchestration'] },
+  { name: 'cancel_delegated_task',sig: 'cancel_delegated_task(task_id)',              desc: 'Cancel a delegated task.',                                                           tags: ['orchestration'] },
+  { name: 'browse_async',        sig: 'browse_async(url, task)',                      desc: 'Offload a browser task to the worker pool asynchronously.',                          tags: ['orchestration', 'browser'] },
+  { name: 'get_worker_status',   sig: 'get_worker_status(worker_id?)',               desc: 'Get the status of worker processes.',                                                tags: ['orchestration'] },
+  { name: 'get_worker_token_usage',sig: 'get_worker_token_usage(worker_id?)',        desc: 'Get token usage from worker processes.',                                              tags: ['orchestration'] },
+  { name: 'start_agent',         sig: 'start_agent(agent_id)',                        desc: 'Start a peer agent.',                                                               tags: ['orchestration'] },
+  { name: 'restart_agent',       sig: 'restart_agent(agent_id)',                      desc: 'Restart a peer agent.',                                                              tags: ['orchestration'] },
+  // ── Agentic User (HITL) ──
+  { name: 'agentic_user_status', sig: 'agentic_user_status()',                       desc: 'Get the status of the agentic user feedback system.',                                 tags: ['orchestration'] },
+  { name: 'agentic_user_log',    sig: 'agentic_user_log()',                          desc: 'View the agentic user interaction log.',                                              tags: ['orchestration'] },
+  { name: 'agentic_user_clear',  sig: 'agentic_user_clear()',                        desc: 'Clear agentic user data.',                                                           tags: ['orchestration'] },
+  // ── Codebase Tools ──
+  { name: 'read_codebase_file',  sig: 'read_codebase_file(file_path, startLine?, endLine?)',desc: 'Read a file from the agent\'s git repository.',                               tags: ['system'] },
+  { name: 'search_codebase',     sig: 'search_codebase(query, includePattern?)',     desc: 'Search the codebase for patterns and symbols.',                                      tags: ['system'] },
+  { name: 'locate_code_symbol',  sig: 'locate_code_symbol(symbol_name)',             desc: 'Find the definition location of a code symbol.',                                     tags: ['system'] },
+  { name: 'edit_codebase_file',  sig: 'edit_codebase_file(file_path, replacements)', desc: 'Make targeted edits to codebase files.',                                             tags: ['system'] },
+  // ── Bootstrap & World ──
+  { name: 'update_bootstrap_file',sig: 'update_bootstrap_file(name, content, category?)',desc: 'Update a bootstrap skill specification.',                                        tags: ['system'] },
+  { name: 'read_bootstrap_file', sig: 'read_bootstrap_file(name)',                   desc: 'Read a bootstrap skill specification.',                                               tags: ['system'] },
+  { name: 'list_bootstrap_files',sig: 'list_bootstrap_files()',                      desc: 'List available bootstrap files.',                                                     tags: ['system'] },
+  { name: 'update_world',        sig: 'update_world(section, content)',              desc: 'Update the agent world/environment structure.',                                       tags: ['system'] },
+  // ── Channel & Misc ──
+  { name: 'manage_channels',     sig: 'manage_channels({ action, name?, code? })',   desc: 'Manage messaging channels (list, add, remove).',                                     tags: ['system'] },
+  { name: 'create_time_capsule', sig: 'create_time_capsule({ goal, duration_minutes })',desc: 'Start a high-intensity, time-bounded task with relaxed limits.',                   tags: ['system', 'ai'] },
+  // ── Book Log ──
+  { name: 'book_log_add',        sig: 'book_log_add(title, source, summary, tags, keyExcerpts, insights, documentId?)',desc: 'Add an abstractive summary of a resource to the Book Log.', tags: ['memory', 'rag'] },
+  { name: 'book_log_search',     sig: 'book_log_search(query)',                       desc: 'Search the Book Log for summaries and insights.',                                   tags: ['memory', 'rag'] },
+  { name: 'book_log_list',       sig: 'book_log_list(limit?)',                        desc: 'List recent Book Log entries.',                                                     tags: ['memory', 'rag'] },
 ];
 
 const TAG_COLORS: Record<Tag, string> = {
@@ -145,6 +288,7 @@ const TAG_COLORS: Record<Tag, string> = {
   rag:          '#06d6a0',
   computer:     '#ff9f1c',
   tuning:       '#e0c3fc',
+  email:        '#ff7eb3',
 };
 
 // ─── Plugin steps ─────────────────────────────────────────────────────────────

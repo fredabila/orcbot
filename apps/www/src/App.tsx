@@ -181,7 +181,7 @@ function App() {
             <div className="install-footnote">
               <span>Requires Node.js ≥ 18</span>
               <span className="dot-sep">·</span>
-              <a href="https://fredabila.github.io/orcbot/docs/getting-started.html" target="_blank" rel="noopener noreferrer">Full setup guide →</a>
+              <a href="https://docs.orcbot.buzzchat.site/getting-started.html" target="_blank" rel="noopener noreferrer">Full setup guide →</a>
             </div>
           </div>
         </section>
@@ -289,12 +289,12 @@ function App() {
           <p className="section-desc">Guides that move fast — from first run to production ops.</p>
           <div className="docs-grid">
             {[
-              { icon: '🚀', title: 'Getting Started', desc: 'Quick setup guide — running in under 5 minutes.', url: 'https://fredabila.github.io/orcbot/docs/getting-started.html' },
-              { icon: '🏗️', title: 'Architecture', desc: 'Deep dive into modular design and component contracts.', url: 'https://fredabila.github.io/orcbot/docs/architecture.html' },
-              { icon: '🧩', title: 'Skills & Plugins', desc: 'Core skills reference and how to author custom ones.', url: 'https://fredabila.github.io/orcbot/docs/skills.html' },
-              { icon: '⚙️', title: 'Configuration', desc: 'Providers, channels, and every advanced setting.', url: 'https://fredabila.github.io/orcbot/docs/configuration.html' },
-              { icon: '🐳', title: 'Docker Deployment', desc: 'Run OrcBot anywhere with Docker Compose.', url: 'https://fredabila.github.io/orcbot/docs/docker.html' },
-              { icon: '📚', title: 'Full Documentation', desc: 'All guides, API references, and examples in one place.', url: 'https://fredabila.github.io/orcbot/docs/', featured: true },
+              { icon: '🚀', title: 'Getting Started', desc: 'Quick setup guide — running in under 5 minutes.', url: 'https://docs.orcbot.buzzchat.site/getting-started.html' },
+              { icon: '🏗️', title: 'Architecture', desc: 'Deep dive into modular design and component contracts.', url: 'https://docs.orcbot.buzzchat.site/architecture.html' },
+              { icon: '🧩', title: 'Skills & Plugins', desc: 'Core skills reference and how to author custom ones.', url: 'https://docs.orcbot.buzzchat.site/skills.html' },
+              { icon: '⚙️', title: 'Configuration', desc: 'Providers, channels, and every advanced setting.', url: 'https://docs.orcbot.buzzchat.site/configuration.html' },
+              { icon: '🐳', title: 'Docker Deployment', desc: 'Run OrcBot anywhere with Docker Compose.', url: 'https://docs.orcbot.buzzchat.site/docker.html' },
+              { icon: '📚', title: 'Full Documentation', desc: 'All guides, API references, and examples in one place.', url: 'https://docs.orcbot.buzzchat.site/', featured: true },
             ].map((doc, i) => (
               <a href={doc.url} target="_blank" rel="noopener noreferrer" className={`doc-card ${(doc as any).featured ? 'featured' : ''}`} key={i}>
                 <div className="doc-card-icon">{doc.icon}</div>
@@ -355,11 +355,11 @@ function App() {
             </div>
             <div className="footer-col">
               <h4>Docs</h4>
-              <a href="https://fredabila.github.io/orcbot/docs/getting-started.html" target="_blank" rel="noopener noreferrer">Getting Started</a>
-              <a href="https://fredabila.github.io/orcbot/docs/configuration.html" target="_blank" rel="noopener noreferrer">Configuration</a>
-              <a href="https://fredabila.github.io/orcbot/docs/skills.html" target="_blank" rel="noopener noreferrer">Skills &amp; Plugins</a>
-              <a href="https://fredabila.github.io/orcbot/docs/architecture.html" target="_blank" rel="noopener noreferrer">Architecture</a>
-              <a href="https://fredabila.github.io/orcbot/docs/" target="_blank" rel="noopener noreferrer">All Docs →</a>
+              <a href="https://docs.orcbot.buzzchat.site/getting-started.html" target="_blank" rel="noopener noreferrer">Getting Started</a>
+              <a href="https://docs.orcbot.buzzchat.site/configuration.html" target="_blank" rel="noopener noreferrer">Configuration</a>
+              <a href="https://docs.orcbot.buzzchat.site/skills.html" target="_blank" rel="noopener noreferrer">Skills &amp; Plugins</a>
+              <a href="https://docs.orcbot.buzzchat.site/architecture.html" target="_blank" rel="noopener noreferrer">Architecture</a>
+              <a href="https://docs.orcbot.buzzchat.site/" target="_blank" rel="noopener noreferrer">All Docs →</a>
             </div>
             <div className="footer-col">
               <h4>Project</h4>

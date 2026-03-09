@@ -4,6 +4,7 @@ import Header from '../components/Header';
 import '../index.css';
 import './Deploy.css';
 
+
 type Provider = 'digitalocean' | 'docker' | 'aws' | 'railway' | 'hetzner' | 'local';
 
 const providers: { id: Provider; name: string; icon: string; available: boolean }[] = [
@@ -172,13 +173,12 @@ ufw enable`,
 
   return (
     <div className="app deploy-page">
-      <div className="backdrop" />
+      <div className="bg-gradient-orbs" />
       <div className="noise-overlay" />
 
       <Header scrolled={true} />
 
       <header className="deploy-header">
-
         <div className="deploy-hero-grid">
           <div className="deploy-hero-copy">
             <div className="section-label">Deployment Playbook</div>
@@ -189,14 +189,14 @@ ufw enable`,
             </p>
             <div className="deploy-hero-actions">
               <a className="btn btn-primary btn-lg" href="#providers">Choose a provider</a>
-              <a className="btn btn-outline btn-lg" href="https://fredabila.github.io/orcbot/docs/" target="_blank" rel="noopener noreferrer">Full docs</a>
+              <a className="btn btn-outline btn-lg" href="https://docs.orcbot.buzzchat.site/" target="_blank" rel="noopener noreferrer">Full docs</a>
             </div>
           </div>
 
           <div className="deploy-hero-card">
             <div className="deploy-card-header">
               <span className="deploy-card-kicker">Launch Overview</span>
-              <span className="status-pill">Ready</span>
+              <span className="deploy-status-pill">Ready</span>
             </div>
             <div className="deploy-card-grid">
               <div>
@@ -522,11 +522,12 @@ docker compose -f docker-compose.minimal.yml \\
           </section>
         )}
 
-        <section className="cta-section">
-          <div className="cta-section-inner">
+        <section className="deploy-cta-section">
+          <div className="deploy-cta-inner">
+            <div className="section-label">Community</div>
             <h2>Need help deploying?</h2>
             <p>Join the community for support, real configs, and deployment playbooks.</p>
-            <div className="cta-buttons">
+            <div className="deploy-cta-buttons">
               <a href="https://github.com/fredabila/orcbot/discussions" className="btn btn-primary btn-lg">GitHub Discussions</a>
               <a href="https://twitter.com/orcbot_ai" className="btn btn-outline btn-lg">Follow Updates</a>
             </div>
@@ -534,8 +535,15 @@ docker compose -f docker-compose.minimal.yml \\
         </section>
       </main>
 
-      <footer>
-        <p>&copy; {new Date().getFullYear()} OrcBot Project. Built for the autonomous era.</p>
+      <footer className="site-footer">
+        <div className="footer-bottom" style={{ maxWidth: '1400px' }}>
+          <p>&copy; {new Date().getFullYear()} OrcBot Project. Built for the autonomous era.</p>
+          <div className="footer-bottom-links">
+            <Link to="/">Home</Link>
+            <Link to="/skills">Skills</Link>
+            <a href="https://github.com/fredabila/orcbot" target="_blank" rel="noopener noreferrer">GitHub</a>
+          </div>
+        </div>
       </footer>
     </div>
   );
