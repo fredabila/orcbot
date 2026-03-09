@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  publish:
+  publish-github-packages:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -34,3 +34,39 @@ jobs:
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-npmjs:
+    runs-on: ubuntu-latest
+    needs: publish-github-packages
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Rewrite package name for npmjs
+        run: npm pkg set name=orcbot
+
+      - name: Remove GitHub registry publish config
+        run: |
+          npm pkg delete publishConfig.registry
+          npm pkg delete publishConfig.access
+
+      - name: Publish to npmjs
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

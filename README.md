@@ -327,7 +327,12 @@ git push --follow-tags
 gh release create v$(node -p "require('./package.json').version") --generate-notes
 ```
 
-Publishing is handled by `.github/workflows/publish-package.yml` and uses the repository `GITHUB_TOKEN`.
+Publishing is handled by `.github/workflows/publish-package.yml`.
+
+- GitHub Packages publishes `@fredabila/orcbot` using the repository `GITHUB_TOKEN`.
+- npmjs publishes `orcbot` using a repository secret named `NPM_TOKEN`.
+
+To keep the public npm package updated, add an `NPM_TOKEN` repository secret from your npm account automation token.
 
 ---
 
