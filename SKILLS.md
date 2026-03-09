@@ -148,6 +148,17 @@ These skills allow the agent to dynamically adjust its own behavior based on wha
 - **get_tuning_history(limit?)**: [SELF-TUNING] See recent tuning changes and their outcomes.
 - **reset_tuning(category?)**: [SELF-TUNING] Reset tuning to defaults (browser, workflow, llm, or all).
 
+## Self-Training Sidecar
+These skills manage OrcBot's offline-safe self-training pipeline: capture accepted trajectories from real work, prepare datasets and manifests, evaluate candidate models, and promote them through admin-gated rollout.
+
+- **get_self_training_status()**: [SELF-TRAINING] Return self-training stats, artifact paths, candidate registry state, and the latest prepared/evaluated/promoted records.
+- **prepare_self_training_job()**: [SELF-TRAINING] Build an offline training manifest from accepted trajectories. Does not mutate the live model.
+- **run_self_training_eval(limit?, provider?, modelName?)**: [SELF-TRAINING][ADMIN] Evaluate accepted trajectories against the active or specified model and persist an evaluation report.
+- **build_self_training_launch_plan(commandTemplate?, cwd?, sessionId?)**: [SELF-TRAINING][ADMIN] Build the command, working directory, and session ID for launching an external training job without executing it.
+- **launch_self_training_job(commandTemplate?, cwd?, sessionId?, dryRun?)**: [SELF-TRAINING][ADMIN] Launch a prepared offline training job in a background shell session, or preview it with `dryRun`.
+- **register_self_training_candidate(modelName, provider?, candidateId?, jobId?, notes?)**: [SELF-TRAINING][ADMIN] Register a trained candidate model, linking it to the latest evaluation and launch metadata when available.
+- **promote_self_training_candidate(candidateId?, modelName?, provider?, dryRun?)**: [SELF-TRAINING][ADMIN] Promote a registered candidate into OrcBot's live `modelName` and `llmProvider` config after promotion gates pass. Use `dryRun` to preview the switch.
+
 ## Agent Skills (SKILL.md Ecosystem)
 Agent Skills follow the [agentskills.io](https://agentskills.io/) specification — portable, LLM-readable skill packages that can extend OrcBot in any direction.
 

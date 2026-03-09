@@ -57,7 +57,16 @@ import { resolveBrowserScratchpadTarget } from './BrowserScratchpad';
 import { collectCompletionAuditIssues, StepLedger, auditDelivery } from './CompletionAudit';
 import { buildDelegatedTaskFollowupAction } from './DelegatedTaskFollowup';
 import { resolveInboundRoute } from './InboundRouting';
-import { SelfTrainingManager } from './SelfTrainingManager';
+import {
+    BuildLaunchPlanOptions,
+    LaunchPlanResult,
+    RegisterCandidateModelInput,
+    RegisterCandidateModelResult,
+    RunEvaluationOptions,
+    SelfTrainingManager,
+    SelfTrainingPromotionRecord,
+    SelfTrainingStatus,
+} from './SelfTrainingManager';
 
 /**
  * Tracks users who have interacted with the bot across channels.
@@ -614,6 +623,124 @@ export class Agent {
             fallbackModelNames: newConfig.fallbackModelNames,
             fastModelName: newConfig.fastModelName
         });
+    }
+
+    public getSelfTrainingStatus(): SelfTrainingStatus {
+        return this.selfTraining.getStatus();
+    }
+
+    public prepareSelfTrainingJob() {
+        return this.selfTraining.prepareTrainingJobIfNeeded();
+    }
+
+    public async runSelfTrainingEvaluation(options: RunEvaluationOptions = {}) {
+        return this.selfTraining.runEvaluation(this.llm, options);
+    }
+
+    public buildSelfTrainingLaunchPlan(options: BuildLaunchPlanOptions = {}): LaunchPlanResult {
+        return this.selfTraining.buildLaunchPlan(options);
+    }
+
+    public async launchSelfTrainingJob(options: BuildLaunchPlanOptions & { dryRun?: boolean } = {}) {
+        const planResult = this.selfTraining.buildLaunchPlan(options);
+        if (!planResult.ready || !planResult.plan) {
+            return planResult;
+        }
+
+        if (options.dryRun) {
+            return { launched: false, reason: 'dry_run', plan: planResult.plan };
+        }
+
+        const { spawn } = require('child_process');
+        const child = spawn(planResult.plan.command, {
+            cwd: planResult.plan.cwd,
+            shell: true,
+            detached: false,
+            stdio: 'pipe',
+            env: {
+                ...process.env,
+                ORCBOT_SELF_TRAINING_JOB: planResult.plan.jobManifestPath,
+                ORCBOT_SELF_TRAINING_EXPORT: planResult.plan.exportPath,
+                ORCBOT_SELF_TRAINING_STORE: planResult.plan.storePath,
+                ORCBOT_SELF_TRAINING_JOB_ID: planResult.plan.jobId,
+            }
+        });
+
+        const session = shellSessions.attach(planResult.plan.sessionId, child, planResult.plan.command, planResult.plan.cwd);
+        this.selfTraining.recordLaunch({
+            launchedAt: new Date().toISOString(),
+            jobId: planResult.plan.jobId,
+            sessionId: planResult.plan.sessionId,
+            command: planResult.plan.command,
+            cwd: planResult.plan.cwd,
+            pid: session.pid,
+        });
+
+        return {
+            launched: true,
+            sessionId: planResult.plan.sessionId,
+            pid: session.pid,
+            command: planResult.plan.command,
+            cwd: planResult.plan.cwd,
+            jobId: planResult.plan.jobId,
+        };
+    }
+
+    public registerSelfTrainingCandidate(input: RegisterCandidateModelInput): RegisterCandidateModelResult {
+        return this.selfTraining.registerCandidateModel(input);
+    }
+
+    public promoteSelfTrainingCandidate(input: { candidateId?: string; modelName?: string; provider?: string; dryRun?: boolean }) {
+        const decision = this.selfTraining.preparePromotion({
+            candidateId: input.candidateId,
+            modelName: input.modelName,
+            provider: input.provider,
+        });
+
+        if (!decision.eligible || !decision.candidate) {
+            return decision;
+        }
+
+        const previousModelName = this.config.get('modelName');
+        const previousProvider = this.config.get('llmProvider') || 'auto';
+        if (input.dryRun) {
+            return {
+                promoted: false,
+                reason: 'dry_run',
+                decision,
+                previousModelName,
+                previousProvider,
+            };
+        }
+
+        if (decision.candidate.provider && decision.candidate.provider !== 'auto') {
+            this.config.set('llmProvider', decision.candidate.provider as any);
+        } else {
+            this.config.set('llmProvider', undefined as any);
+        }
+        this.config.set('modelName', decision.candidate.modelName);
+
+        const record: SelfTrainingPromotionRecord = {
+            promotedAt: new Date().toISOString(),
+            candidateId: decision.candidate.id,
+            modelName: decision.candidate.modelName,
+            provider: decision.candidate.provider,
+            previousModelName,
+            previousProvider,
+            evaluationAverageScore: decision.candidate.evaluationAverageScore,
+            evaluationPassRate: decision.candidate.evaluationPassRate,
+            evaluationPassThreshold: decision.candidate.evaluationPassThreshold,
+        };
+        this.selfTraining.recordPromotion(record);
+
+        return {
+            promoted: true,
+            candidate: decision.candidate,
+            previousModelName,
+            previousProvider,
+            activeModelName: this.config.get('modelName'),
+            activeProvider: this.config.get('llmProvider') || 'auto',
+        };
     }
 
     private async hotReloadChannels(oldConfig: any, newConfig: any) {

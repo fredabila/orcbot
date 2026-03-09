@@ -2387,6 +2387,7 @@ async function showMainMenu() {
             { label: `  ${c.cyan}📊${c.reset}  View Status`, value: 'status' },
             { label: `── CONFIGURE ─────────────────────────────`, value: 'separator_config', disabled: true },
             { label: `  ${c.magenta}🧠${c.reset}  Manage AI Models`, value: 'models' },
+            { label: `  ${c.brightCyan}🧪${c.reset}  Self-Training`, value: 'self_training' },
             { label: `  ${c.brightBlue}🔌${c.reset}  Manage Connections`, value: 'connections' },
             { label: `  ${c.brightCyan}⚡${c.reset}  Manage Skills  ${c.gray}(${agent.skills.getAgentSkills().length} installed)${c.reset}`, value: 'skills' },
             { label: `  ${c.brightBlue}🌍${c.reset}  World Governance`, value: 'world' },
@@ -2441,6 +2442,9 @@ async function showMainMenu() {
             break;
         case 'models':
             await showModelsMenu();
+            break;
+        case 'self_training':
+            await showSelfTrainingMenu();
             break;
         case 'tooling':
             await showToolingMenu();
@@ -3422,6 +3426,212 @@ async function showOllamaMenu() {
         await waitKeyPress();
         return showOllamaMenu();
     }
+}
+
+async function showSelfTrainingMenu() {
+    console.clear();
+    banner();
+    sectionHeader('🧪', 'Self-Training Sidecar');
+
+    const status = agent.getSelfTrainingStatus();
+    const lastEval = status.lastEvaluationReport;
+    const lastJob = status.lastPreparedJob;
+    const lastPromotion = status.lastPromotionRecord;
+
+    console.log('');
+    box([
+        `${c.white}Enabled${c.reset}      ${status.enabled ? green('Yes') : red('No')}`,
+        `${c.white}Train on Idle${c.reset} ${status.trainOnIdle ? green('Yes') : gray('No')}`,
+        `${c.white}Accepted${c.reset}     ${brightCyan(String(status.stats.accepted))} ${dim('/ ' + status.stats.total + ' captured')}`,
+        `${c.white}Candidates${c.reset}   ${brightCyan(String(status.candidates.length))}`,
+        `${c.white}Min Quality${c.reset}  ${bold(String(status.minQualityScore))}`,
+        `${c.white}Promote Gate${c.reset} ${bold(String(status.promotionMinAverageScore))} ${status.requireEvalForPromotion ? dim('(eval required)') : dim('(manual)')}`,
+        `${c.gray}${'─'.repeat(52)}${c.reset}`,
+        `${c.white}Last Job${c.reset}     ${lastJob ? green(lastJob.id) : gray('none')}`,
+        `${c.white}Last Eval${c.reset}    ${lastEval ? green(`${lastEval.averageScore} avg / ${lastEval.passRate} pass`) : gray('none')}`,
+        `${c.white}Last Promote${c.reset} ${lastPromotion ? green(lastPromotion.modelName) : gray('none')}`,
+    ], { title: '🧪 SELF-TRAINING STATUS', width: 58, color: c.brightCyan });
+    console.log('');
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: cyan('Self-Training options:'),
+            choices: [
+                { name: `  📊 ${bold('View Detailed Status')}`, value: 'status' },
+                { name: `  🧱 ${bold('Prepare Training Job')}`, value: 'prepare' },
+                { name: `  📈 ${bold('Run Evaluation')}`, value: 'eval' },
+                { name: `  📦 ${bold('Build Launch Plan')}`, value: 'plan' },
+                { name: `  🚀 ${bold('Launch Training Job')}`, value: 'launch', disabled: !status.lastPreparedJob },
+                new inquirer.Separator(gradient('  ─── Candidate Lifecycle ───────────', [c.brightCyan, c.gray])),
+                { name: `  🏷️  ${bold('Register Candidate Model')}`, value: 'register' },
+                { name: `  ⭐ ${bold('Promote Candidate Model')}`, value: 'promote', disabled: status.candidates.length === 0 },
+                new inquirer.Separator(gradient('  ─── Settings ─────────────────────', [c.brightCyan, c.gray])),
+                { name: `  ⚙️  ${bold('Configure Self-Training')}`, value: 'config' },
+                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.brightCyan, c.gray])),
+                { name: dim('  ← Back'), value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showMainMenu();
+
+    if (action === 'status') {
+        console.log('');
+        console.log(JSON.stringify(status, null, 2));
+        await waitKeyPress();
+        return showSelfTrainingMenu();
+    }
+
+    if (action === 'prepare') {
+        console.log('');
+        console.log(JSON.stringify(agent.prepareSelfTrainingJob(), null, 2));
+        await waitKeyPress();
+        return showSelfTrainingMenu();
+    }
+
+    if (action === 'eval') {
+        const { limit, provider, modelName } = await inquirer.prompt([
+            { type: 'input', name: 'limit', message: 'Sample size (leave blank for configured default):', default: '' },
+            { type: 'input', name: 'provider', message: 'Provider override (leave blank for default):', default: '' },
+            { type: 'input', name: 'modelName', message: 'Model override (leave blank for active model):', default: '' },
+        ]);
+        const report = await agent.runSelfTrainingEvaluation({
+            limit: limit ? Number(limit) : undefined,
+            provider: provider || undefined,
+            modelName: modelName || undefined,
+        } as any);
+        console.log('');
+        console.log(JSON.stringify(report, null, 2));
+        await waitKeyPress();
+        return showSelfTrainingMenu();
+    }
+
+    if (action === 'plan') {
+        const defaults = agent.getSelfTrainingStatus();
+        const { commandTemplate, cwd, sessionId } = await inquirer.prompt([
+            { type: 'input', name: 'commandTemplate', message: 'Command template override (blank = configured default):', default: '' },
+            { type: 'input', name: 'cwd', message: 'Working directory override (blank = default):', default: '' },
+            { type: 'input', name: 'sessionId', message: 'Session ID override (blank = auto):', default: '' },
+        ]);
+        const plan = agent.buildSelfTrainingLaunchPlan({
+            commandTemplate: commandTemplate || undefined,
+            cwd: cwd || undefined,
+            sessionId: sessionId || undefined,
+        });
+        console.log('');
+        console.log(JSON.stringify({ ...plan, paths: defaults.paths }, null, 2));
+        await waitKeyPress();
+        return showSelfTrainingMenu();
+    }
+
+    if (action === 'launch') {
+        const { commandTemplate, cwd, sessionId, dryRun } = await inquirer.prompt([
+            { type: 'input', name: 'commandTemplate', message: 'Command template override (blank = configured default):', default: '' },
+            { type: 'input', name: 'cwd', message: 'Working directory override (blank = default):', default: '' },
+            { type: 'input', name: 'sessionId', message: 'Session ID override (blank = auto):', default: '' },
+            { type: 'confirm', name: 'dryRun', message: 'Dry run only?', default: true },
+        ]);
+        const result = await agent.launchSelfTrainingJob({
+            commandTemplate: commandTemplate || undefined,
+            cwd: cwd || undefined,
+            sessionId: sessionId || undefined,
+            dryRun,
+        });
+        console.log('');
+        console.log(JSON.stringify(result, null, 2));
+        await waitKeyPress();
+        return showSelfTrainingMenu();
+    }
+
+    if (action === 'register') {
+        const { modelName, provider, candidateId, jobId, notes } = await inquirer.prompt([
+            { type: 'input', name: 'modelName', message: 'Candidate model name:', validate: (value: string) => value.trim().length > 0 || 'Model name is required.' },
+            { type: 'input', name: 'provider', message: 'Provider (blank = auto/none):', default: '' },
+            { type: 'input', name: 'candidateId', message: 'Candidate ID override (blank = auto):', default: '' },
+            { type: 'input', name: 'jobId', message: 'Source job ID (blank = latest prepared job):', default: '' },
+            { type: 'input', name: 'notes', message: 'Notes (semicolon-separated):', default: '' },
+        ]);
+        const result = agent.registerSelfTrainingCandidate({
+            modelName: modelName.trim(),
+            provider: provider || undefined,
+            candidateId: candidateId || undefined,
+            jobId: jobId || undefined,
+            notes: notes ? String(notes).split(';').map((part: string) => part.trim()).filter(Boolean) : [],
+        });
+        console.log('');
+        console.log(JSON.stringify(result, null, 2));
+        await waitKeyPress();
+        return showSelfTrainingMenu();
+    }
+
+    if (action === 'promote') {
+        const refreshed = agent.getSelfTrainingStatus();
+        const { candidateId, dryRun } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'candidateId',
+                message: 'Select candidate to promote:',
+                choices: refreshed.candidates.map(candidate => ({
+                    name: `${candidate.modelName} ${dim(`(${candidate.provider || 'auto'})`)} ${candidate.evaluationAverageScore !== undefined ? green(`score ${candidate.evaluationAverageScore}`) : yellow('no eval')}`,
+                    value: candidate.id,
+                }))
+            },
+            { type: 'confirm', name: 'dryRun', message: 'Dry run first?', default: true },
+        ]);
+        const result = agent.promoteSelfTrainingCandidate({ candidateId, dryRun });
+        console.log('');
+        console.log(JSON.stringify(result, null, 2));
+        await waitKeyPress();
+        return showSelfTrainingMenu();
+    }
+
+    if (action === 'config') {
+        const cfg = agent.getSelfTrainingStatus();
+        const { setting } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'setting',
+                message: 'Select self-training setting:',
+                choices: [
+                    { name: `Enabled (${String(cfg.enabled)})`, value: 'selfTrainingEnabled' },
+                    { name: `Train on Idle (${String(cfg.trainOnIdle)})`, value: 'selfTrainingTrainOnIdle' },
+                    { name: `Min Quality Score (${cfg.minQualityScore})`, value: 'selfTrainingMinQualityScore' },
+                    { name: `Min Accepted Examples (${cfg.minAcceptedExamples})`, value: 'selfTrainingMinAcceptedExamples' },
+                    { name: `Eval Pass Threshold (${cfg.lastEvaluationReport?.passThreshold ?? agent.config.get('selfTrainingEvalPassThreshold')})`, value: 'selfTrainingEvalPassThreshold' },
+                    { name: `Promotion Min Average Score (${cfg.promotionMinAverageScore})`, value: 'selfTrainingPromotionMinAverageScore' },
+                    { name: `Require Eval For Promotion (${String(cfg.requireEvalForPromotion)})`, value: 'selfTrainingRequireEvalForPromotion' },
+                    { name: `Launch Command (${agent.config.get('selfTrainingLaunchCommand') || 'not set'})`, value: 'selfTrainingLaunchCommand' },
+                    { name: `Launch Cwd (${agent.config.get('selfTrainingLaunchCwd') || 'not set'})`, value: 'selfTrainingLaunchCwd' },
+                    { name: 'Back', value: 'back' },
+                ]
+            }
+        ]);
+
+        if (setting === 'back') {
+            return showSelfTrainingMenu();
+        }
+
+        const currentValue = agent.config.get(setting);
+        if (typeof currentValue === 'boolean') {
+            const { value } = await inquirer.prompt([{ type: 'confirm', name: 'value', message: `Set ${setting}:`, default: currentValue }]);
+            agent.config.set(setting, value);
+        } else {
+            const { value } = await inquirer.prompt([{ type: 'input', name: 'value', message: `Set ${setting}:`, default: currentValue ?? '' }]);
+            if (setting === 'selfTrainingLaunchCommand' || setting === 'selfTrainingLaunchCwd') {
+                agent.config.set(setting, value || undefined);
+            } else {
+                agent.config.set(setting, value === '' ? undefined : Number.isFinite(Number(value)) && value.trim() !== '' ? Number(value) : value);
+            }
+        }
+
+        console.log(green('\nSelf-training setting updated.'));
+        await waitKeyPress();
+        return showSelfTrainingMenu();
+    }
+
+    return showSelfTrainingMenu();
 }
 
 async function showPiAIConfig() {
