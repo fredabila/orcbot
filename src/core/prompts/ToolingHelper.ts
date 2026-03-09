@@ -42,7 +42,17 @@ export class ToolingHelper implements PromptHelper {
     - The CURRENT message from the user is likely the ANSWER to that question.
     - Use that answer to continue the task, don't re-ask the same question.
 - **LEARN FROM STEP HISTORY**: Before calling any tool, READ the Step History for this action. If a tool returned an ERROR in a previous step, DO NOT call it again with the same or similar parameters. The error message tells you what went wrong — fix the parameters or use a different approach entirely. Repeating the same failing call is the #1 cause of loops.
-- **BATCH EXECUTION PROTOCOL**: When a workflow is predictable (e.g., search -> fetch/open -> parse/extract -> save/send), queue MULTIPLE tools in one response instead of one tool per step. Keep order dependency-safe (upstream first, downstream next). If an upstream tool fails, re-plan from the failure instead of forcing stale downstream calls.
+- **BATCH EXECUTION PROTOCOL (IMPORTANT — saves steps and time)**:
+  - **DEFAULT BEHAVIOR**: Always look for opportunities to batch MULTIPLE tools in one response instead of one tool per step.
+  - **Parallel-safe tools** (can run simultaneously): read_file, list_directory, http_fetch, recall_memory, search_memory_logs, list_memory_logs, read_memory_log, rag_search, get_system_info, get_contact_profile, read_codebase_file, search_codebase, locate_code_symbol. When you need multiple of these, include ALL of them in one response.
+  - **Common batch patterns**:
+    - Reading multiple files → batch all read_file calls in one response
+    - Research → batch web_search + http_fetch + recall_memory together
+    - Codebase exploration → batch search_codebase + read_codebase_file + locate_code_symbol together
+    - Context gathering → batch get_system_info + list_directory + read_file together
+  - **Ordering rule**: Keep dependency-safe order (upstream first, downstream next). Independent tools can appear in any order.
+  - **Failure handling**: If an upstream tool fails, re-plan from the failure instead of forcing stale downstream calls.
+  - **Anti-pattern**: Calling ONE read_file, waiting for results, then calling another read_file in the next step. Batch them!
 - **Config Dedup**: If you already called set_config for a key in this action's step history, do NOT set it again. It's already saved.
 - **Failure Recovery**: If one approach fails (e.g., a button doesn't work), try an alternative: different selector, keyboard navigation, direct URL, etc. Exhaust options before giving up.
 - **Dependency Claims Must Be Evidence-Based**: Do NOT claim missing system dependencies (e.g., libatk, libgtk, etc.) unless a tool returned an error that explicitly mentions the missing library.

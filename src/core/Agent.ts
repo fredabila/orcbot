@@ -2208,6 +2208,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             description: 'List files and subdirectories in a directory. Use this to explore the project structure and find relevant source code or configuration. Defaults to the project root. NOTE: Access to node_modules and .git is blocked.',
             usage: 'list_directory(path)',
             isDeep: true,
+            isParallelSafe: true,
             handler: async (args: any) => {
                 const dirPath = args.path || args.dir || args.directory || this.getBuildWorkspacePath();
 
@@ -2623,6 +2624,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             name: 'get_contact_profile',
             description: 'Retrieve the stored profile/context for a specific WhatsApp contact.',
             usage: 'get_contact_profile(jid)',
+            isParallelSafe: true,
             handler: async (args: any) => {
                 const jid = args.jid || args.to || args.id;
 
@@ -2847,6 +2849,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             name: 'recall_memory',
             description: 'Search your entire memory semantically — finds relevant memories across ALL channels, time periods, and memory types (short, episodic, long-term). Use this when you need to remember something from a past conversation, find context about a topic, or recall what happened with a specific person/project. Much more powerful than keyword search.',
             usage: 'recall_memory(query, limit?)',
+            isParallelSafe: true,
             handler: async (args: any) => {
                 const query = args.query || args.search || args.text || args.q;
                 const limit = parseInt(args.limit || '10', 10);
@@ -2902,6 +2905,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             name: 'search_memory_logs',
             description: 'Literal search across all daily memory log files, JOURNAL.md, and LEARNING.md. Use this for "deep" history search when semantic recall fails, or when you need to find exact technical details, dates, or specific names mentioned in the past. This is a very robust fallback.',
             usage: 'search_memory_logs(query, limit?)',
+            isParallelSafe: true,
             handler: async (args: any) => {
                 const query = args.query || args.q || args.text;
                 const limit = parseInt(args.limit || '10', 10);
@@ -2960,6 +2964,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             name: 'list_memory_logs',
             description: 'List all available daily memory log dates. Useful to see how far back your history goes or to identify specific days to search.',
             usage: 'list_memory_logs()',
+            isParallelSafe: true,
             handler: async () => {
                 try {
                     const dailyMemory = this.memory.getDailyMemory();
@@ -2979,6 +2984,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             name: 'read_memory_log',
             description: 'Read the full content of a specific daily memory log. Use list_memory_logs to see available dates and search_memory_logs to find relevant ones. Date format: YYYY-MM-DD.',
             usage: 'read_memory_log(date)',
+            isParallelSafe: true,
             handler: async (args: any) => {
                 const date = args.date || args.text;
                 if (!date) return 'Error: Missing date string (YYYY-MM-DD).';
@@ -3544,6 +3550,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             name: 'get_system_info',
             description: 'Get comprehensive system information including OS, platform, shell, and command syntax guidance',
             usage: 'get_system_info()',
+            isParallelSafe: true,
             handler: async () => {
                 const os = require('os');
                 const isWindows = process.platform === 'win32';
@@ -5867,6 +5874,7 @@ export default ${name};
             name: 'http_fetch',
             description: 'Fetch a URL using a simple HTTP request (no browser needed). Supports GET, POST, PUT, PATCH, DELETE. Returns the response body as text or JSON. Much faster and lighter than browser_navigate for APIs, JSON endpoints, and simple web pages.',
             usage: 'http_fetch(url, method?, headers?, body?, timeout?)',
+            isParallelSafe: true,
             handler: async (args: any) => {
                 const url = args.url || args.link;
                 if (!url) return 'Error: Missing url.';
@@ -6759,6 +6767,7 @@ Be thorough and academic.`;
                 name: 'read_codebase_file',
                 description: 'Read the contents of a source file in the project codebase. Requires enableSelfModification to be true. Cannot read from node_modules or .git.',
                 usage: 'read_codebase_file(path)',
+                isParallelSafe: true,
                 handler: async (args: any) => {
                     if (!this.config.get('enableSelfModification')) {
                         return 'Error: Self-Modification is disabled. To enable codebase access, ask the user to toggle "Self-Modification" in the TUI security menu.';
@@ -6787,6 +6796,7 @@ Be thorough and academic.`;
                 name: 'search_codebase',
                 description: 'Search for source code using multiple keywords or a regex. Supports context lines (contextLines) to see surrounding code. Use multiple terms in "query" (e.g., "login AND validate") to target specific logic. Excludes node_modules and .git.',
                 usage: 'search_codebase(query, include?, contextLines?)',
+                isParallelSafe: true,
                 handler: async (args: any) => {
                     if (!this.config.get('enableSelfModification')) {
                         return 'Error: Self-Modification is disabled.';
@@ -6846,6 +6856,7 @@ Be thorough and academic.`;
                 name: 'locate_code_symbol',
                 description: 'Quickly find the definition of a function, class, interface, or variable. Targets "export const/class/function" etc.',
                 usage: 'locate_code_symbol(symbolName)',
+                isParallelSafe: true,
                 handler: async (args: any) => {
                     const symbol = args.symbolName || args.symbol || args.name;
                     if (!symbol) return 'Error: Missing symbol name.';
@@ -7639,6 +7650,7 @@ Be thorough and academic.`;
             description: 'Search the RAG knowledge store for information relevant to a query. Returns the most similar document chunks with relevance scores. Use this when you need to recall ingested knowledge — documentation, datasets, files, or web pages that were previously stored.',
             usage: 'rag_search(query, limit?, collection?, tags?)',
             isDeep: true,
+            isParallelSafe: true,
             handler: async (args: any) => {
                 try {
                     const query = args.query || args.q || args.search;

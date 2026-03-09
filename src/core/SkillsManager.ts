@@ -1562,7 +1562,10 @@ main().catch(console.error);
         const skills = excludeSkills 
             ? this.getAllSkills().filter(s => !excludeSkills.has(s.name))
             : this.getAllSkills();
-        const skillsList = skills.map(s => `- ${s.name}: ${s.description} (Usage: ${s.usage})`).join('\n');
+        const skillsList = skills.map(s => {
+            const batchTag = s.isParallelSafe ? ' [batch-safe]' : '';
+            return `- ${s.name}: ${s.description} (Usage: ${s.usage})${batchTag}`;
+        }).join('\n');
         return `Available Skills:\n${skillsList}`;
     }
 
@@ -1596,7 +1599,10 @@ main().catch(console.error);
             return keywords.some(k => text.includes(k));
         });
         
-        const skillsList = relevant.map(s => `- ${s.name}: ${s.description} (Usage: ${s.usage})`).join('\n');
+        const skillsList = relevant.map(s => {
+            const batchTag = s.isParallelSafe ? ' [batch-safe]' : '';
+            return `- ${s.name}: ${s.description} (Usage: ${s.usage})${batchTag}`;
+        }).join('\n');
         return `Available Skills:\n${skillsList}`;
     }
 
