@@ -311,6 +311,24 @@ npm run build
 npm run setup
 ```
 
+**Install from GitHub Packages**
+```bash
+echo "@fredabila:registry=https://npm.pkg.github.com" >> ~/.npmrc
+echo "//npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN" >> ~/.npmrc
+npm install -g @fredabila/orcbot
+```
+
+The published package lives in GitHub Packages under `@fredabila/orcbot`. The CLI command remains `orcbot`.
+
+**Publish to GitHub Packages**
+```bash
+npm version patch
+git push --follow-tags
+gh release create v$(node -p "require('./package.json').version") --generate-notes
+```
+
+Publishing is handled by `.github/workflows/publish-package.yml` and uses the repository `GITHUB_TOKEN`.
+
 ---
 
 ## Documentation

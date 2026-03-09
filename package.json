@@ -1,9 +1,21 @@
 {
-  "name": "orcbot",
+  "name": "@fredabila/orcbot",
   "version": "1.0.4",
   "description": "Autonomous AI Agent Orchestrator with Puppeteer browsing, multi-channel messaging, and self-tuning capabilities.",
   "main": "./dist/core/Agent.js",
   "types": "./dist/core/Agent.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fredabila/orcbot.git"
+  },
+  "homepage": "https://github.com/fredabila/orcbot#readme",
+  "bugs": {
+    "url": "https://github.com/fredabila/orcbot/issues"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
   "bin": {
     "orcbot": "./dist/cli/index.js"
   },
