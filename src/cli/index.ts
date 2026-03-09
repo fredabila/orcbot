@@ -19,7 +19,7 @@ import { TokenTracker } from '../core/TokenTracker';
 import { OllamaHelper } from '../utils/OllamaHelper';
 import { aggregateWorldEvents, fetchWorldEvents, summarizeWorldEvents, WorldEvent, WorldEventSource, getRootCodeLabel } from '../tools/WorldEvents';
 import { piBox, isPiTuiAvailable } from '../core/PiTuiRenderer';
-import { collectDoctorReport } from './Doctor';
+import { collectDoctorReport, collectLLMCompatibilityReport } from './Doctor';
 
 dotenv.config(); // Local .env
 dotenv.config({ path: path.join(os.homedir(), '.orcbot', '.env') }); // Global .env
@@ -1059,9 +1059,15 @@ program
     .command('doctor')
     .description('Run a local health and deployment audit for OrcBot')
     .option('--deep', 'Include additional filesystem/state checks')
+    .option('--llm', 'Include LLM/provider compatibility checks')
+    .option('--live', 'Run live provider probes for configured/linked providers (uses API/OAuth calls)')
     .option('--json', 'Print the report as JSON')
-    .action((opts) => {
+    .action(async (opts) => {
         const report = collectDoctorReport(agent.config, { deep: !!opts.deep });
+
+        if (opts.llm || opts.live) {
+            report.llmCompatibility = await collectLLMCompatibilityReport(agent.config, { live: !!opts.live });
+        }
 
         if (opts.json) {
             console.log(JSON.stringify(report, null, 2));
@@ -1075,6 +1081,41 @@ program
         console.log(`Channels: ${report.facts.channelsConfigured.length > 0 ? report.facts.channelsConfigured.join(', ') : 'none'}`);
         console.log(`Providers: ${report.facts.providersConfigured.length > 0 ? report.facts.providersConfigured.join(', ') : 'none'}`);
         console.log('');
+
+        if (report.llmCompatibility) {
+            const llm = report.llmCompatibility;
+            const rows = [
+                ['Provider', 'Model', 'Auth', 'Schema', opts.live ? 'Live' : 'Ready'],
+                ...llm.providers.map(provider => [
+                    provider.provider,
+                    provider.model,
+                    provider.authMode,
+                    provider.toolSchemaCompatible ? green('ok') : brightRed('broken'),
+                    opts.live
+                        ? (provider.liveProbe?.success ? green('ok') : provider.liveProbe?.attempted ? brightRed('fail') : gray('skipped'))
+                        : (provider.ready ? green('ready') : brightRed('missing')),
+                ])
+            ];
+
+            box([
+                `${c.white}Active${c.reset}      ${brightCyan(llm.activeProvider)} ${dim(`(${llm.activeModel})`)}`,
+                `${c.white}pi-ai${c.reset}       ${llm.usePiAI ? brightGreen('enabled') : gray('disabled')}`,
+                `${c.white}Schema${c.reset}      ${llm.schemaContractOk ? brightGreen('valid') : brightRed('broken')}`,
+            ], { title: '🧠 LLM COMPATIBILITY', width: 72, color: llm.schemaContractOk ? c.green : c.red });
+            console.log('');
+            table(rows, { headerColor: brightWhite });
+            console.log('');
+
+            for (const provider of llm.providers) {
+                if (provider.notes.length > 0) {
+                    console.log(`${brightCyan(provider.provider)}: ${provider.notes.join('; ')}`);
+                }
+                if (provider.liveProbe?.error) {
+                    console.log(`  ${dim('Probe:')} ${provider.liveProbe.error}`);
+                }
+            }
+            console.log('');
+        }
 
         const summaryLines = [
             `${c.white}Critical${c.reset}  ${report.summary.critical > 0 ? brightRed(bold(String(report.summary.critical))) : green('0')}`,

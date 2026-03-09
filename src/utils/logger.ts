@@ -1,7 +1,17 @@
 import winston from 'winston';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 dotenv.config();
+
+const logDir = process.env.ORCBOT_LOG_DIR
+    || path.join(process.env.ORCBOT_DATA_DIR || path.join(os.homedir(), '.orcbot'), 'logs');
+
+if (!fs.existsSync(logDir)) {
+    fs.mkdirSync(logDir, { recursive: true });
+}
 
 const { combine, timestamp, printf, colorize } = winston.format;
 
@@ -18,7 +28,7 @@ export const logger = winston.createLogger({
     ),
     transports: [
         new winston.transports.Console(),
-        new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
-        new winston.transports.File({ filename: 'logs/combined.log' }),
+        new winston.transports.File({ filename: path.join(logDir, 'error.log'), level: 'error' }),
+        new winston.transports.File({ filename: path.join(logDir, 'combined.log') }),
     ],
 });

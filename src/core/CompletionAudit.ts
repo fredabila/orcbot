@@ -145,6 +145,10 @@ export function auditDelivery(input: DeliveryAuditInput): DeliveryAuditResult {
     const sends = ledger.sideEffects();
     const deepFailures = deepWork.filter(e => !e.success);
     const deepSuccesses = deepWork.filter(e => e.success);
+    const lastDeepSuccessAt = deepSuccesses.length > 0 ? Math.max(...deepSuccesses.map(e => e.timestamp)) : -1;
+    const sendSuccesses = sends.filter(e => e.success);
+    const lastSuccessfulSendAt = sendSuccesses.length > 0 ? Math.max(...sendSuccesses.map(e => e.timestamp)) : -1;
+    const sentAfterDeepSuccess = lastDeepSuccessAt >= 0 && lastSuccessfulSendAt >= lastDeepSuccessAt;
 
     // 1. No tools ran at all
     if (ledger.size === 0) {
@@ -203,10 +207,23 @@ export function auditDelivery(input: DeliveryAuditInput): DeliveryAuditResult {
     }
 
     // 7. Deep work succeeded and messages sent
-    if (deepSuccesses.length > 0 && substantiveDeliveriesSent > 0) {
+    if (deepSuccesses.length > 0 && substantiveDeliveriesSent > 0 && sentAfterDeepSuccess) {
         return {
             delivered: true,
             reason: 'Deep work succeeded and substantive delivery was sent',
+            summary,
+            unresolvedFailures: false,
+            onlySentStatusMessages: false,
+        };
+    }
+
+    // 7b. Deep work succeeded, but the last user message was sent before that work finished.
+    // This is the "left hanging" case: the user got an acknowledgement, then the work completed,
+    // but no final completion/update message was delivered afterward.
+    if (deepSuccesses.length > 0 && sends.length > 0 && !sentAfterDeepSuccess) {
+        return {
+            delivered: false,
+            reason: 'Deep work succeeded after the last user-facing message, but no final completion update was sent',
             summary,
             unresolvedFailures: false,
             onlySentStatusMessages: false,

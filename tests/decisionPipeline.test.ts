@@ -226,6 +226,100 @@ describe('DecisionPipeline', () => {
     expect(evaluated.tools?.length).toBe(0);
   });
 
+  it('suppresses repeated substantive sends after a substantive reply with no new work', () => {
+    const pipeline = new DecisionPipeline(
+      new StubConfig({
+        maxMessagesPerAction: 6,
+        maxStepsPerAction: 10,
+        messageDedupWindow: 5,
+      }) as any,
+    );
+
+    const proposed: StandardResponse = {
+      success: true,
+      tools: [
+        {
+          name: 'send_telegram',
+          metadata: {
+            chatId: 'u1',
+            message: 'Yeah, but only if I am on the network or you give me router access. I can inspect connected clients from the router page or analyze arp output from this PC.'
+          }
+        }
+      ],
+      verification: { goals_met: false, analysis: 'Sending another answer' },
+    };
+
+    const evaluated = pipeline.evaluate(proposed, {
+      actionId: 'a8',
+      source: 'telegram',
+      sourceId: 'u1',
+      messagesSent: 1,
+      substantiveDeliveriesSent: 1,
+      currentStep: 2,
+      recentMemories: [
+        {
+          id: 'a8-step-1-send_telegram',
+          type: 'short',
+          content: 'sent first answer',
+          metadata: { tool: 'send_telegram' },
+          timestamp: new Date().toISOString(),
+        } as any,
+      ],
+      taskDescription: 'Respond to telegram message from Frederick: can you actually find out details on te devices connected to my wifi network',
+    });
+
+    expect(evaluated.tools?.length).toBe(0);
+    expect(evaluated.verification?.goals_met).toBe(true);
+    expect(evaluated.verification?.analysis).toContain('Substantive message already delivered');
+    expect((evaluated.metadata as any)?.pipelineNotes?.dropped).toContain('post-delivery-repeat:send_telegram');
+  });
+
+  it('also suppresses a second follow-up reply when the first follow-up already answered the user', () => {
+    const pipeline = new DecisionPipeline(
+      new StubConfig({
+        maxMessagesPerAction: 6,
+        maxStepsPerAction: 10,
+        messageDedupWindow: 5,
+      }) as any,
+    );
+
+    const proposed: StandardResponse = {
+      success: true,
+      tools: [
+        {
+          name: 'send_telegram',
+          metadata: {
+            chatId: 'u1',
+            message: 'Yep — done on my side. The stripe-bank skill is installed and I only need your mode, country, account type, and secret key to continue.'
+          }
+        }
+      ],
+      verification: { goals_met: false, analysis: 'Sending another follow-up answer' },
+    };
+
+    const evaluated = pipeline.evaluate(proposed, {
+      actionId: 'a9',
+      source: 'telegram',
+      sourceId: 'u1',
+      messagesSent: 1,
+      substantiveDeliveriesSent: 1,
+      currentStep: 2,
+      recentMemories: [
+        {
+          id: 'a9-step-1-send_telegram',
+          type: 'short',
+          content: 'sent first done reply',
+          metadata: { tool: 'send_telegram' },
+          timestamp: new Date().toISOString(),
+        } as any,
+      ],
+      taskDescription: 'Respond to telegram message from Frederick: are you done',
+    });
+
+    expect(evaluated.tools?.length).toBe(0);
+    expect((evaluated.metadata as any)?.pipelineNotes?.dropped).toContain('post-delivery-repeat:send_telegram');
+  });
+
   it('extends step budget from execution plan to reduce premature termination', () => {
     const pipeline = new DecisionPipeline(
       new StubConfig({

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { collectCompletionAuditIssues } from '../src/core/CompletionAudit';
+import { auditDelivery, collectCompletionAuditIssues, StepLedger } from '../src/core/CompletionAudit';
 
 describe('collectCompletionAuditIssues', () => {
     const isAcknowledgement = (message: string) => /^(on it|working on it|got it|hang tight|one moment)/i.test(message.trim());
@@ -60,5 +60,48 @@ describe('collectCompletionAuditIssues', () => {
         });
 
         expect(issues).toEqual([]);
+    });
+
+    it('marks channel work incomplete when deep work finishes after the last user message', () => {
+        const ledger = new StepLedger();
+        ledger.record({
+            step: 1,
+            tool: 'send_telegram',
+            success: true,
+            isDeep: false,
+            isSideEffect: true,
+            timestamp: 1000,
+            resultSnippet: 'On it. Installing now.'
+        });
+        ledger.record({
+            step: 1,
+            tool: 'install_skill',
+            success: true,
+            isDeep: true,
+            isSideEffect: false,
+            timestamp: 2000,
+            resultSnippet: 'Installed skill successfully'
+        });
+        ledger.record({
+            step: 2,
+            tool: 'validate_skill',
+            success: true,
+            isDeep: true,
+            isSideEffect: false,
+            timestamp: 3000,
+            resultSnippet: 'Validated skill successfully'
+        });
+
+        const result = auditDelivery({
+            ledger,
+            taskDescription: 'Install stripe skill and report back',
+            isChannelTask: true,
+            sentMessagesInAction: ['On it. I am installing that skill now, then I will tell you what info I need.'],
+            substantiveDeliveriesSent: 1,
+            isLikelyAcknowledgementMessage: isAcknowledgement,
+        });
+
+        expect(result.delivered).toBe(false);
+        expect(result.reason).toContain('no final completion update was sent');
     });
 });

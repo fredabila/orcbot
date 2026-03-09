@@ -16,6 +16,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { exec } from 'child_process';
+import readline from 'readline';
 import { logger } from '../utils/logger';
 import type { LLMToolDefinition, LLMToolResponse } from './MultiLLM';
 
@@ -27,6 +28,7 @@ let getModel: any = null;
 let complete: any = null;
 let getProviders: any = null;
 let getModels: any = null;
+let getOAuthApiKey: any = null;
 let loginAnthropic: any = null;
 let loginAntigravity: any = null;
 let loginGeminiCli: any = null;
@@ -41,6 +43,7 @@ async function ensurePiAi(): Promise<boolean> {
         complete = mod.complete;
         getProviders = mod.getProviders;
         getModels = mod.getModels;
+        getOAuthApiKey = mod.getOAuthApiKey;
         loginAnthropic = mod.loginAnthropic;
         loginAntigravity = mod.loginAntigravity;
         loginGeminiCli = mod.loginGeminiCli;
@@ -85,21 +88,52 @@ function normalizePiModel(model: string): string {
     return model.replace(/^nvidia:/, '').replace(/^bedrock:/, '');
 }
 
+function cloneToolSchema(schema: any): any {
+    if (!schema || typeof schema !== 'object') return schema;
+
+    const cloned: any = {};
+
+    for (const key of ['type', 'description', 'title', 'format', 'default', 'enum', 'const', 'nullable']) {
+        if (schema[key] !== undefined) cloned[key] = schema[key];
+    }
+
+    if (schema.properties && typeof schema.properties === 'object') {
+        cloned.properties = Object.fromEntries(
+            Object.entries(schema.properties).map(([propName, propSchema]) => [propName, cloneToolSchema(propSchema)])
+        );
+    }
+
+    if (Array.isArray(schema.required)) {
+        cloned.required = [...schema.required];
+    }
+
+    if (schema.items !== undefined) {
+        cloned.items = Array.isArray(schema.items)
+            ? schema.items.map((item: any) => cloneToolSchema(item))
+            : cloneToolSchema(schema.items);
+    }
+
+    if (schema.additionalProperties !== undefined) {
+        cloned.additionalProperties = typeof schema.additionalProperties === 'object'
+            ? cloneToolSchema(schema.additionalProperties)
+            : schema.additionalProperties;
+    }
+
+    for (const key of ['anyOf', 'oneOf', 'allOf']) {
+        if (Array.isArray(schema[key])) {
+            cloned[key] = schema[key].map((item: any) => cloneToolSchema(item));
+        }
+    }
+
+    return cloned;
+}
+
 /** Converts OrcBot LLMToolDefinition[] to pi-ai Tool[] */
 function topiTools(tools: LLMToolDefinition[]): any[] {
     return tools.map(t => ({
         name: t.function.name,
         description: t.function.description,
-        parameters: {
-            type: 'object' as const,
-            properties: Object.fromEntries(
-                Object.entries(t.function.parameters.properties).map(([k, v]) => [
-                    k,
-                    { type: (v as any).type, description: (v as any).description }
-                ])
-            ),
-            required: t.function.parameters.required ?? [],
-        },
+        parameters: cloneToolSchema(t.function.parameters),
     }));
 }
 
@@ -146,9 +180,9 @@ export async function piAiCall(
         throw new Error('PiAIAdapter: @mariozechner/pi-ai not available');
     }
 
-    const piProvider = toPiProvider(opts.provider, opts.model);
+    const piProvider = resolvePiProvider(opts.provider, opts.model, opts.apiKeys);
     const piModel = normalizePiModel(opts.model);
-    const apiCreds = resolveApiCredentials(piProvider, opts.apiKeys);
+    const apiCreds = await resolveApiCredentials(piProvider, opts.apiKeys);
 
     let model: any;
     try {
@@ -192,9 +226,9 @@ export async function piAiCallWithTools(
         throw new Error('PiAIAdapter: @mariozechner/pi-ai not available');
     }
 
-    const piProvider = toPiProvider(opts.provider, opts.model);
+    const piProvider = resolvePiProvider(opts.provider, opts.model, opts.apiKeys);
     const piModel = normalizePiModel(opts.model);
-    const apiCreds = resolveApiCredentials(piProvider, opts.apiKeys);
+    const apiCreds = await resolveApiCredentials(piProvider, opts.apiKeys);
 
     let model: any;
     try {
@@ -280,8 +314,32 @@ function extractPiAiToolCalls(response: any): LLMToolResponse['toolCalls'] {
         }));
 }
 
+/**
+ * Prefer cached pi-ai OAuth providers when no direct API key is configured.
+ * This avoids forcing OPENAI_API_KEY for users who completed the interactive
+ * OpenAI Codex / ChatGPT auth flow via pi-ai.
+ */
+function resolvePiProvider(provider: string, model: string, keys: PiAIAdapterOptions['apiKeys']): string {
+    const inferredProvider = toPiProvider(provider, model);
+
+    if (inferredProvider === 'openai' && !keys.openai && isPiAiLinked('openai-codex')) {
+        return 'openai-codex';
+    }
+
+    if (inferredProvider === 'google' && !keys.google) {
+        if (isPiAiLinked('google-gemini-cli')) return 'google-gemini-cli';
+        if (isPiAiLinked('google-antigravity')) return 'google-antigravity';
+    }
+
+    if (inferredProvider === 'anthropic' && !keys.anthropic && isPiAiLinked('anthropic')) {
+        return 'anthropic';
+    }
+
+    return inferredProvider;
+}
+
 /** Resolve the right API key or credentials for a pi-ai provider name */
-function resolveApiCredentials(piProvider: string, keys: PiAIAdapterOptions['apiKeys']): { apiKey?: string; baseUrl?: string; project?: string; location?: string } {
+async function resolveApiCredentials(piProvider: string, keys: PiAIAdapterOptions['apiKeys']): Promise<{ apiKey?: string; baseUrl?: string; project?: string; location?: string }> {
     switch (piProvider) {
         case 'openai': return { apiKey: keys.openai };
         case 'google': return { apiKey: keys.google };
@@ -309,8 +367,38 @@ function resolveApiCredentials(piProvider: string, keys: PiAIAdapterOptions['api
         case 'google-gemini-cli':
         case 'github-copilot':
         case 'openai-codex':
-            return { apiKey: (keys as any)[piProvider] }; // No fallback for OAuth providers
+            return { apiKey: await loadOAuthApiKey(piProvider) };
         default: return { apiKey: keys.openai };
+    }
+}
+
+async function loadOAuthApiKey(providerKey: string): Promise<string | undefined> {
+    try {
+        if (!fs.existsSync(PI_AI_AUTH)) return undefined;
+
+        const rawAuth = JSON.parse(fs.readFileSync(PI_AI_AUTH, 'utf8'));
+        if (!rawAuth?.[providerKey]) return undefined;
+
+        const normalizedAuth: Record<string, any> = { ...rawAuth };
+        const providerCreds = normalizedAuth[providerKey];
+
+        if (providerCreds && !providerCreds.type) {
+            normalizedAuth[providerKey] = { type: 'oauth', ...providerCreds };
+        }
+
+        if (getOAuthApiKey) {
+            const result = await getOAuthApiKey(providerKey, normalizedAuth);
+            if (result?.apiKey) {
+                normalizedAuth[providerKey] = { type: 'oauth', ...result.newCredentials };
+                fs.writeFileSync(PI_AI_AUTH, JSON.stringify(normalizedAuth, null, 2), 'utf8');
+                return result.apiKey;
+            }
+        }
+
+        return providerCreds.access || providerCreds.apiKey;
+    } catch (e) {
+        logger.error(`PiAIAdapter: Failed to load OAuth API key for ${providerKey} — ${(e as Error).message}`);
+        return undefined;
     }
 }
 
@@ -336,31 +424,41 @@ export async function piAiLogin(providerKey: string): Promise<void> {
         console.log('  '.repeat(1) + `URL: ${url}`);
         if (opts.devCode) console.log('  '.repeat(1) + `Device Code: ${opts.devCode}`);
         if (opts.instructions) console.log('  '.repeat(1) + `Instructions: ${opts.instructions}`);
+        console.log('  '.repeat(1) + 'If this OrcBot instance is running on a server, finish login in your browser and then paste the FULL redirect URL or auth code back into the terminal when prompted.');
         console.log('\n  Opening browser for authorization...\n');
 
         const cmd = process.platform === 'win32' ? 'start' : process.platform === 'darwin' ? 'open' : 'xdg-open';
-        exec(`${cmd} "${url}"`);
+        exec(`${cmd} "${url}"`, (error) => {
+            if (error) {
+                logger.warn(`PiAIAdapter: Failed to auto-open browser for ${providerKey} — ${error.message}`);
+            }
+        });
     };
 
     const onProgress = (msg: string) => logger.info(`PiAIAdapter: ${msg}`);
+    const onPrompt = async (prompt: { message: string }) => promptForOAuthInput(providerKey, prompt.message);
+    const onManualCodeInput = async () => promptForOAuthInput(
+        providerKey,
+        'Paste the FULL redirect URL from the browser address bar, or just the authorization code'
+    );
 
     try {
         let creds: any = null;
         switch (providerKey) {
             case 'anthropic':
-                if (loginAnthropic) creds = await loginAnthropic((url: string) => onAuth(url), () => Promise.resolve(''));
+                if (loginAnthropic) creds = await loginAnthropic((url: string) => onAuth(url), () => onPrompt({ message: 'Paste the device code shown in the browser flow' }));
                 break;
             case 'google-antigravity':
-                if (loginAntigravity) creds = await loginAntigravity(onAuth, onProgress);
+                if (loginAntigravity) creds = await loginAntigravity(onAuth, onProgress, onManualCodeInput);
                 break;
             case 'google-gemini-cli':
-                if (loginGeminiCli) creds = await loginGeminiCli({ onAuth, onProgress });
+                if (loginGeminiCli) creds = await loginGeminiCli(onAuth, onProgress, onManualCodeInput);
                 break;
             case 'github-copilot':
-                if (loginGitHubCopilot) creds = await loginGitHubCopilot({ onAuth, onProgress });
+                if (loginGitHubCopilot) creds = await loginGitHubCopilot({ onAuth, onPrompt, onProgress, onManualCodeInput });
                 break;
             case 'openai-codex':
-                if (loginOpenAICodex) creds = await loginOpenAICodex({ onAuth, onProgress });
+                if (loginOpenAICodex) creds = await loginOpenAICodex({ onAuth, onPrompt, onProgress, onManualCodeInput });
                 break;
             default:
                 logger.warn(`PiAIAdapter: No login handler for ${providerKey}`);
@@ -372,6 +470,32 @@ export async function piAiLogin(providerKey: string): Promise<void> {
         }
     } catch (e) {
         logger.error(`PiAIAdapter: Login failed — ${(e as Error).message}`);
+    }
+}
+
+function canPromptForOAuthInput(): boolean {
+    return !!process.stdin?.isTTY && !!process.stdout?.isTTY;
+}
+
+async function promptForOAuthInput(providerKey: string, message: string): Promise<string> {
+    if (!canPromptForOAuthInput()) {
+        throw new Error(
+            `OAuth login for ${providerKey} requires manual redirect/code input, but this OrcBot process has no interactive terminal. Run the login from an attached terminal, or complete the OAuth flow on the same host that owns the localhost callback.`
+        );
+    }
+
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+    });
+
+    try {
+        const answer = await new Promise<string>((resolve) => {
+            rl.question(`\n${message}: `, resolve);
+        });
+        return answer.trim();
+    } finally {
+        rl.close();
     }
 }
 
@@ -388,7 +512,7 @@ function savePiAiAuth(providerKey: string, credentialsJson: string) {
         // Some login functions return a JSON string, others might return an object
         const creds = typeof credentialsJson === 'string' ? JSON.parse(credentialsJson) : credentialsJson;
 
-        existing[providerKey] = creds;
+        existing[providerKey] = { type: 'oauth', ...creds };
 
         if (!fs.existsSync(PI_AI_DIR)) {
             fs.mkdirSync(PI_AI_DIR, { recursive: true });
@@ -409,3 +533,10 @@ export function isPiAiLinked(providerKey: string): boolean {
         return false;
     }
 }
+
+export const __test__ = {
+    cloneToolSchema,
+    topiTools,
+    normalizePiModel,
+    toPiProvider,
+};

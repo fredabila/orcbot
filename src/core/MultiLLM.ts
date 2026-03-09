@@ -187,14 +187,26 @@ export class MultiLLM {
     public async callFast(prompt: string, systemMessage?: string): Promise<string> {
         if (this.fastModelName) {
             const provider = this.inferProvider(this.fastModelName);
-            if (this.hasKeyForProvider(provider)) {
-                return this.call(prompt, systemMessage, provider, this.fastModelName);
+            if (this.hasKeyForProvider(provider) || this.hasPiAiLinkedAuth(provider)) {
+                try {
+                    return await this.call(prompt, systemMessage, provider, this.fastModelName);
+                } catch (error) {
+                    logger.warn(`MultiLLM: Explicit fast model ${this.fastModelName} failed, falling back to selected model ${this.modelName} - ${(error as Error).message}`);
+                    const selectedProvider = this.preferredProvider || this.inferProvider(this.modelName);
+                    return this.call(prompt, systemMessage, selectedProvider, this.modelName);
+                }
             }
-            logger.info(`MultiLLM: Fast model ${this.fastModelName} needs ${provider} key (not configured). Auto-selecting from primary provider.`);
+            logger.info(`MultiLLM: Fast model ${this.fastModelName} needs ${provider} credentials (not configured). Auto-selecting from primary provider.`);
         }
         const primaryProvider = this.preferredProvider || this.inferProvider(this.modelName);
         const fastModel = this.getFastModelForProvider(primaryProvider);
-        return this.call(prompt, systemMessage, primaryProvider, fastModel);
+        try {
+            return await this.call(prompt, systemMessage, primaryProvider, fastModel);
+        } catch (error) {
+            if (fastModel === this.modelName) throw error;
+            logger.warn(`MultiLLM: Fast model ${fastModel} failed, falling back to selected model ${this.modelName} - ${(error as Error).message}`);
+            return this.call(prompt, systemMessage, primaryProvider, this.modelName);
+        }
     }
 
     private hasKeyForProvider(provider: LLMProvider): boolean {
@@ -217,7 +229,26 @@ export class MultiLLM {
         }
     }
 
+    private hasPiAiLinkedAuth(provider: LLMProvider): boolean {
+        if (!this.usePiAI || provider === 'ollama') return false;
+
+        switch (provider) {
+            case 'openai':
+                return isPiAiLinked('openai-codex');
+            case 'google':
+                return isPiAiLinked('google-gemini-cli') || isPiAiLinked('google-antigravity');
+            case 'anthropic':
+                return isPiAiLinked('anthropic');
+            default:
+                return false;
+        }
+    }
+
     private getFastModelForProvider(provider: LLMProvider): string {
+        if (this.usePiAI && this.hasPiAiLinkedAuth(provider)) {
+            return this.modelName;
+        }
+
         switch (provider) {
             case 'openai': return 'gpt-4o-mini';
             case 'google': return 'gemini-flash-lite-latest';
@@ -231,11 +262,16 @@ export class MultiLLM {
 
     public async call(prompt: string, systemMessage?: string, provider?: LLMProvider, modelOverride?: string): Promise<string> {
         const primaryProvider = provider || this.preferredProvider || this.inferProvider(modelOverride || this.modelName);
+        const primaryModel = modelOverride || this.modelName;
+        let piAiError: Error | undefined;
 
         if (this.usePiAI && primaryProvider !== 'ollama') {
             try {
                 return await piAiCall(prompt, systemMessage, this.getPiAIOptions(modelOverride, provider));
-            } catch (e) {}
+            } catch (e) {
+                piAiError = e as Error;
+                logger.warn(`MultiLLM: pi-ai call failed for ${primaryProvider}/${primaryModel}, falling back to legacy path - ${piAiError.message}`);
+            }
         }
         
         const fallbackProvider = this.getFallbackProvider(primaryProvider);
@@ -255,10 +291,12 @@ export class MultiLLM {
             }
         };
 
-        const primaryModel = modelOverride || this.modelName;
         return ErrorHandler.withFallback(
             async () => {
                 const primaryProviderResolved = provider || this.preferredProvider || this.inferProvider(primaryModel);
+                if (piAiError && !this.hasKeyForProvider(primaryProviderResolved)) {
+                    throw new Error(`Primary provider (${primaryProviderResolved}) via pi-ai failed: ${piAiError.message}`);
+                }
                 if (!this.hasKeyForProvider(primaryProviderResolved)) {
                     throw new Error(`Primary provider (${primaryProviderResolved}) failed: API key not configured.`);
                 }
@@ -284,12 +322,14 @@ export class MultiLLM {
         modelOverride?: string
     ): Promise<LLMToolResponse> {
         const primaryProvider = provider || this.preferredProvider || this.inferProvider(modelOverride || this.modelName);
+        let piAiToolError: Error | undefined;
 
         if (this.usePiAI && primaryProvider !== 'ollama') {
             try {
                 return await piAiCallWithTools(prompt, systemMessage, tools, this.getPiAIOptions(modelOverride, provider));
             } catch (e) {
-                logger.warn(`MultiLLM: pi-ai callWithTools failed, falling back to legacy — ${(e as Error).message}`);
+                piAiToolError = e as Error;
+                logger.warn(`MultiLLM: pi-ai callWithTools failed, falling back to legacy - ${piAiToolError.message}`);
             }
         }
         
@@ -326,6 +366,9 @@ export class MultiLLM {
         const fallbackProvider = this.getFallbackProvider(primaryProvider);
         return ErrorHandler.withFallback(
             async () => {
+                if (piAiToolError && !this.hasKeyForProvider(primaryProvider)) {
+                    throw new Error(`Primary provider (${primaryProvider}) via pi-ai failed: ${piAiToolError.message}`);
+                }
                 if (!this.hasKeyForProvider(primaryProvider)) {
                     throw new Error(`Primary provider (${primaryProvider}) failed: API key not configured.`);
                 }

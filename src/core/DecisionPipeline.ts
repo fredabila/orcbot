@@ -662,6 +662,14 @@ export class DecisionPipeline {
             const isSemanticallyDuplicate = this.messageCache.isSemanticallyDuplicate(channelKey, message);
             const isReassurance = this.isShortReassurance(message);
             const hasNewToolOutput = this.hasNonSendToolSinceLastSend(ctx);
+            const isUserFollowUp = this.isUserFollowUpQuery(ctx.taskDescription);
+            const priorSubstantiveDelivery = (ctx.substantiveDeliveriesSent || 0) > 0;
+
+            if (priorSubstantiveDelivery && !hasNewToolOutput && !proposedHasNonSendTool) {
+                dropped.push(`post-delivery-repeat:${tool.name}`);
+                notes.push('Suppressed send: substantive reply already delivered in this action without any new work since the last send');
+                continue;
+            }
 
             if (isReassurance && !hasNewToolOutput && !proposedHasNonSendTool) {
                 // Allow the very first message of an action even if it's a reassurance —
@@ -682,7 +690,6 @@ export class DecisionPipeline {
             // Also exempt when the user is explicitly asking for an update or follow-up.
             // In that scenario, even if the response is semantically similar to a prior message,
             // the user deserves a fresh reply — they're asking because they haven't seen results.
-            const isUserFollowUp = this.isUserFollowUpQuery(ctx.taskDescription);
             const exemptFromSemanticDedup = isFirstMessageInAction || (isUserFollowUp && allowedMessages === 0);
 
             // Block semantically duplicate messages (e.g., "I'm distributing tasks" repeated with slight variations)

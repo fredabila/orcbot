@@ -1,4 +1,40 @@
-import { describe, expect, it, vi } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { ConfigManager } from '../src/config/ConfigManager';
+import { collectLLMCompatibilityReport } from '../src/cli/Doctor';
+
+const tempPaths: string[] = [];
+
+afterEach(() => {
+    for (const tempPath of tempPaths.splice(0)) {
+        fs.rmSync(tempPath, { recursive: true, force: true });
+    }
+});
+
+describe('Doctor LLM compatibility report', () => {
+    it('reports configured provider readiness without live probes', async () => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orcbot-doctor-'));
+        tempPaths.push(tempDir);
+
+        const configPath = path.join(tempDir, 'orcbot.config.yaml');
+        fs.writeFileSync(configPath, [
+            'llmProvider: openrouter',
+            'modelName: openrouter:google/gemini-2.0-flash-exp:free',
+            'openrouterApiKey: test-openrouter-key',
+            'usePiAI: false',
+        ].join('\n'));
+
+        const config = new ConfigManager(configPath);
+        const report = await collectLLMCompatibilityReport(config, { live: false });
+
+        expect(report.activeProvider).toBe('openrouter');
+        expect(report.schemaContractOk).toBe(true);
+        expect(report.providers.some(provider => provider.provider === 'openrouter' && provider.ready)).toBe(true);
+        expect(report.providers.find(provider => provider.provider === 'openrouter')?.authMode).toBe('api-key');
+    });
+});import { describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import { collectDoctorReport } from '../src/cli/Doctor';
 
