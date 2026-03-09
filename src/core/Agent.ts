@@ -57,6 +57,7 @@ import { resolveBrowserScratchpadTarget } from './BrowserScratchpad';
 import { collectCompletionAuditIssues, StepLedger, auditDelivery } from './CompletionAudit';
 import { buildDelegatedTaskFollowupAction } from './DelegatedTaskFollowup';
 import { resolveInboundRoute } from './InboundRouting';
+import { SelfTrainingManager } from './SelfTrainingManager';
 
 /**
  * Tracks users who have interacted with the bot across channels.
@@ -118,6 +119,7 @@ export class Agent {
     private lastWorldEventsSummary: string = '';
     private _blankPageCount: number = 0;
     private agentConfigFile: string;
+    private selfTraining: SelfTrainingManager;
     private agentIdentity: string = '';
     private isBusy: boolean = false;
     /** Per-lane busy flags used by the parallel worker pool */
@@ -313,6 +315,32 @@ export class Agent {
 
         // Initialize RuntimeTuner for self-tuning capabilities
         this.tuner = new RuntimeTuner(path.dirname(this.config.get('memoryPath')));
+
+        this.selfTraining = new SelfTrainingManager({
+            enabled: this.config.get('selfTrainingEnabled') !== false,
+            redactSensitiveData: this.config.get('selfTrainingRedactSensitiveData') !== false,
+            minQualityScore: Number(this.config.get('selfTrainingMinQualityScore') || 0.72),
+            maxTrajectories: Number(this.config.get('selfTrainingMaxTrajectories') || 1000),
+            trainOnIdle: this.config.get('selfTrainingTrainOnIdle') !== false,
+            minAcceptedExamples: Number(this.config.get('selfTrainingMinAcceptedExamples') || 25),
+            preparationCooldownMinutes: Number(this.config.get('selfTrainingPreparationCooldownMinutes') || 60),
+            storePath: this.config.get('selfTrainingStorePath') || path.join(this.config.getDataHome(), 'self-training-trajectories.json'),
+            exportPath: this.config.get('selfTrainingExportPath') || path.join(this.config.getDataHome(), 'self-training-trajectories.jsonl'),
+            jobManifestPath: this.config.get('selfTrainingJobManifestPath') || path.join(this.config.getDataHome(), 'self-training-job.json'),
+            evalReportPath: this.config.get('selfTrainingEvalReportPath') || path.join(this.config.getDataHome(), 'self-training-eval-report.json'),
+            evalPassThreshold: Number(this.config.get('selfTrainingEvalPassThreshold') || 0.55),
+            evalSampleSize: Number(this.config.get('selfTrainingEvalSampleSize') || 10),
+            launchCommandTemplate: this.config.get('selfTrainingLaunchCommand'),
+            launchCwd: this.config.get('selfTrainingLaunchCwd'),
+            launchSessionPrefix: this.config.get('selfTrainingLaunchSessionPrefix') || 'self-train',
+            launchRecordPath: this.config.get('selfTrainingLaunchRecordPath') || path.join(this.config.getDataHome(), 'self-training-launch.json'),
+            candidateRegistryPath: this.config.get('selfTrainingCandidateRegistryPath') || path.join(this.config.getDataHome(), 'self-training-candidates.json'),
+            promotionRecordPath: this.config.get('selfTrainingPromotionRecordPath') || path.join(this.config.getDataHome(), 'self-training-promotion.json'),
+            promotionMinAverageScore: Number(this.config.get('selfTrainingPromotionMinAverageScore') || 0.7),
+            requireEvalForPromotion: this.config.get('selfTrainingRequireEvalForPromotion') !== false,
+            modelName: this.config.get('modelName'),
+            provider: this.config.get('llmProvider') || 'auto',
+        });
 
         this.browser = new WebBrowser(
             this.config.get('serperApiKey'),
@@ -7338,6 +7366,208 @@ Be thorough and academic.`;
             }
         });
 
+        this.skills.registerSkill({
+            name: 'get_self_training_status',
+            description: 'Get self-training capture statistics, accepted trajectory counts, and the latest prepared offline training job manifest.',
+            usage: 'get_self_training_status()',
+            handler: async () => {
+                return JSON.stringify(this.selfTraining.getStatus(), null, 2);
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'prepare_self_training_job',
+            description: 'Prepare an offline training job manifest from accepted self-training trajectories. Does not train live weights.',
+            usage: 'prepare_self_training_job()',
+            handler: async () => {
+                const result = this.selfTraining.prepareTrainingJobIfNeeded();
+                return JSON.stringify(result, null, 2);
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'run_self_training_eval',
+            description: 'Evaluate accepted self-training trajectories against the current or specified model. Admin only because it consumes model calls.',
+            usage: 'run_self_training_eval(limit?, provider?, modelName?)',
+            handler: async (args: any) => {
+                if (!this.isUserAdmin(args)) {
+                    return 'Error: Only admin users can run self-training model evaluations.';
+                }
+
+                const limit = args.limit ? Number(args.limit) : undefined;
+                const provider = args.provider;
+                const modelName = args.modelName || args.model;
+                const report = await this.selfTraining.runEvaluation(this.llm, { limit, provider, modelName });
+                return JSON.stringify(report, null, 2);
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'build_self_training_launch_plan',
+            description: 'Build the command and working directory for launching an offline self-training job without executing it. Admin only.',
+            usage: 'build_self_training_launch_plan(commandTemplate?, cwd?, sessionId?)',
+            handler: async (args: any) => {
+                if (!this.isUserAdmin(args)) {
+                    return 'Error: Only admin users can build self-training launch plans.';
+                }
+
+                const result = this.selfTraining.buildLaunchPlan({
+                    commandTemplate: args.commandTemplate,
+                    cwd: args.cwd,
+                    sessionId: args.sessionId,
+                });
+                return JSON.stringify(result, null, 2);
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'launch_self_training_job',
+            description: 'Launch a prepared offline self-training job in a background shell session. Admin only. Requires selfTrainingLaunchCommand config or an explicit commandTemplate.',
+            usage: 'launch_self_training_job(commandTemplate?, cwd?, sessionId?, dryRun?)',
+            handler: async (args: any) => {
+                if (!this.isUserAdmin(args)) {
+                    return 'Error: Only admin users can launch self-training jobs.';
+                }
+
+                const planResult = this.selfTraining.buildLaunchPlan({
+                    commandTemplate: args.commandTemplate,
+                    cwd: args.cwd,
+                    sessionId: args.sessionId,
+                });
+
+                if (!planResult.ready || !planResult.plan) {
+                    return JSON.stringify(planResult, null, 2);
+                }
+
+                if (args.dryRun === true || String(args.dryRun || '').toLowerCase() === 'true') {
+                    return JSON.stringify({ launched: false, reason: 'dry_run', plan: planResult.plan }, null, 2);
+                }
+
+                const { spawn } = require('child_process');
+                const child = spawn(planResult.plan.command, {
+                    cwd: planResult.plan.cwd,
+                    shell: true,
+                    detached: false,
+                    stdio: 'pipe',
+                    env: {
+                        ...process.env,
+                        ORCBOT_SELF_TRAINING_JOB: planResult.plan.jobManifestPath,
+                        ORCBOT_SELF_TRAINING_EXPORT: planResult.plan.exportPath,
+                        ORCBOT_SELF_TRAINING_STORE: planResult.plan.storePath,
+                        ORCBOT_SELF_TRAINING_JOB_ID: planResult.plan.jobId,
+                    }
+                });
+
+                const session = shellSessions.attach(planResult.plan.sessionId, child, planResult.plan.command, planResult.plan.cwd);
+                this.selfTraining.recordLaunch({
+                    launchedAt: new Date().toISOString(),
+                    jobId: planResult.plan.jobId,
+                    sessionId: planResult.plan.sessionId,
+                    command: planResult.plan.command,
+                    cwd: planResult.plan.cwd,
+                    pid: session.pid,
+                });
+
+                return JSON.stringify({
+                    launched: true,
+                    sessionId: planResult.plan.sessionId,
+                    pid: session.pid,
+                    command: planResult.plan.command,
+                    cwd: planResult.plan.cwd,
+                    jobId: planResult.plan.jobId,
+                }, null, 2);
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'register_self_training_candidate',
+            description: 'Register a trained candidate model so it can be promoted later if evaluation passes. Admin only.',
+            usage: 'register_self_training_candidate(modelName, provider?, candidateId?, jobId?, notes?)',
+            handler: async (args: any) => {
+                if (!this.isUserAdmin(args)) {
+                    return 'Error: Only admin users can register self-training candidates.';
+                }
+
+                const notes = Array.isArray(args.notes)
+                    ? args.notes.map((note: any) => String(note))
+                    : typeof args.notes === 'string'
+                        ? [args.notes]
+                        : [];
+
+                const result = this.selfTraining.registerCandidateModel({
+                    candidateId: args.candidateId,
+                    modelName: String(args.modelName || args.model || '').trim(),
+                    provider: args.provider,
+                    jobId: args.jobId,
+                    notes,
+                });
+                return JSON.stringify(result, null, 2);
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'promote_self_training_candidate',
+            description: 'Promote a registered self-training candidate into the live model configuration. Admin only.',
+            usage: 'promote_self_training_candidate(candidateId?, modelName?, provider?, dryRun?)',
+            handler: async (args: any) => {
+                if (!this.isUserAdmin(args)) {
+                    return 'Error: Only admin users can promote self-training candidates.';
+                }
+
+                const decision = this.selfTraining.preparePromotion({
+                    candidateId: args.candidateId,
+                    modelName: args.modelName || args.model,
+                    provider: args.provider,
+                });
+
+                if (!decision.eligible || !decision.candidate) {
+                    return JSON.stringify(decision, null, 2);
+                }
+
+                const previousModelName = this.config.get('modelName');
+                const previousProvider = this.config.get('llmProvider') || 'auto';
+                const dryRun = args.dryRun === true || String(args.dryRun || '').toLowerCase() === 'true';
+
+                if (dryRun) {
+                    return JSON.stringify({
+                        promoted: false,
+                        reason: 'dry_run',
+                        decision,
+                        previousModelName,
+                        previousProvider,
+                    }, null, 2);
+                }
+
+                if (decision.candidate.provider && decision.candidate.provider !== 'auto') {
+                    this.config.set('llmProvider', decision.candidate.provider as any);
+                } else {
+                    this.config.set('llmProvider', undefined as any);
+                }
+                this.config.set('modelName', decision.candidate.modelName);
+
+                this.selfTraining.recordPromotion({
+                    promotedAt: new Date().toISOString(),
+                    candidateId: decision.candidate.id,
+                    modelName: decision.candidate.modelName,
+                    provider: decision.candidate.provider,
+                    previousModelName,
+                    previousProvider,
+                    evaluationAverageScore: decision.candidate.evaluationAverageScore,
+                    evaluationPassRate: decision.candidate.evaluationPassRate,
+                    evaluationPassThreshold: decision.candidate.evaluationPassThreshold,
+                });
+
+                return JSON.stringify({
+                    promoted: true,
+                    candidate: decision.candidate,
+                    previousModelName,
+                    previousProvider,
+                    activeModelName: this.config.get('modelName'),
+                    activeProvider: this.config.get('llmProvider') || 'auto',
+                }, null, 2);
+            }
+        });
+
         // Skill: Reset Tuning
         this.skills.registerSkill({
             name: 'reset_tuning',
@@ -10448,6 +10678,41 @@ REFLECTION: <1-2 sentences>`;
                     logger.info('Agent: Memory limits reloaded');
                 }
 
+                const selfTrainingChanged = [
+                    'selfTrainingEnabled',
+                    'selfTrainingMinQualityScore',
+                    'selfTrainingTrainOnIdle',
+                    'selfTrainingMinAcceptedExamples',
+                    'selfTrainingPreparationCooldownMinutes',
+                    'selfTrainingEvalPassThreshold',
+                    'selfTrainingEvalSampleSize',
+                    'selfTrainingLaunchCommand',
+                    'selfTrainingLaunchCwd',
+                    'selfTrainingPromotionMinAverageScore',
+                    'selfTrainingRequireEvalForPromotion',
+                    'modelName',
+                    'llmProvider'
+                ].some(key => !isDeepEqual(oldConfig[key], newConfig[key]));
+
+                if (selfTrainingChanged) {
+                    this.selfTraining.updateRuntimeConfig({
+                        enabled: newConfig.selfTrainingEnabled !== false,
+                        minQualityScore: Number(newConfig.selfTrainingMinQualityScore || 0.72),
+                        trainOnIdle: newConfig.selfTrainingTrainOnIdle !== false,
+                        minAcceptedExamples: Number(newConfig.selfTrainingMinAcceptedExamples || 25),
+                        preparationCooldownMinutes: Number(newConfig.selfTrainingPreparationCooldownMinutes || 60),
+                        evalPassThreshold: Number(newConfig.selfTrainingEvalPassThreshold || 0.55),
+                        evalSampleSize: Number(newConfig.selfTrainingEvalSampleSize || 10),
+                        launchCommandTemplate: newConfig.selfTrainingLaunchCommand,
+                        launchCwd: newConfig.selfTrainingLaunchCwd,
+                        modelName: newConfig.modelName,
+                        provider: newConfig.llmProvider || 'auto',
+                        promotionMinAverageScore: Number(newConfig.selfTrainingPromotionMinAverageScore || 0.7),
+                        requireEvalForPromotion: newConfig.selfTrainingRequireEvalForPromotion !== false,
+                    });
+                    logger.info('Agent: Self-training settings reloaded');
+                }
+
                 // Reload AgenticUser settings if changed
                 const agenticUserChanged =
                     oldConfig.agenticUserEnabled !== newConfig.agenticUserEnabled ||
@@ -10646,6 +10911,15 @@ REFLECTION: <1-2 sentences>`;
         }
 
         const idleTimeMs = Date.now() - this.lastActionTime;
+
+        try {
+            const prep = this.selfTraining.prepareTrainingJobIfNeeded();
+            if (prep.prepared) {
+                logger.info(`Agent: Prepared self-training job ${prep.job?.id} from ${prep.job?.acceptedTrajectoryCount} accepted trajectories during idle heartbeat window.`);
+            }
+        } catch (e) {
+            logger.warn(`Agent: Idle self-training preparation failed: ${e}`);
+        }
 
         // SMART COOLING: If the last heartbeat was unproductive (agent had nothing to do),
         // back off exponentially — 2×, 4×, up to 8× the base interval — so we don't spam
@@ -14482,6 +14756,30 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
             this.actionQueue.updateStatus(action.id, actionStatus);
 
+            try {
+                const capture = this.selfTraining.captureCompletedAction({
+                    action,
+                    actionStatus,
+                    goalsMet,
+                    currentStep,
+                    messagesSent,
+                    substantiveDeliveriesSent,
+                    sentMessagesInAction,
+                    stepLedger,
+                    deliveryAudit,
+                    isUserFacingAction,
+                    modelName: this.config.get('modelName'),
+                    provider: this.config.get('llmProvider') || 'auto',
+                    skillCallCounts,
+                    isLikelyAcknowledgementMessage: (message: string) => this.isLikelyAcknowledgementMessage(message),
+                });
+                if (capture.captured) {
+                    logger.info(`Agent: Self-training trajectory ${capture.trajectoryId} captured for ${action.id} (accepted=${capture.accepted}, score=${capture.qualityScore}, reason=${capture.reason})`);
+                }
+            } catch (e) {
+                logger.warn(`Agent: Self-training capture failed for ${action.id}: ${e}`);
+            }
+
             // If ActionQueue silently auto-retried (flipped status back to 'pending'),
             // tell the user so they're not left wondering why nothing happened after
             // being told "Working on it...".
@@ -14578,6 +14876,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
             this.memory.consolidateInteractions(this.llm, 'session_end').catch(e => {
                 logger.error(`Background Interaction Consolidation Error: ${e}`);
             });
+            try {
+                this.selfTraining.prepareTrainingJobIfNeeded();
+            } catch (e) {
+                logger.warn(`Agent: Background self-training preparation failed: ${e}`);
+            }
         }
     }
 

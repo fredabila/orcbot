@@ -1,0 +1,150 @@
+.self-training-shell {
+  position: relative;
+  z-index: 2;
+  padding-top: 32px;
+  padding-bottom: 80px;
+}
+
+.self-training-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+  gap: 28px;
+  align-items: start;
+  margin-bottom: 56px;
+}
+
+.self-training-title {
+  font-size: clamp(2.4rem, 5vw, 4.8rem);
+  line-height: 0.98;
+  max-width: 12ch;
+  margin-bottom: 18px;
+}
+
+.self-training-lead {
+  max-width: 70ch;
+}
+
+.self-training-actions {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 24px;
+}
+
+.self-training-panel,
+.self-training-card,
+.self-training-column,
+.self-training-config {
+  background: rgba(18, 22, 29, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 24px;
+  padding: 24px;
+  backdrop-filter: blur(18px);
+}
+
+.st-panel-kicker {
+  display: inline-block;
+  color: var(--accent);
+  font-size: 0.76rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+
+.self-training-panel h2 {
+  font-size: 1.45rem;
+  margin-bottom: 12px;
+}
+
+.self-training-panel p,
+.self-training-card p,
+.deep-dive-copy p {
+  color: var(--text-muted);
+}
+
+.self-training-grid-section,
+.self-training-columns,
+.self-training-deep-dive,
+.self-training-config {
+  margin-bottom: 36px;
+}
+
+.self-training-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.self-training-card h3 {
+  font-size: 1rem;
+  margin-bottom: 10px;
+}
+
+.self-training-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.self-training-list {
+  list-style: none;
+  margin-top: 18px;
+  display: grid;
+  gap: 12px;
+  color: var(--text-muted);
+}
+
+.self-training-list li {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.self-training-code-list code,
+.self-training-pre code {
+  font-family: var(--font-mono);
+  font-size: 0.92rem;
+}
+
+.deep-dive-copy {
+  display: grid;
+  gap: 16px;
+}
+
+.self-training-pre {
+  margin-top: 18px;
+  overflow-x: auto;
+  padding: 18px;
+  border-radius: 18px;
+  background: rgba(7, 10, 14, 0.9);
+  border: 1px solid rgba(92, 255, 179, 0.18);
+}
+
+.self-training-cta {
+  position: relative;
+}
+
+@media (max-width: 1100px) {
+  .self-training-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .self-training-hero,
+  .self-training-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .self-training-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .self-training-title {
+    max-width: none;
+  }
+}

@@ -216,10 +216,12 @@ function App() {
               <div className="marquee-track marquee-track-reverse">
                 {[
                   { icon: '⚡', title: 'Self-Evolving Skills', desc: 'Researches, writes, and installs its own TypeScript plugins when new capabilities are needed.' },
+                  { icon: '🧪', title: 'Self-Training Sidecar', desc: 'Captures accepted trajectories, prepares offline datasets, evaluates candidates, and promotes new models under admin control.' },
                   { icon: '🛡️', title: 'Guard Rails & Safety', desc: 'Loop detection, termination review, skill frequency limits, and deduplication protection.' },
                   { icon: '🧩', title: 'Smart Skill Routing', desc: 'Intent-based skill selection with configurable routing rules for optimal tool matching.' },
                   { icon: '🔒', title: 'Privacy First', desc: 'All logs, memories, configs, and context stay on your hardware. You own everything.' },
                   { icon: '⚡', title: 'Self-Evolving Skills', desc: 'Researches, writes, and installs its own TypeScript plugins when new capabilities are needed.' },
+                  { icon: '🧪', title: 'Self-Training Sidecar', desc: 'Captures accepted trajectories, prepares offline datasets, evaluates candidates, and promotes new models under admin control.' },
                   { icon: '🛡️', title: 'Guard Rails & Safety', desc: 'Loop detection, termination review, skill frequency limits, and deduplication protection.' },
                   { icon: '🧩', title: 'Smart Skill Routing', desc: 'Intent-based skill selection with configurable routing rules for optimal tool matching.' },
                   { icon: '🔒', title: 'Privacy First', desc: 'All logs, memories, configs, and context stay on your hardware. You own everything.' },
@@ -292,17 +294,28 @@ function App() {
               { icon: '🚀', title: 'Getting Started', desc: 'Quick setup guide — running in under 5 minutes.', url: 'https://docs.orcbot.buzzchat.site/getting-started.html' },
               { icon: '🏗️', title: 'Architecture', desc: 'Deep dive into modular design and component contracts.', url: 'https://docs.orcbot.buzzchat.site/architecture.html' },
               { icon: '🧩', title: 'Skills & Plugins', desc: 'Core skills reference and how to author custom ones.', url: 'https://docs.orcbot.buzzchat.site/skills.html' },
+              { icon: '🧪', title: 'Self-Training', desc: 'How OrcBot captures trajectories, evaluates candidates, and promotes models safely.', url: '/self-training' },
               { icon: '⚙️', title: 'Configuration', desc: 'Providers, channels, and every advanced setting.', url: 'https://docs.orcbot.buzzchat.site/configuration.html' },
               { icon: '🐳', title: 'Docker Deployment', desc: 'Run OrcBot anywhere with Docker Compose.', url: 'https://docs.orcbot.buzzchat.site/docker.html' },
               { icon: '📚', title: 'Full Documentation', desc: 'All guides, API references, and examples in one place.', url: 'https://docs.orcbot.buzzchat.site/', featured: true },
             ].map((doc, i) => (
-              <a href={doc.url} target="_blank" rel="noopener noreferrer" className={`doc-card ${(doc as any).featured ? 'featured' : ''}`} key={i}>
-                <div className="doc-card-icon">{doc.icon}</div>
-                <div className="doc-card-body"><h3>{doc.title}</h3><p>{doc.desc}</p></div>
-                <span className="doc-card-arrow">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg>
-                </span>
-              </a>
+              doc.url.startsWith('/') ? (
+                <Link to={doc.url} className={`doc-card ${(doc as any).featured ? 'featured' : ''}`} key={i}>
+                  <div className="doc-card-icon">{doc.icon}</div>
+                  <div className="doc-card-body"><h3>{doc.title}</h3><p>{doc.desc}</p></div>
+                  <span className="doc-card-arrow">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg>
+                  </span>
+                </Link>
+              ) : (
+                <a href={doc.url} target="_blank" rel="noopener noreferrer" className={`doc-card ${(doc as any).featured ? 'featured' : ''}`} key={i}>
+                  <div className="doc-card-icon">{doc.icon}</div>
+                  <div className="doc-card-body"><h3>{doc.title}</h3><p>{doc.desc}</p></div>
+                  <span className="doc-card-arrow">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg>
+                  </span>
+                </a>
+              )
             ))}
           </div>
         </section>
@@ -351,6 +364,7 @@ function App() {
               <a href="#how-it-works">How It Works</a>
               <a href="#architecture">Architecture</a>
               <a href="#install">Install</a>
+              <Link to="/self-training">Self-Training</Link>
               <Link to="/deploy">Cloud Deploy</Link>
             </div>
             <div className="footer-col">

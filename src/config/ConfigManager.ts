@@ -294,7 +294,14 @@ export class ConfigManager {
             browserProfileDir: 'browser-profiles',
             browserTraceDir: 'browser-traces',
             tokenUsagePath: 'token-usage-summary.json',
-            tokenLogPath: 'token-usage.log'
+            tokenLogPath: 'token-usage.log',
+            selfTrainingStorePath: 'self-training-trajectories.json',
+            selfTrainingExportPath: 'self-training-trajectories.jsonl',
+            selfTrainingJobManifestPath: 'self-training-job.json',
+            selfTrainingEvalReportPath: 'self-training-eval-report.json',
+            selfTrainingLaunchRecordPath: 'self-training-launch.json',
+            selfTrainingCandidateRegistryPath: 'self-training-candidates.json',
+            selfTrainingPromotionRecordPath: 'self-training-promotion.json'
         };
 
         for (const [key, base] of Object.entries(pathDefaults)) {

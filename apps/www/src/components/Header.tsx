@@ -34,6 +34,7 @@ const Header: React.FC<HeaderProps> = ({ scrolled: initialScrolled = false }) =>
       <div className={`nav-center ${mobileMenuOpen ? 'open' : ''}`}>
         <Link to="/" onClick={() => setMobileMenuOpen(false)}>Home</Link>
         <Link to="/skills" onClick={() => setMobileMenuOpen(false)}>Skills</Link>
+        <Link to="/self-training" onClick={() => setMobileMenuOpen(false)}>Self-Training</Link>
         <Link to="/robotics" onClick={() => setMobileMenuOpen(false)}>Robotics</Link>
         <Link to="/engineering" onClick={() => setMobileMenuOpen(false)}>Engineering</Link>
         <Link to="/saas" onClick={() => setMobileMenuOpen(false)}>SaaS Farm</Link>

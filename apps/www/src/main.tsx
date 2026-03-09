@@ -8,6 +8,7 @@ import Robotics from './pages/Robotics.tsx'
 import Skills from './pages/Skills.tsx'
 import SaaSPage from './pages/SaaS/SaaSPage.tsx'
 import Engineering from './pages/Engineering.tsx'
+import SelfTraining from './pages/SelfTraining.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -19,6 +20,7 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/skills" element={<Skills />} />
         <Route path="/saas" element={<SaaSPage />} />
         <Route path="/engineering" element={<Engineering />} />
+        <Route path="/self-training" element={<SelfTraining />} />
       </Routes>
     </BrowserRouter>
   </StrictMode>,

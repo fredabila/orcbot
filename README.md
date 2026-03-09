@@ -13,7 +13,7 @@
 
 **Autonomous. Strategic. Multi-Modal. Self-Healing.**
 
-[Features](#features) • [Installation](#installation) • [Quickstart](#quickstart) • [Usage](#-usage) • [Configuration](#configuration) • [Autonomy](#autonomy--heartbeat) • [Skills](#-high-power-skills) • [Plugins](#-dynamic-plugin-system) • [Hardware](#hardware--robotics) • [Security](#security--privacy) • [Blog](docs/blog/robotics.md) • [Docs](https://fredabila.github.io/orcbot/docs/)
+[Features](#features) • [Installation](#installation) • [Quickstart](#quickstart) • [Usage](#-usage) • [Configuration](#configuration) • [Self-Training](#self-training-sidecar) • [Autonomy](#autonomy--heartbeat) • [Skills](#-high-power-skills) • [Plugins](#-dynamic-plugin-system) • [Hardware](#hardware--robotics) • [Security](#security--privacy) • [Blog](docs/blog/robotics.md) • [Docs](https://fredabila.github.io/orcbot/docs/)
 
 </div>
 
@@ -51,6 +51,7 @@ OrcBot is a next-generation **autonomous reasoning agent**. Beyond the v2.0 Stra
 *   💬 **Rich Telegram UX**: Inline buttons, polls, message editing, emoji reactions (with reply fallback), and message pinning.
 *   🔁 **Clarification Delivery**: `request_supporting_data` now actively sends questions through the active channel before pausing.
 *   ✅ **Shared Execution Semantics**: Main-step, parallel, and bonus-step execution now run through shared helpers so cooldowns, duplicate side-effect blocking, and failure handling stay aligned.
+*   🧪 **Self-Training Sidecar**: Captures accepted trajectories, exports offline datasets, evaluates candidates, and promotes stronger models under admin control.
 
 ---
 
@@ -204,6 +205,61 @@ This is the part of the system that most directly improved OrcBot's autonomy und
 
 ---
 
+## Self-Training Sidecar
+
+OrcBot now supports a production-safe self-training loop. The key design choice is that this is not live online weight mutation inside the action loop. Instead, the agent continuously produces learning data from real work while model rollout remains a separate, reviewable operation.
+
+### Workflow
+
+1. **Capture**: completed actions become redacted trajectories with tool steps, delivery audits, and final user-facing answers.
+2. **Filter**: low-quality runs, unresolved failures, and status-only deliveries are rejected from the training export.
+3. **Prepare**: when enough accepted examples exist, OrcBot writes a JSONL dataset and an offline training manifest.
+4. **Evaluate**: candidate models are scored against accepted trajectories.
+5. **Promote**: an admin explicitly registers a trained candidate model and promotes it into the live config only if the evaluation gate passes.
+
+### Artifacts
+
+- `self-training-trajectories.json`: all captured trajectories
+- `self-training-trajectories.jsonl`: accepted trajectories only
+- `self-training-job.json`: current offline training manifest
+- `self-training-eval-report.json`: latest evaluation output
+- `self-training-launch.json`: background launch audit trail
+- `self-training-candidates.json`: registered model candidates
+- `self-training-promotion.json`: latest promotion record with previous-model context
+
+### Skills
+
+- `get_self_training_status()`
+- `prepare_self_training_job()`
+- `run_self_training_eval(limit?, provider?, modelName?)`
+- `build_self_training_launch_plan(commandTemplate?, cwd?, sessionId?)`
+- `launch_self_training_job(commandTemplate?, cwd?, sessionId?, dryRun?)`
+- `register_self_training_candidate(modelName, provider?, candidateId?, jobId?, notes?)`
+- `promote_self_training_candidate(candidateId?, modelName?, provider?, dryRun?)`
+
+### Safety Model
+
+- Training data is redacted before persistence.
+- Acceptance is gated on goal completion and substantive delivery.
+- Launching training remains an offline/background concern, not an in-loop side effect.
+- Promotion is admin-only and reuses OrcBot's normal `modelName` and `llmProvider` hot-reload path.
+- Every promotion records the previous model so rollback stays explicit.
+
+### Example Config
+
+```yaml
+selfTrainingEnabled: true
+selfTrainingTrainOnIdle: true
+selfTrainingMinQualityScore: 0.72
+selfTrainingMinAcceptedExamples: 25
+selfTrainingEvalPassThreshold: 0.55
+selfTrainingPromotionMinAverageScore: 0.70
+selfTrainingRequireEvalForPromotion: true
+selfTrainingLaunchCommand: python trainer.py --manifest {jobManifestPath} --export {exportPath} --model {modelName}
+```
+
+---
+
 ## Hardware & Robotics
 
 OrcBot is software-first, but its skill system makes it a strong brain for hardware stacks. The recommended pattern is to keep **real-world control in a dedicated hardware bridge** (ROS2, MQTT, REST, or serial gateway), and let OrcBot plan, reason, and issue safe commands through that bridge.
@@ -270,6 +326,7 @@ Live docs (GitHub Pages): https://fredabila.github.io/orcbot/docs/
 *   🔒 [**Security Summary**](SECURITY_SUMMARY.md) - Security features and best practices
 *   🚀 [**Extraordinary Use Cases**](docs/EXTRAORDINARY_USE_CASES.md) - God-mode automation, robotics, and strategic orchestration
 *   🤖 [**Robotics + OrcBot**](docs/blog/robotics.md) - Hardware integration approach and safety patterns
+*   🧪 [**Self-Training Sidecar Page**](https://orcbot.vercel.app/self-training) - Capture, evaluation, launch, and promotion workflow
 
 ---
 
@@ -493,6 +550,9 @@ Key settings (excerpt):
 - `autonomyAllowedChannels`: List of channels the agent can message proactively (e.g., `["telegram"]`).
 - `skillRoutingRules`: Intent-based skill selection rules
 - `reasoningExposeChecklist`: Set to `true` to send the agent's internal step-by-step checklist to the user before starting complex tasks.
+- `selfTrainingEnabled`, `selfTrainingTrainOnIdle`, `selfTrainingMinAcceptedExamples`
+- `selfTrainingEvalPassThreshold`, `selfTrainingPromotionMinAverageScore`, `selfTrainingRequireEvalForPromotion`
+- `selfTrainingLaunchCommand`: command template with `{jobManifestPath}`, `{exportPath}`, `{modelName}`, `{provider}`, and `{jobId}` placeholders.
 
 ### Autonomy Channel Policy
 To prevent background spam, the agent uses `autonomyAllowedChannels` to restrict where it can send "out of the blue" updates.
