@@ -1,6 +1,6 @@
 {
   "name": "@fredabila/orcbot",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Autonomous AI Agent Orchestrator with Puppeteer browsing, multi-channel messaging, and self-tuning capabilities.",
   "main": "./dist/core/Agent.js",
   "types": "./dist/core/Agent.d.ts",
