@@ -334,6 +334,20 @@ Publishing is handled by `.github/workflows/publish-package.yml`.
 
 To keep the public npm package updated, add an `NPM_TOKEN` repository secret from your npm account automation token.
 
+For local manual npmjs publishing, use:
+
+```bash
+npm run publish:npmjs
+```
+
+If your npm account requires 2FA for publish, pass the current OTP explicitly:
+
+```bash
+npm run publish:npmjs -- --otp=123456
+```
+
+If GitHub Actions fails with `EOTP`, your `NPM_TOKEN` is the wrong type. CI publishing requires an npm `Automation` token because standard publish tokens still require interactive OTP entry.
+
 ---
 
 ## Documentation
