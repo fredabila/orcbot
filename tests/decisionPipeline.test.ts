@@ -82,7 +82,7 @@ describe('DecisionPipeline', () => {
     });
 
     expect(evaluated.tools?.length).toBe(0);
-    expect(evaluated.verification?.goals_met).toBe(true);
+    expect(evaluated.verification?.goals_met).toBe(false);
   });
 
   it('dedupes per channel/user key but allows same text on different channels', () => {

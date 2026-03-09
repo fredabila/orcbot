@@ -15,6 +15,8 @@ export interface PipelineContext {
     allowedTools?: string[];
     taskDescription?: string;
     fileIntent?: 'requested' | 'not_requested' | 'unknown';
+    /** Count of substantive (non-status) deliveries already sent in this action */
+    substantiveDeliveriesSent?: number;
 }
 
 class LastMessageCache {
@@ -339,11 +341,14 @@ export class DecisionPipeline {
 
         if (maxSteps > 0 && ctx.currentStep > maxSteps) {
             result.tools = [];
+            // Do NOT force goals_met:true here — the Agent.ts max-steps review layer
+            // will decide whether to terminate or grant bonus steps. Forcing true here
+            // bypasses delivery audit, work persistence, and reconciliation guards.
             result.verification = {
-                goals_met: true,
-                analysis: `Max steps reached (${ctx.currentStep}/${maxSteps}). Pipeline terminated action to prevent loops.${applySafetyFloor && configuredMaxSteps > 0 && configuredMaxSteps < 6 ? ' (Applied minimum safety floor of 6 steps for user lane.)' : ''}`
+                goals_met: false,
+                analysis: `Max steps reached (${ctx.currentStep}/${maxSteps}). Tools stripped to prevent further work. Agent should deliver results or let the review layer decide.${applySafetyFloor && configuredMaxSteps > 0 && configuredMaxSteps < 6 ? ' (Applied minimum safety floor of 6 steps for user lane.)' : ''}`
             };
-            notes.push('Terminated due to max step budget');
+            notes.push('Terminated due to max step budget (goals_met deferred to Agent review)');
             this.attachNotes(result, notes, dropped);
             return result;
         }
@@ -462,6 +467,9 @@ export class DecisionPipeline {
 
         const browserNavigateCounts = new Map<string, number>();
         const browserToolCounts = new Map<string, number>();
+        // Track browser inspection calls since the last navigation — examining a new page
+        // after navigating is fresh context, not a loop.
+        const browserInspectSinceLastNav = new Map<string, number>();
         let browserCycleCount = 0;
         let hasAnyTextDelivery = false;
         for (const m of recentActionToolMemories) {
@@ -475,12 +483,18 @@ export class DecisionPipeline {
 
             if (toolName === 'browser_navigate') {
                 browserCycleCount++;
+                // Reset inspect-since-nav counters — new page means fresh context
+                browserInspectSinceLastNav.clear();
                 const input = m.metadata?.input || {};
                 const rawUrl = (input.url || input.link || input.site || '').toString().trim().toLowerCase();
                 if (rawUrl) {
                     const normalizedUrl = rawUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
                     browserNavigateCounts.set(normalizedUrl, (browserNavigateCounts.get(normalizedUrl) || 0) + 1);
                 }
+            }
+
+            if (toolName === 'browser_examine_page' || toolName === 'browser_screenshot' || toolName === 'browser_vision') {
+                browserInspectSinceLastNav.set(toolName, (browserInspectSinceLastNav.get(toolName) || 0) + 1);
             }
         }
 
@@ -580,9 +594,9 @@ export class DecisionPipeline {
             }
 
             if ((toolName === 'browser_examine_page' || toolName === 'browser_screenshot' || toolName === 'browser_vision')
-                && (browserToolCounts.get(toolName) || 0) >= maxToolLoops) {
+                && (browserInspectSinceLastNav.get(toolName) || 0) >= maxToolLoops) {
                 dropped.push(`browser-inspect-loop:${tool.name}`);
-                notes.push(`Suppressed ${tool.name}: repeated browser inspection without progress`);
+                notes.push(`Suppressed ${tool.name}: repeated browser inspection on same page without progress`);
                 continue;
             }
 
@@ -631,9 +645,17 @@ export class DecisionPipeline {
             const channelKey = `${tool.name}:${destination || 'anon'}`;
 
             if (maxMessages > 0 && (ctx.messagesSent + allowedMessages) >= maxMessages) {
-                dropped.push(`limit:${tool.name}`);
-                notes.push(`Suppressed send: message cap ${maxMessages} reached`);
-                continue;
+                // Allow one final delivery when at the cap IF no substantive delivery 
+                // has been sent yet — don't let status-update chatter block the real answer.
+                const hasSubstantiveDelivery = (ctx.substantiveDeliveriesSent || 0) > 0;
+                const isFirstMsg = ctx.messagesSent === 0 && allowedMessages === 0;
+                if (hasSubstantiveDelivery || !isFirstMsg) {
+                    dropped.push(`limit:${tool.name}`);
+                    notes.push(`Suppressed send: message cap ${maxMessages} reached`);
+                    continue;
+                } else {
+                    notes.push(`Allowing final delivery despite message cap — no substantive delivery sent yet`);
+                }
             }
 
             const isImmediateDuplicate = this.messageCache.isImmediateDuplicate(channelKey, message);
@@ -642,9 +664,14 @@ export class DecisionPipeline {
             const hasNewToolOutput = this.hasNonSendToolSinceLastSend(ctx);
 
             if (isReassurance && !hasNewToolOutput && !proposedHasNonSendTool) {
-                dropped.push(`status-only:${tool.name}`);
-                notes.push('Suppressed send: reassurance without any actual work/tool output');
-                continue;
+                // Allow the very first message of an action even if it's a reassurance —
+                // the user sent a message and expects at least an acknowledgement.
+                const isFirstMsg = ctx.messagesSent === 0 && allowedMessages === 0;
+                if (!isFirstMsg) {
+                    dropped.push(`status-only:${tool.name}`);
+                    notes.push('Suppressed send: reassurance without any actual work/tool output');
+                    continue;
+                }
             }
 
             // CRITICAL: Never suppress the FIRST message of an action.
@@ -698,10 +725,20 @@ export class DecisionPipeline {
                     result.verification.goals_met = false;
                     result.verification.analysis = 'User asked for an update but all responses were suppressed as duplicates. The agent must produce genuinely new information or acknowledge the situation.';
                 } else {
-                    notes.push('All subsequent sends suppressed — message already delivered. Marking task complete.');
-                    result.verification = result.verification || { goals_met: false, analysis: '' };
-                    result.verification.goals_met = true;
-                    result.verification.analysis = 'Message already delivered successfully. Subsequent duplicate sends suppressed by pipeline.';
+                    // Only force-complete if prior messages included a substantive delivery,
+                    // not just status/acknowledgement messages like "working on it".
+                    const priorSubstantive = (ctx.substantiveDeliveriesSent || 0) > 0;
+                    if (priorSubstantive) {
+                        notes.push('All subsequent sends suppressed — substantive message already delivered. Marking task complete.');
+                        result.verification = result.verification || { goals_met: false, analysis: '' };
+                        result.verification.goals_met = true;
+                        result.verification.analysis = 'Substantive message already delivered. Subsequent duplicate sends suppressed by pipeline.';
+                    } else {
+                        notes.push('All sends suppressed as dupes but prior messages were only status updates — NOT marking complete.');
+                        result.verification = result.verification || { goals_met: false, analysis: '' };
+                        result.verification.goals_met = false;
+                        result.verification.analysis = 'All responses suppressed as duplicates, but prior messages were only status updates. Agent must produce a substantive answer.';
+                    }
                 }
             } else {
                 notes.push('All proposed tools were suppressed by the pipeline');

@@ -13681,6 +13681,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 payload: {
                                     ...action.payload,
                                     messagesSent,
+                                    substantiveDeliveriesSent,
                                     messagingLocked: messagesSent > 0,
                                     currentStep,
                                     maxSteps: lastEstimatedRemaining || MAX_STEPS,

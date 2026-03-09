@@ -598,7 +598,8 @@ ${this.repoContext}`,
             recentMemories: recentContext,
             allowedTools: allowedToolNames,
             taskDescription,
-            fileIntent: inferredFileIntent
+            fileIntent: inferredFileIntent,
+            substantiveDeliveriesSent: metadata.substantiveDeliveriesSent || 0
         });
 
         return { piped, validation, parsed };
@@ -1599,20 +1600,44 @@ ${safeOtherContext ? `RECENT BACKGROUND CONTEXT (reference only — may describe
         // LOOP PROTECTION: Check if the agent is stuck in a repetitive cycle
         const actionState = this.executionStateManager.getState(actionId);
         if (actionState.isRepeatingResponse(4)) {
-            logger.warn(`DecisionEngine: Loop detected for action ${actionId}. Forcing termination to prevent redundant messaging.`);
+            logger.warn(`DecisionEngine: Loop detected for action ${actionId}. Checking delivery state before terminating.`);
             
             // Mark that a loop was detected so the auditor can bypass the "unsent results" check
             metadata.loopDetected = true;
 
-            // Force goals_met to true so the pipeline doesn't keep retrying
+            const noMessagesSent = (metadata.messagesSent || 0) === 0;
+            const noSubstantiveDelivery = (metadata.substantiveDeliveriesSent || 0) === 0;
+
             if (piped) {
-                piped.verification = { 
-                    goals_met: true,
-                    analysis: 'Terminated due to repetitive response detection (loop prevention).'
-                };
-                // If the model is repeating the same message, just stop after the current one
-                piped.tools = []; 
-                return piped;
+                if (isUserFacing && noMessagesSent) {
+                    // Agent is looping BUT has never sent anything to the user.
+                    // Don't kill silently — force one delivery of whatever it has.
+                    logger.warn(`DecisionEngine: Loop detected but no messages sent. Injecting delivery directive instead of hard-terminating.`);
+                    piped.verification = { 
+                        goals_met: false,
+                        analysis: 'Loop detected (4x repeated response). No message sent to user yet — agent must deliver available results before terminating.'
+                    };
+                    piped.tools = []; 
+                    return piped;
+                } else if (isUserFacing && noSubstantiveDelivery) {
+                    // Messages were sent but none were substantive (just status updates).
+                    // Give one more chance to deliver real content.
+                    logger.warn(`DecisionEngine: Loop detected but only status messages sent. Allowing one more attempt.`);
+                    piped.verification = { 
+                        goals_met: false,
+                        analysis: 'Loop detected (4x repeated response). Only status messages sent — agent must deliver a substantive answer or explain what went wrong.'
+                    };
+                    piped.tools = []; 
+                    return piped;
+                } else {
+                    // Substantive delivery was already made — safe to terminate.
+                    piped.verification = { 
+                        goals_met: true,
+                        analysis: 'Terminated due to repetitive response detection (loop prevention). Substantive delivery already made.'
+                    };
+                    piped.tools = []; 
+                    return piped;
+                }
             }
         }
 
@@ -1681,7 +1706,8 @@ QUESTION: Was the original task completed? If not, what tools should be called n
                 recentMemories: recentContext,
                 allowedTools: allowedToolNames,
                 taskDescription,
-                fileIntent: reviewFileIntent
+                fileIntent: reviewFileIntent,
+                substantiveDeliveriesSent: metadata.substantiveDeliveriesSent || 0
             });
 
             if (reviewed?.verification?.goals_met === false || (reviewed.tools && reviewed.tools.length > 0)) {
