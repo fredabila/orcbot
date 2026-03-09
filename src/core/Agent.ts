@@ -54,7 +54,7 @@ import { ChannelRegistry } from '../channels/ChannelRegistry';
 import { BlockReviewer, ReviewResult, BlockVerdict } from './BlockReviewer';
 import { parseBrowserPerformActions } from './BrowserPerformParser';
 import { resolveBrowserScratchpadTarget } from './BrowserScratchpad';
-import { collectCompletionAuditIssues } from './CompletionAudit';
+import { collectCompletionAuditIssues, StepLedger, auditDelivery } from './CompletionAudit';
 import { buildDelegatedTaskFollowupAction } from './DelegatedTaskFollowup';
 import { resolveInboundRoute } from './InboundRouting';
 
@@ -9268,6 +9268,7 @@ REFLECTION: <1-2 sentences>`;
             memoryContentPrefix?: string;
             pauseLogMessage: string;
             onBlocked?: (blockReason: string) => void;
+            stepLedger?: StepLedger;
         };
     }): Promise<{ replanAfterFailure: boolean }> {
         const { action, currentStep, toolCalls, getSkillMeta, state, options } = params;
@@ -9382,6 +9383,22 @@ REFLECTION: <1-2 sentences>`;
                     : { tool: toolCall.name, result: toolResult }
             });
 
+            // Record in step ledger for delivery audit
+            if (options.stepLedger) {
+                const argSnippet = JSON.stringify(toolCall.metadata || {}).slice(0, 200);
+                options.stepLedger.record({
+                    step: currentStep,
+                    tool: toolCall.name,
+                    args: argSnippet,
+                    success: !resultIndicatesError,
+                    isDeep: !!toolMeta.isDeep && !isInternalTool,
+                    isSideEffect: !!toolMeta.isSideEffect,
+                    resultSnippet: resultIndicatesError ? undefined : String(resultString).slice(0, 200),
+                    errorSnippet: resultIndicatesError ? String(resultString).slice(0, 200) : undefined,
+                    timestamp: Date.now(),
+                });
+            }
+
             if (resultIndicatesError && remainingQueuedTools > 0) {
                 logger.info(`Agent: ${options.pauseLogMessage.replace('{tool}', toolCall.name)}`);
                 break;
@@ -9422,6 +9439,7 @@ REFLECTION: <1-2 sentences>`;
             skillFailCounts: Record<string, number>;
             remainingQueuedToolsOffset?: number;
             memoryIdPrefix: string;
+            stepLedger?: StepLedger;
         };
     }): Promise<{ replanAfterFailure: boolean }> {
         const { action, currentStep, toolCalls, getSkillMeta, state, options } = params;
@@ -9521,6 +9539,22 @@ REFLECTION: <1-2 sentences>`;
                 content: `[TOOL: ${toolCall.name}] Result: ${String(toolResult).slice(0, 2000)}`,
                 metadata: { actionId: action.id, step: currentStep, tool: toolCall.name, success: !resultIndicatesError }
             });
+
+            // Record in step ledger for delivery audit
+            if (options.stepLedger) {
+                const argSnippet = JSON.stringify(toolCall.metadata || {}).slice(0, 200);
+                options.stepLedger.record({
+                    step: currentStep,
+                    tool: toolCall.name,
+                    args: argSnippet,
+                    success: !resultIndicatesError,
+                    isDeep: !!toolMeta.isDeep && !isInternalTool,
+                    isSideEffect: !!toolMeta.isSideEffect,
+                    resultSnippet: resultIndicatesError ? undefined : String(toolResult).slice(0, 200),
+                    errorSnippet: resultIndicatesError ? String(toolResult).slice(0, 200) : undefined,
+                    timestamp: Date.now(),
+                });
+            }
 
             if (state.forceBreak) break;
         }
@@ -13476,6 +13510,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             const MAX_MESSAGES = limits.messages;
             const isResearchTask = taskComplexity === 'complex';
             const isChannelTask = ['telegram', 'whatsapp', 'discord', 'slack', 'email'].includes((action.payload?.source || '').toString().toLowerCase());
+            const isUserFacingAction = isChannelTask || action.payload?.source === 'gateway-chat';
             const MAX_NO_TOOLS_RETRIES = 3; // Max retries when LLM returns no tools but goals_met=false
             const MAX_SKILL_REPEATS = this.config.get('maxToolRepeats') || 5; 
             const MAX_RESEARCH_SKILL_REPEATS = this.config.get('maxResearchToolRepeats') || 20;
@@ -13507,6 +13542,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             let deepWorkToolSucceeded = false; // Track if at least one deep work tool succeeded in this action
             let workPersistenceOverrides = 0; // Cap how many times work persistence can override termination
             const MAX_WORK_PERSISTENCE_OVERRIDES = 3; // After this many overrides, allow termination
+            const stepLedger = new StepLedger(); // Structured log of every tool call for delivery audit
             let imageGeneratedInAction = false; // Track if generate_image has been called in this action
             let imageDeliveredInAction = false; // Track if the generated image has been delivered
             let generatedImagePath = ''; // Path of the most recently generated image
@@ -13895,6 +13931,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                     skillFailCounts,
                                     remainingQueuedToolsOffset: Math.max(0, remainingToolsInBatch - batch.tools.length),
                                     memoryIdPrefix: `${action.id}-step-${currentStep}`,
+                                    stepLedger,
                                 }
                             });
 
@@ -13934,6 +13971,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                     remainingQueuedToolsOffset: Math.max(0, remainingToolsInBatch - batch.tools.length),
                                     memoryIdPrefix: `${action.id}-step-${currentStep}`,
                                     pauseLogMessage: 'Paused queued tools after {tool} failure.',
+                                    stepLedger,
                                     onBlocked: (blockReason) => {
                                         if (blockReason.includes('repeated failures')) logger.warn(`Agent: ${blockReason}`);
                                         else if (blockReason.includes('turn cooldown')) logger.info(`Agent: ${blockReason}`);
@@ -13983,17 +14021,25 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     }
 
                     if (decision.verification?.goals_met) {
-                        // WORK PERSISTENCE CHECK: If work tools failed and the agent
-                        // only sent status messages (no substantive results), override
-                        // goals_met and force the agent to keep working.
-                        if (hasUnresolvedWorkFailure && !deepWorkToolSucceeded && substantiveDeliveriesSent === 0 && workPersistenceOverrides < MAX_WORK_PERSISTENCE_OVERRIDES) {
+                        // WORK PERSISTENCE CHECK: Use the step ledger to determine if
+                        // deep work tools failed without recovery and only status messages
+                        // were sent. This is a real-time audit of what actually happened.
+                        const midActionAudit = auditDelivery({
+                            ledger: stepLedger,
+                            taskDescription: typeof action.payload === 'string' ? action.payload : (action.payload?.description || ''),
+                            isChannelTask: isUserFacingAction,
+                            sentMessagesInAction,
+                            substantiveDeliveriesSent,
+                            isLikelyAcknowledgementMessage: (msg: string) => this.isLikelyAcknowledgementMessage(msg),
+                        });
+                        if (midActionAudit.unresolvedFailures && !midActionAudit.delivered && workPersistenceOverrides < MAX_WORK_PERSISTENCE_OVERRIDES) {
                             workPersistenceOverrides++;
-                            logger.warn(`Agent: Overriding goals_met for action ${action.id} \u2014 unresolved work failures exist and no substantive delivery was made. Override ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}. Continuing work.`);
+                            logger.warn(`Agent: Overriding goals_met for action ${action.id} \u2014 delivery audit: "${midActionAudit.reason}". Override ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}. Continuing work.`);
                             this.memory.saveMemory({
                                 id: `${action.id}-step-${currentStep}-work-persistence`,
                                 type: 'short',
-                                content: `[SYSTEM: WORK PERSISTENCE OVERRIDE (attempt ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}) \u2014 You told the user you are working on the task, but a tool failed and you haven't actually fixed the problem yet. Do NOT set goals_met=true until the underlying work is completed or you have genuinely exhausted all approaches. Try a different strategy to solve the error.]`,
-                                metadata: { actionId: action.id, step: currentStep, workPersistence: true }
+                                content: `[SYSTEM: WORK PERSISTENCE OVERRIDE (attempt ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}) \u2014 Step ledger shows: ${midActionAudit.reason}. You told the user you are working on the task, but you haven't actually fixed the problem yet. Do NOT set goals_met=true until the underlying work is completed or you have genuinely exhausted all approaches. Try a different strategy to solve the error.]`,
+                                metadata: { actionId: action.id, step: currentStep, workPersistence: true, auditReason: midActionAudit.reason }
                             });
                             continue;
                         }
@@ -14021,20 +14067,29 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     if (noToolOutcome.outcome === 'break') {
                         break;
                     }
-                    // WORK PERSISTENCE: If the agent wants to self-terminate but deep work
-                    // tools failed and the problem was never resolved, don't let it stop.
-                    // Inject guidance and force one more cycle so the LLM tries a different approach.
-                    if (hasUnresolvedWorkFailure && !deepWorkToolSucceeded && currentStep < MAX_STEPS - 1 && workPersistenceOverrides < MAX_WORK_PERSISTENCE_OVERRIDES) {
-                        workPersistenceOverrides++;
-                        const isLoopTermination = (decision.verification?.analysis || '').includes('loop prevention');
-                        logger.warn(`Agent: Blocking self-termination for ${action.id} — unresolved work failures (loop=${isLoopTermination}). Override ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}. Injecting recovery guidance.`);
-                        this.memory.saveMemory({
-                            id: `${action.id}-step-${currentStep}-work-persist-no-tool`,
-                            type: 'short',
-                            content: `[SYSTEM: WORK PERSISTENCE (attempt ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}) — You are trying to finish this task, but you have NOT resolved the underlying problem. A tool failed earlier and you haven't successfully completed the work. Do NOT just send a status message. You MUST either: (1) try a fundamentally different approach to fix the error, (2) search the web for solutions, or (3) if truly stuck after multiple attempts, send the user an honest message explaining exactly what failed and what alternatives exist. Then set goals_met=true.]`,
-                            metadata: { actionId: action.id, step: currentStep, workPersistence: true }
+                    // WORK PERSISTENCE: Use the step ledger to check if the agent is trying
+                    // to self-terminate while deep work tools failed and weren't resolved.
+                    if (currentStep < MAX_STEPS - 1 && workPersistenceOverrides < MAX_WORK_PERSISTENCE_OVERRIDES) {
+                        const selfTermAudit = auditDelivery({
+                            ledger: stepLedger,
+                            taskDescription: typeof action.payload === 'string' ? action.payload : (action.payload?.description || ''),
+                            isChannelTask: isUserFacingAction,
+                            sentMessagesInAction,
+                            substantiveDeliveriesSent,
+                            isLikelyAcknowledgementMessage: (msg: string) => this.isLikelyAcknowledgementMessage(msg),
                         });
-                        continue;
+                        if (selfTermAudit.unresolvedFailures && !selfTermAudit.delivered) {
+                            workPersistenceOverrides++;
+                            const isLoopTermination = (decision.verification?.analysis || '').includes('loop prevention');
+                            logger.warn(`Agent: Blocking self-termination for ${action.id} — delivery audit: "${selfTermAudit.reason}" (loop=${isLoopTermination}). Override ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}. Injecting recovery guidance.`);
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-work-persist-no-tool`,
+                                type: 'short',
+                                content: `[SYSTEM: WORK PERSISTENCE (attempt ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}) — Step ledger shows: ${selfTermAudit.reason}. You are trying to finish this task, but you have NOT resolved the underlying problem. Do NOT just send a status message. You MUST either: (1) try a fundamentally different approach to fix the error, (2) search the web for solutions, or (3) if truly stuck after multiple attempts, send the user an honest message explaining exactly what failed and what alternatives exist. Then set goals_met=true.]`,
+                                metadata: { actionId: action.id, step: currentStep, workPersistence: true, auditReason: selfTermAudit.reason }
+                            });
+                            continue;
+                        }
                     }
                     logger.info(`Agent: Action ${action.id} reached self-termination. Reasoning: ${decision.reasoning || 'No further tools needed.'}`);
                     goalsMet = true;
@@ -14158,6 +14213,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                     memoryIdPrefix: `${action.id}-bonus-${bonus}`,
                                     memoryContentPrefix: 'Bonus step:',
                                     pauseLogMessage: 'Paused bonus-step queued tools after {tool} failure.',
+                                    stepLedger,
                                     onBlocked: (blockReason) => {
                                         logger.warn(`Agent: ${blockReason}`);
                                     }
@@ -14240,15 +14296,29 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 }
             }
 
-            const isUserFacingAction = action.payload?.source === 'telegram' || action.payload?.source === 'whatsapp' ||
-                action.payload?.source === 'discord' || action.payload?.source === 'slack' || action.payload?.source === 'email' || action.payload?.source === 'gateway-chat';
+            // ── Step Ledger Delivery Audit ──
+            // Instead of relying solely on flags, audit the actual tool execution log
+            // to determine if the action truly delivered on the task.
+            const deliveryAudit = auditDelivery({
+                ledger: stepLedger,
+                taskDescription: typeof action.payload === 'string' ? action.payload : (action.payload?.description || ''),
+                isChannelTask: isUserFacingAction,
+                sentMessagesInAction,
+                substantiveDeliveriesSent,
+                isLikelyAcknowledgementMessage: (msg: string) => this.isLikelyAcknowledgementMessage(msg),
+            });
+            logger.info(`Agent: Delivery audit for ${action.id}: delivered=${deliveryAudit.delivered}, reason="${deliveryAudit.reason}", unresolvedFailures=${deliveryAudit.unresolvedFailures}, onlyStatus=${deliveryAudit.onlySentStatusMessages}`);
+            if (stepLedger.size > 0) {
+                logger.debug(`Agent: Step ledger summary for ${action.id}:\n${deliveryAudit.summary}`);
+            }
+
             if (!goalsMet && isUserFacingAction && substantiveDeliveriesSent > 0) {
-                // Don't reconcile to completed if deep work tools failed and weren't resolved.
-                // Sending a status message like "I'm investigating" doesn't mean the task is done.
-                if (hasUnresolvedWorkFailure && !deepWorkToolSucceeded) {
-                    logger.warn(`Agent: Skipping delivery reconciliation for ${action.id} — unresolved work failures exist (only status messages were sent).`);
+                // Use the ledger audit to decide whether reconciliation is appropriate.
+                // Don't reconcile if the audit says work wasn't actually delivered.
+                if (!deliveryAudit.delivered) {
+                    logger.warn(`Agent: Skipping delivery reconciliation for ${action.id} — delivery audit says task not completed: ${deliveryAudit.reason}`);
                 } else {
-                    logger.warn(`Agent: Reconciled final status to completed for ${action.id} because user delivery succeeded.`);
+                    logger.warn(`Agent: Reconciled final status to completed for ${action.id} because delivery audit confirmed: ${deliveryAudit.reason}`);
                     this.memory.saveMemory({
                         id: `${action.id}-delivery-reconciled`,
                         type: 'short',
@@ -14389,11 +14459,12 @@ Respond with a single actionable task description (one sentence). Be specific ab
             }
 
             // Record Final Response/Reasoning in Memory upon completion
+            const ledgerSummary = stepLedger.size > 0 ? ` Execution: ${stepLedger.summarize().replace(/\n/g, '; ')}` : '';
             this.memory.saveMemory({
                 id: `${action.id}-conclusion`,
                 type: 'episodic',
-                content: `Task ${goalsMet ? 'Finished' : 'Terminated without completion'}: ${action.payload.description}. Status: ${actionStatus}.`,
-                metadata: { actionId: action.id, steps: currentStep, goalsMet }
+                content: `Task ${goalsMet ? 'Finished' : 'Terminated without completion'}: ${action.payload.description}. Status: ${actionStatus}.${ledgerSummary}`.slice(0, 500),
+                metadata: { actionId: action.id, steps: currentStep, goalsMet, deliveryAudit: { delivered: deliveryAudit.delivered, reason: deliveryAudit.reason, unresolvedFailures: deliveryAudit.unresolvedFailures } }
             });
 
             this.actionQueue.updateStatus(action.id, actionStatus);

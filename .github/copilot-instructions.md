@@ -2,7 +2,6 @@
 
 ## Project Overview
 OrcBot is a TypeScript/Node.js autonomous AI agent that can chat over Telegram, WhatsApp, Discord, and a web gateway. It plans multi-step tasks, executes tools (skills), browses the web, and learns from its interactions. All state is file-backed under `~/.orcbot/` by default.
-
 ---
 
 ## Architecture Map

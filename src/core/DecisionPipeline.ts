@@ -19,7 +19,11 @@ export interface PipelineContext {
 
 class LastMessageCache {
     private cache: Map<string, string[]> = new Map();
-    constructor(private windowSize: number, private config: ConfigManager) { }
+    private timestamps: Map<string, number[]> = new Map();
+    private cacheTtlMs: number;
+    constructor(private windowSize: number, private config: ConfigManager) {
+        this.cacheTtlMs = (this.config.get('messageCacheTtlSeconds') || 300) * 1000; // default 5 min
+    }
 
     private normalize(message: string) {
         return message.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -51,6 +55,7 @@ class LastMessageCache {
     public isDuplicate(channelKey: string, message: string): boolean {
         if (!message) return false;
         const normalized = this.normalize(message);
+        this.evictExpired(channelKey);
         const history = this.cache.get(channelKey) || [];
         return history.includes(normalized);
     }
@@ -58,6 +63,7 @@ class LastMessageCache {
     public isImmediateDuplicate(channelKey: string, message: string): boolean {
         if (!message) return false;
         const normalized = this.normalize(message);
+        this.evictExpired(channelKey);
         const history = this.cache.get(channelKey) || [];
         if (history.length === 0) return false;
         return history[history.length - 1] === normalized;
@@ -74,11 +80,10 @@ class LastMessageCache {
         if (fingerprint.length < 20) return false; // Too short to compare meaningfully
         
         const threshold = this.config.get('messageSimilarityThreshold') || 0.7;
+        this.evictExpired(channelKey);
         const history = this.cache.get(channelKey) || [];
         for (const prev of history.slice(-5)) { // Check last 5 messages
             const prevFingerprint = this.getSemanticFingerprint(prev);
-            // Check for high similarity (common substring)
-            // Relax threshold for messaging to allow more natural flow
             const effectiveThreshold = threshold;
             if (this.stringSimilarity(fingerprint, prevFingerprint) > effectiveThreshold) {
                 return true;
@@ -109,9 +114,27 @@ class LastMessageCache {
         if (!message) return;
         const normalized = this.normalize(message);
         const history = this.cache.get(channelKey) || [];
+        const timestamps = this.timestamps.get(channelKey) || [];
         history.push(normalized);
-        while (history.length > this.windowSize) history.shift();
+        timestamps.push(Date.now());
+        while (history.length > this.windowSize) {
+            history.shift();
+            timestamps.shift();
+        }
         this.cache.set(channelKey, history);
+        this.timestamps.set(channelKey, timestamps);
+    }
+
+    /** Remove entries older than the TTL */
+    private evictExpired(channelKey: string): void {
+        const history = this.cache.get(channelKey);
+        const timestamps = this.timestamps.get(channelKey);
+        if (!history || !timestamps || history.length === 0) return;
+        const cutoff = Date.now() - this.cacheTtlMs;
+        while (timestamps.length > 0 && timestamps[0] < cutoff) {
+            history.shift();
+            timestamps.shift();
+        }
     }
 }
 
@@ -145,6 +168,40 @@ export class DecisionPipeline {
             'give me a moment'
         ];
         return phrases.some(p => normalized.includes(p));
+    }
+
+    /**
+     * Detect if the task is a user follow-up or "any update?" type query.
+     * When the user is explicitly asking for status or progress, the agent
+     * must deliver a fresh response even if it's topically similar to a prior one.
+     */
+    private isUserFollowUpQuery(taskDescription?: string): boolean {
+        if (!taskDescription) return false;
+        const normalized = taskDescription.toLowerCase();
+        const followUpPatterns = [
+            'any update',
+            'what\'s the update',
+            'what\'s the status',
+            'what is the status',
+            'what is the update',
+            'are you done',
+            'is it done',
+            'is it ready',
+            'have you finished',
+            'how is it going',
+            'how\'s it going',
+            'what happened',
+            'where are we',
+            'what\'s happening',
+            'progress',
+            'you\'re supposed to be',
+            'you\'ve gone idle',
+            'what are you doing',
+            'so what',
+            'still working',
+            '??',
+        ];
+        return followUpPatterns.some(p => normalized.includes(p));
     }
 
     private canUseReassurance(actionId: string): boolean {
@@ -595,15 +652,21 @@ export class DecisionPipeline {
             // similarity is expected (similar reassurances like "on it" / "working on it").
             const isFirstMessageInAction = ctx.messagesSent === 0 && allowedMessages === 0;
 
+            // Also exempt when the user is explicitly asking for an update or follow-up.
+            // In that scenario, even if the response is semantically similar to a prior message,
+            // the user deserves a fresh reply — they're asking because they haven't seen results.
+            const isUserFollowUp = this.isUserFollowUpQuery(ctx.taskDescription);
+            const exemptFromSemanticDedup = isFirstMessageInAction || (isUserFollowUp && allowedMessages === 0);
+
             // Block semantically duplicate messages (e.g., "I'm distributing tasks" repeated with slight variations)
             // BUT only within the same action — the first reply to a NEW user message must always go through.
-            if (isSemanticallyDuplicate && !hasNewToolOutput && !isFirstMessageInAction) {
+            if (isSemanticallyDuplicate && !hasNewToolOutput && !exemptFromSemanticDedup) {
                 dropped.push(`semantic-dupe:${tool.name}`);
                 notes.push('Suppressed send: semantically similar to recent message');
                 continue;
             }
 
-            if (isImmediateDuplicate && !hasNewToolOutput && !isFirstMessageInAction) {
+            if (isImmediateDuplicate && !hasNewToolOutput && !exemptFromSemanticDedup) {
                 if (isReassurance && this.canUseReassurance(ctx.actionId)) {
                     this.markReassuranceUsed(ctx.actionId);
                 } else {
@@ -626,11 +689,20 @@ export class DecisionPipeline {
 
             if (allDroppedWereSends && ctx.messagesSent > 0) {
                 // Agent already sent a message AND all subsequent sends were suppressed as dupes.
-                // This is NOT a failure — the task is done. Force goals_met=true to prevent loops.
-                notes.push('All subsequent sends suppressed — message already delivered. Marking task complete.');
-                result.verification = result.verification || { goals_met: false, analysis: '' };
-                result.verification.goals_met = true;
-                result.verification.analysis = 'Message already delivered successfully. Subsequent duplicate sends suppressed by pipeline.';
+                // But if this is a user follow-up ("any update?"), suppressing everything likely
+                // means the agent failed to produce a genuinely new response. Don't force-complete.
+                const isFollowUp = this.isUserFollowUpQuery(ctx.taskDescription);
+                if (isFollowUp) {
+                    notes.push('All sends suppressed but user asked for update — NOT marking complete. Agent should produce new content.');
+                    result.verification = result.verification || { goals_met: false, analysis: '' };
+                    result.verification.goals_met = false;
+                    result.verification.analysis = 'User asked for an update but all responses were suppressed as duplicates. The agent must produce genuinely new information or acknowledge the situation.';
+                } else {
+                    notes.push('All subsequent sends suppressed — message already delivered. Marking task complete.');
+                    result.verification = result.verification || { goals_met: false, analysis: '' };
+                    result.verification.goals_met = true;
+                    result.verification.analysis = 'Message already delivered successfully. Subsequent duplicate sends suppressed by pipeline.';
+                }
             } else {
                 notes.push('All proposed tools were suppressed by the pipeline');
                 result.verification = result.verification || { goals_met: false, analysis: '' };
