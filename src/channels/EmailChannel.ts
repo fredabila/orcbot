@@ -24,8 +24,7 @@ export class EmailChannel implements IChannel {
     private imapClient: ImapFlow | null = null;
     private imapReconnectTimer: NodeJS.Timeout | null = null;
     private processing = false;
-    private connectionTime = new Date();
-    private firstFetchDone = false;
+    private unreadBaselineUid = 0;
 
     constructor(agent: any) {
         this.agent = agent;
@@ -36,8 +35,7 @@ export class EmailChannel implements IChannel {
             throw new Error('Email channel not configured. Set SMTP + IMAP credentials first.');
         }
         this.started = true;
-        this.connectionTime = new Date();
-        this.firstFetchDone = false;
+        this.unreadBaselineUid = 0;
         await this.connectImapWithRetry();
         logger.info('Email channel started (Event-Driven IMAP IDLE)');
     }
@@ -315,6 +313,44 @@ export class EmailChannel implements IChannel {
         });
     }
 
+    private shouldProcessUnreadOnStart(): boolean {
+        return this.agent.config.get('emailProcessUnreadOnStart') === true;
+    }
+
+    private filterUnreadUids(uids: number[]): number[] {
+        if (this.shouldProcessUnreadOnStart()) {
+            return uids;
+        }
+
+        if (this.unreadBaselineUid <= 0) {
+            return uids;
+        }
+
+        return uids.filter(uid => uid > this.unreadBaselineUid);
+    }
+
+    private async captureUnreadBaselineUid(): Promise<void> {
+        if (!this.imapClient) {
+            return;
+        }
+
+        let lock: any;
+        try {
+            lock = await this.imapClient.getMailboxLock('INBOX');
+            const searchResult = await this.imapClient.search({ seen: false }, { uid: true });
+            const unreadUids = Array.isArray(searchResult) ? searchResult : [];
+            this.unreadBaselineUid = unreadUids.length > 0 ? Math.max(...unreadUids) : 0;
+
+            if (unreadUids.length > 0) {
+                logger.info(`EmailChannel: Ignoring ${unreadUids.length} existing unread email(s) on connect. New mail must have UID > ${this.unreadBaselineUid}.`);
+            } else {
+                logger.debug('EmailChannel: No unread backlog found during startup baseline capture.');
+            }
+        } finally {
+            if (lock) lock.release();
+        }
+    }
+
     private async connectImapWithRetry(delayMs = 5000): Promise<void> {
         if (!this.started) return;
 
@@ -327,12 +363,6 @@ export class EmailChannel implements IChannel {
 
             this.imapClient = this.createImapClient();
 
-            // Listen for mail events
-            this.imapClient.on('exists', (data) => {
-                logger.info(`EmailChannel: New message detected in mailbox (Total: ${data.count})`);
-                this.fetchUnreadEmails().catch(err => logger.error(`EmailChannel: Error in exists handler: ${err.message}`));
-            });
-
             this.imapClient.on('error', (err: any) => {
                 logger.error(`EmailChannel: IMAP connection error: ${err.message}`);
                 this.scheduleReconnect(delayMs);
@@ -344,10 +374,19 @@ export class EmailChannel implements IChannel {
             });
 
             await this.imapClient.connect();
-            logger.info('EmailChannel: Connected to IMAP and waiting for emails...');
 
-            // Fetch any emails that are currently unread on connection
-            await this.fetchUnreadEmails();
+            if (this.shouldProcessUnreadOnStart()) {
+                logger.info('EmailChannel: Connected to IMAP. Processing existing unread inbox messages on startup.');
+                await this.fetchUnreadEmails();
+            } else {
+                await this.captureUnreadBaselineUid();
+                logger.info('EmailChannel: Connected to IMAP. Ignoring existing unread inbox messages and waiting for new mail only.');
+            }
+
+            this.imapClient.on('exists', (data) => {
+                logger.info(`EmailChannel: New message detected in mailbox (Total: ${data.count})`);
+                this.fetchUnreadEmails().catch(err => logger.error(`EmailChannel: Error in exists handler: ${err.message}`));
+            });
         } catch (error: any) {
             logger.error(`EmailChannel: IMAP connection failed: ${error.message}. Retrying in ${delayMs / 1000}s...`);
             this.scheduleReconnect(delayMs);
@@ -381,19 +420,16 @@ export class EmailChannel implements IChannel {
             logger.debug('EmailChannel: Acquiring mailbox lock for INBOX...');
             lock = await this.imapClient.getMailboxLock('INBOX');
 
-            // Search for unread messages.
-            // On first fetch after connection, only look for emails arrived after connectionTime
-            // to avoid processing thousands of old unread emails.
-            const searchObj: any = { seen: false };
-            if (!this.firstFetchDone) {
-                searchObj.since = this.connectionTime;
+            const searchResult = await this.imapClient.search({ seen: false }, { uid: true });
+            const unreadUids = Array.isArray(searchResult) ? searchResult : [];
+            const uids = this.filterUnreadUids(unreadUids);
+
+            if (unreadUids.length > uids.length) {
+                logger.debug(`EmailChannel: Ignoring ${unreadUids.length - uids.length} unread backlog message(s) at or below startup baseline UID ${this.unreadBaselineUid}.`);
             }
-            
-            const uids = await this.imapClient.search(searchObj, { uid: true });
-            this.firstFetchDone = true;
 
             if (uids && uids.length > 0) {
-                logger.info(`EmailChannel: Found ${uids.length} unread messages.`);
+                logger.info(`EmailChannel: Found ${uids.length} unread messages to process.`);
                 for (const uid of uids) {
                     try {
                         const message = await this.imapClient.fetchOne(uid, { source: true, uid: true });

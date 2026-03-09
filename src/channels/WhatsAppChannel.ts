@@ -271,6 +271,10 @@ export class WhatsAppChannel implements IChannel {
                         const senderName = msg.pushName || 'WhatsApp User';
                         const isGroup = senderId?.endsWith('@g.us');
                         const isStatus = senderId === 'status@broadcast';
+                        const receivedAt = Date.now();
+                        const previousUserTs = (!isStatus && senderId && !isFromMe)
+                            ? (this.lastUserMessageTimestamps.get(senderId) || 0)
+                            : 0;
 
                         // Extract reply/quote context if this message is a reply
                         let replyContext = '';
@@ -310,56 +314,9 @@ export class WhatsAppChannel implements IChannel {
 
                         // Skip group chats for now unless mentioned or requested (simpler for now)
                         if (!isGroup) this.recordContactJid(senderId);
-                        // Update last seen timestamp for reply suppression logic
-                        if (senderId && !isFromMe) this.lastUserMessageTimestamps.set(senderId, Date.now());
-                        if (isGroup) return;
-
-                        // Special handling for Status Updates
-                        if (isStatus && text) {
-                            // Cache the full message key so we can send a proper status reply later
-                            const participant = msg.key.participant || msg.participant;
-                            const statusMetadata = {
-                                key: msg.key,
-                                message: msg.message,
-                                timestamp: typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : undefined,
-                                contentType: this.detectStatusContentType(msg.message),
-                                hasMedia: this.hasStatusMedia(msg.message)
-                            };
-                            this.statusRepliesByParticipant.set(participant, statusMetadata);
-                            this.statusRepliesById.set(messageId, statusMetadata);
-
-                            // COOL DOWN: Don't pile up tasks for every status update.
-                            // Default to 12 hours between status-check tasks for the same person.
-                            const minIntervalHrs = Number(this.agent.config.get('whatsappStatusTaskMinIntervalHours') || 12);
-                            const lastTaskAt = this.lastStatusTaskTimestamps.get(participant) || 0;
-                            const now = Date.now();
-                            
-                            if (now - lastTaskAt < minIntervalHrs * 60 * 60 * 1000) {
-                                logger.debug(`WhatsApp: Skipping status task for ${participant} (cooldown active)`);
-                            } else {
-                                this.lastStatusTaskTimestamps.set(participant, now);
-                                
-                                // Dispatch via MessageBus for unified memory and task creation
-                                await this.agent.messageBus.dispatch({
-                                    source: 'whatsapp',
-                                    sourceId: participant,
-                                    senderName: participant,
-                                    content: text,
-                                    messageId,
-                                    metadata: {
-                                        type: 'status',
-                                        statusContentType: statusMetadata.contentType,
-                                        statusHasMedia: statusMetadata.hasMedia,
-                                        statusTimestamp: statusMetadata.timestamp
-                                    }
-                                });
-                            }
-                            return;
-                        }
+                        if (isGroup) continue;
 
                         // Skip if no text AND no media (e.g. some system msg)
-                        if (!text && !mediaPath) return;
-
                         // Auto-transcribe voice/audio messages so the agent can "hear" them
                         let transcription = '';
                         if (mediaPath && audioMsg) {
@@ -393,12 +350,64 @@ export class WhatsAppChannel implements IChannel {
                             }
                         }
 
+                        // Special handling for Status Updates
+                        if (isStatus) {
+                            const participant = msg.key.participant || msg.participant;
+                            if (!participant) {
+                                logger.warn(`WhatsApp: Received status ${messageId} without participant JID; skipping.`);
+                                continue;
+                            }
+
+                            if (!this.statusReplyEnabled) {
+                                logger.debug(`WhatsApp: Status interactions disabled; ignoring status ${messageId} from ${participant}.`);
+                                continue;
+                            }
+
+                            const statusMetadata = {
+                                key: msg.key,
+                                message: msg.message,
+                                timestamp: typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : undefined,
+                                contentType: this.detectStatusContentType(msg.message),
+                                hasMedia: this.hasStatusMedia(msg.message)
+                            };
+                            this.statusRepliesByParticipant.set(participant, statusMetadata);
+                            this.statusRepliesById.set(messageId, statusMetadata);
+
+                            const minIntervalHrs = Number(this.agent.config.get('whatsappStatusTaskMinIntervalHours') || 12);
+                            const lastTaskAt = this.lastStatusTaskTimestamps.get(participant) || 0;
+                            if (receivedAt - lastTaskAt < minIntervalHrs * 60 * 60 * 1000) {
+                                logger.debug(`WhatsApp: Skipping status task for ${participant} (cooldown active)`);
+                                continue;
+                            }
+
+                            this.lastStatusTaskTimestamps.set(participant, receivedAt);
+                            const statusContent = text || transcription || mediaAnalysis || `[${statusMetadata.contentType} status update]`;
+
+                            await this.agent.messageBus.dispatch({
+                                source: 'whatsapp',
+                                sourceId: participant,
+                                senderName: participant,
+                                content: statusContent,
+                                messageId,
+                                mediaPaths: mediaPath ? [mediaPath] : [],
+                                mediaAnalysis,
+                                metadata: {
+                                    type: 'status',
+                                    statusContentType: statusMetadata.contentType,
+                                    statusHasMedia: statusMetadata.hasMedia,
+                                    statusTimestamp: statusMetadata.timestamp
+                                }
+                            });
+                            continue;
+                        }
+
+                        // Skip if no text AND no media (e.g. some system msg)
+                        if (!text && !mediaPath) continue;
+
                         // Suppress agent reply if user is active in chat (already checked senderId)
                         if (!isSelfChat) {
-                            const lastUserTs = this.lastUserMessageTimestamps.get(senderId) || 0;
-                            const now = Date.now();
                             const userActiveWindowMs = 60 * 1000; // 1 minute window
-                            if (now - lastUserTs < userActiveWindowMs) {
+                            if (receivedAt - previousUserTs < userActiveWindowMs) {
                                 logger.info(`WhatsAppChannel: User is active in chat (${senderId}), suppressing agent task.`);
                                 // We still record the message in memory via MessageBus, but we disable auto-reply for this dispatch
                                 await this.agent.messageBus.dispatch({
@@ -415,7 +424,8 @@ export class WhatsAppChannel implements IChannel {
                                         suppressReply: true 
                                     }
                                 });
-                                return;
+                                if (senderId && !isFromMe) this.lastUserMessageTimestamps.set(senderId, receivedAt);
+                                continue;
                             }
                         }
 
@@ -438,6 +448,7 @@ export class WhatsAppChannel implements IChannel {
                                 profiling: this.profilingEnabled
                             }
                         });
+                        if (senderId && !isFromMe) this.lastUserMessageTimestamps.set(senderId, receivedAt);
                     }
                 }
             }

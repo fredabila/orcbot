@@ -176,9 +176,13 @@ describe('DecisionEngine - System Prompt Persistence', () => {
       payload: {
         description: 'Test task',
         messagesSent: 0,
-        currentStep: 1
+        currentStep: 1,
+        source: 'telegram',
+        sourceId: 'test-user'
       }
     });
+
+    expect(llmCalls.length).toBe(2);
 
     // Both calls should contain the agent identity
     expect(llmCalls[0].systemMessage).toContain(testIdentity);
@@ -294,6 +298,13 @@ describe('DecisionEngine - Thread Context Grounding', () => {
             metadata: { source: 'telegram', role: 'assistant', chatId: '12345' }
           },
           {
+            id: 'tg-progress-1',
+            type: 'short',
+            content: 'Assistant sent status update to telegram 12345: ⏳ Working on it...',
+            timestamp: '2026-02-05T10:01:30.000Z',
+            metadata: { source: 'telegram', role: 'assistant', chatId: '12345', progressType: 'working', progressOnly: true, lowSignal: true }
+          },
+          {
             id: 'noise-1',
             type: 'short',
             content: 'Observation: Tool web_search returned: "..."',
@@ -350,6 +361,7 @@ describe('DecisionEngine - Thread Context Grounding', () => {
     expect(systemPrompt).toContain('THREAD CONTEXT (Same Chat)');
     expect(systemPrompt).toContain('Frederick');
     expect(systemPrompt).not.toContain('Observation: Tool web_search returned');
+    expect(systemPrompt).not.toContain('Working on it');
   });
 });
 
@@ -495,5 +507,74 @@ describe('DecisionEngine - Step compaction expansion', () => {
     expect(systemPrompt).toContain('expanded continuity context');
     expect(systemPrompt).toContain('[Step 9] Tool web_search returned detail from step 9');
     expect(systemPrompt).not.toContain('middle steps compacted');
+  });
+});
+
+describe('DecisionEngine - Recovery Supervisor', () => {
+  it('repairs blocked plans before returning to the agent loop', async () => {
+    const llmCalls: Array<{ prompt: string; systemMessage?: string }> = [];
+
+    const mockLLM = {
+      supportsNativeToolCalling: () => false,
+      call: vi.fn(async (prompt: string, systemMessage?: string) => {
+        llmCalls.push({ prompt, systemMessage });
+
+        if (llmCalls.length === 1) {
+          return JSON.stringify({
+            reasoning: 'Try browsing directly',
+            verification: { goals_met: false, analysis: 'Need to continue' },
+            tools: [{ name: 'browser_click', metadata: {} }]
+          });
+        }
+
+        return JSON.stringify({
+          reasoning: 'Use a valid tool with executable arguments',
+          verification: { goals_met: false, analysis: 'Recovered with a valid plan' },
+          tools: [{ name: 'web_search', metadata: { query: 'recovery supervisor plan' } }]
+        });
+      })
+    } as any;
+
+    const mockMemory = {
+      getUserContext: () => ({ raw: '' }),
+      getRecentContext: () => [],
+      getContactProfile: () => null,
+      searchMemory: () => []
+    } as any;
+
+    const mockSkills = {
+      getSkillsPrompt: () => 'Available Skills:\n- web_search: Search the web (Usage: web_search(query))\n- browser_click: Click browser element (Usage: browser_click(selector))',
+      getCompactSkillsPrompt: () => 'Tools: web_search(query), browser_click(selector)',
+      getRelevantSkillsPrompt: () => 'Available Skills:\n- web_search: Search the web (Usage: web_search(query))\n- browser_click: Click browser element (Usage: browser_click(selector))',
+      getAllSkills: () => [{ name: 'web_search' }, { name: 'browser_click' }],
+      matchSkillsForTask: () => [],
+      classifySkillsWithLLM: async () => [],
+      getAgentSkillsPrompt: () => '',
+      getActivatedSkillsContext: () => '',
+      getAgentSkills: () => [],
+      activateAgentSkill: () => {},
+      deactivateNonStickySkills: () => {}
+    } as any;
+
+    const mockConfig = {
+      get: () => undefined
+    } as any;
+
+    const engine = new DecisionEngine(mockMemory, mockLLM, mockSkills, '', '', mockConfig);
+
+    const result = await engine.decide({
+      id: 'recovery-action',
+      payload: {
+        description: 'Find the relevant information and continue',
+        messagesSent: 0,
+        currentStep: 1,
+        source: 'internal'
+      }
+    });
+
+    expect(llmCalls.length).toBe(2);
+    expect(result.tools?.length).toBe(1);
+    expect(result.tools?.[0]?.name).toBe('web_search');
+    expect(result.tools?.[0]?.metadata?.query).toBe('recovery supervisor plan');
   });
 });

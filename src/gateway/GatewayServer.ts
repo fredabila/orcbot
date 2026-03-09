@@ -14,6 +14,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { Agent } from '../core/Agent';
 import { ConfigManager } from '../config/ConfigManager';
+import { collectDoctorReport } from '../cli/Doctor';
 import { logger } from '../utils/logger';
 import { eventBus } from '../core/EventBus';
 
@@ -35,6 +36,43 @@ export class GatewayServer {
     private gatewayConfig: GatewayConfig;
     private clients: Set<WebSocket> = new Set();
     private requestBuckets: Map<string, { count: number; windowStart: number }> = new Map();
+    private static readonly DATA_HOME_TEXT_LIMIT_BYTES = 1_000_000;
+    private static readonly DATA_HOME_MIME_TYPES: Record<string, string> = {
+        '.txt': 'text/plain; charset=utf-8',
+        '.md': 'text/markdown; charset=utf-8',
+        '.json': 'application/json; charset=utf-8',
+        '.jsonl': 'application/x-ndjson; charset=utf-8',
+        '.yaml': 'application/yaml; charset=utf-8',
+        '.yml': 'application/yaml; charset=utf-8',
+        '.xml': 'application/xml; charset=utf-8',
+        '.csv': 'text/csv; charset=utf-8',
+        '.log': 'text/plain; charset=utf-8',
+        '.ts': 'text/plain; charset=utf-8',
+        '.js': 'text/plain; charset=utf-8',
+        '.tsx': 'text/plain; charset=utf-8',
+        '.jsx': 'text/plain; charset=utf-8',
+        '.css': 'text/css; charset=utf-8',
+        '.html': 'text/html; charset=utf-8',
+        '.svg': 'image/svg+xml',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.bmp': 'image/bmp',
+        '.ico': 'image/x-icon',
+        '.mp3': 'audio/mpeg',
+        '.wav': 'audio/wav',
+        '.ogg': 'audio/ogg',
+        '.m4a': 'audio/mp4',
+        '.flac': 'audio/flac',
+        '.mp4': 'video/mp4',
+        '.webm': 'video/webm',
+        '.mov': 'video/quicktime',
+        '.avi': 'video/x-msvideo',
+        '.mkv': 'video/x-matroska',
+        '.pdf': 'application/pdf'
+    };
 
     constructor(agent: Agent, config: ConfigManager, gatewayConfig: Partial<GatewayConfig> = {}) {
         this.agent = agent;
@@ -177,6 +215,453 @@ export class GatewayServer {
             });
     }
 
+    private getMemoryStats(): { totalMemories: number; fileSize: number } {
+        const dataDir = this.getDataHome();
+        const memoryPath = path.join(dataDir, 'memory.json');
+
+        if (!fs.existsSync(memoryPath)) {
+            return { totalMemories: 0, fileSize: 0 };
+        }
+
+        try {
+            const content = JSON.parse(fs.readFileSync(memoryPath, 'utf8'));
+            const memories = Array.isArray(content?.memories) ? content.memories : (Array.isArray(content) ? content : []);
+            return {
+                totalMemories: memories.length || 0,
+                fileSize: fs.statSync(memoryPath).size
+            };
+        } catch {
+            return { totalMemories: 0, fileSize: 0 };
+        }
+    }
+
+    private getDataHome(): string {
+        return path.resolve(this.config.getDataHome?.() || this.config.get('dataDir') || path.join(process.env.HOME || '', '.orcbot'));
+    }
+
+    private isProtectedDataHomePath(relativePath: string): boolean {
+        const normalized = String(relativePath || '').replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+        if (!normalized) return false;
+        return normalized === '.env'
+            || normalized.endsWith('/.env')
+            || normalized === 'orcbot.lock'
+            || normalized.endsWith('/orcbot.lock')
+            || normalized.endsWith('.pid');
+    }
+
+    private resolveDataHomeTarget(relativePath: string = ''): { root: string; absolutePath: string; relativePath: string } {
+        const root = this.getDataHome();
+        const requested = String(relativePath || '').trim();
+        if (path.isAbsolute(requested)) {
+            throw new Error('Absolute paths are not allowed');
+        }
+
+        const absolutePath = path.resolve(root, requested || '.');
+        const relative = path.relative(root, absolutePath);
+        if (relative.startsWith('..') || path.isAbsolute(relative)) {
+            throw new Error('Path escapes the OrcBot data directory');
+        }
+
+        const normalizedRelative = (relative || '').replace(/\\/g, '/');
+        if (this.isProtectedDataHomePath(normalizedRelative)) {
+            throw new Error('Requested path is protected');
+        }
+
+        return {
+            root,
+            absolutePath,
+            relativePath: normalizedRelative
+        };
+    }
+
+    private deleteDataHomeEntry(relativePath: string): { path: string; type: 'file' | 'directory' } {
+        const target = this.resolveDataHomeTarget(relativePath);
+        if (!target.relativePath) {
+            throw new Error('Root data directory cannot be deleted');
+        }
+        if (!fs.existsSync(target.absolutePath)) {
+            throw new Error('Path not found');
+        }
+
+        const stats = fs.statSync(target.absolutePath);
+        if (stats.isDirectory()) {
+            fs.rmSync(target.absolutePath, { recursive: true, force: false });
+            return { path: target.relativePath, type: 'directory' };
+        }
+
+        fs.unlinkSync(target.absolutePath);
+        return { path: target.relativePath, type: 'file' };
+    }
+
+    private renameDataHomeEntry(fromPath: string, toPath: string): { fromPath: string; toPath: string; type: 'file' | 'directory' } {
+        const source = this.resolveDataHomeTarget(fromPath);
+        const destination = this.resolveDataHomeTarget(toPath);
+
+        if (!source.relativePath) {
+            throw new Error('Root data directory cannot be renamed');
+        }
+        if (!destination.relativePath) {
+            throw new Error('Destination path is required');
+        }
+        if (!fs.existsSync(source.absolutePath)) {
+            throw new Error('Source path not found');
+        }
+        if (fs.existsSync(destination.absolutePath)) {
+            throw new Error('Destination path already exists');
+        }
+
+        fs.mkdirSync(path.dirname(destination.absolutePath), { recursive: true });
+        const stats = fs.statSync(source.absolutePath);
+        fs.renameSync(source.absolutePath, destination.absolutePath);
+
+        return {
+            fromPath: source.relativePath,
+            toPath: destination.relativePath,
+            type: stats.isDirectory() ? 'directory' : 'file'
+        };
+    }
+
+    private describeDataHomeEntry(absolutePath: string, relativePath: string, depth: number): any {
+        const stats = fs.statSync(absolutePath);
+        const isDirectory = stats.isDirectory();
+        const mimeType = isDirectory ? undefined : this.getDataHomeMimeType(absolutePath);
+        const entry: any = {
+            name: relativePath ? path.basename(absolutePath) : path.basename(this.getDataHome()),
+            path: relativePath,
+            type: isDirectory ? 'directory' : 'file',
+            size: isDirectory ? undefined : stats.size,
+            modifiedAt: stats.mtime.toISOString(),
+            mimeType,
+            protected: this.isProtectedDataHomePath(relativePath)
+        };
+
+        if (isDirectory && depth > 0 && !entry.protected) {
+            const children = fs.readdirSync(absolutePath, { withFileTypes: true })
+                .map((child) => {
+                    const childRelative = [relativePath, child.name].filter(Boolean).join('/');
+                    const childAbsolute = path.join(absolutePath, child.name);
+                    const childProtected = this.isProtectedDataHomePath(childRelative);
+                    if (childProtected) {
+                        return {
+                            name: child.name,
+                            path: childRelative,
+                            type: child.isDirectory() ? 'directory' : 'file',
+                            protected: true
+                        };
+                    }
+                    return this.describeDataHomeEntry(childAbsolute, childRelative, depth - 1);
+                })
+                .sort((left, right) => {
+                    if (left.type !== right.type) return left.type === 'directory' ? -1 : 1;
+                    return String(left.name).localeCompare(String(right.name));
+                });
+            entry.children = children;
+        }
+
+        return entry;
+    }
+
+    private getDataHomeMimeType(filePath: string): string {
+        const extension = path.extname(filePath).toLowerCase();
+        return GatewayServer.DATA_HOME_MIME_TYPES[extension] || 'application/octet-stream';
+    }
+
+    private isTextDataHomeFile(filePath: string, mimeType: string): boolean {
+        const extension = path.extname(filePath).toLowerCase();
+        if (mimeType.startsWith('text/')) return true;
+        if (mimeType.includes('json') || mimeType.includes('xml') || mimeType.includes('yaml')) return true;
+        return ['.ts', '.js', '.tsx', '.jsx', '.md', '.log', '.env', '.sh', '.ps1', '.bat'].includes(extension);
+    }
+
+    private getDataHomePreviewKind(mimeType: string): 'text' | 'image' | 'audio' | 'video' | 'pdf' | 'binary' {
+        if (mimeType.startsWith('image/')) return 'image';
+        if (mimeType.startsWith('audio/')) return 'audio';
+        if (mimeType.startsWith('video/')) return 'video';
+        if (mimeType === 'application/pdf') return 'pdf';
+        if (mimeType.startsWith('text/') || mimeType.includes('json') || mimeType.includes('xml') || mimeType.includes('yaml')) return 'text';
+        return 'binary';
+    }
+
+    private getDataHomeSummary() {
+        const root = this.getDataHome();
+        const tree = this.describeDataHomeEntry(root, '', 1);
+        return {
+            root,
+            protectedPatterns: ['.env', 'orcbot.lock', '*.pid'],
+            tree
+        };
+    }
+
+    private getAvailableLogFiles(): string[] {
+        const dataHome = this.getDataHome();
+        const workspaceRoot = process.cwd();
+        const candidates = [
+            path.join(workspaceRoot, 'logs', 'combined.log'),
+            path.join(dataHome, 'foreground.log'),
+            path.join(workspaceRoot, 'logs', 'error.log'),
+            path.join(workspaceRoot, 'foreground.log')
+        ];
+
+        return candidates.filter((candidate, index) => candidates.indexOf(candidate) === index && fs.existsSync(candidate));
+    }
+
+    private getConnectionsSummary() {
+        return {
+            telegram: {
+                configured: !!this.config.get('telegramToken'),
+                autoReply: this.config.get('telegramAutoReplyEnabled') || false
+            },
+            whatsapp: {
+                configured: !!this.config.get('whatsappEnabled'),
+                autoReply: this.config.get('whatsappAutoReplyEnabled') || false,
+                statusReply: this.config.get('whatsappStatusReplyEnabled') || false,
+                autoReact: this.config.get('whatsappAutoReactEnabled') || false,
+                linkedAccount: this.config.get('whatsappOwnerJID') || null
+            },
+            discord: {
+                configured: !!this.config.get('discordToken'),
+                autoReply: this.config.get('discordAutoReplyEnabled') || false
+            },
+            slack: {
+                configured: !!this.config.get('slackBotToken'),
+                autoReply: this.config.get('slackAutoReplyEnabled') || false
+            },
+            email: {
+                configured: !!this.config.get('emailEnabled'),
+                address: this.config.get('emailAddress') || null
+            }
+        };
+    }
+
+    private getModelsSummary() {
+        return {
+            currentModel: this.config.get('modelName'),
+            provider: this.config.get('llmProvider') || 'auto',
+            inferredProvider: this.inferProviderFromModel(this.config.get('modelName') || ''),
+            configuredProviders: this.getConfiguredProviders()
+        };
+    }
+
+    private getSecuritySummary() {
+        return {
+            safeMode: this.config.get('safeMode') || false,
+            autoExecuteCommands: this.config.get('autoExecuteCommands') || false,
+            pluginAllowList: this.config.get('pluginAllowList') || [],
+            pluginDenyList: this.config.get('pluginDenyList') || []
+        };
+    }
+
+    private getQueueSummary() {
+        const counts = this.agent.actionQueue?.getCounts?.() || {
+            pending: 0,
+            waiting: 0,
+            'in-progress': 0,
+            completed: 0,
+            failed: 0
+        };
+        const active = this.agent.actionQueue?.getActive?.() || [];
+        const queue = this.agent.actionQueue?.getQueue?.() || [];
+        return {
+            counts,
+            activeCount: active.length,
+            total: queue.length,
+            active: active.slice(0, 10)
+        };
+    }
+
+    private getChatSummary() {
+        const messages = this.getChatHistory();
+        return {
+            messageCount: messages.length,
+            lastMessageAt: messages[0]?.timestamp || null,
+            latest: messages.slice(0, 20)
+        };
+    }
+
+    private getServiceRegistry() {
+        const status = this.getAgentStatus();
+        const queue = this.getQueueSummary();
+        const chat = this.getChatSummary();
+        const memory = this.getMemoryStats();
+        const skills = this.agent.skills.getAllSkills();
+        const orchestratorAgents = this.agent.orchestrator.getAgents?.() || [];
+        const orchestratorTasks = this.agent.orchestrator.getTasks?.() || [];
+        const tokenStatus = {
+            authEnabled: !!(this.gatewayConfig.apiKey || this.config.get('gatewayApiKey')),
+            wsClients: this.clients.size
+        };
+
+        return [
+            {
+                id: 'gateway',
+                title: 'Gateway',
+                category: 'core',
+                status: 'healthy',
+                description: 'REST, WebSocket, auth, and browser dashboard transport layer.',
+                metrics: { wsClients: this.clients.size, mode: status.mode },
+                endpoints: ['/api/status', '/api/health', '/api/gateway/capabilities', '/api/dashboard/overview']
+            },
+            {
+                id: 'agent',
+                title: 'Agent Runtime',
+                category: 'core',
+                status: status.running ? 'healthy' : 'degraded',
+                description: 'Main agent loop, model routing, and orchestration status.',
+                metrics: { running: status.running, model: status.model, provider: status.provider },
+                endpoints: ['/api/status', '/api/models', '/api/providers', '/api/agent/start', '/api/agent/stop']
+            },
+            {
+                id: 'tasks',
+                title: 'Task Queue',
+                category: 'operations',
+                status: queue.counts.failed > 0 ? 'warning' : 'healthy',
+                description: 'Queued, in-progress, waiting, and historical actions.',
+                metrics: { total: queue.total, active: queue.activeCount, failed: queue.counts.failed },
+                endpoints: ['/api/tasks', '/api/tasks/:id', '/api/tasks/:id/cancel', '/api/tasks/clear', '/api/queue/stats']
+            },
+            {
+                id: 'chat',
+                title: 'Gateway Chat',
+                category: 'workspace',
+                status: 'healthy',
+                description: 'Web chat session transport, history, and assistant responses.',
+                metrics: { messages: chat.messageCount, lastMessageAt: chat.lastMessageAt },
+                endpoints: ['/api/chat/send', '/api/chat/history', '/api/chat/export', '/api/chat/clear']
+            },
+            {
+                id: 'memory',
+                title: 'Memory',
+                category: 'data',
+                status: memory.totalMemories > 0 ? 'healthy' : 'degraded',
+                description: 'Recent context, search, and file-backed memory statistics.',
+                metrics: { totalMemories: memory.totalMemories, fileSize: memory.fileSize },
+                endpoints: ['/api/memory', '/api/memory/stats', '/api/memory/search']
+            },
+            {
+                id: 'data-home',
+                title: 'Data Home',
+                category: 'data',
+                status: 'healthy',
+                description: 'Managed view over ~/.orcbot files including bootstrap docs, memory artifacts, tools, and workspace folders.',
+                metrics: { root: this.getDataHome() },
+                endpoints: ['/api/data-home/summary', '/api/data-home/tree', '/api/data-home/file', '/api/data-home/asset', '/api/data-home/directory', '/api/data-home/rename', '/api/data-home/entry']
+            },
+            {
+                id: 'skills',
+                title: 'Skills',
+                category: 'extensions',
+                status: 'healthy',
+                description: 'Built-in and plugin skill registry, install, execute, and health checks.',
+                metrics: { totalSkills: skills.length, pluginSkills: skills.filter(s => !!s.pluginPath).length },
+                endpoints: ['/api/skills', '/api/skills/health', '/api/skills/install', '/api/skills/:name/execute']
+            },
+            {
+                id: 'orchestrator',
+                title: 'Orchestrator',
+                category: 'operations',
+                status: orchestratorTasks.length > 0 ? 'healthy' : 'idle',
+                description: 'Delegated agents and distributed task execution state.',
+                metrics: { agents: orchestratorAgents.length, delegatedTasks: orchestratorTasks.length },
+                endpoints: ['/api/orchestrator/agents', '/api/orchestrator/tasks', '/api/orchestrator/tasks/:id/cancel']
+            },
+            {
+                id: 'channels',
+                title: 'Channels',
+                category: 'integrations',
+                status: 'healthy',
+                description: 'Messaging channel configuration and connection settings.',
+                metrics: { configured: Object.values(this.getConnectionsSummary()).filter((entry: any) => entry.configured).length },
+                endpoints: ['/api/connections', '/api/connections/:channel']
+            },
+            {
+                id: 'security',
+                title: 'Security',
+                category: 'admin',
+                status: tokenStatus.authEnabled ? 'healthy' : 'warning',
+                description: 'Gateway auth token, safe mode, and plugin policy controls.',
+                metrics: { authEnabled: tokenStatus.authEnabled, wsClients: tokenStatus.wsClients },
+                endpoints: ['/api/gateway/token/status', '/api/gateway/token/rotate', '/api/security']
+            }
+        ];
+    }
+
+    private getServiceSnapshot(serviceId: string) {
+        const lower = String(serviceId || '').toLowerCase();
+        const services = this.getServiceRegistry();
+        const service = services.find(entry => entry.id === lower);
+        if (!service) return null;
+
+        const snapshots: Record<string, any> = {
+            gateway: {
+                status: this.getAgentStatus(),
+                health: {
+                    uptimeSeconds: Math.floor(process.uptime()),
+                    wsClients: this.clients.size,
+                    memoryUsage: process.memoryUsage()
+                },
+                capabilities: this.getGatewayCapabilities()
+            },
+            agent: this.getAgentStatus(),
+            tasks: this.getQueueSummary(),
+            chat: this.getChatSummary(),
+            memory: {
+                stats: this.getMemoryStats(),
+                recent: this.agent.memory?.getRecentContext(20) || []
+            },
+            'data-home': this.getDataHomeSummary(),
+            skills: {
+                skills: this.agent.skills.getAllSkills().map(s => ({
+                    name: s.name,
+                    description: s.description,
+                    usage: s.usage,
+                    isPlugin: !!s.pluginPath,
+                    pluginPath: s.pluginPath
+                }))
+            },
+            orchestrator: {
+                agents: this.agent.orchestrator.getAgents?.() || [],
+                tasks: this.agent.orchestrator.getTasks?.() || []
+            },
+            channels: {
+                connections: this.getConnectionsSummary()
+            },
+            security: {
+                token: {
+                    authEnabled: !!(this.gatewayConfig.apiKey || this.config.get('gatewayApiKey')),
+                    wsClients: this.clients.size
+                },
+                security: this.getSecuritySummary()
+            }
+        };
+
+        return {
+            ...service,
+            snapshot: snapshots[lower] || null,
+            timestamp: new Date().toISOString()
+        };
+    }
+
+    private getDashboardOverview() {
+        return {
+            status: this.getAgentStatus(),
+            health: {
+                status: 'ok',
+                timestamp: new Date().toISOString(),
+                uptimeSeconds: Math.floor(process.uptime()),
+                wsClients: this.clients.size,
+                memoryUsage: process.memoryUsage()
+            },
+            queue: this.getQueueSummary(),
+            models: this.getModelsSummary(),
+            connections: this.getConnectionsSummary(),
+            security: this.getSecuritySummary(),
+            memory: this.getMemoryStats(),
+            chat: this.getChatSummary(),
+            services: this.getServiceRegistry(),
+            capabilities: this.getGatewayCapabilities()
+        };
+    }
+
     private setupMiddleware() {
         this.app.disable('x-powered-by');
 
@@ -297,8 +782,10 @@ export class GatewayServer {
                 websocket: '/'
             },
             api: {
-                status: ['GET /api/status', 'GET /api/health', 'GET /api/gateway/capabilities', 'GET /api/system/info'],
-                security: ['GET /api/gateway/token/status', 'POST /api/gateway/token/rotate'],
+                status: ['GET /api/status', 'GET /api/health', 'GET /api/doctor', 'GET /api/gateway/capabilities', 'GET /api/system/info'],
+                dashboard: ['GET /api/dashboard/overview', 'GET /api/services', 'GET /api/services/:id'],
+                dataHome: ['GET /api/data-home/summary', 'GET /api/data-home/tree', 'GET /api/data-home/file', 'GET /api/data-home/asset', 'PUT /api/data-home/file', 'POST /api/data-home/directory', 'POST /api/data-home/rename', 'DELETE /api/data-home/entry'],
+                security: ['GET /api/security', 'GET /api/security/audit', 'PUT /api/security', 'GET /api/gateway/token/status', 'POST /api/gateway/token/rotate'],
                 tasks: ['POST /api/tasks', 'GET /api/tasks', 'GET /api/tasks/:id', 'POST /api/tasks/:id/cancel', 'POST /api/tasks/clear', 'GET /api/queue/stats'],
                 chat: ['POST /api/chat/send', 'GET /api/chat/history', 'GET /api/chat/export', 'POST /api/chat/clear'],
                 memory: ['GET /api/memory', 'GET /api/memory/stats', 'GET /api/memory/search'],
@@ -371,8 +858,184 @@ export class GatewayServer {
             });
         });
 
+        router.get('/doctor', (req: Request, res: Response) => {
+            const deep = String(req.query.deep || '').toLowerCase() === 'true';
+            res.json(collectDoctorReport(this.config, { deep }));
+        });
+
         router.get('/gateway/capabilities', (_req: Request, res: Response) => {
             res.json(this.getGatewayCapabilities());
+        });
+
+        router.get('/dashboard/overview', (_req: Request, res: Response) => {
+            res.json(this.getDashboardOverview());
+        });
+
+        router.get('/services', (_req: Request, res: Response) => {
+            res.json({ services: this.getServiceRegistry() });
+        });
+
+        router.get('/services/:id', (req: Request, res: Response) => {
+            const snapshot = this.getServiceSnapshot(req.params.id);
+            if (!snapshot) return res.status(404).json({ error: 'Service not found' });
+            res.json(snapshot);
+        });
+
+        // ===== ORCBOT DATA HOME =====
+        router.get('/data-home/summary', (_req: Request, res: Response) => {
+            res.json(this.getDataHomeSummary());
+        });
+
+        router.get('/data-home/tree', (req: Request, res: Response) => {
+            try {
+                const requestedPath = String(req.query.path || '');
+                const depth = Math.max(0, Math.min(5, parseInt(String(req.query.depth || '2'), 10) || 2));
+                const target = this.resolveDataHomeTarget(requestedPath);
+                if (!fs.existsSync(target.absolutePath)) {
+                    return res.status(404).json({ error: 'Path not found' });
+                }
+                res.json({
+                    root: this.getDataHome(),
+                    requestedPath: target.relativePath,
+                    entry: this.describeDataHomeEntry(target.absolutePath, target.relativePath, depth)
+                });
+            } catch (error: any) {
+                res.status(400).json({ error: error.message });
+            }
+        });
+
+        router.get('/data-home/file', (req: Request, res: Response) => {
+            try {
+                const requestedPath = String(req.query.path || '').trim();
+                if (!requestedPath) {
+                    return res.status(400).json({ error: 'path query is required' });
+                }
+                const target = this.resolveDataHomeTarget(requestedPath);
+                if (!fs.existsSync(target.absolutePath)) {
+                    return res.status(404).json({ error: 'File not found' });
+                }
+                const stats = fs.statSync(target.absolutePath);
+                if (!stats.isFile()) {
+                    return res.status(400).json({ error: 'Requested path is not a file' });
+                }
+                const mimeType = this.getDataHomeMimeType(target.absolutePath);
+                const isText = this.isTextDataHomeFile(target.absolutePath, mimeType);
+                const previewKind = this.getDataHomePreviewKind(mimeType);
+                let content: string | null = null;
+
+                if (isText) {
+                    if (stats.size > GatewayServer.DATA_HOME_TEXT_LIMIT_BYTES) {
+                        return res.status(413).json({ error: `File too large to read via gateway API (limit ${GatewayServer.DATA_HOME_TEXT_LIMIT_BYTES} bytes)` });
+                    }
+                    content = fs.readFileSync(target.absolutePath, 'utf8');
+                }
+
+                res.json({
+                    root: this.getDataHome(),
+                    path: target.relativePath,
+                    size: stats.size,
+                    modifiedAt: stats.mtime.toISOString(),
+                    mimeType,
+                    isText,
+                    previewKind,
+                    content
+                });
+            } catch (error: any) {
+                res.status(400).json({ error: error.message });
+            }
+        });
+
+        router.get('/data-home/asset', (req: Request, res: Response) => {
+            try {
+                const requestedPath = String(req.query.path || '').trim();
+                if (!requestedPath) {
+                    return res.status(400).json({ error: 'path query is required' });
+                }
+                const target = this.resolveDataHomeTarget(requestedPath);
+                if (!fs.existsSync(target.absolutePath)) {
+                    return res.status(404).json({ error: 'File not found' });
+                }
+                const stats = fs.statSync(target.absolutePath);
+                if (!stats.isFile()) {
+                    return res.status(400).json({ error: 'Requested path is not a file' });
+                }
+
+                const mimeType = this.getDataHomeMimeType(target.absolutePath);
+                const dispositionMode = String(req.query.download || '').toLowerCase() === 'true' ? 'attachment' : 'inline';
+                res.setHeader('Content-Type', mimeType);
+                res.setHeader('Content-Length', String(stats.size));
+                res.setHeader('Content-Disposition', `${dispositionMode}; filename="${path.basename(target.absolutePath).replace(/"/g, '')}"`);
+                res.sendFile(target.absolutePath);
+            } catch (error: any) {
+                res.status(400).json({ error: error.message });
+            }
+        });
+
+        router.put('/data-home/file', (req: Request, res: Response) => {
+            try {
+                const requestedPath = String(req.body?.path || '').trim();
+                const content = req.body?.content;
+                if (!requestedPath) {
+                    return res.status(400).json({ error: 'path is required' });
+                }
+                if (typeof content !== 'string') {
+                    return res.status(400).json({ error: 'content must be a string' });
+                }
+                const target = this.resolveDataHomeTarget(requestedPath);
+                fs.mkdirSync(path.dirname(target.absolutePath), { recursive: true });
+                fs.writeFileSync(target.absolutePath, content, 'utf8');
+                const stats = fs.statSync(target.absolutePath);
+                res.json({ success: true, path: target.relativePath, size: stats.size, modifiedAt: stats.mtime.toISOString() });
+            } catch (error: any) {
+                res.status(400).json({ error: error.message });
+            }
+        });
+
+        router.post('/data-home/directory', (req: Request, res: Response) => {
+            try {
+                const requestedPath = String(req.body?.path || '').trim();
+                if (!requestedPath) {
+                    return res.status(400).json({ error: 'path is required' });
+                }
+                const target = this.resolveDataHomeTarget(requestedPath);
+                fs.mkdirSync(target.absolutePath, { recursive: true });
+                res.json({ success: true, path: target.relativePath });
+            } catch (error: any) {
+                res.status(400).json({ error: error.message });
+            }
+        });
+
+        router.post('/data-home/rename', (req: Request, res: Response) => {
+            try {
+                const fromPath = String(req.body?.fromPath || '').trim();
+                const toPath = String(req.body?.toPath || '').trim();
+                if (!fromPath || !toPath) {
+                    return res.status(400).json({ error: 'fromPath and toPath are required' });
+                }
+
+                const result = this.renameDataHomeEntry(fromPath, toPath);
+                res.json({ success: true, ...result });
+            } catch (error: any) {
+                const message = String(error?.message || error);
+                const status = message.includes('already exists') ? 409 : (message.includes('not found') ? 404 : 400);
+                res.status(status).json({ error: message });
+            }
+        });
+
+        router.delete('/data-home/entry', (req: Request, res: Response) => {
+            try {
+                const requestedPath = String(req.query.path || '').trim();
+                if (!requestedPath) {
+                    return res.status(400).json({ error: 'path query is required' });
+                }
+
+                const result = this.deleteDataHomeEntry(requestedPath);
+                res.json({ success: true, ...result });
+            } catch (error: any) {
+                const message = String(error?.message || error);
+                const status = message.includes('not found') ? 404 : 400;
+                res.status(status).json({ error: message });
+            }
         });
 
         // ===== GATEWAY TOKEN MANAGEMENT =====
@@ -477,7 +1140,7 @@ export class GatewayServer {
 
         // ===== ORCHESTRATOR =====
         router.get('/orchestrator/agents', (_req: Request, res: Response) => {
-            const agents = this.agent.orchestrator.getAgents();
+            const agents = this.agent.orchestrator.getDetailedWorkerStatus();
             res.json({ agents });
         });
 
@@ -597,17 +1260,7 @@ export class GatewayServer {
         });
 
         router.get('/memory/stats', (_req: Request, res: Response) => {
-            const dataDir = this.config.get('dataDir') || path.join(process.env.HOME || '', '.orcbot');
-            const memoryPath = path.join(dataDir, 'memory.json');
-            
-            let stats = { totalMemories: 0, fileSize: 0 };
-            if (fs.existsSync(memoryPath)) {
-                const content = JSON.parse(fs.readFileSync(memoryPath, 'utf8'));
-                const memories = Array.isArray(content?.memories) ? content.memories : (Array.isArray(content) ? content : []);
-                stats.totalMemories = memories.length || 0;
-                stats.fileSize = fs.statSync(memoryPath).size;
-            }
-            res.json(stats);
+            res.json(this.getMemoryStats());
         });
 
         router.get('/memory/search', (req: Request, res: Response) => {
@@ -633,25 +1286,7 @@ export class GatewayServer {
 
         // ===== CONNECTIONS / CHANNELS =====
         router.get('/connections', (_req: Request, res: Response) => {
-            const connections = {
-                telegram: {
-                    configured: !!this.config.get('telegramToken'),
-                    autoReply: this.config.get('telegramAutoReplyEnabled') || false
-                },
-                whatsapp: {
-                    configured: !!this.config.get('whatsappEnabled'),
-                    autoReply: this.config.get('whatsappAutoReplyEnabled') || false,
-                    linkedAccount: this.config.get('whatsappOwnerJID') || null
-                },
-                discord: {
-                    configured: !!this.config.get('discordToken'),
-                    autoReply: this.config.get('discordAutoReplyEnabled') || false
-                },
-                slack: {
-                    configured: !!this.config.get('slackBotToken'),
-                    autoReply: this.config.get('slackAutoReplyEnabled') || false
-                }
-            };
+            const connections = this.getConnectionsSummary();
             res.json({ connections });
         });
 
@@ -682,16 +1317,7 @@ export class GatewayServer {
 
         // ===== AI MODELS =====
         router.get('/models', (_req: Request, res: Response) => {
-            const models = {
-                currentModel: this.config.get('modelName'),
-                provider: this.config.get('llmProvider') || 'auto',
-                providers: {
-                    openai: { configured: !!this.config.get('openaiApiKey') },
-                    google: { configured: !!this.config.get('googleApiKey') },
-                    openrouter: { configured: !!this.config.get('openrouterApiKey') },
-                    bedrock: { configured: !!this.config.get('bedrockAccessKeyId') }
-                }
-            };
+            const models = this.getModelsSummary();
             res.json(models);
         });
 
@@ -758,11 +1384,11 @@ export class GatewayServer {
             const lines = parseInt(req.query.lines as string) || 200;
             const level = req.query.level as string; // Filter by log level (info, error, warn, debug)
             const search = req.query.search as string; // Search term
-            const dataDir = this.config.get('dataDir') || path.join(process.env.HOME || '', '.orcbot');
-            const logPath = path.join(dataDir, 'foreground.log');
+            const availableLogFiles = this.getAvailableLogFiles();
+            const logPath = availableLogFiles[0];
 
-            if (!fs.existsSync(logPath)) {
-                return res.json({ logs: [], total: 0 });
+            if (!logPath) {
+                return res.json({ logs: [], total: 0, source: null, sources: [] });
             }
 
             try {
@@ -788,7 +1414,9 @@ export class GatewayServer {
                 res.json({ 
                     logs: recentLogs, 
                     total,
-                    filtered: !!level || !!search
+                    filtered: !!level || !!search,
+                    source: logPath,
+                    sources: availableLogFiles
                 });
             } catch (error: any) {
                 res.status(500).json({ error: error.message });
@@ -797,11 +1425,23 @@ export class GatewayServer {
 
         // ===== SECURITY =====
         router.get('/security', (_req: Request, res: Response) => {
+            res.json(this.getSecuritySummary());
+        });
+
+        router.get('/security/audit', (req: Request, res: Response) => {
+            const deep = String(req.query.deep || '').toLowerCase() === 'true';
+            const report = collectDoctorReport(this.config, { deep });
+            const findings = report.findings.filter(f => f.area === 'security' || f.area === 'gateway' || f.area === 'channels');
+
             res.json({
-                safeMode: this.config.get('safeMode') || false,
-                autoExecuteCommands: this.config.get('autoExecuteCommands') || false,
-                pluginAllowList: this.config.get('pluginAllowList') || [],
-                pluginDenyList: this.config.get('pluginDenyList') || []
+                ...report,
+                summary: {
+                    critical: findings.filter(f => f.severity === 'critical').length,
+                    warn: findings.filter(f => f.severity === 'warn').length,
+                    info: findings.filter(f => f.severity === 'info').length,
+                    ok: Math.max(0, 6 - findings.filter(f => f.severity !== 'info').length)
+                },
+                findings
             });
         });
 
@@ -1089,7 +1729,7 @@ export class GatewayServer {
     }
 
     private getAgentStatus() {
-        const dataDir = this.config.get('dataDir') || path.join(process.env.HOME || '', '.orcbot');
+        const dataDir = this.getDataHome();
         const lockPath = path.join(dataDir, 'orcbot.lock');
         let lockFileValid = false;
         let lockInfo = null;

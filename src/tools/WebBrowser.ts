@@ -2239,12 +2239,12 @@ export class WebBrowser {
      * Provides 'page', 'browser', and 'logger' to the script context.
      * Use this for complex custom logic that standard tools can't handle.
      */
-    public async runScript(code: string): Promise<string> {
+    public async runScript(code: string, sourceLabel: string = 'inline browser scratchpad'): Promise<string> {
         try {
             await this.ensureBrowser();
             if (!this._page) return 'Error: No browser page available.';
 
-            logger.info('Browser: Running custom script (Web Scratchpad)');
+            logger.info(`Browser: Running custom script (Web Scratchpad) from ${sourceLabel}`);
             
             // We wrap the user code in an async block and provide 'page', 'browser', and 'logger'
             const scriptFunc = new Function('page', 'browser', 'logger', `
@@ -2254,9 +2254,9 @@ export class WebBrowser {
             `);
 
             const result = await scriptFunc(this._page, this.browser, logger);
-            return `Script executed successfully. Result: ${JSON.stringify(result || 'No return value')}`;
+            return `Script executed successfully from ${sourceLabel}. Result: ${JSON.stringify(result || 'No return value')}`;
         } catch (e) {
-            return `Script execution failed: ${e}`;
+            return `Script execution failed from ${sourceLabel}: ${e}`;
         }
     }
 

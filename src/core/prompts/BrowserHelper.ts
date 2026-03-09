@@ -59,6 +59,7 @@ export class BrowserHelper implements PromptHelper {
     - \`browser_perform(goal)\`: **STRONGLY PREFERRED** for multi-step tasks (e.g. "type the article into the doc"). It uses advanced focus/caret logic.
     - \`browser_type_into_label(label, text)\`: Best for standard forms.
     - \`browser_click_text(text)\`: Best for navigation.
+    - \`browser_run_script(code?, filename?)\`: Use the persistent browser scratchpad for complex DOM workflows, repeatable site-specific automations, and recovery logic that does not fit cleanly into one browser_perform call.
 4. **Complex Editors (Canvas, Web IDEs, Rich Text)**: Many modern sites use custom rendering for inputs.
     - **DO NOT** just navigate and wait.
     - You MUST click the main editing area first to trigger the caret and focus.

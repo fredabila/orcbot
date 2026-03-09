@@ -11,12 +11,55 @@
  * Falls back gracefully when vision or system control is unavailable.
  */
 
-import { Page, Browser } from 'puppeteer';
 import { logger } from '../utils/logger';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
 import { execSync } from 'child_process';
+
+type BrowserLikePage = any;
+
+function isViewportSize(value: any): value is { width: number; height: number } {
+    return !!value
+        && typeof value.width === 'number'
+        && Number.isFinite(value.width)
+        && typeof value.height === 'number'
+        && Number.isFinite(value.height);
+}
+
+export function getBrowserPageViewportSize(page: BrowserLikePage): { width: number; height: number } | null {
+    if (!page) return null;
+
+    try {
+        if (typeof page.viewport === 'function') {
+            const viewport = page.viewport();
+            if (isViewportSize(viewport)) {
+                return viewport;
+            }
+        }
+
+        if (typeof page.viewportSize === 'function') {
+            const viewport = page.viewportSize();
+            if (isViewportSize(viewport)) {
+                return viewport;
+            }
+        }
+    } catch (error) {
+        logger.debug(`ComputerUse: Failed to read page viewport size: ${error}`);
+    }
+
+    return null;
+}
+
+function isBrowserPageClosed(page: BrowserLikePage | null | undefined): boolean {
+    if (!page) return true;
+
+    try {
+        return typeof page.isClosed === 'function' ? page.isClosed() : false;
+    } catch {
+        return true;
+    }
+}
 
 // robotjs — native cross-platform mouse/keyboard/screen control
 let robot: any;
@@ -45,8 +88,8 @@ export interface ScreenInfo {
 
 export class ComputerUse {
     private context: ComputerUseContext = 'browser';
-    private page: Page | null = null;
-    private pageGetter?: () => Page | null;
+    private page: BrowserLikePage | null = null;
+    private pageGetter?: () => BrowserLikePage | null;
     private visionAnalyzer?: (screenshotPath: string, prompt: string) => Promise<string>;
     private screenshotDir: string;
     private platform: NodeJS.Platform;
@@ -79,18 +122,18 @@ export class ComputerUse {
      * Set the Puppeteer page reference for browser-context operations.
      * Can be set directly or via a getter function that resolves the current page lazily.
      */
-    public setPage(page: Page | null): void {
+    public setPage(page: BrowserLikePage | null): void {
         this.page = page;
     }
 
     /**
      * Set a lazy page getter (e.g., () => browser.page) so ComputerUse always has the current page.
      */
-    public setPageGetter(getter: () => Page | null): void {
+    public setPageGetter(getter: () => BrowserLikePage | null): void {
         this.pageGetter = getter;
     }
 
-    private getPage(): Page | null {
+    private getPage(): BrowserLikePage | null {
         if (this.pageGetter) return this.pageGetter();
         return this.page;
     }
@@ -108,7 +151,7 @@ export class ComputerUse {
     public isAvailable(): boolean {
         if (this.context === 'browser') {
             const p = this.getPage();
-            return p !== null && !p.isClosed();
+            return p !== null && !isBrowserPageClosed(p);
         }
         // System context: requires robotjs
         return !!robot;
@@ -133,7 +176,7 @@ export class ComputerUse {
 
         if (this.context === 'browser') {
             const page = this.getPage();
-            if (!page || page.isClosed()) {
+            if (!page || isBrowserPageClosed(page)) {
                 if (!robot) {
                     throw new Error('No browser page available for screenshot');
                 }
@@ -148,14 +191,13 @@ export class ComputerUse {
 
     private async captureBrowserScreen(savePath: string): Promise<string> {
         const page = this.getPage();
-        if (!page || page.isClosed()) {
+        if (!page || isBrowserPageClosed(page)) {
             throw new Error('No browser page available for screenshot');
         }
         await page.screenshot({ path: savePath, type: 'png', fullPage: false });
         this.lastScreenshot = savePath;
 
-        // Puppeteer viewport detection
-        const viewport = page.viewport();
+        const viewport = getBrowserPageViewportSize(page);
         if (viewport) {
             this.screenSize = { width: viewport.width, height: viewport.height };
         }
@@ -531,14 +573,14 @@ Respond with ONLY the JSON array, no other text.`;
 
     private async browserMouseMove(x: number, y: number): Promise<string> {
         const page = this.getPage();
-        if (!page || page.isClosed()) return 'Error: No browser page.';
+        if (!page || isBrowserPageClosed(page)) return 'Error: No browser page.';
         await page.mouse.move(x, y);
         return `Mouse moved to (${x}, ${y})`;
     }
 
     private async browserMouseClick(x: number, y: number, button: 'left' | 'right' | 'middle', clickCount: number): Promise<string> {
         const page = this.getPage();
-        if (!page || page.isClosed()) return 'Error: No browser page.';
+        if (!page || isBrowserPageClosed(page)) return 'Error: No browser page.';
         await page.mouse.click(x, y, { button, clickCount });
         await this.sleep(300);
         return `Clicked ${button}${clickCount > 1 ? ` x${clickCount}` : ''} at (${x}, ${y})`;
@@ -546,7 +588,7 @@ Respond with ONLY the JSON array, no other text.`;
 
     private async browserMouseDrag(fromX: number, fromY: number, toX: number, toY: number): Promise<string> {
         const page = this.getPage();
-        if (!page || page.isClosed()) return 'Error: No browser page.';
+        if (!page || isBrowserPageClosed(page)) return 'Error: No browser page.';
         await page.mouse.move(fromX, fromY);
         await page.mouse.down();
         // Smooth drag with intermediate steps
@@ -558,14 +600,14 @@ Respond with ONLY the JSON array, no other text.`;
 
     private async browserKeyType(text: string): Promise<string> {
         const page = this.getPage();
-        if (!page || page.isClosed()) return 'Error: No browser page.';
+        if (!page || isBrowserPageClosed(page)) return 'Error: No browser page.';
         await page.keyboard.type(text, { delay: 30 });
         return `Typed ${text.length} characters`;
     }
 
     private async browserKeyPress(key: string): Promise<string> {
         const page = this.getPage();
-        if (!page || page.isClosed()) return 'Error: No browser page.';
+        if (!page || isBrowserPageClosed(page)) return 'Error: No browser page.';
         // Normalize key combos: "ctrl+c" → "Control+c"
         const normalized = this.normalizeKey(key);
         await page.keyboard.press(normalized as any);
@@ -574,7 +616,7 @@ Respond with ONLY the JSON array, no other text.`;
 
     private async browserScroll(direction: 'up' | 'down' | 'left' | 'right', amount: number): Promise<string> {
         const page = this.getPage();
-        if (!page || page.isClosed()) return 'Error: No browser page.';
+        if (!page || isBrowserPageClosed(page)) return 'Error: No browser page.';
         const pixels = amount * 120; // 120px per scroll "tick"
         const deltaX = direction === 'left' ? -pixels : direction === 'right' ? pixels : 0;
         const deltaY = direction === 'up' ? -pixels : direction === 'down' ? pixels : 0;

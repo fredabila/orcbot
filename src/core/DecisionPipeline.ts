@@ -222,6 +222,38 @@ export class DecisionPipeline {
         return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
     }
 
+    private buildRecoveryHint(dropped: string[], notes: string[]): string {
+        const hints: string[] = [];
+
+        if (dropped.some(d => d.startsWith('unknown:'))) {
+            hints.push('Use only tools from the current Available Skills or Tools list.');
+        }
+        if (dropped.some(d => d.startsWith('search-loop:'))) {
+            hints.push('Do not repeat the same search query. Change the query, inspect the current page, or use a direct URL/source instead.');
+        }
+        if (dropped.some(d => d.startsWith('browser-nav-loop:') || d.startsWith('browser-phase-loop:') || d.startsWith('browser-inspect-loop:'))) {
+            hints.push('Stop repeating the same browser loop. Change page, inspect/extract from the current page, or summarize what is already known before navigating again.');
+        }
+        if (dropped.some(d => d.startsWith('orch-loop:'))) {
+            hints.push('Do not keep polling orchestration status. Move the work forward with a different action or compile current results.');
+        }
+        if (dropped.some(d => d.startsWith('answer-first:') || d.startsWith('unsolicited-file:'))) {
+            hints.push('Reply with a normal text answer first unless the user explicitly asked for file delivery.');
+        }
+        if (dropped.some(d => d.startsWith('status-only:') || d.startsWith('semantic-dupe:') || d.startsWith('dupe:') || d.startsWith('limit:'))) {
+            hints.push('Do not send another low-value status update. Continue with non-send work or send one substantive final result.');
+        }
+        if (dropped.some(d => d.startsWith('dedup:'))) {
+            hints.push('Avoid repeating the exact same tool call with the same arguments. Change parameters or choose a different tool.');
+        }
+
+        if (hints.length === 0 && notes.some(n => n.includes('Pipeline suppressed unsafe/duplicate actions'))) {
+            hints.push('Your previous tool plan could not execute. Choose a materially different tool or change the arguments before retrying.');
+        }
+
+        return hints.join(' ');
+    }
+
     public evaluate(proposed: StandardResponse, ctx: PipelineContext): StandardResponse {
         const result: StandardResponse = {
             ...proposed,
@@ -479,7 +511,11 @@ export class DecisionPipeline {
 
                 // Phase guard: once we already navigated multiple times in this action,
                 // block additional navigate loops and push toward final response.
-                if (browserCycleCount >= 3 && !hasAnyTextDelivery) {
+                const browserPhaseGuardThreshold = Math.max(5, maxToolLoops + 1);
+                const hasBrowserInspectionWork = (browserToolCounts.get('browser_examine_page') || 0) > 0 ||
+                    (browserToolCounts.get('browser_extract_data') || 0) > 0 ||
+                    (browserToolCounts.get('browser_extract_content') || 0) > 0;
+                if (browserCycleCount >= browserPhaseGuardThreshold && !hasAnyTextDelivery && !hasBrowserInspectionWork) {
                     dropped.push(`browser-phase-loop:${tool.name}`);
                     notes.push('Suppressed browser_navigate: phase guard requires summarizing and replying instead of continuing navigation');
                     continue;
@@ -600,6 +636,12 @@ export class DecisionPipeline {
                 result.verification = result.verification || { goals_met: false, analysis: '' };
                 result.verification.analysis = `${result.verification.analysis || ''} Pipeline suppressed unsafe/duplicate actions.`.trim();
             }
+        }
+
+        const recoveryHint = this.buildRecoveryHint(dropped, notes);
+        if (recoveryHint) {
+            if (!result.metadata) result.metadata = {};
+            result.metadata.recoveryHint = recoveryHint;
         }
 
         this.attachNotes(result, notes, dropped);

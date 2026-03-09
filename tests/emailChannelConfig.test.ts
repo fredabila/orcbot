@@ -58,4 +58,21 @@ describe('EmailChannel configuration checks', () => {
         const channel = new EmailChannel({ config: { get: (k: string) => (k === 'emailSocketTimeoutMs' ? 100 : undefined) } });
         expect((channel as any).getSocketTimeoutMs()).toBe(3000);
     });
+
+    it('ignores unread backlog on startup by default', () => {
+        const channel = new EmailChannel({ config: { get: () => undefined } });
+        expect((channel as any).shouldProcessUnreadOnStart()).toBe(false);
+    });
+
+    it('filters unread UIDs at or below the startup baseline by default', () => {
+        const channel = new EmailChannel({ config: { get: () => undefined } });
+        (channel as any).unreadBaselineUid = 42;
+        expect((channel as any).filterUnreadUids([7, 42, 43, 100])).toEqual([43, 100]);
+    });
+
+    it('allows backlog processing when startup catch-up is enabled', () => {
+        const channel = new EmailChannel({ config: { get: (key: string) => (key === 'emailProcessUnreadOnStart' ? true : undefined) } });
+        (channel as any).unreadBaselineUid = 42;
+        expect((channel as any).filterUnreadUids([7, 42, 43, 100])).toEqual([7, 42, 43, 100]);
+    });
 });

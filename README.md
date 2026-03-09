@@ -1,5 +1,5 @@
 <div align="center">
-<img src="assets/orcbot.jpeg" width="420" alt="OrcBot Hero Banner">
+<img src="https://raw.githubusercontent.com/fredabila/orcbot/main/assets/orcbot.jpeg" width="420" alt="OrcBot Hero Banner">
 
 # OrcBot v2.1
 ### The Production-Ready Strategic AI Agent
@@ -21,7 +21,7 @@
 
 ## 🚀 Why OrcBot v2.1?
 
-OrcBot is a next-generation **autonomous reasoning agent**. Beyond the v2.0 Strategic Simulation Architecture, v2.1 brings hardened skill infrastructure, richer Telegram interactions, a RAG knowledge store, and battle-tested multi-channel delivery.
+OrcBot is a next-generation **autonomous reasoning agent**. Beyond the v2.0 Strategic Simulation Architecture, v2.1 now includes a substantially hardened supervisor loop: blocked-plan repair before execution, runtime re-planning after tool failures, shared execution coordinators for serial/parallel/bonus flows, richer Telegram interactions, a RAG knowledge store, and battle-tested multi-channel delivery.
 
 ### Key Capabilities
 
@@ -34,10 +34,11 @@ OrcBot is a next-generation **autonomous reasoning agent**. Beyond the v2.0 Stra
 *   💓 **Smart Heartbeat**: Context-aware autonomy with exponential backoff, productivity tracking, and action-oriented tasks.
 *   🤖 **Multi-Agent Orchestration**: Spawn worker processes to handle parallel tasks with real-time coordination.
 *   🔄 **Termination Review**: Built-in safety layer that reviews proposed actions to prevent premature task termination.
+*   🧯 **Runtime Supervisor Loop**: Failed batches trigger immediate re-planning instead of blindly continuing, and repeated failed tool signatures are suppressed before they can loop.
 *   🧭 **LLM Task Complexity**: Dynamic step/message budgets based on model-classified task complexity.
 *   🎯 **Smart Skill Routing**: Intent-based skill selection using configurable routing rules for better tool matching.
 *   🧩 **Admin Permissions + Known Users**: Elevated skills protected by admin gates with persistent user tracking.
-*   🛤️ **Decision Pipeline**: Guardrails system with deduplication, safety checks, and autopilot mode.
+*   🛤️ **Decision Pipeline**: Guardrails system with deduplication, recovery hints, safety checks, and autopilot mode.
 *   🔍 **Resilient Web Search**: Smart fallback from API providers to browser-based search when keys aren't configured.
 *   🖥️ **Interactive TUI & Dashboard**: Comprehensive terminal interface with worker process management.
 *   🔌 **Dynamic Plugin System**: Hot-loadable TypeScript plugins for limitless extensibility.
@@ -49,6 +50,7 @@ OrcBot is a next-generation **autonomous reasoning agent**. Beyond the v2.0 Stra
 *   🗃️ **RAG Knowledge Store**: Ingest documents, URLs, and files into a semantic vector search index for durable recall.
 *   💬 **Rich Telegram UX**: Inline buttons, polls, message editing, emoji reactions (with reply fallback), and message pinning.
 *   🔁 **Clarification Delivery**: `request_supporting_data` now actively sends questions through the active channel before pausing.
+*   ✅ **Shared Execution Semantics**: Main-step, parallel, and bonus-step execution now run through shared helpers so cooldowns, duplicate side-effect blocking, and failure handling stay aligned.
 
 ---
 
@@ -63,7 +65,7 @@ OrcBot is built around **strategic autonomy**: it plans, executes, and repairs i
 OrcBot v2.1 is engineered for peak reliability and strategic depth. Our latest benchmark testing shows superior performance across conversational, web, and system tasks.
 
 <div align="center">
-<img src="assets/benchmarks_v21.png" width="600" alt="OrcBot v2.1 Benchmarks">
+<img src="https://raw.githubusercontent.com/fredabila/orcbot/main/assets/benchmarks_v21.png" width="600" alt="OrcBot v2.1 Benchmarks">
 
 **[View Detailed Benchmark Methodology & Data](docs/BENCHMARKS.md)**
 </div>
@@ -101,9 +103,9 @@ flowchart TB
     subgraph AgentCore["🤖 Agent Core  (Agent.ts)"]
         Agent[Agent\naction loop]
         Sim[SimulationEngine\npre-task plan]
-        DE[DecisionEngine\nprompt assembly\n+ LLM call]
+        DE[DecisionEngine\nprompt assembly\n+ LLM call\nblocked-plan repair]
         PR[PromptRouter\n8 modular helpers]
-        PL[DecisionPipeline\nguardrails · dedup\nloop detection]
+        PL[DecisionPipeline\nguardrails · dedup\nrecovery hints · loop detection]
         Parser[ParserLayer\n3-tier JSON fallback]
         CC[ContextCompactor\ntruncation + summarise]
         RT[RuntimeTuner\nauto-adjust limits]
@@ -187,6 +189,18 @@ flowchart TB
     %% ── Outbound delivery ────────────────────────────────────
     CoreSkills -->|3-tier channel detection\nWhatsApp → Discord → Telegram| Channels
 ```
+
+### Supervisor Runtime
+
+The current runtime is designed around a supervisor-style loop rather than a fire-and-forget tool chain.
+
+- **Pre-execution repair**: `DecisionEngine` can repair blocked or non-executable plans before the main loop ever runs them.
+- **Shared execution coordinators**: serial, parallel, and bonus-step tool execution now flow through shared helpers in `Agent.ts`, keeping side-effect handling, cooldowns, and failure semantics aligned.
+- **Runtime re-planning**: if a serial or parallel batch fails, OrcBot pauses later queued work, records a workflow signal, and re-plans from the latest failure context.
+- **Bonus-step wrap-up mode**: when max-step review grants extra turns, bonus steps are optimized for safe final delivery rather than fresh exploration.
+- **Completion reconciliation**: if a substantive user-facing delivery succeeded, OrcBot can reconcile final status to `completed` even if guardrails later exhaust the step budget.
+
+This is the part of the system that most directly improved OrcBot's autonomy under real workloads: fewer silent terminations, fewer repeated failing calls, and less need for human steering when a tool or plan goes sideways.
 
 ---
 

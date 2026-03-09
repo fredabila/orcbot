@@ -11,6 +11,11 @@ export interface AgentContext {
     logger: any;  // logger
     workerProfile?: any; // WorkerProfileManager
     orchestrator?: any;  // AgentOrchestrator
+    workerCapabilityProfile?: {
+        enforced: boolean;
+        capabilities: string[];
+        allowChannels?: boolean;
+    };
     [key: string]: any;
 }
 
@@ -309,6 +314,91 @@ export class SkillsManager {
     public registerSkill(skill: Skill) {
         this.skills.set(skill.name, skill);
         logger.info(`Skill registered: ${skill.name}`);
+    }
+
+    private writeWorkerCapabilityStatus(status: {
+        blocked: boolean;
+        skillName: string;
+        requiredCapability?: string;
+        reason: string;
+        timestamp: string;
+    }): void {
+        try {
+            const profile = this.context?.workerCapabilityProfile;
+            if (!profile?.enforced) return;
+            const dataHome = this.context?.config?.getDataHome?.();
+            if (!dataHome) return;
+            const statusPath = path.join(dataHome, 'worker-capability-status.json');
+            fs.writeFileSync(statusPath, JSON.stringify(status, null, 2));
+        } catch (error) {
+            logger.debug(`SkillsManager: Failed to persist worker capability status: ${error}`);
+        }
+    }
+
+    private normalizeWorkerCapability(capability: string): string {
+        const normalized = String(capability || '').trim().toLowerCase();
+        const aliases: Record<string, string> = {
+            browser: 'browse',
+            search: 'web_search',
+            research: 'web_search',
+            files: 'read_file',
+            file: 'read_file',
+            write: 'write_file',
+            shell: 'run_command',
+            commands: 'run_command',
+            message: 'messaging',
+            messages: 'messaging',
+            media: 'analyze',
+            analysis: 'analyze'
+        };
+        return aliases[normalized] || normalized;
+    }
+
+    private getRequiredWorkerCapability(skillName: string): string | null {
+        const name = String(skillName || '').trim().toLowerCase();
+
+        if (/^(browser_|computer_|switch_browser_)/.test(name)) return 'browse';
+        if (['web_search', 'extract_article', 'http_fetch', 'download_file'].includes(name)) return 'web_search';
+        if (['read_file', 'read_codebase_file', 'search_codebase', 'locate_code_symbol'].includes(name)) return 'read_file';
+        if (['write_file', 'write_to_file', 'create_file', 'create_directory', 'delete_file', 'edit_codebase_file'].includes(name)) return 'write_file';
+        if (name === 'run_command' || /^shell_/.test(name) || name === 'install_npm_dependency') return 'run_command';
+        if (/^(send_|telegram_|reply_whatsapp_status|react_whatsapp)/.test(name)) return 'messaging';
+        if (['analyze_media', 'generate_image', 'text_to_speech'].includes(name)) return 'analyze';
+
+        return null;
+    }
+
+    private assertWorkerCapabilityAllowed(skillName: string): void {
+        const profile = this.context?.workerCapabilityProfile;
+        if (!profile || profile.enforced !== true) return;
+
+        const requiredCapability = this.getRequiredWorkerCapability(skillName);
+        if (!requiredCapability) return;
+
+        const normalizedCapabilities = new Set((profile.capabilities || []).map(cap => this.normalizeWorkerCapability(cap)));
+        if (requiredCapability === 'messaging' && profile.allowChannels !== true) {
+            const reason = `Worker capability policy blocked skill ${skillName}: messaging is disabled for this worker profile.`;
+            this.writeWorkerCapabilityStatus({
+                blocked: true,
+                skillName,
+                requiredCapability,
+                reason,
+                timestamp: new Date().toISOString()
+            });
+            throw new Error(reason);
+        }
+
+        if (!normalizedCapabilities.has(requiredCapability)) {
+            const reason = `Worker capability policy blocked skill ${skillName}: requires capability ${requiredCapability}.`;
+            this.writeWorkerCapabilityStatus({
+                blocked: true,
+                skillName,
+                requiredCapability,
+                reason,
+                timestamp: new Date().toISOString()
+            });
+            throw new Error(reason);
+        }
     }
 
     // ─── Agent Skills (SKILL.md format) ──────────────────────────────────
@@ -1324,6 +1414,7 @@ main().catch(console.error);
         let timerId: NodeJS.Timeout | undefined;
         try {
             logger.info(`Executing skill: ${name}`);
+            this.assertWorkerCapabilityAllowed(name);
             
             // Global watchdog timeout to prevent indefinite hangs.
             // Defaults to 15 minutes (900000ms). This is longer than the default

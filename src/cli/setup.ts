@@ -1,13 +1,21 @@
-import inquirer from 'inquirer';
+import * as p from '@clack/prompts';
+import chalk from 'chalk';
 import fs from 'fs';
 import path from 'path';
 import yaml from 'yaml';
+import os from 'os';
 import { logger } from '../utils/logger';
 
-import os from 'os';
+function checkCancel(val: any) {
+    if (p.isCancel(val)) {
+        p.cancel('Setup cancelled.');
+        process.exit(0);
+    }
+    return val;
+}
 
 export async function runSetup() {
-    console.log('\n🤖 Welcome to the OrcBot Setup Wizard!\n');
+    p.intro(chalk.bgCyan.black(' 🤖 Welcome to the OrcBot Setup Wizard! '));
 
     const dataHome = path.join(os.homedir(), '.orcbot');
     if (!fs.existsSync(dataHome)) fs.mkdirSync(dataHome, { recursive: true });
@@ -36,359 +44,235 @@ export async function runSetup() {
         } catch {}
     }
 
-    const maskHint = (key: string) => existingEnv[key] ? '(configured - press Enter to keep)' : '(optional)';
+    const maskHint = (key: string) => existingEnv[key] ? chalk.green('(configured - press Enter to keep)') : chalk.gray('(optional)');
 
     // ── Section 1: Identity & LLM ──
-    console.log('─── Agent Identity & LLM Provider ───\n');
+    p.note('Agent Identity & LLM Provider', 'Section 1');
 
-    const identityAnswers = await inquirer.prompt([
-        {
-            type: 'input',
-            name: 'agentName',
-            message: 'Agent Name:',
-            default: currentConfig.agentName || 'OrcBot'
-        },
-        {
-            type: 'list',
-            name: 'llmProvider',
-            message: 'Primary LLM Provider:',
-            choices: [
-                { name: 'Auto-detect (from available API keys)', value: '' },
-                { name: 'OpenAI (GPT-4o, etc.)', value: 'openai' },
-                { name: 'Google (Gemini)', value: 'google' },
-                { name: 'OpenRouter', value: 'openrouter' },
-                { name: 'NVIDIA', value: 'nvidia' },
-                { name: 'Anthropic (Claude)', value: 'anthropic' },
-                { name: 'AWS Bedrock', value: 'bedrock' },
-                { name: 'Groq (ultra-fast inference)', value: 'groq' },
-                { name: 'Mistral AI', value: 'mistral' },
-                { name: 'Cerebras', value: 'cerebras' },
-                { name: 'xAI (Grok)', value: 'xai' }
-            ],
-            default: currentConfig.llmProvider || ''
-        },
-        {
-            type: 'input',
-            name: 'modelName',
-            message: 'Default Model Name:',
-            default: currentConfig.modelName || 'gpt-4o'
-        }
-    ]);
+    const agentName = checkCancel(await p.text({
+        message: 'Agent Name:',
+        initialValue: currentConfig.agentName || 'OrcBot'
+    }));
+
+    const llmProvider = checkCancel(await p.select({
+        message: 'Primary LLM Provider:',
+        initialValue: currentConfig.llmProvider || '',
+        options: [
+            { label: 'Auto-detect (from available API keys)', value: '' },
+            { label: 'OpenAI (GPT-4o, etc.)', value: 'openai' },
+            { label: 'Google (Gemini)', value: 'google' },
+            { label: 'OpenRouter', value: 'openrouter' },
+            { label: 'NVIDIA', value: 'nvidia' },
+            { label: 'Anthropic (Claude)', value: 'anthropic' },
+            { label: 'AWS Bedrock', value: 'bedrock' },
+            { label: 'Groq (ultra-fast inference)', value: 'groq' },
+            { label: 'Mistral AI', value: 'mistral' },
+            { label: 'Cerebras', value: 'cerebras' },
+            { label: 'xAI (Grok)', value: 'xai' }
+        ]
+    }));
+
+    const modelName = checkCancel(await p.text({
+        message: 'Default Model Name:',
+        initialValue: currentConfig.modelName || 'gpt-4o'
+    }));
 
     // ── Section 2: API Keys ──
-    console.log('\n─── API Keys (press Enter to skip/keep existing) ───\n');
+    p.note('API Keys (press Enter to skip/keep existing)', 'Section 2');
 
-    const keyAnswers = await inquirer.prompt([
-        {
-            type: 'input',
-            name: 'openaiApiKey',
-            message: `OpenAI API Key ${maskHint('OPENAI_API_KEY')}:`,
-            mask: '*'
-        },
-        {
-            type: 'input',
-            name: 'googleApiKey',
-            message: `Google (Gemini) API Key ${maskHint('GOOGLE_API_KEY')}:`,
-            mask: '*'
-        },
-        {
-            type: 'input',
-            name: 'openrouterApiKey',
-            message: `OpenRouter API Key ${maskHint('OPENROUTER_API_KEY')}:`,
-            mask: '*',
-            when: () => identityAnswers.llmProvider === 'openrouter' || !identityAnswers.llmProvider
-        },
-        {
-            type: 'input',
-            name: 'nvidiaApiKey',
-            message: `NVIDIA API Key ${maskHint('NVIDIA_API_KEY')}:`,
-            mask: '*'
-        },
-        {
-            type: 'input',
-            name: 'anthropicApiKey',
-            message: `Anthropic (Claude) API Key ${maskHint('ANTHROPIC_API_KEY')}:`,
-            mask: '*'
-        },
-        {
-            type: 'input',
-            name: 'bedrockRegion',
-            message: 'AWS Bedrock Region (e.g., us-east-1):',
-            when: () => identityAnswers.llmProvider === 'bedrock'
-        },
-        {
-            type: 'input',
-            name: 'bedrockAccessKeyId',
-            message: `Bedrock Access Key ID ${maskHint('BEDROCK_ACCESS_KEY_ID')}:`,
-            mask: '*',
-            when: () => identityAnswers.llmProvider === 'bedrock'
-        },
-        {
-            type: 'input',
-            name: 'bedrockSecretAccessKey',
-            message: `Bedrock Secret Access Key ${maskHint('BEDROCK_SECRET_ACCESS_KEY')}:`,
-            mask: '*',
-            when: () => identityAnswers.llmProvider === 'bedrock'
-        },
-        {
-            type: 'input',
-            name: 'serperApiKey',
-            message: `Serper.dev API Key (web search) ${maskHint('SERPER_API_KEY')}:`,
-            mask: '*'
-        },
-        {
-            type: 'input',
-            name: 'groqApiKey',
-            message: `Groq API Key ${maskHint('GROQ_API_KEY')}:`,
-            mask: '*',
-            when: () => identityAnswers.llmProvider === 'groq' || !identityAnswers.llmProvider
-        },
-        {
-            type: 'input',
-            name: 'mistralApiKey',
-            message: `Mistral AI API Key ${maskHint('MISTRAL_API_KEY')}:`,
-            mask: '*',
-            when: () => identityAnswers.llmProvider === 'mistral' || !identityAnswers.llmProvider
-        },
-        {
-            type: 'input',
-            name: 'cerebrasApiKey',
-            message: `Cerebras API Key ${maskHint('CEREBRAS_API_KEY')}:`,
-            mask: '*',
-            when: () => identityAnswers.llmProvider === 'cerebras'
-        },
-        {
-            type: 'input',
-            name: 'xaiApiKey',
-            message: `xAI (Grok) API Key ${maskHint('XAI_API_KEY')}:`,
-            mask: '*',
-            when: () => identityAnswers.llmProvider === 'xai'
-        }
-    ]);
+    const openaiApiKey = checkCancel(await p.password({ message: `OpenAI API Key ${maskHint('OPENAI_API_KEY')}:` }));
+    const googleApiKey = checkCancel(await p.password({ message: `Google (Gemini) API Key ${maskHint('GOOGLE_API_KEY')}:` }));
+
+    let openrouterApiKey;
+    if (llmProvider === 'openrouter' || !llmProvider) {
+        openrouterApiKey = checkCancel(await p.password({ message: `OpenRouter API Key ${maskHint('OPENROUTER_API_KEY')}:` }));
+    }
+
+    const nvidiaApiKey = checkCancel(await p.password({ message: `NVIDIA API Key ${maskHint('NVIDIA_API_KEY')}:` }));
+    const anthropicApiKey = checkCancel(await p.password({ message: `Anthropic (Claude) API Key ${maskHint('ANTHROPIC_API_KEY')}:` }));
+
+    let bedrockRegion, bedrockAccessKeyId, bedrockSecretAccessKey;
+    if (llmProvider === 'bedrock') {
+        bedrockRegion = checkCancel(await p.text({ message: 'AWS Bedrock Region (e.g., us-east-1):' }));
+        bedrockAccessKeyId = checkCancel(await p.password({ message: `Bedrock Access Key ID ${maskHint('BEDROCK_ACCESS_KEY_ID')}:` }));
+        bedrockSecretAccessKey = checkCancel(await p.password({ message: `Bedrock Secret Access Key ${maskHint('BEDROCK_SECRET_ACCESS_KEY')}:` }));
+    }
+
+    const serperApiKey = checkCancel(await p.password({ message: `Serper.dev API Key (web search) ${maskHint('SERPER_API_KEY')}:` }));
+
+    let groqApiKey;
+    if (llmProvider === 'groq' || !llmProvider) {
+        groqApiKey = checkCancel(await p.password({ message: `Groq API Key ${maskHint('GROQ_API_KEY')}:` }));
+    }
+
+    let mistralApiKey;
+    if (llmProvider === 'mistral' || !llmProvider) {
+        mistralApiKey = checkCancel(await p.password({ message: `Mistral AI API Key ${maskHint('MISTRAL_API_KEY')}:` }));
+    }
+
+    let cerebrasApiKey;
+    if (llmProvider === 'cerebras') {
+        cerebrasApiKey = checkCancel(await p.password({ message: `Cerebras API Key ${maskHint('CEREBRAS_API_KEY')}:` }));
+    }
+
+    let xaiApiKey;
+    if (llmProvider === 'xai') {
+        xaiApiKey = checkCancel(await p.password({ message: `xAI (Grok) API Key ${maskHint('XAI_API_KEY')}:` }));
+    }
 
     // ── Section 3: Channels ──
-    console.log('\n─── Communication Channels ───\n');
+    p.note('Communication Channels', 'Section 3');
 
-    const channelAnswers = await inquirer.prompt([
-        {
-            type: 'input',
-            name: 'telegramToken',
-            message: `Telegram Bot Token ${maskHint('TELEGRAM_TOKEN')}:`,
-            mask: '*'
-        },
-        {
-            type: 'confirm',
-            name: 'telegramAutoReplyEnabled',
+    const telegramToken = checkCancel(await p.password({ message: `Telegram Bot Token ${maskHint('TELEGRAM_TOKEN')}:` }));
+    let telegramAutoReplyEnabled = false;
+    if (telegramToken || existingEnv['TELEGRAM_TOKEN']) {
+        telegramAutoReplyEnabled = checkCancel(await p.confirm({
             message: 'Enable Telegram AI Auto-Reply?',
-            default: currentConfig.telegramAutoReplyEnabled || false,
-            when: (ans) => !!ans.telegramToken || !!existingEnv['TELEGRAM_TOKEN']
-        },
-        {
-            type: 'confirm',
-            name: 'whatsappEnabled',
-            message: 'Enable WhatsApp Channel?',
-            default: currentConfig.whatsappEnabled || false
-        },
-        {
-            type: 'confirm',
-            name: 'whatsappAutoReplyEnabled',
+            initialValue: currentConfig.telegramAutoReplyEnabled || false
+        }));
+    }
+
+    const whatsappEnabled = checkCancel(await p.confirm({
+        message: 'Enable WhatsApp Channel?',
+        initialValue: currentConfig.whatsappEnabled || false
+    }));
+    let whatsappAutoReplyEnabled = false;
+    if (whatsappEnabled) {
+        whatsappAutoReplyEnabled = checkCancel(await p.confirm({
             message: 'Enable WhatsApp AI Auto-Reply?',
-            default: currentConfig.whatsappAutoReplyEnabled || false,
-            when: (ans) => ans.whatsappEnabled
-        },
-        {
-            type: 'input',
-            name: 'discordToken',
-            message: `Discord Bot Token ${maskHint('DISCORD_TOKEN')}:`,
-            mask: '*'
-        },
-        {
-            type: 'confirm',
-            name: 'discordAutoReplyEnabled',
+            initialValue: currentConfig.whatsappAutoReplyEnabled || false
+        }));
+    }
+
+    const discordToken = checkCancel(await p.password({ message: `Discord Bot Token ${maskHint('DISCORD_TOKEN')}:` }));
+    let discordAutoReplyEnabled = false;
+    if (discordToken || existingEnv['DISCORD_TOKEN']) {
+        discordAutoReplyEnabled = checkCancel(await p.confirm({
             message: 'Enable Discord AI Auto-Reply?',
-            default: currentConfig.discordAutoReplyEnabled || false,
-            when: (ans) => !!ans.discordToken || !!existingEnv['DISCORD_TOKEN']
-        },
-        {
-            type: 'input',
-            name: 'slackBotToken',
-            message: `Slack Bot Token ${maskHint('SLACK_BOT_TOKEN')}:`,
-            mask: '*'
-        },
-        {
-            type: 'input',
-            name: 'slackAppToken',
-            message: `Slack App Token (Socket Mode) ${maskHint('SLACK_APP_TOKEN')}:`,
-            mask: '*'
-        },
-        {
-            type: 'input',
-            name: 'slackSigningSecret',
-            message: `Slack Signing Secret ${maskHint('SLACK_SIGNING_SECRET')}:`,
-            mask: '*'
-        },
-        {
-            type: 'confirm',
-            name: 'slackAutoReplyEnabled',
+            initialValue: currentConfig.discordAutoReplyEnabled || false
+        }));
+    }
+
+    const slackBotToken = checkCancel(await p.password({ message: `Slack Bot Token ${maskHint('SLACK_BOT_TOKEN')}:` }));
+    const slackAppToken = checkCancel(await p.password({ message: `Slack App Token (Socket Mode) ${maskHint('SLACK_APP_TOKEN')}:` }));
+    const slackSigningSecret = checkCancel(await p.password({ message: `Slack Signing Secret ${maskHint('SLACK_SIGNING_SECRET')}:` }));
+    let slackAutoReplyEnabled = false;
+    if (slackBotToken || existingEnv['SLACK_BOT_TOKEN']) {
+        slackAutoReplyEnabled = checkCancel(await p.confirm({
             message: 'Enable Slack AI Auto-Reply?',
-            default: currentConfig.slackAutoReplyEnabled || false,
-            when: (ans) => !!ans.slackBotToken || !!existingEnv['SLACK_BOT_TOKEN']
-        },
-        {
-            type: 'confirm',
-            name: 'emailEnabled',
-            message: 'Enable Email Channel (SMTP + IMAP)?',
-            default: currentConfig.emailEnabled || false
-        },
-        {
-            type: 'input',
-            name: 'emailAddress',
-            message: `Email Address ${maskHint('EMAIL_ADDRESS')}:`,
-            when: (ans) => ans.emailEnabled
-        },
-        {
-            type: 'input',
-            name: 'smtpHost',
-            message: `SMTP Host ${maskHint('SMTP_HOST')}:`,
-            when: (ans) => ans.emailEnabled
-        },
-        {
-            type: 'number',
-            name: 'smtpPort',
+            initialValue: currentConfig.slackAutoReplyEnabled || false
+        }));
+    }
+
+    const emailEnabled = checkCancel(await p.confirm({
+        message: 'Enable Email Channel (SMTP + IMAP)?',
+        initialValue: currentConfig.emailEnabled || false
+    }));
+
+    let emailAddress, smtpHost, smtpPort, smtpSecure, smtpStartTls, smtpUsername, smtpPassword;
+    let imapHost, imapPort, imapSecure, imapUsername, imapPassword, emailSocketTimeoutMs, emailAutoReplyEnabled;
+
+    if (emailEnabled) {
+        emailAddress = checkCancel(await p.text({ message: `Email Address ${maskHint('EMAIL_ADDRESS')}:` }));
+        smtpHost = checkCancel(await p.text({ message: `SMTP Host ${maskHint('SMTP_HOST')}:` }));
+        
+        const smtpPortInput = checkCancel(await p.text({
             message: 'SMTP Port:',
-            default: currentConfig.smtpPort || 587,
-            when: (ans) => ans.emailEnabled
-        },
-        {
-            type: 'confirm',
-            name: 'smtpSecure',
+            initialValue: String(currentConfig.smtpPort || 587)
+        }));
+        smtpPort = Number(smtpPortInput);
+        
+        smtpSecure = checkCancel(await p.confirm({
             message: 'Use TLS for SMTP?',
-            default: currentConfig.smtpSecure ?? false,
-            when: (ans) => ans.emailEnabled
-        },
-        {
-            type: 'confirm',
-            name: 'smtpStartTls',
-            message: 'Use STARTTLS upgrade for SMTP (recommended for port 587)?',
-            default: currentConfig.smtpStartTls ?? true,
-            when: (ans) => ans.emailEnabled && !ans.smtpSecure
-        },
-        {
-            type: 'input',
-            name: 'smtpUsername',
-            message: `SMTP Username ${maskHint('SMTP_USERNAME')}:`,
-            when: (ans) => ans.emailEnabled
-        },
-        {
-            type: 'input',
-            name: 'smtpPassword',
-            message: `SMTP Password ${maskHint('SMTP_PASSWORD')}:`,
-            mask: '*',
-            when: (ans) => ans.emailEnabled
-        },
-        {
-            type: 'input',
-            name: 'imapHost',
-            message: `IMAP Host ${maskHint('IMAP_HOST')}:`,
-            when: (ans) => ans.emailEnabled
-        },
-        {
-            type: 'number',
-            name: 'imapPort',
-            message: 'IMAP Port:',
-            default: currentConfig.imapPort || 993,
-            when: (ans) => ans.emailEnabled
-        },
-        {
-            type: 'confirm',
-            name: 'imapSecure',
-            message: 'Use TLS for IMAP?',
-            default: currentConfig.imapSecure ?? true,
-            when: (ans) => ans.emailEnabled
-        },
-        {
-            type: 'input',
-            name: 'imapUsername',
-            message: `IMAP Username ${maskHint('IMAP_USERNAME')}:`,
-            when: (ans) => ans.emailEnabled
-        },
-        {
-            type: 'input',
-            name: 'imapPassword',
-            message: `IMAP Password ${maskHint('IMAP_PASSWORD')}:`,
-            mask: '*',
-            when: (ans) => ans.emailEnabled
-        },
-        {
-            type: 'number',
-            name: 'emailSocketTimeoutMs',
-            message: 'Email socket timeout (ms):',
-            default: currentConfig.emailSocketTimeoutMs || 15000,
-            when: (ans) => ans.emailEnabled
-        },
-        {
-            type: 'confirm',
-            name: 'emailAutoReplyEnabled',
-            message: 'Enable Email AI Auto-Reply?',
-            default: currentConfig.emailAutoReplyEnabled || false,
-            when: (ans) => ans.emailEnabled
+            initialValue: currentConfig.smtpSecure ?? false
+        }));
+        
+        if (!smtpSecure) {
+            smtpStartTls = checkCancel(await p.confirm({
+                message: 'Use STARTTLS upgrade for SMTP (recommended for port 587)?',
+                initialValue: currentConfig.smtpStartTls ?? true
+            }));
         }
-    ]);
+
+        smtpUsername = checkCancel(await p.text({ message: `SMTP Username ${maskHint('SMTP_USERNAME')}:` }));
+        smtpPassword = checkCancel(await p.password({ message: `SMTP Password ${maskHint('SMTP_PASSWORD')}:` }));
+
+        imapHost = checkCancel(await p.text({ message: `IMAP Host ${maskHint('IMAP_HOST')}:` }));
+        
+        const imapPortInput = checkCancel(await p.text({
+            message: 'IMAP Port:',
+            initialValue: String(currentConfig.imapPort || 993)
+        }));
+        imapPort = Number(imapPortInput);
+        
+        imapSecure = checkCancel(await p.confirm({
+            message: 'Use TLS for IMAP?',
+            initialValue: currentConfig.imapSecure ?? true
+        }));
+        
+        imapUsername = checkCancel(await p.text({ message: `IMAP Username ${maskHint('IMAP_USERNAME')}:` }));
+        imapPassword = checkCancel(await p.password({ message: `IMAP Password ${maskHint('IMAP_PASSWORD')}:` }));
+
+        const timeoutInput = checkCancel(await p.text({
+            message: 'Email socket timeout (ms):',
+            initialValue: String(currentConfig.emailSocketTimeoutMs || 15000)
+        }));
+        emailSocketTimeoutMs = Number(timeoutInput);
+
+        emailAutoReplyEnabled = checkCancel(await p.confirm({
+            message: 'Enable Email AI Auto-Reply?',
+            initialValue: currentConfig.emailAutoReplyEnabled || false
+        }));
+    }
 
     // ── Section 4: Gateway & Safety ──
-    console.log('\n─── Gateway & Safety ───\n');
+    p.note('Gateway & Safety', 'Section 4');
 
-    const safetyAnswers = await inquirer.prompt([
-        {
-            type: 'confirm',
-            name: 'gatewayEnabled',
-            message: 'Enable Web Gateway (REST API + WebSocket)?',
-            default: !!currentConfig.gatewayPort || false
-        },
-        {
-            type: 'number',
-            name: 'gatewayPort',
+    const gatewayEnabled = checkCancel(await p.confirm({
+        message: 'Enable Web Gateway (REST API + WebSocket)?',
+        initialValue: !!currentConfig.gatewayPort || false
+    }));
+
+    let gatewayPort;
+    if (gatewayEnabled) {
+        const portInput = checkCancel(await p.text({
             message: 'Gateway Port:',
-            default: currentConfig.gatewayPort || 3100,
-            when: (ans) => ans.gatewayEnabled
-        },
-        {
-            type: 'confirm',
-            name: 'autonomyEnabled',
-            message: 'Enable autonomous task processing (agent works on queued tasks)?',
-            default: currentConfig.autonomyEnabled !== false
-        },
-        {
-            type: 'number',
-            name: 'autonomyInterval',
-            message: 'Autonomy check interval (minutes, 0=continuous):',
-            default: currentConfig.autonomyInterval || 15,
-            when: (ans) => ans.autonomyEnabled
-        },
-        {
-            type: 'input',
-            name: 'projectRoot',
-            message: 'Project Root Directory (for search/edit skills):',
-            default: currentConfig.projectRoot || process.cwd()
-        },
-        {
-            type: 'input',
-            name: 'pluginsPath',
-            message: 'Plugins Directory:',
-            default: currentConfig.pluginsPath || path.join(dataHome, 'plugins')
-        }
-    ]);
+            initialValue: String(currentConfig.gatewayPort || 3100)
+        }));
+        gatewayPort = Number(portInput);
+    }
 
-    // ── Build config ──
-    const answers = { ...identityAnswers, ...keyAnswers, ...channelAnswers, ...safetyAnswers };
+    const autonomyEnabled = checkCancel(await p.confirm({
+        message: 'Enable autonomous task processing (agent works on queued tasks)?',
+        initialValue: currentConfig.autonomyEnabled !== false
+    }));
+
+    let autonomyInterval;
+    if (autonomyEnabled) {
+        const intervalInput = checkCancel(await p.text({
+            message: 'Autonomy check interval (minutes, 0=continuous):',
+            initialValue: String(currentConfig.autonomyInterval || 15)
+        }));
+        autonomyInterval = Number(intervalInput);
+    }
+
+    const projectRoot = checkCancel(await p.text({
+        message: 'Project Root Directory (for search/edit skills):',
+        initialValue: currentConfig.projectRoot || process.cwd()
+    }));
+
+    const pluginsPath = checkCancel(await p.text({
+        message: 'Plugins Directory:',
+        initialValue: currentConfig.pluginsPath || path.join(dataHome, 'plugins')
+    }));
 
     // Save YAML Config
     const newConfig: Record<string, any> = {
-        agentName: answers.agentName,
-        llmProvider: answers.llmProvider || undefined,
-        modelName: answers.modelName,
-        projectRoot: answers.projectRoot || '.',
-        pluginsPath: answers.pluginsPath || path.join(dataHome, 'plugins'),
+        agentName,
+        llmProvider: llmProvider || undefined,
+        modelName,
+        projectRoot: projectRoot || '.',
+        pluginsPath: pluginsPath || path.join(dataHome, 'plugins'),
         memoryPath: path.join(dataHome, 'memory.json'),
         userProfilePath: path.join(dataHome, 'USER.md'),
         journalPath: path.join(dataHome, 'JOURNAL.md'),
@@ -399,29 +283,29 @@ export async function runSetup() {
         tokenUsagePath: path.join(dataHome, 'token-usage-summary.json'),
         tokenLogPath: path.join(dataHome, 'token-usage.log'),
         // Channels
-        telegramAutoReplyEnabled: answers.telegramAutoReplyEnabled || false,
-        whatsappEnabled: answers.whatsappEnabled || false,
-        whatsappAutoReplyEnabled: answers.whatsappAutoReplyEnabled || false,
-        discordAutoReplyEnabled: answers.discordAutoReplyEnabled || false,
-        slackAutoReplyEnabled: answers.slackAutoReplyEnabled || false,
-        emailEnabled: answers.emailEnabled || false,
-        emailAddress: answers.emailAddress || undefined,
-        smtpHost: answers.smtpHost || undefined,
-        smtpPort: answers.smtpPort || undefined,
-        smtpSecure: answers.smtpSecure ?? undefined,
-        smtpStartTls: answers.smtpStartTls ?? undefined,
-        imapHost: answers.imapHost || undefined,
-        imapPort: answers.imapPort || undefined,
-        imapSecure: answers.imapSecure ?? undefined,
-        emailAutoReplyEnabled: answers.emailAutoReplyEnabled || false,
-        emailSocketTimeoutMs: answers.emailSocketTimeoutMs ? Number(answers.emailSocketTimeoutMs) : undefined,
+        telegramAutoReplyEnabled,
+        whatsappEnabled,
+        whatsappAutoReplyEnabled,
+        discordAutoReplyEnabled,
+        slackAutoReplyEnabled,
+        emailEnabled,
+        emailAddress: emailAddress || undefined,
+        smtpHost: smtpHost || undefined,
+        smtpPort: smtpPort || undefined,
+        smtpSecure: smtpSecure ?? undefined,
+        smtpStartTls: smtpStartTls ?? undefined,
+        imapHost: imapHost || undefined,
+        imapPort: imapPort || undefined,
+        imapSecure: imapSecure ?? undefined,
+        emailAutoReplyEnabled: emailAutoReplyEnabled || false,
+        emailSocketTimeoutMs: emailSocketTimeoutMs || undefined,
         // Autonomy
-        autonomyEnabled: answers.autonomyEnabled !== false,
-        autonomyInterval: answers.autonomyInterval ?? 15,
+        autonomyEnabled,
+        autonomyInterval: autonomyInterval ?? 15,
         // Gateway
-        ...(answers.gatewayEnabled ? { gatewayPort: answers.gatewayPort || 3100 } : {}),
+        ...(gatewayEnabled ? { gatewayPort: gatewayPort || 3100 } : {}),
         // Bedrock (non-secret)
-        ...(answers.bedrockRegion ? { bedrockRegion: answers.bedrockRegion } : {})
+        ...(bedrockRegion ? { bedrockRegion } : {})
     };
 
     // Remove undefined values for clean YAML
@@ -430,40 +314,39 @@ export async function runSetup() {
     );
 
     fs.writeFileSync(configPath, yaml.stringify(cleanConfig));
-    console.log(`\n✅ Config saved to ${configPath}`);
+    p.log.success(`Config saved to ${configPath}`);
 
     // Save .env (merge with existing — don't wipe keys user didn't update)
     const envEntries: Record<string, string> = { ...existingEnv };
-    const envMap: Record<string, string> = {
-        openaiApiKey: 'OPENAI_API_KEY',
-        googleApiKey: 'GOOGLE_API_KEY',
-        openrouterApiKey: 'OPENROUTER_API_KEY',
-        nvidiaApiKey: 'NVIDIA_API_KEY',
-        anthropicApiKey: 'ANTHROPIC_API_KEY',
-        bedrockAccessKeyId: 'BEDROCK_ACCESS_KEY_ID',
-        bedrockSecretAccessKey: 'BEDROCK_SECRET_ACCESS_KEY',
-        serperApiKey: 'SERPER_API_KEY',
-        groqApiKey: 'GROQ_API_KEY',
-        mistralApiKey: 'MISTRAL_API_KEY',
-        cerebrasApiKey: 'CEREBRAS_API_KEY',
-        xaiApiKey: 'XAI_API_KEY',
-        telegramToken: 'TELEGRAM_TOKEN',
-        discordToken: 'DISCORD_TOKEN',
-        slackBotToken: 'SLACK_BOT_TOKEN',
-        slackAppToken: 'SLACK_APP_TOKEN',
-        slackSigningSecret: 'SLACK_SIGNING_SECRET',
-        emailAddress: 'EMAIL_ADDRESS',
-        smtpUsername: 'SMTP_USERNAME',
-        smtpPassword: 'SMTP_PASSWORD',
-        smtpStartTls: 'SMTP_STARTTLS',
-        imapUsername: 'IMAP_USERNAME',
-        imapPassword: 'IMAP_PASSWORD'
+    const envValuesToSave: any = {
+        OPENAI_API_KEY: openaiApiKey,
+        GOOGLE_API_KEY: googleApiKey,
+        OPENROUTER_API_KEY: openrouterApiKey,
+        NVIDIA_API_KEY: nvidiaApiKey,
+        ANTHROPIC_API_KEY: anthropicApiKey,
+        BEDROCK_ACCESS_KEY_ID: bedrockAccessKeyId,
+        BEDROCK_SECRET_ACCESS_KEY: bedrockSecretAccessKey,
+        SERPER_API_KEY: serperApiKey,
+        GROQ_API_KEY: groqApiKey,
+        MISTRAL_API_KEY: mistralApiKey,
+        CEREBRAS_API_KEY: cerebrasApiKey,
+        XAI_API_KEY: xaiApiKey,
+        TELEGRAM_TOKEN: telegramToken,
+        DISCORD_TOKEN: discordToken,
+        SLACK_BOT_TOKEN: slackBotToken,
+        SLACK_APP_TOKEN: slackAppToken,
+        SLACK_SIGNING_SECRET: slackSigningSecret,
+        EMAIL_ADDRESS: emailAddress,
+        SMTP_USERNAME: smtpUsername,
+        SMTP_PASSWORD: smtpPassword,
+        SMTP_STARTTLS: smtpStartTls,
+        IMAP_USERNAME: imapUsername,
+        IMAP_PASSWORD: imapPassword
     };
 
-    for (const [field, envKey] of Object.entries(envMap)) {
-        const value = (answers as any)[field];
-        if (value) {
-            envEntries[envKey] = value;
+    for (const [envKey, value] of Object.entries(envValuesToSave)) {
+        if (value !== undefined && value !== '') {
+            envEntries[envKey] = String(value);
         }
     }
 
@@ -472,12 +355,12 @@ export async function runSetup() {
         .join('\n') + '\n';
 
     fs.writeFileSync(envPath, envContent);
-    console.log(`✅ Environment variables saved to ${envPath}`);
+    p.log.success(`Environment variables saved to ${envPath}`);
 
     // Scaffold essential files if they don't exist
     scaffoldFiles(dataHome);
 
-    console.log('\n🚀 Setup complete! You can now run "orcbot start" to begin.\n');
+    p.outro(chalk.green('🚀 Setup complete! You can now run "orcbot start" to begin.'));
 }
 
 /**
@@ -505,7 +388,7 @@ export function scaffoldFiles(dataHome: string) {
         const filePath = path.join(dataHome, file.name);
         if (!fs.existsSync(filePath)) {
             fs.writeFileSync(filePath, file.content);
-            console.log(`   Created ${file.name}`);
+            p.log.step(`Created ${file.name}`);
         }
     }
 }

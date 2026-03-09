@@ -1,3 +1,4 @@
+import { EdgeTTS } from 'node-edge-tts';
 import { logger } from '../utils/logger';
 import { ErrorHandler } from '../utils/ErrorHandler';
 import fs from 'fs';
@@ -1006,8 +1007,23 @@ export class MultiLLM {
 
     public async textToSpeech(text: string, outputPath: string, voice?: string, speed: number = 1.0): Promise<string> {
         const primaryProvider = this.preferredProvider || this.inferProvider(this.modelName);
-        if (primaryProvider === 'google' && this.googleKey) return this.textToSpeechGoogle(text, outputPath, voice);
-        if (!this.openaiKey) throw new Error('OpenAI API key not configured — required for TTS');
+        
+        // Use Google if preferred and key exists
+        if (primaryProvider === 'google' && this.googleKey) {
+            return this.textToSpeechGoogle(text, outputPath, voice);
+        }
+        
+        // Use OpenAI if preferred and key exists
+        if (primaryProvider === 'openai' && this.openaiKey) {
+            return this.textToSpeechOpenAI(text, outputPath, voice, speed);
+        }
+        
+        // Fallback to EdgeTTS (free, no API key required)
+        return this.textToSpeechEdge(text, outputPath, voice, speed);
+    }
+
+    private async textToSpeechOpenAI(text: string, outputPath: string, voice?: string, speed: number = 1.0): Promise<string> {
+        if (!this.openaiKey) throw new Error('OpenAI API key not configured — required for OpenAI TTS');
         const selectedVoice = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'].includes(voice || '') ? voice : 'nova';
         try {
             const response = await fetch('https://api.openai.com/v1/audio/speech', {
@@ -1022,6 +1038,27 @@ export class MultiLLM {
             fs.writeFileSync(outputPath, buffer);
             return outputPath;
         } catch (error) {
+            throw error;
+        }
+    }
+
+    private async textToSpeechEdge(text: string, outputPath: string, voice?: string, speed: number = 1.0): Promise<string> {
+        try {
+            const selectedVoice = voice && voice.includes('-') ? voice : 'en-US-AriaNeural';
+            const tts = new EdgeTTS({ voice: selectedVoice });
+            
+            const dir = path.dirname(outputPath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            
+            // Adjust speed: EdgeTTS accepts rate like "+0%" or "+50%"
+            // If speed is 1.0, rate is "+0%". If 1.5, "+50%".
+            const speedPct = Math.round((speed - 1.0) * 100);
+            const rateStr = speedPct >= 0 ? `+${speedPct}%` : `${speedPct}%`;
+            
+            await tts.ttsPromise(text, outputPath);
+            return outputPath;
+        } catch (error) {
+            logger.error(`EdgeTTS failed: ${error}`);
             throw error;
         }
     }
@@ -1215,3 +1252,4 @@ export class MultiLLM {
 
     private getBedrockClient() { return new BedrockRuntimeClient({ region: this.bedrockRegion!, credentials: this.bedrockAccessKeyId && this.bedrockSecretAccessKey ? { accessKeyId: this.bedrockAccessKeyId, secretAccessKey: this.bedrockSecretAccessKey, sessionToken: this.bedrockSessionToken } : undefined }); }
 }
+

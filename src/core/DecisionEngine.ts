@@ -18,6 +18,7 @@ import { KnowledgeStore } from '../memory/KnowledgeStore';
 import { BookLogManager } from '../memory/BookLogManager';
 import { ToolsManager } from './ToolsManager';
 import { Environment } from './utils/Environment';
+import type { ValidationResult } from './ResponseValidator';
 
 export class DecisionEngine {
     private agentIdentity: string = '';
@@ -545,6 +546,167 @@ ${this.repoContext}`,
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
+    private async validateAndPipelineDecision(
+        parsed: StandardResponse,
+        metadata: any,
+        allowedToolNames: string[],
+        recentContext: any[],
+        taskDescription: string
+    ): Promise<{ piped: StandardResponse; validation: ValidationResult; parsed: StandardResponse }> {
+        const validation = ResponseValidator.validateResponse(parsed, allowedToolNames);
+        ResponseValidator.logValidation(validation, `action ${metadata?.id || metadata?.actionId || 'unknown'}`);
+
+        if ((validation.errors.length > 0 || validation.warnings.length > 0)) {
+            if (!parsed.metadata) parsed.metadata = {};
+            parsed.metadata.validationFeedback = {
+                errors: [...validation.errors],
+                warnings: [...validation.warnings]
+            };
+        }
+
+        if (!validation.valid && parsed.tools) {
+            const originalCount = parsed.tools.length;
+            const validTools = parsed.tools.filter(tool => {
+                const toolValidation = ResponseValidator.validateResponse(
+                    { ...parsed, tools: [tool] },
+                    allowedToolNames
+                );
+                return toolValidation.valid;
+            });
+            const filteredCount = originalCount - validTools.length;
+            parsed.tools = validTools;
+            if (filteredCount > 0) {
+                parsed.toolsFiltered = filteredCount;
+                logger.warn(`DecisionEngine: Filtered out ${filteredCount} invalid tool(s) from response`);
+            }
+        }
+
+        const pipelineActionId = metadata.id || metadata.actionId || 'unknown';
+        const parsedHasSendFile = (parsed.tools || []).some(t => (t.name || '').toLowerCase().trim() === 'send_file');
+        const inferredFileIntent = parsedHasSendFile
+            ? await this.inferFileIntentForAction(pipelineActionId, taskDescription, recentContext)
+            : 'unknown';
+
+        const piped = this.pipeline.evaluate(parsed, {
+            actionId: pipelineActionId,
+            source: metadata.source,
+            sourceId: metadata.sourceId,
+            messagesSent: metadata.messagesSent || 0,
+            currentStep: metadata.currentStep || 1,
+            executionPlan: metadata.executionPlan,
+            lane: metadata.lane,
+            recentMemories: recentContext,
+            allowedTools: allowedToolNames,
+            taskDescription,
+            fileIntent: inferredFileIntent
+        });
+
+        return { piped, validation, parsed };
+    }
+
+    private shouldRunRecoverySupervisor(parsed: StandardResponse, piped: StandardResponse, validation: ValidationResult): boolean {
+        const proposedToolCount = parsed.tools?.length || 0;
+        const pipedToolCount = piped.tools?.length || 0;
+        const goalsNotMet = piped.verification?.goals_met === false;
+        const filteredTools = (parsed.toolsFiltered || 0) > 0;
+        const dropped = Array.isArray(piped.metadata?.pipelineNotes?.dropped) ? piped.metadata.pipelineNotes.dropped : [];
+        const recoveryHint = String(piped.metadata?.recoveryHint || '').trim();
+
+        if (validation.errors.length > 0) return true;
+        if (filteredTools && goalsNotMet) return true;
+        if (goalsNotMet && proposedToolCount > 0 && pipedToolCount === 0) return true;
+        if (goalsNotMet && recoveryHint.length > 0 && dropped.length > 0) return true;
+        return false;
+    }
+
+    private async runRecoverySupervisor(
+        actionId: string,
+        taskDescription: string,
+        coreInstructions: string,
+        stepHistoryString: string,
+        metadata: any,
+        parsed: StandardResponse,
+        piped: StandardResponse,
+        validation: ValidationResult,
+        allowedToolNames: string[],
+        recentContext: any[]
+    ): Promise<StandardResponse | null> {
+        const pipelineNotes = piped.metadata?.pipelineNotes || {};
+        const recoveryHint = String(piped.metadata?.recoveryHint || '').trim();
+
+        const supervisorPrompt = `
+${coreInstructions}
+
+SUPERVISOR RECOVERY LOOP:
+The previous plan was not fully executable. Repair it before returning control to the main loop.
+
+RECOVERY RULES:
+- Return a corrected response that can execute immediately.
+- Use only tools from the current Available Skills or Tools list.
+- If validation rejected fields, fix the metadata shape.
+- If pipeline guardrails suppressed the plan, choose different tools or materially different arguments.
+- Do NOT repeat the same blocked plan.
+- Prefer autonomous continuation over asking the user for help unless the task is truly blocked.
+- If the task is already complete, return goals_met=true with no tools.
+
+TASK:
+${taskDescription}
+
+EXECUTION PLAN:
+${metadata.executionPlan || 'No plan provided.'}
+
+STEP HISTORY FOR THIS ACTION:
+${stepHistoryString}
+
+VALIDATION ERRORS:
+${validation.errors.length > 0 ? validation.errors.join('\n') : '(none)'}
+
+VALIDATION WARNINGS:
+${validation.warnings.length > 0 ? validation.warnings.join('\n') : '(none)'}
+
+PIPELINE NOTES:
+${Array.isArray(pipelineNotes.warnings) && pipelineNotes.warnings.length > 0 ? pipelineNotes.warnings.join('\n') : '(none)'}
+
+PIPELINE DROPPED:
+${Array.isArray(pipelineNotes.dropped) && pipelineNotes.dropped.length > 0 ? pipelineNotes.dropped.join('\n') : '(none)'}
+
+RECOVERY HINT:
+${recoveryHint || '(none)'}
+
+BLOCKED RESPONSE:
+${JSON.stringify(piped, null, 2)}
+
+QUESTION:
+Return the corrected next response now.`;
+
+        try {
+            const recoveryRaw = await this.callLLMWithRetry(taskDescription, supervisorPrompt, actionId);
+            const recoveryParsed = this.applyChannelDefaultsToTools(ParserLayer.normalize(recoveryRaw), metadata);
+            const recovered = await this.validateAndPipelineDecision(
+                recoveryParsed,
+                metadata,
+                allowedToolNames,
+                recentContext,
+                taskDescription
+            );
+
+            const recoveredHasProgress = (recovered.piped.tools?.length || 0) > 0 || recovered.piped.verification?.goals_met === true;
+            if (recoveredHasProgress) {
+                if (!recovered.piped.metadata) recovered.piped.metadata = {};
+                recovered.piped.metadata.recoverySupervisor = {
+                    used: true,
+                    recovered: true
+                };
+                logger.info(`DecisionEngine: Recovery supervisor repaired blocked plan for action ${actionId}`);
+                return recovered.piped;
+            }
+        } catch (e) {
+            logger.warn(`DecisionEngine: Recovery supervisor failed for action ${actionId}: ${e}`);
+        }
+
+        return null;
+    }
+
     public async decide(action: any): Promise<StandardResponse> {
         const taskDescription = action.payload.description;
         const metadata = action.payload;
@@ -683,10 +845,23 @@ ${lastTurnInvolvedMessage
             } catch (e) { }
         }
 
+        const isLowSignalMemory = (m: any): boolean => {
+            const content = (m?.content || '').toString();
+            const md = m?.metadata || {};
+            if (md?.progressOnly || md?.progressType || md?.lowSignal) return true;
+            if (md?.tool) return true;
+            if (content.startsWith('Observation: Tool ')) return true;
+            if (content.startsWith('[SYSTEM:')) return true;
+            if (content.startsWith('Pipeline notes:')) return true;
+            if (content.startsWith('Assistant sent status update to ')) return true;
+            return false;
+        };
+
         // Include limited other context for background awareness (configurable)
         const otherContextN = Number(this.config?.get('threadContextOtherMemoriesN') ?? 5);
         const otherMemories = recentContext
             .filter(c => !c.id || !c.id.startsWith(actionPrefix))
+            .filter(c => !isLowSignalMemory(c))
             .filter(c => {
                 const content = (c.content || '').toString();
                 const id = (c.id || '').toString();
@@ -732,16 +907,6 @@ ${lastTurnInvolvedMessage
                     if (taskTokens.has(t)) overlap++;
                 }
                 return overlap;
-            };
-
-            const isLowSignal = (m: any): boolean => {
-                const content = (m?.content || '').toString();
-                const md = m?.metadata || {};
-                if (md?.tool) return true;
-                if (content.startsWith('Observation: Tool ')) return true;
-                if (content.startsWith('[SYSTEM:')) return true;
-                if (content.startsWith('Pipeline notes:')) return true;
-                return false;
             };
 
             const shortAll = this.memory.searchMemory('short');
@@ -808,7 +973,7 @@ ${lastTurnInvolvedMessage
                     }
                     return false;
                 })
-                .filter(m => !isLowSignal(m))
+                .filter(m => !isLowSignalMemory(m))
                 .sort((a, b) => {
                     const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
                     const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
@@ -1390,48 +1555,35 @@ ${safeOtherContext ? `RECENT BACKGROUND CONTEXT (reference only — may describe
             parsed = this.applyChannelDefaultsToTools(ParserLayer.normalize(rawResponse), metadata);
         }
 
-        // Validate response before processing
-        const validation = ResponseValidator.validateResponse(parsed, allowedToolNames);
-        ResponseValidator.logValidation(validation, `action ${actionId}`);
-        
-        // Filter out invalid tools if validation found errors
-        if (!validation.valid && parsed.tools) {
-            const originalCount = parsed.tools.length;
-            const validTools = parsed.tools.filter(tool => {
-                const toolValidation = ResponseValidator.validateResponse(
-                    { ...parsed, tools: [tool] },
-                    allowedToolNames
-                );
-                return toolValidation.valid;
-            });
-            const filteredCount = originalCount - validTools.length;
-            parsed.tools = validTools;
-            if (filteredCount > 0) {
-                parsed.toolsFiltered = filteredCount;
-                logger.warn(`DecisionEngine: Filtered out ${filteredCount} invalid tool(s) from response`);
+        const initial = await this.validateAndPipelineDecision(parsed, metadata, allowedToolNames, recentContext, taskDescription);
+        let piped = initial.piped;
+        const validation = initial.validation;
+        const pipelineActionId = metadata.id || metadata.actionId || 'unknown';
+
+        if (this.shouldRunRecoverySupervisor(initial.parsed, piped, validation)) {
+            const recovered = await this.runRecoverySupervisor(
+                actionId,
+                taskDescription,
+                coreInstructions,
+                stepHistoryString,
+                metadata,
+                initial.parsed,
+                piped,
+                validation,
+                allowedToolNames,
+                recentContext
+            );
+            if (recovered) {
+                piped = recovered;
+                piped.metadata = {
+                    ...(piped.metadata || {}),
+                    recoverySupervisor: {
+                        used: true,
+                        recovered: true
+                    }
+                };
             }
         }
-
-        const pipelineActionId = metadata.id || metadata.actionId || 'unknown';
-        const parsedHasSendFile = (parsed.tools || []).some(t => (t.name || '').toLowerCase().trim() === 'send_file');
-        const inferredFileIntent = parsedHasSendFile
-            ? await this.inferFileIntentForAction(pipelineActionId, taskDescription, recentContext)
-            : 'unknown';
-
-        // Run parsed response through structured pipeline guardrails
-        let piped = this.pipeline.evaluate(parsed, {
-            actionId: pipelineActionId,
-            source: metadata.source,
-            sourceId: metadata.sourceId,
-            messagesSent: metadata.messagesSent || 0,
-            currentStep: metadata.currentStep || 1,
-            executionPlan: metadata.executionPlan,
-            lane: metadata.lane,
-            recentMemories: recentContext,
-            allowedTools: allowedToolNames,
-            taskDescription,
-            fileIntent: inferredFileIntent
-        });
 
         // Track if semantic duplication occurred (important for completion audit)
         const pipelineDropped = piped?.metadata?.pipelineNotes?.dropped || [];

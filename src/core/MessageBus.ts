@@ -1,5 +1,6 @@
 import { Agent } from './Agent';
 import { logger } from '../utils/logger';
+import { resolveInboundRoute } from './InboundRouting';
 
 export interface InboundMessage {
     source: string; // e.g., 'discord', 'telegram', 'whatsapp', 'slack', 'email'
@@ -34,6 +35,12 @@ export class MessageBus {
             userId: msg.userId,
             chatId: msg.sourceId
         });
+        const routingDecision = resolveInboundRoute(this.agent.actionQueue.getQueue(), {
+            source: msg.source,
+            sourceId: msg.sourceId,
+            sessionScopeId,
+            messageId: msg.messageId
+        });
 
         // 2. Normalize Content & Log
         const sender = msg.senderName || msg.userId || 'Unknown';
@@ -63,6 +70,8 @@ export class MessageBus {
                 userId: msg.userId,
                 senderName: msg.senderName,
                 messageId: msg.messageId,
+                inboundRoute: routingDecision.route,
+                inboundRouteTargetActionId: routingDecision.waitingActionId || routingDecision.activeActionId,
                 ...msg.metadata
             }
         });
@@ -79,6 +88,9 @@ export class MessageBus {
         // 5. Construct Task
         let priority = 10;
         let taskDescription = '';
+        const whatsappReactionHint = msg.source === 'whatsapp' && msg.metadata?.autoReact && msg.messageId
+            ? `\nIf a lightweight emoji reaction is more appropriate than a full reply, you may use 'react_whatsapp' with jid '${msg.sourceId}' and message_id '${msg.messageId}'.`
+            : '';
 
         if (msg.isCommand || msg.isOwner) {
             priority = msg.isOwner ? 15 : 20;
@@ -104,14 +116,14 @@ Technical Instructions:
 
 Goal: Decide if you should reply to this status based on our history and my persona. 
 If yes, you MUST use 'reply_whatsapp_status' with the JID '${msg.sourceId}' and a short, conversational reply message. 
-The reply will appear as a proper status reply inside their status thread, not as a standalone DM.`;
+The reply will appear as a proper status reply inside their status thread, not as a standalone DM.${whatsappReactionHint}`;
         } else if (msg.isExternal) {
             priority = 5; // Lower priority for external observation
             taskDescription = `EXTERNAL ${msg.source.toUpperCase()} MESSAGE from ${sender} (ID: ${msg.messageId}): "${baseContent}"${msg.mediaAnalysis ? ` [Media analysis: ${msg.mediaAnalysis}]` : ''}${msg.replyContext ? ' ' + msg.replyContext : ''}. 
 
-Goal: Decide if you should respond based on our history and my persona. If yes, use 'send_${msg.source}'.`;
+Goal: Decide if you should respond based on our history and my persona. If yes, use 'send_${msg.source}'.${whatsappReactionHint}`;
         } else {
-            taskDescription = `Respond to ${msg.source} message from ${sender}${channelStr}: "${baseContent}"${msg.mediaAnalysis ? ` [Media analysis: ${msg.mediaAnalysis}]` : ''}${msg.replyContext ? ' ' + msg.replyContext : ''}`;
+            taskDescription = `Respond to ${msg.source} message from ${sender}${channelStr}: "${baseContent}"${msg.mediaAnalysis ? ` [Media analysis: ${msg.mediaAnalysis}]` : ''}${msg.replyContext ? ' ' + msg.replyContext : ''}${whatsappReactionHint}`;
         }
 
         if (msg.mediaPaths && msg.mediaPaths.length > 0) {
@@ -126,6 +138,9 @@ Goal: Decide if you should respond based on our history and my persona. If yes, 
                 source: msg.source,
                 sourceId: msg.sourceId,
                 sessionScopeId,
+                inboundRoute: routingDecision.route,
+                inboundRouteTargetActionId: routingDecision.waitingActionId || routingDecision.activeActionId,
+                inboundSupersededActionIds: routingDecision.supersededActionIds,
                 senderName: msg.senderName,
                 userId: msg.userId,
                 messageId: msg.messageId,

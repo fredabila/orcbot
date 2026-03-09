@@ -10,6 +10,15 @@ export class SQLiteAdapter {
     }
 
     private initialize() {
+        // Load sqlite-vec extension if available
+        try {
+            const sqliteVec = require('sqlite-vec');
+            sqliteVec.load(this.db);
+            logger.info('SQLiteAdapter: sqlite-vec extension loaded successfully');
+        } catch (e) {
+            logger.debug(`SQLiteAdapter: sqlite-vec extension not available: ${e}`);
+        }
+
         this.db.exec(`
       CREATE TABLE IF NOT EXISTS memory (
         id TEXT PRIMARY KEY,

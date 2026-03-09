@@ -252,4 +252,69 @@ describe('DecisionPipeline', () => {
     expect(evaluated.verification?.goals_met).not.toBe(true);
   });
 
+  it('adds recovery hints when all proposed non-send tools are suppressed', () => {
+    const pipeline = new DecisionPipeline(
+      new StubConfig({
+        maxMessagesPerAction: 4,
+        maxStepsPerAction: 10,
+        messageDedupWindow: 5,
+        maxToolLoops: 3,
+      }) as any,
+    );
+
+    const proposed: StandardResponse = {
+      success: true,
+      tools: [
+        { name: 'web_search', metadata: { query: 'same query' } }
+      ],
+      verification: { goals_met: false, analysis: 'Need more research' },
+    };
+
+    const evaluated = pipeline.evaluate(proposed, {
+      actionId: 'a8',
+      messagesSent: 0,
+      currentStep: 4,
+      recentMemories: [
+        { id: 'a8-step-1-web_search', type: 'short', content: 'Tool web_search returned', metadata: { tool: 'web_search', input: { query: 'same query' } } } as any,
+        { id: 'a8-step-2-web_search', type: 'short', content: 'Tool web_search returned', metadata: { tool: 'web_search', input: { query: 'same query' } } } as any,
+      ],
+    });
+
+    expect(evaluated.tools?.length).toBe(0);
+    expect(evaluated.verification?.goals_met).toBe(false);
+    expect(String(evaluated.metadata?.recoveryHint || '')).toContain('Do not repeat the same search query');
+  });
+
+  it('does not cut off multi-page browsing too early when inspection work exists', () => {
+    const pipeline = new DecisionPipeline(
+      new StubConfig({
+        maxMessagesPerAction: 4,
+        maxStepsPerAction: 10,
+        messageDedupWindow: 5,
+        maxToolLoops: 3,
+      }) as any,
+    );
+
+    const proposed: StandardResponse = {
+      success: true,
+      tools: [{ name: 'browser_navigate', metadata: { url: 'https://example.org/next' } }],
+      verification: { goals_met: false, analysis: 'Continue browsing' },
+    };
+
+    const evaluated = pipeline.evaluate(proposed, {
+      actionId: 'a9',
+      messagesSent: 0,
+      currentStep: 5,
+      recentMemories: [
+        { id: 'a9-step-1-browser_navigate', type: 'short', content: 'Tool browser_navigate returned', metadata: { tool: 'browser_navigate', input: { url: 'https://example.org/1' } } } as any,
+        { id: 'a9-step-2-browser_examine_page', type: 'short', content: 'Tool browser_examine_page returned', metadata: { tool: 'browser_examine_page' } } as any,
+        { id: 'a9-step-3-browser_navigate', type: 'short', content: 'Tool browser_navigate returned', metadata: { tool: 'browser_navigate', input: { url: 'https://example.org/2' } } } as any,
+        { id: 'a9-step-4-browser_navigate', type: 'short', content: 'Tool browser_navigate returned', metadata: { tool: 'browser_navigate', input: { url: 'https://example.org/3' } } } as any,
+      ],
+    });
+
+    expect(evaluated.tools?.length).toBe(1);
+    expect(evaluated.tools?.[0]?.name).toBe('browser_navigate');
+  });
+
 });

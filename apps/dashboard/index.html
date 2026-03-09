@@ -3,3291 +3,418 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OrcBot Dashboard</title>
+    <title>OrcBot Gateway</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        :root {
-            --bg-dark: #0a0a0f;
-            --bg-card: #12121a;
-            --bg-hover: #1a1a25;
-            --bg-input: #0d0d12;
-            --bg-glass: rgba(18, 18, 26, 0.74);
-            --text: #e4e4e7;
-            --text-dim: #71717a;
-            --text-muted: #52525b;
-            --accent: #22c55e;
-            --accent-dim: #16a34a;
-            --accent-glow: rgba(34, 197, 94, 0.2);
-            --accent-glow-strong: rgba(34, 197, 94, 0.35);
-            --blue: #3b82f6;
-            --purple: #a855f7;
-            --orange: #f97316;
-            --red: #ef4444;
-            --yellow: #eab308;
-            --border: #27272a;
-            --border-light: #3f3f46;
-            --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.35);
-            --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.28);
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background:
-                radial-gradient(circle at 8% 8%, rgba(34, 197, 94, 0.08), transparent 35%),
-                radial-gradient(circle at 92% 12%, rgba(59, 130, 246, 0.1), transparent 34%),
-                radial-gradient(circle at 80% 85%, rgba(168, 85, 247, 0.1), transparent 36%),
-                var(--bg-dark);
-            color: var(--text);
-            min-height: 100vh;
-            overflow-x: hidden;
-        }
-
-        /* Sidebar */
-        .sidebar {
-            position: fixed;
-            left: 0;
-            top: 0;
-            bottom: 0;
-            width: 240px;
-            background: var(--bg-glass);
-            backdrop-filter: blur(12px);
-            border-right: 1px solid var(--border);
-            padding: 20px 0;
-            z-index: 100;
-            display: flex;
-            flex-direction: column;
-            box-shadow: var(--shadow-md);
-        }
-
-        .logo {
-            padding: 0 20px 20px;
-            border-bottom: 1px solid var(--border);
-            margin-bottom: 10px;
-        }
-
-        .logo h1 {
-            font-size: 20px;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .logo h1 span { color: var(--accent); }
-
-        .nav-section {
-            padding: 10px 12px;
-        }
-
-        .nav-label {
-            font-size: 10px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            color: var(--text-muted);
-            padding: 8px;
-            margin-top: 10px;
-        }
-
-        .nav-item {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 10px 12px;
-            border-radius: 8px;
-            color: var(--text-dim);
-            cursor: pointer;
-            transition: all 0.2s ease;
-            font-size: 14px;
-            border: 1px solid transparent;
-        }
-
-        .nav-item:hover {
-            background: rgba(255, 255, 255, 0.04);
-            color: var(--text);
-            border-color: var(--border-light);
-        }
-        .nav-item.active {
-            background: linear-gradient(90deg, var(--accent-glow), rgba(34, 197, 94, 0.08));
-            color: var(--accent);
-            border-color: var(--accent-glow-strong);
-        }
-        .nav-item i { width: 20px; text-align: center; }
-
-        .sidebar-footer {
-            margin-top: auto;
-            padding: 15px 20px;
-            border-top: 1px solid var(--border);
-        }
-
-        .connection-status {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 12px;
-            color: var(--text-dim);
-        }
-
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: var(--red);
-        }
-
-        .status-dot.connected { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
-
-        /* Main Content */
-        .main {
-            margin-left: 240px;
-            min-height: 100vh;
-        }
-
-        .topbar {
-            position: sticky;
-            top: 0;
-            background: rgba(10, 10, 15, 0.82);
-            backdrop-filter: blur(12px);
-            border-bottom: 1px solid var(--border);
-            padding: 15px 30px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            z-index: 50;
-        }
-
-        .topbar-left {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-
-        .gateway-meta {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-
-        .meta-pill {
-            font-size: 11px;
-            color: var(--text-dim);
-            border: 1px solid var(--border-light);
-            border-radius: 999px;
-            padding: 3px 8px;
-            background: rgba(255, 255, 255, 0.02);
-        }
-
-        .meta-pill strong {
-            color: var(--text);
-            font-weight: 600;
-        }
-
-        .page-title {
-            font-size: 18px;
-            font-weight: 600;
-        }
-
-        .topbar-actions {
-            display: flex;
-            gap: 10px;
-        }
-
-        .btn {
-            padding: 8px 16px;
-            border-radius: 8px;
-            border: none;
-            cursor: pointer;
-            font-size: 13px;
-            font-weight: 500;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            transition: all 0.15s;
-        }
-
-        .btn-primary {
-            background: linear-gradient(135deg, var(--accent), #10b981);
-            color: #03160a;
-            box-shadow: 0 8px 20px rgba(16, 185, 129, 0.24);
-        }
-
-        .btn-primary:hover {
-            transform: translateY(-1px);
-            filter: brightness(1.05);
-        }
-
-        .btn-secondary {
-            background: var(--bg-hover);
-            color: var(--text);
-            border: 1px solid var(--border);
-        }
-
-        .btn-secondary:hover { border-color: var(--border-light); }
-
-        .btn-danger { background: var(--red); color: white; }
-        .btn-danger:hover { background: #dc2626; }
-
-        .content {
-            padding: 30px;
-        }
-
-        /* Page Sections */
-        .page { display: none; }
-        .page.active { display: block; }
-
-        /* Stats Grid */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 16px;
-            margin-bottom: 30px;
-        }
-
-        .stat-card {
-            background: rgba(18, 18, 26, 0.88);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: var(--shadow-md);
-            transition: transform 0.2s ease, border-color 0.2s ease;
-        }
-
-        .stat-card:hover {
-            transform: translateY(-2px);
-            border-color: var(--border-light);
-        }
-
-        .stat-card .label {
-            font-size: 12px;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 8px;
-        }
-
-        .stat-card .value {
-            font-size: 28px;
-            font-weight: 700;
-            color: var(--text);
-        }
-
-        .stat-card .value.accent { color: var(--accent); }
-        .stat-card .value.warning { color: var(--yellow); }
-
-        .stat-card .sub {
-            font-size: 12px;
-            color: var(--text-dim);
-            margin-top: 4px;
-        }
-
-        /* Cards */
-        .card {
-            background: rgba(18, 18, 26, 0.9);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            margin-bottom: 20px;
-            box-shadow: var(--shadow-md);
-        }
-
-        .card-header {
-            padding: 16px 20px;
-            border-bottom: 1px solid var(--border);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .card-header h3 {
-            font-size: 14px;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .card-header h3 i { color: var(--accent); }
-
-        .card-body { padding: 20px; }
-        .card-body.no-padding { padding: 0; }
-
-        /* Two Column Layout */
-        .two-col {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-        }
-
-        @media (max-width: 1200px) {
-            .two-col { grid-template-columns: 1fr; }
-        }
-
-        /* Task Input */
-        .task-input-container {
-            display: flex;
-            gap: 12px;
-            margin-bottom: 25px;
-        }
-
-        .task-input {
-            flex: 1;
-            background: var(--bg-input);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 14px 18px;
-            color: var(--text);
-            font-size: 14px;
-            transition: border-color 0.15s;
-        }
-
-        .task-input:focus {
-            outline: none;
-            border-color: var(--accent);
-        }
-
-        .task-input::placeholder { color: var(--text-muted); }
-
-        .priority-select {
-            width: 110px;
-            background: var(--bg-input);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 14px;
-            color: var(--text);
-            font-size: 14px;
-            cursor: pointer;
-        }
-
-        /* Task Queue */
-        .task-list { list-style: none; }
-
-        .task-item {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            padding: 14px 20px;
-            border-bottom: 1px solid var(--border);
-            transition: background 0.15s;
-        }
-
-        .task-item:hover { background: var(--bg-hover); }
-        .task-item:last-child { border-bottom: none; }
-
-        .task-priority {
-            width: 32px;
-            height: 32px;
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 700;
-            font-size: 12px;
-            background: var(--bg-hover);
-        }
-
-        .task-priority.high { background: rgba(239, 68, 68, 0.2); color: var(--red); }
-        .task-priority.medium { background: rgba(234, 179, 8, 0.2); color: var(--yellow); }
-        .task-priority.low { background: rgba(34, 197, 94, 0.2); color: var(--accent); }
-
-        .task-content { flex: 1; }
-        .task-content .task-text { font-size: 14px; margin-bottom: 3px; }
-        .task-content .task-meta { font-size: 11px; color: var(--text-muted); }
-
-        .task-status {
-            padding: 4px 10px;
-            border-radius: 20px;
-            font-size: 11px;
-            font-weight: 500;
-        }
-
-        .task-status.pending { background: rgba(59, 130, 246, 0.2); color: var(--blue); }
-        .task-status.processing { background: rgba(168, 85, 247, 0.2); color: var(--purple); }
-        .task-status.done { background: rgba(34, 197, 94, 0.2); color: var(--accent); }
-
-        /* Skills Grid */
-        .skills-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 12px;
-            padding: 20px;
-        }
-
-        .skill-card {
-            background: var(--bg-hover);
-            border-radius: 10px;
-            padding: 16px;
-            cursor: pointer;
-            transition: all 0.15s;
-            border: 1px solid transparent;
-        }
-
-        .skill-card:hover {
-            border-color: var(--border-light);
-            transform: translateY(-2px);
-        }
-
-        .skill-card .skill-name {
-            font-weight: 600;
-            font-size: 14px;
-            margin-bottom: 6px;
-            color: var(--accent);
-        }
-
-        .skill-card .skill-desc {
-            font-size: 12px;
-            color: var(--text-dim);
-            line-height: 1.5;
-        }
-
-        .skill-card .skill-type {
-            margin-top: 10px;
-            font-size: 10px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: var(--text-muted);
-        }
-
-        /* Memory Timeline */
-        .memory-timeline {
-            padding: 0 20px 20px;
-        }
-
-        .memory-item {
-            display: flex;
-            gap: 15px;
-            padding: 15px 0;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .memory-item:last-child { border-bottom: none; }
-
-        .memory-icon {
-            width: 36px;
-            height: 36px;
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: var(--bg-hover);
-            color: var(--accent);
-            flex-shrink: 0;
-        }
-
-        .memory-content { flex: 1; min-width: 0; }
-        .memory-content .type { font-size: 11px; color: var(--text-muted); text-transform: uppercase; }
-        .memory-content .text { font-size: 13px; margin-top: 4px; line-height: 1.5; }
-        .memory-content .time { font-size: 11px; color: var(--text-muted); margin-top: 6px; }
-
-        /* Logs */
-        .log-viewer {
-            font-family: 'SF Mono', 'Fira Code', monospace;
-            font-size: 12px;
-            background: var(--bg-input);
-            border-radius: 8px;
-            padding: 15px;
-            max-height: 400px;
-            overflow-y: auto;
-            line-height: 1.8;
-        }
-
-        .log-line { white-space: pre-wrap; word-break: break-all; }
-        .log-line.error { color: var(--red); }
-        .log-line.warn { color: var(--yellow); }
-        .log-line.info { color: var(--blue); }
-        .log-line.debug { color: var(--text-muted); }
-        .log-filter-info { padding: 10px; color: var(--text-dim); border-bottom: 1px solid var(--border); }
-
-        /* Config */
-        .config-section { margin-bottom: 30px; }
-
-        .config-section h4 {
-            font-size: 13px;
-            color: var(--text-dim);
-            margin-bottom: 15px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .config-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 12px 0;
-        }
-
-        .config-row .label {
-            font-size: 14px;
-        }
-
-        .config-row .sublabel {
-            font-size: 12px;
-            color: var(--text-muted);
-            margin-top: 2px;
-        }
-
-        .config-value {
-            font-family: 'SF Mono', monospace;
-            font-size: 13px;
-            color: var(--accent);
-            background: var(--bg-hover);
-            padding: 6px 12px;
-            border-radius: 6px;
-        }
-
-        /* Toggle */
-        .toggle {
-            position: relative;
-            width: 44px;
-            height: 24px;
-            background: var(--bg-hover);
-            border-radius: 12px;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-
-        .toggle.active { background: var(--accent); }
-
-        .toggle::after {
-            content: '';
-            position: absolute;
-            width: 18px;
-            height: 18px;
-            background: white;
-            border-radius: 50%;
-            top: 3px;
-            left: 3px;
-            transition: transform 0.2s;
-        }
-
-        .toggle.active::after { transform: translateX(20px); }
-
-        /* Channel Cards */
-        .channel-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 16px;
-        }
-
-        .channel-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 20px;
-        }
-
-        .channel-header {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 15px;
-        }
-
-        .channel-icon {
-            width: 40px;
-            height: 40px;
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 20px;
-        }
-
-        .channel-icon.telegram { background: linear-gradient(135deg, #2AABEE, #229ED9); }
-        .channel-icon.whatsapp { background: linear-gradient(135deg, #25D366, #128C7E); }
-        .channel-icon.discord { background: linear-gradient(135deg, #5865F2, #4752C4); }
-
-        .channel-info h4 { font-size: 15px; font-weight: 600; }
-        .channel-info .status { font-size: 12px; color: var(--text-muted); }
-        .channel-info .status.active { color: var(--accent); }
-
-        .channel-stats {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            margin-top: 15px;
-            padding-top: 15px;
-            border-top: 1px solid var(--border);
-        }
-
-        .channel-stat {
-            text-align: center;
-        }
-
-        .channel-stat .value { font-size: 20px; font-weight: 700; }
-        .channel-stat .label { font-size: 11px; color: var(--text-muted); }
-
-        /* Live Events Feed */
-        .events-feed {
-            max-height: 300px;
-            overflow-y: auto;
-        }
-
-        .event-item {
-            display: flex;
-            align-items: flex-start;
-            gap: 12px;
-            padding: 12px 20px;
-            border-bottom: 1px solid var(--border);
-            font-size: 13px;
-        }
-
-        .event-item:last-child { border-bottom: none; }
-
-        .event-time {
-            font-family: monospace;
-            font-size: 11px;
-            color: var(--text-muted);
-            white-space: nowrap;
-        }
-
-        .event-type {
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 10px;
-            font-weight: 600;
-            text-transform: uppercase;
-        }
-
-        .event-type.thinking { background: rgba(168, 85, 247, 0.2); color: var(--purple); }
-        .event-type.action { background: rgba(59, 130, 246, 0.2); color: var(--blue); }
-        .event-type.observation { background: rgba(34, 197, 94, 0.2); color: var(--accent); }
-        .event-type.error { background: rgba(239, 68, 68, 0.2); color: var(--red); }
-        .event-type.system { background: rgba(113, 113, 122, 0.2); color: var(--text-dim); }
-
-        .event-message { flex: 1; color: var(--text-dim); }
-
-        /* Modal */
-        .modal-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.7);
-            display: none;
-            align-items: center;
-            justify-content: center;
-            z-index: 200;
-        }
-
-        .modal-overlay.active { display: flex; }
-
-        .modal {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 16px;
-            width: 90%;
-            max-width: 500px;
-            max-height: 80vh;
-            overflow: hidden;
-        }
-
-        .modal-header {
-            padding: 20px;
-            border-bottom: 1px solid var(--border);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .modal-header h3 { font-size: 16px; }
-
-        .modal-close {
-            background: none;
-            border: none;
-            color: var(--text-dim);
-            cursor: pointer;
-            font-size: 20px;
-        }
-
-        .modal-body {
-            padding: 20px;
-            overflow-y: auto;
-            max-height: 60vh;
-        }
-
-        .form-group { margin-bottom: 20px; }
-        .form-group label { display: block; font-size: 13px; margin-bottom: 8px; color: var(--text-dim); }
-
-        .form-input {
-            width: 100%;
-            background: var(--bg-input);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 12px;
-            color: var(--text);
-            font-size: 14px;
-        }
-
-        .form-input:focus { outline: none; border-color: var(--accent); }
-
-        /* Toast */
-        .toast-container {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            z-index: 300;
-        }
-
-        .toast {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 14px 20px;
-            margin-top: 10px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            animation: slideIn 0.3s ease;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
-        }
-
-        .toast.success .toast-icon { color: var(--accent); }
-        .toast.error .toast-icon { color: var(--red); }
-
-        @keyframes slideIn {
-            from { transform: translateX(100%); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
-        }
-
-        /* Empty State */
-        .empty-state {
-            text-align: center;
-            padding: 40px 20px;
-            color: var(--text-muted);
-        }
-
-        .empty-state i { font-size: 48px; margin-bottom: 15px; opacity: 0.3; }
-        .empty-state p { font-size: 14px; }
-
-        /* Responsive */
-        @media (max-width: 768px) {
-            .sidebar { transform: translateX(-100%); transition: transform 0.3s; }
-            .sidebar.open { transform: translateX(0); }
-            .main { margin-left: 0; }
-            .content { padding: 20px; }
-            .task-input-container { flex-direction: column; }
-            .priority-select { width: 100%; }
-        }
-
-        /* Scrollbar */
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: var(--bg-dark); }
-        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
-
-        /* Security / Token Panel */
-        .token-display {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            background: var(--bg-input);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 14px 16px;
-            margin-bottom: 16px;
-            font-family: 'SF Mono', 'Fira Code', monospace;
-            font-size: 14px;
-            word-break: break-all;
-        }
-
-        .token-display .token-text {
-            flex: 1;
-            letter-spacing: 0.05em;
-            color: var(--accent);
-        }
-
-        .token-display .token-copy-btn {
-            background: none;
-            border: 1px solid var(--border);
-            color: var(--text-dim);
-            border-radius: 6px;
-            padding: 4px 10px;
-            cursor: pointer;
-            font-size: 12px;
-            transition: all 0.15s;
-            white-space: nowrap;
-        }
-
-        .token-display .token-copy-btn:hover {
-            border-color: var(--accent);
-            color: var(--accent);
-        }
-
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            padding: 4px 10px;
-            border-radius: 20px;
-            font-size: 11px;
-            font-weight: 600;
-        }
-
-        .badge.green { background: rgba(34,197,94,0.15); color: var(--accent); }
-        .badge.red { background: rgba(239,68,68,0.15); color: var(--red); }
-        .badge.yellow { background: rgba(234,179,8,0.15); color: var(--yellow); }
-
-        .security-alert {
-            display: flex;
-            align-items: flex-start;
-            gap: 12px;
-            padding: 14px 16px;
-            border-radius: 10px;
-            font-size: 13px;
-            line-height: 1.5;
-            margin-bottom: 20px;
-        }
-
-        .security-alert.warning {
-            background: rgba(234,179,8,0.1);
-            border: 1px solid rgba(234,179,8,0.3);
-            color: var(--yellow);
-        }
-
-        .security-alert.success {
-            background: rgba(34,197,94,0.1);
-            border: 1px solid rgba(34,197,94,0.3);
-            color: var(--accent);
-        }
-
-        .security-alert.danger {
-            background: rgba(239,68,68,0.1);
-            border: 1px solid rgba(239,68,68,0.3);
-            color: var(--red);
-        }
-
-        .helper-card {
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            background: rgba(255,255,255,0.02);
-            padding: 12px;
-            margin-top: 10px;
-        }
-
-        .helper-card h4 {
-            font-size: 13px;
-            margin-bottom: 6px;
-            color: var(--text);
-        }
-
-        .helper-list {
-            margin: 0;
-            padding-left: 18px;
-            color: var(--text-muted);
-            font-size: 12px;
-            line-height: 1.5;
-        }
-
-        .code-block-mini {
-            margin-top: 8px;
-            background: #0b0f14;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            font-size: 11px;
-            color: #93c5fd;
-            padding: 10px;
-            overflow-x: auto;
-            white-space: pre-wrap;
-        }
-
-        .skill-guidance {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-            gap: 12px;
-            margin-bottom: 14px;
-        }
-
-        /* Chat Interface */
-        .chat-container {
-            display: flex;
-            flex-direction: column;
-            height: calc(100vh - 120px);
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-
-        .chat-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 16px 20px;
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px 12px 0 0;
-            border-bottom: none;
-        }
-
-        .chat-header h3 {
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text);
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .chat-header h3 i { color: var(--accent); }
-
-        .chat-messages {
-            flex: 1;
-            overflow-y: auto;
-            padding: 20px;
-            background: var(--bg-card);
-            border-left: 1px solid var(--border);
-            border-right: 1px solid var(--border);
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-        }
-
-        .chat-message {
-            display: flex;
-            gap: 12px;
-            animation: fadeInUp 0.3s ease;
-        }
-
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .chat-message.user {
-            flex-direction: row-reverse;
-        }
-
-        .chat-message-avatar {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 16px;
-            flex-shrink: 0;
-        }
-
-        .chat-message.user .chat-message-avatar {
-            background: linear-gradient(135deg, var(--accent), var(--accent-dim));
-            color: #000;
-        }
-
-        .chat-message.assistant .chat-message-avatar {
-            background: linear-gradient(135deg, var(--purple), var(--blue));
-            color: white;
-        }
-
-        .chat-message-content {
-            flex: 1;
-            max-width: 70%;
-        }
-
-        .chat-message.user .chat-message-content {
-            display: flex;
-            flex-direction: column;
-            align-items: flex-end;
-        }
-
-        .chat-message-bubble {
-            padding: 12px 16px;
-            border-radius: 12px;
-            font-size: 14px;
-            line-height: 1.5;
-            word-wrap: break-word;
-        }
-
-        .chat-message.user .chat-message-bubble {
-            background: var(--accent);
-            color: #000;
-            border-bottom-right-radius: 4px;
-        }
-
-        .chat-message.assistant .chat-message-bubble {
-            background: var(--bg-hover);
-            color: var(--text);
-            border-bottom-left-radius: 4px;
-            border: 1px solid var(--border);
-        }
-
-        .chat-message-time {
-            font-size: 11px;
-            color: var(--text-muted);
-            margin-top: 4px;
-        }
-
-        .chat-message.user .chat-message-time {
-            text-align: right;
-        }
-
-        .chat-typing {
-            display: flex;
-            gap: 12px;
-            padding: 0 20px;
-        }
-
-        .chat-typing-bubble {
-            background: var(--bg-hover);
-            border: 1px solid var(--border);
-            padding: 12px 16px;
-            border-radius: 12px;
-            border-bottom-left-radius: 4px;
-            display: flex;
-            gap: 4px;
-            align-items: center;
-        }
-
-        .chat-typing-dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: var(--text-dim);
-            animation: typingDot 1.4s infinite;
-        }
-
-        .chat-typing-dot:nth-child(2) { animation-delay: 0.2s; }
-        .chat-typing-dot:nth-child(3) { animation-delay: 0.4s; }
-
-        @keyframes typingDot {
-            0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
-            30% { opacity: 1; transform: translateY(-4px); }
-        }
-
-        .chat-input-container {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 0 0 12px 12px;
-            border-top: none;
-            padding: 16px 20px;
-        }
-
-        .chat-input-wrapper {
-            display: flex;
-            gap: 12px;
-            align-items: flex-end;
-        }
-
-        .chat-input {
-            flex: 1;
-            background: var(--bg-input);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 12px 16px;
-            color: var(--text);
-            font-size: 14px;
-            resize: none;
-            min-height: 44px;
-            max-height: 120px;
-            font-family: inherit;
-            transition: border-color 0.15s;
-        }
-
-        .chat-input:focus {
-            outline: none;
-            border-color: var(--accent);
-        }
-
-        .chat-input::placeholder { color: var(--text-muted); }
-
-        .chat-send-btn {
-            width: 44px;
-            height: 44px;
-            border-radius: 12px;
-            border: none;
-            background: var(--accent);
-            color: #000;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 16px;
-            transition: all 0.15s;
-            flex-shrink: 0;
-        }
-
-        .chat-send-btn:hover {
-            background: var(--accent-dim);
-            transform: scale(1.05);
-        }
-
-        .chat-send-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: scale(1);
-        }
-
-        .chat-empty {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-muted);
-            gap: 16px;
-        }
-
-        .chat-empty i {
-            font-size: 64px;
-            opacity: 0.3;
-        }
-
-        .chat-empty h3 {
-            font-size: 18px;
-            font-weight: 600;
-            color: var(--text-dim);
-        }
-
-        .chat-empty p {
-            font-size: 14px;
-            max-width: 400px;
-            text-align: center;
-            line-height: 1.5;
-        }
-    </style>
+    <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-    <!-- Sidebar -->
-    <aside class="sidebar" id="sidebar">
-        <div class="logo">
-            <h1><span>🤖</span> OrcBot</h1>
-        </div>
-        
-        <nav class="nav-section">
-            <div class="nav-item active" data-page="dashboard">
-                <i class="fas fa-home"></i> Dashboard
-            </div>
-            <div class="nav-item" data-page="tasks">
-                <i class="fas fa-list-check"></i> Task Queue
-            </div>
-            <div class="nav-item" data-page="skills">
-                <i class="fas fa-wand-magic-sparkles"></i> Skills
-            </div>
-            <div class="nav-item" data-page="memory">
-                <i class="fas fa-brain"></i> Memory
-            </div>
-            <div class="nav-item" data-page="chat">
-                <i class="fas fa-comments"></i> Chat
-            </div>
-            
-            <div class="nav-label">System</div>
-            <div class="nav-item" data-page="orchestrator">
-                <i class="fas fa-sitemap"></i> Orchestrator
-            </div>
-            <div class="nav-item" data-page="channels">
-                <i class="fas fa-plug"></i> Channels
-            </div>
-            <div class="nav-item" data-page="logs">
-                <i class="fas fa-terminal"></i> Logs
-            </div>
-            <div class="nav-item" data-page="security">
-                <i class="fas fa-shield-halved"></i> Security
-            </div>
-            <div class="nav-item" data-page="api">
-                <i class="fas fa-compass"></i> API Explorer
-            </div>
-            <div class="nav-item" data-page="config">
-                <i class="fas fa-cog"></i> Configuration
-            </div>
-        </nav>
-        
-        <div class="sidebar-footer">
-            <div class="connection-status">
-                <div class="status-dot" id="wsStatusDot"></div>
-                <span id="wsStatusText">Connecting...</span>
-            </div>
-        </div>
-    </aside>
-
-    <!-- Main Content -->
-    <main class="main">
-        <div class="topbar">
-            <div class="topbar-left">
-                <h2 class="page-title" id="pageTitle">Dashboard</h2>
-                <div class="gateway-meta">
-                    <span class="meta-pill">REST <strong id="apiEndpoint">/api</strong></span>
-                    <span class="meta-pill">WS <strong id="wsEndpoint">/</strong></span>
-                    <span class="meta-pill">Mode <strong id="gatewayMode">gateway-only</strong></span>
-                </div>
-            </div>
-            <div class="topbar-actions">
-                <button class="btn btn-secondary" onclick="refreshAll()">
-                    <i class="fas fa-sync-alt"></i> Refresh
-                </button>
-                <button class="btn btn-primary" onclick="openTaskModal()">
-                    <i class="fas fa-plus"></i> New Task
-                </button>
-            </div>
-        </div>
-
-        <div class="content">
-            <!-- Dashboard Page -->
-            <div class="page active" id="page-dashboard">
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <div class="label">Agent Status</div>
-                        <div class="value" id="agentStatusValue">-</div>
-                        <div class="sub" id="agentStatusSub">Checking...</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="label">Current Model</div>
-                        <div class="value accent" id="modelValue">-</div>
-                        <div class="sub" id="providerValue">-</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="label">Active Skills</div>
-                        <div class="value" id="skillCountValue">-</div>
-                        <div class="sub">Core + Plugins</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="label">Tasks in Queue</div>
-                        <div class="value" id="taskCountValue">0</div>
-                        <div class="sub" id="taskQueueSub">No pending tasks</div>
-                    </div>
-                </div>
-
-                <div class="two-col">
-                    <div class="card">
-                        <div class="card-header">
-                            <h3><i class="fas fa-bolt"></i> Quick Actions</h3>
-                        </div>
-                        <div class="card-body">
-                            <div class="task-input-container">
-                                <input type="text" class="task-input" id="quickTaskInput" placeholder="What should OrcBot do?">
-                                <button class="btn btn-primary" onclick="quickPushTask()">
-                                    <i class="fas fa-paper-plane"></i> Send
-                                </button>
-                            </div>
-                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                                <button class="btn btn-secondary" onclick="pushPreset('Check my messages and summarize')">
-                                    <i class="fas fa-envelope"></i> Check Messages
-                                </button>
-                                <button class="btn btn-secondary" onclick="pushPreset('Search the web for latest news')">
-                                    <i class="fas fa-search"></i> Web Search
-                                </button>
-                                <button class="btn btn-secondary" onclick="pushPreset('What is the current time?')">
-                                    <i class="fas fa-clock"></i> Current Time
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="card">
-                        <div class="card-header">
-                            <h3><i class="fas fa-satellite-dish"></i> Live Events</h3>
-                        </div>
-                        <div class="card-body no-padding">
-                            <div class="events-feed" id="eventsFeed">
-                                <div class="empty-state">
-                                    <i class="fas fa-wave-square"></i>
-                                    <p>Waiting for events...</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="card-header">
-                        <h3><i class="fas fa-clock-rotate-left"></i> Recent Activity</h3>
-                        <button class="btn btn-secondary" onclick="loadMemory()">
-                            <i class="fas fa-refresh"></i>
-                        </button>
-                    </div>
-                    <div class="card-body no-padding">
-                        <div class="memory-timeline" id="recentMemory">
-                            <div class="empty-state">
-                                <i class="fas fa-history"></i>
-                                <p>No recent activity</p>
-                            </div>
-                        </div>
-                    </div>
+    <div class="shell">
+        <aside class="sidebar">
+            <div class="brand-block">
+                <div class="brand-mark">OB</div>
+                <div>
+                    <div class="eyebrow">Gateway Control</div>
+                    <h1>OrcBot Ops</h1>
                 </div>
             </div>
 
-            <!-- Tasks Page -->
-            <div class="page" id="page-tasks">
-                <div class="card">
-                    <div class="card-header">
-                        <h3><i class="fas fa-list-check"></i> Task Queue</h3>
-                        <div style="display: flex; gap: 10px;">
-                            <button class="btn btn-danger" onclick="clearAllTasks()">
-                                <i class="fas fa-trash"></i> Clear All
-                            </button>
-                            <button class="btn btn-primary" onclick="openTaskModal()">
-                                <i class="fas fa-plus"></i> Add Task
-                            </button>
-                        </div>
+            <nav class="nav-stack scroll-region">
+                <button class="nav-item active" data-view="overview"><i class="fas fa-grid-2"></i><span>Overview</span></button>
+                <button class="nav-item" data-view="canvas"><i class="fas fa-object-group"></i><span>Canvas</span></button>
+                <button class="nav-item" data-view="chat"><i class="fas fa-comments"></i><span>Gateway Chat</span></button>
+                <button class="nav-item" data-view="tasks"><i class="fas fa-list-check"></i><span>Queue</span></button>
+                <button class="nav-item" data-view="skills"><i class="fas fa-wand-magic-sparkles"></i><span>Skills</span></button>
+                <button class="nav-item" data-view="services"><i class="fas fa-cubes"></i><span>Services</span></button>
+                <button class="nav-item" data-view="data-home"><i class="fas fa-folder-tree"></i><span>Data Home</span></button>
+                <button class="nav-item" data-view="memory"><i class="fas fa-brain"></i><span>Memory</span></button>
+                <button class="nav-item" data-view="logs"><i class="fas fa-wave-square"></i><span>Logs</span></button>
+                <button class="nav-item" data-view="api"><i class="fas fa-flask"></i><span>API Lab</span></button>
+                <button class="nav-item" data-view="security"><i class="fas fa-shield-halved"></i><span>Security</span></button>
+                <button class="nav-item" data-view="config"><i class="fas fa-sliders"></i><span>Config</span></button>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="connection-row">
+                    <span class="status-dot" id="wsDot"></span>
+                    <div>
+                        <div class="footer-label">WebSocket</div>
+                        <div class="footer-value" id="wsState">Connecting...</div>
                     </div>
-                    <div class="card-body no-padding">
-                        <ul class="task-list" id="taskList">
-                            <div class="empty-state">
-                                <i class="fas fa-inbox"></i>
-                                <p>No tasks in queue</p>
-                            </div>
-                        </ul>
+                </div>
+                <div class="connection-row compact">
+                    <div>
+                        <div class="footer-label">Gateway Mode</div>
+                        <div class="footer-value" id="modeLabel">-</div>
                     </div>
                 </div>
             </div>
+        </aside>
 
-            <!-- Skills Page -->
-            <div class="page" id="page-skills">
-                <div class="card" style="margin-bottom: 16px;">
-                    <div class="card-header">
-                        <h3><i class="fas fa-circle-info"></i> Skill Run Guidance</h3>
+        <main class="main">
+            <header class="topbar">
+                <div>
+                    <div class="eyebrow" id="viewEyebrow">Operations</div>
+                    <h2 id="viewTitle">Overview</h2>
+                </div>
+                <div class="topbar-meta">
+                    <span class="meta-chip">REST <strong id="restBase">/api</strong></span>
+                    <span class="meta-chip">WS <strong id="wsBase">/</strong></span>
+                    <span class="meta-chip">Model <strong id="activeModel">-</strong></span>
+                    <span class="meta-chip">Provider <strong id="activeProvider">-</strong></span>
+                </div>
+                <div class="topbar-actions">
+                    <button class="btn ghost" id="refreshBtn"><i class="fas fa-rotate"></i> Refresh</button>
+                    <button class="btn primary" id="newTaskBtn"><i class="fas fa-plus"></i> Push Task</button>
+                </div>
+            </header>
+
+            <section class="content view active" id="view-overview">
+                <div class="hero-panel">
+                    <div>
+                        <div class="eyebrow">Gateway Overview</div>
+                        <h3>One control plane for the agent, services, and live conversation flows.</h3>
+                        <p id="modeDescription">Loading gateway status...</p>
                     </div>
-                    <div class="card-body">
-                        <div class="skill-guidance">
-                            <div class="helper-card" style="margin-top:0;">
-                                <h4><i class="fas fa-compass"></i> How to choose args</h4>
-                                <ul class="helper-list">
-                                    <li>Check each skill card's <strong>usage</strong> hint first.</li>
-                                    <li>Use an object payload by default: <code>{}</code> or <code>{"key":"value"}</code>.</li>
-                                    <li>If no params are documented, run with <code>{}</code> and inspect output/errors.</li>
-                                </ul>
-                            </div>
-                            <div class="helper-card" style="margin-top:0;">
-                                <h4><i class="fas fa-code"></i> Common payload shapes</h4>
-                                <div class="code-block-mini">{"query":"latest GPU pricing"}
-{"url":"https://example.com"}
-{"path":"/tmp/report.md","content":"hello"}</div>
-                            </div>
-                        </div>
+                    <div class="hero-actions">
+                        <button class="btn primary" data-jump="canvas"><i class="fas fa-object-group"></i> Open Canvas</button>
+                        <button class="btn ghost" data-jump="api"><i class="fas fa-flask"></i> API Lab</button>
                     </div>
                 </div>
 
-                <div class="card" style="margin-bottom: 16px;">
-                    <div class="card-header">
-                        <h3><i class="fas fa-download"></i> Install Skill</h3>
-                    </div>
-                    <div class="card-body">
-                        <div class="task-input-container" style="margin-bottom: 0;">
-                            <input type="text" class="task-input" id="skillsInstallInput" placeholder='e.g. firecrawl/cli  or  npm:some-package  or  https://…/skill.js'>
-                            <button class="btn btn-primary" onclick="installSkillFromSkillsPage()">
-                                <i class="fas fa-download"></i> Install
-                            </button>
-                        </div>
-                        <div id="skillsInstallResult" style="margin-top: 8px; font-size: 13px; color: var(--text-muted);"></div>
-                    </div>
-                </div>
-                <div class="card">
-                    <div class="card-header">
-                        <h3><i class="fas fa-wand-magic-sparkles"></i> Available Skills</h3>
-                        <div style="display: flex; align-items: center; gap: 12px;">
-                            <span id="skillsCount" style="color: var(--text-muted); font-size: 13px;">-</span>
-                            <button class="btn btn-secondary" onclick="loadSkills()"><i class="fas fa-refresh"></i></button>
-                        </div>
-                    </div>
-                    <div class="card-body no-padding">
-                        <div class="skills-grid" id="skillsGrid">
-                            <div class="empty-state">
-                                <i class="fas fa-puzzle-piece"></i>
-                                <p>Loading skills...</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
+                <div class="metric-grid" id="metricGrid"></div>
 
-            <!-- Memory Page -->
-            <div class="page" id="page-memory">
-                <div class="stats-grid" style="margin-bottom: 20px;">
-                    <div class="stat-card">
-                        <div class="label">Total Memories</div>
-                        <div class="value" id="memoryTotal">-</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="label">Short-Term</div>
-                        <div class="value" id="memoryShortTerm">-</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="label">Episodic</div>
-                        <div class="value" id="memoryEpisodic">-</div>
-                    </div>
-                </div>
-                <div class="card">
-                    <div class="card-header">
-                        <h3><i class="fas fa-brain"></i> Memory Timeline</h3>
-                        <button class="btn btn-secondary" onclick="loadFullMemory()">
-                            <i class="fas fa-refresh"></i> Refresh
-                        </button>
-                    </div>
-                    <div class="card-body no-padding">
-                        <div class="memory-timeline" id="fullMemoryList" style="max-height: 500px; overflow-y: auto;">
-                            <div class="empty-state">
-                                <i class="fas fa-brain"></i>
-                                <p>Loading memories...</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Orchestrator Page -->
-            <div class="page" id="page-orchestrator">
-                <div class="stats-grid" style="margin-bottom: 20px;">
-                    <div class="stat-card">
-                        <div class="label">Total Agents</div>
-                        <div class="value" id="orchAgentCount">-</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="label">Active Agents</div>
-                        <div class="value accent" id="orchActiveAgents">-</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="label">Pending Tasks</div>
-                        <div class="value warning" id="orchPendingTasks">-</div>
-                    </div>
-                </div>
-
-                <div class="two-col">
-                    <div class="card">
-                        <div class="card-header">
-                            <h3><i class="fas fa-robot"></i> Agents</h3>
-                            <button class="btn btn-secondary" onclick="loadOrchestrator()">
-                                <i class="fas fa-refresh"></i>
-                            </button>
-                        </div>
-                        <div class="card-body no-padding">
-                            <ul class="task-list" id="orchAgentsList">
-                                <div class="empty-state">
-                                    <i class="fas fa-robot"></i>
-                                    <p>No agents</p>
-                                </div>
-                            </ul>
-                        </div>
-                    </div>
-
-                    <div class="card">
-                        <div class="card-header">
-                            <h3><i class="fas fa-tasks"></i> Delegated Tasks</h3>
-                        </div>
-                        <div class="card-body no-padding">
-                            <ul class="task-list" id="orchTasksList">
-                                <div class="empty-state">
-                                    <i class="fas fa-tasks"></i>
-                                    <p>No delegated tasks</p>
-                                </div>
-                            </ul>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Channels Page -->
-            <div class="page" id="page-channels">
-                <div class="channel-grid" id="channelsGrid">
-                    <!-- Populated by JS -->
-                </div>
-            </div>
-
-            <!-- Logs Page -->
-            <div class="page" id="page-logs">
-                <div class="card">
-                    <div class="card-header">
-                        <h3><i class="fas fa-terminal"></i> System Logs</h3>
-                        <div style="display: flex; gap: 10px;">
-                            <select class="priority-select" id="logFilter" onchange="loadLogs()">
-                                <option value="all">All Levels</option>
-                                <option value="error">Errors</option>
-                                <option value="warn">Warnings</option>
-                                <option value="info">Info</option>
-                            </select>
-                            <button class="btn btn-secondary" onclick="loadLogs()">
-                                <i class="fas fa-refresh"></i>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="card-body">
-                        <div class="log-viewer" id="logViewer">
-                            Loading logs...
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Security Page -->
-            <div class="page" id="page-security">
-                <div class="two-col">
-                    <div class="card">
-                        <div class="card-header">
-                            <h3><i class="fas fa-key"></i> Access Token</h3>
-                            <span id="tokenAuthBadge" class="badge">—</span>
-                        </div>
-                        <div class="card-body">
-                            <div id="tokenAlertBanner"></div>
-
-                            <div class="config-row" style="align-items: flex-start; flex-direction: column; gap: 8px;">
-                                <div class="label">Current Token</div>
-                                <div class="sublabel">Partial view for verification. Store the full token securely.</div>
-                                <div class="token-display" id="tokenDisplayBox">
-                                    <span class="token-text" id="tokenPartialEl">—</span>
-                                    <button class="token-copy-btn" onclick="copyStoredApiKey()">
-                                        <i class="fas fa-copy"></i> Copy
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div class="config-row" style="margin-top: 4px;">
-                                <div>
-                                    <div class="label">Token Length</div>
-                                    <div class="sublabel">Bytes in current token</div>
-                                </div>
-                                <span class="config-value" id="tokenLengthEl">—</span>
-                            </div>
-
-                            <div style="margin-top: 20px; display: flex; gap: 10px; flex-wrap: wrap;">
-                                <button class="btn btn-secondary" onclick="loadSecurity()">
-                                    <i class="fas fa-refresh"></i> Refresh
-                                </button>
-                                <button class="btn btn-danger" onclick="rotateApiToken()">
-                                    <i class="fas fa-rotate"></i> Rotate Token
-                                </button>
-                            </div>
-
-                            <div style="margin-top: 16px; padding: 12px 14px; background: var(--bg-hover); border-radius: 8px; font-size: 12px; color: var(--text-muted); line-height: 1.6;">
-                                <strong style="color: var(--text-dim);">How to use:</strong> Pass via <code>X-Api-Key</code> header or <code>?apiKey=…</code> query param, or store in the browser using "Change" in the Config page.
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="card" style="margin-top: 16px;">
-                        <div class="card-header">
-                            <h3><i class="fas fa-network-wired"></i> Private Access (Tailscale Quick Start)</h3>
-                        </div>
-                        <div class="card-body">
-                            <div class="security-alert success" style="margin-bottom: 10px;">
-                                <i class="fas fa-lock"></i>
-                                <span>Recommended: keep dashboard/gateway off the public internet and access it only over your Tailnet.</span>
-                            </div>
-                            <ol class="helper-list" style="padding-left: 20px; margin-bottom: 8px;">
-                                <li>Install Tailscale on the OrcBot host and admin devices.</li>
-                                <li>Set a gateway token (<code>Rotate Token</code>) and keep <code>safeMode</code> on.</li>
-                                <li>Limit access in Tailnet ACLs to trusted operators and this host's gateway port.</li>
-                            </ol>
-                            <div class="code-block-mini"># Example: run gateway locally and access via Tailnet IP
-orcbot gateway --with-agent -p 3100
-# Then open: http://100.x.y.z:3100</div>
-                        </div>
-                    </div>
-
-                    <div class="card">
-                        <div class="card-header">
-                            <h3><i class="fas fa-shield-halved"></i> Access Controls</h3>
-                        </div>
-                        <div class="card-body">
-                            <div class="config-row">
-                                <div>
-                                    <div class="label">Safe Mode</div>
-                                    <div class="sublabel">Require confirmation for dangerous actions</div>
-                                </div>
-                                <div class="toggle" id="secSafeModeToggle" onclick="toggleSecSafeMode()"></div>
-                            </div>
-                            <div class="config-row">
-                                <div>
-                                    <div class="label">WebSocket Auth</div>
-                                    <div class="sublabel">Token required for WS connections (via ?apiKey=)</div>
-                                </div>
-                                <span class="config-value" id="secWsAuth">—</span>
-                            </div>
-                            <div class="config-row">
-                                <div>
-                                    <div class="label">Rate Limit</div>
-                                    <div class="sublabel">Max requests / minute per IP</div>
-                                </div>
-                                <span class="config-value">180 / min</span>
-                            </div>
-                            <div class="config-row">
-                                <div>
-                                    <div class="label">Timing-Safe Compare</div>
-                                    <div class="sublabel">API key checked with crypto.timingSafeEqual</div>
-                                </div>
-                                <span class="badge green"><i class="fas fa-check"></i> Enabled</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="card-header">
-                        <h3><i class="fas fa-list-check"></i> Allow / Deny Lists</h3>
-                        <button class="btn btn-secondary" onclick="loadSecurity()">
-                            <i class="fas fa-refresh"></i>
-                        </button>
-                    </div>
-                    <div class="card-body">
-                        <div class="two-col">
+                <div class="split-grid">
+                    <article class="panel panel-tall">
+                        <div class="panel-head">
                             <div>
-                                <div class="form-group">
-                                    <label>Allowlist (comma-separated task patterns)</label>
-                                    <textarea class="form-input" id="secAllowList" rows="3" placeholder="Leave empty to allow all"></textarea>
-                                </div>
+                                <div class="eyebrow">Live Feed</div>
+                                <h3>Recent runtime events</h3>
                             </div>
+                            <button class="icon-btn" id="clearEventsBtn"><i class="fas fa-broom"></i></button>
+                        </div>
+                        <div class="event-feed" id="eventFeed"></div>
+                    </article>
+
+                    <article class="panel">
+                        <div class="panel-head">
                             <div>
-                                <div class="form-group">
-                                    <label>Denylist (comma-separated task patterns)</label>
-                                    <textarea class="form-input" id="secDenyList" rows="3" placeholder="Leave empty to deny nothing"></textarea>
-                                </div>
+                                <div class="eyebrow">Quick Task</div>
+                                <h3>Push a high-priority operation</h3>
                             </div>
                         </div>
-                        <button class="btn btn-primary" onclick="saveSecurityLists()">
-                            <i class="fas fa-save"></i> Save Lists
-                        </button>
-                    </div>
+                        <div class="compose-stack">
+                            <textarea id="quickTaskText" class="text-area" rows="4" placeholder="Describe the task OrcBot should execute..."></textarea>
+                            <div class="inline-fields">
+                                <label>
+                                    <span>Priority</span>
+                                    <select id="quickTaskPriority" class="field-input">
+                                        <option value="3">3</option>
+                                        <option value="5" selected>5</option>
+                                        <option value="8">8</option>
+                                        <option value="10">10</option>
+                                    </select>
+                                </label>
+                                <label>
+                                    <span>Source</span>
+                                    <input id="quickTaskSource" class="field-input" value="gateway-chat">
+                                </label>
+                            </div>
+                            <button class="btn primary" id="quickTaskSend"><i class="fas fa-paper-plane"></i> Submit Task</button>
+                        </div>
+                    </article>
                 </div>
 
-                <div class="card">
-                    <div class="card-header">
-                        <h3><i class="fas fa-plug"></i> Install Skill from Package</h3>
-                    </div>
-                    <div class="card-body">
-                        <div class="task-input-container">
-                            <input type="text" class="task-input" id="skillInstallInput" placeholder='e.g. firecrawl/cli  or  npm:some-package  or  https://example.com/skill.js'>
-                            <button class="btn btn-primary" onclick="installSkillFromDashboard()">
-                                <i class="fas fa-download"></i> Install
-                            </button>
+                <article class="panel">
+                    <div class="panel-head">
+                        <div>
+                            <div class="eyebrow">Services</div>
+                            <h3>Service registry snapshot</h3>
                         </div>
-                        <div id="skillInstallResult" style="margin-top: 12px; font-size: 13px; color: var(--text-muted);"></div>
+                        <button class="btn ghost small" data-jump="services">Open full registry</button>
+                    </div>
+                    <div class="service-strip" id="serviceStrip"></div>
+                </article>
+
+                <article class="panel">
+                    <div class="panel-head">
+                        <div>
+                            <div class="eyebrow">Workspace Guide</div>
+                            <h3>What the canvas is for</h3>
+                        </div>
+                        <button class="btn ghost small" data-jump="canvas">Open canvas</button>
+                    </div>
+                    <div class="detail-stack compact-stack">
+                        <article class="detail-card">
+                            <div class="mini-label">Purpose</div>
+                            <div>The canvas is the live operator workspace. It keeps queue state, live events, chat, services, and the payload inspector on one screen so you can monitor or steer OrcBot without switching between tabs.</div>
+                        </article>
+                        <article class="detail-card">
+                            <div class="mini-label">Use it when</div>
+                            <div>You need to watch the agent react in real time, inspect a task or service payload, or let an external A2UI surface push tasks and events into the dashboard bridge.</div>
+                        </article>
+                    </div>
+                </article>
+            </section>
+
+            <section class="content view" id="view-canvas">
+                <div class="canvas-header">
+                    <div>
+                        <div class="eyebrow">Live Workspace</div>
+                        <h3>Monitor OrcBot in one place and inspect what each subsystem is doing.</h3>
+                        <p class="canvas-subtitle">The canvas is the operator view: bounded panels, live state, and internal scroll inside each panel instead of one long page.</p>
+                    </div>
+                    <div class="canvas-actions">
+                        <button class="btn ghost" id="canvasCompactBtn">Compact</button>
+                        <button class="btn ghost" id="canvasResetBtn">Reset Layout</button>
                     </div>
                 </div>
-            </div>
-
-            <!-- API Explorer Page -->
-            <div class="page" id="page-api">
-                <div class="two-col">
-                    <div class="card">
-                        <div class="card-header">
-                            <h3><i class="fas fa-map-signs"></i> Endpoint Catalog</h3>
-                            <button class="btn btn-secondary" onclick="loadApiExplorer()">
-                                <i class="fas fa-refresh"></i>
-                            </button>
+                <div class="ops-canvas" id="opsCanvas">
+                    <section class="canvas-panel emphasis" data-panel="command">
+                        <div class="canvas-panel-head"><span>Command Deck</span><button class="icon-btn" data-canvas-action="focus-chat"><i class="fas fa-arrow-up-right-from-square"></i></button></div>
+                        <div class="canvas-panel-body">
+                            <p>Use this as the operator entry point. It is exposed through <code>window.a2uiGatewayBridge</code> so external UIs can push tasks, events, and service state into the same workspace.</p>
+                            <div class="canvas-command-grid">
+                                <button class="btn primary" data-jump="chat"><i class="fas fa-comments"></i> Open Chat</button>
+                                <button class="btn ghost" data-jump="tasks"><i class="fas fa-list-check"></i> Review Queue</button>
+                                <button class="btn ghost" data-jump="skills"><i class="fas fa-wand-magic-sparkles"></i> Use Skills</button>
+                                <button class="btn ghost" data-jump="api"><i class="fas fa-flask"></i> Probe API</button>
+                            </div>
+                            <pre class="code-surface" id="bridgePreview">window.a2uiGatewayBridge.ready = true</pre>
                         </div>
-                        <div class="card-body no-padding">
-                            <div id="apiCatalog" style="padding: 16px; display: grid; gap: 12px;">
-                                <div class="empty-state">
-                                    <i class="fas fa-plug"></i>
-                                    <p>Loading endpoint capabilities...</p>
-                                </div>
+                    </section>
+                    <section class="canvas-panel" data-panel="services">
+                        <div class="canvas-panel-head"><span>Service Graph</span><button class="icon-btn" data-jump="services"><i class="fas fa-cubes"></i></button></div>
+                        <div class="canvas-panel-body" id="canvasServices"></div>
+                    </section>
+                    <section class="canvas-panel" data-panel="events">
+                        <div class="canvas-panel-head"><span>Event Lane</span><button class="icon-btn" id="canvasEventClear"><i class="fas fa-broom"></i></button></div>
+                        <div class="canvas-panel-body lane" id="canvasEvents"></div>
+                    </section>
+                    <section class="canvas-panel" data-panel="queue">
+                        <div class="canvas-panel-head"><span>Queue Radar</span><button class="icon-btn" data-jump="tasks"><i class="fas fa-radar"></i></button></div>
+                        <div class="canvas-panel-body" id="canvasQueue"></div>
+                    </section>
+                    <section class="canvas-panel" data-panel="chat">
+                        <div class="canvas-panel-head"><span>Conversation Window</span><button class="icon-btn" data-jump="chat"><i class="fas fa-comments"></i></button></div>
+                        <div class="canvas-panel-body lane" id="canvasChat"></div>
+                    </section>
+                    <section class="canvas-panel" data-panel="inspector">
+                        <div class="canvas-panel-head"><span>Inspector</span><button class="icon-btn" data-jump="api"><i class="fas fa-code"></i></button></div>
+                        <div class="canvas-panel-body">
+                            <pre class="code-surface" id="canvasInspector">Select a service or run an API call to inspect payloads here.</pre>
+                        </div>
+                    </section>
+                </div>
+            </section>
+
+            <section class="content view" id="view-skills">
+                <div class="workspace-grid two-up">
+                    <article class="panel panel-tall">
+                        <div class="panel-head">
+                            <div><div class="eyebrow">Registry</div><h3>Built-in and plugin skills</h3></div>
+                            <div class="inline-actions">
+                                <input id="skillSearchInput" class="field-input compact wide-input" placeholder="filter skills">
+                                <button class="btn ghost small" id="refreshSkillsBtn">Refresh</button>
                             </div>
                         </div>
-                    </div>
-
-                    <div class="card">
-                        <div class="card-header">
-                            <h3><i class="fas fa-flask"></i> Endpoint Tester</h3>
-                        </div>
-                        <div class="card-body">
-                            <div class="form-group">
-                                <label>Method</label>
-                                <select class="form-input" id="apiTestMethod">
-                                    <option value="GET">GET</option>
-                                    <option value="POST">POST</option>
-                                    <option value="PUT">PUT</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>Endpoint</label>
-                                <input class="form-input" id="apiTestEndpoint" value="/status" placeholder="/status">
-                            </div>
-                            <div class="form-group">
-                                <label>JSON Body (optional)</label>
-                                <textarea class="form-input" id="apiTestBody" rows="6" placeholder='{"task":"hello"}'></textarea>
-                            </div>
-                            <button class="btn btn-primary" style="width: 100%;" onclick="runApiTest()">
-                                <i class="fas fa-play"></i> Run Test
-                            </button>
-                        </div>
-                    </div>
+                        <div class="service-grid" id="skillsGrid"></div>
+                    </article>
+                    <article class="panel panel-tall">
+                        <div class="panel-head"><div><div class="eyebrow">Runner</div><h3 id="skillDetailTitle">Select a skill</h3></div></div>
+                        <div class="detail-stack" id="skillDetail"></div>
+                    </article>
                 </div>
+            </section>
 
-                <div class="card">
-                    <div class="card-header">
-                        <h3><i class="fas fa-code"></i> Response</h3>
-                    </div>
-                    <div class="card-body">
-                        <pre id="apiTestResult" class="log-viewer" style="max-height: 420px; white-space: pre-wrap; margin: 0;">Run a test to see API response output</pre>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Config Page -->
-            <div class="page" id="page-config">
-                <div class="two-col">
-                    <div class="card">
-                        <div class="card-header">
-                            <h3><i class="fas fa-robot"></i> Agent Settings</h3>
-                        </div>
-                        <div class="card-body">
-                            <div class="config-section">
-                                <div class="config-row">
-                                    <div>
-                                        <div class="label">Safe Mode</div>
-                                        <div class="sublabel">Require confirmation for actions</div>
-                                    </div>
-                                    <div class="toggle" id="safeModeToggle" onclick="toggleSafeMode()"></div>
-                                </div>
-                                <div class="config-row">
-                                    <div>
-                                        <div class="label">Model</div>
-                                        <div class="sublabel">Current LLM model</div>
-                                    </div>
-                                    <span class="config-value" id="configModel">-</span>
-                                </div>
-                                <div class="config-row">
-                                    <div>
-                                        <div class="label">Provider</div>
-                                        <div class="sublabel">LLM provider</div>
-                                    </div>
-                                    <span class="config-value" id="configProvider">-</span>
-                                </div>
+            <section class="content view" id="view-chat">
+                <div class="workspace-grid two-up">
+                    <article class="panel panel-tall">
+                        <div class="panel-head"><div><div class="eyebrow">Conversation</div><h3>Gateway chat session</h3></div><button class="btn ghost small" id="clearChatBtn">Clear view</button></div>
+                        <div class="chat-thread" id="chatThread"></div>
+                        <div class="chat-compose">
+                            <textarea id="chatInput" class="text-area" rows="3" placeholder="Send a message to OrcBot through the gateway..."></textarea>
+                            <div class="inline-actions">
+                                <input id="chatClientId" class="field-input" value="gateway-web" placeholder="client id">
+                                <button class="btn primary" id="chatSendBtn"><i class="fas fa-paper-plane"></i> Send</button>
                             </div>
                         </div>
-                    </div>
+                    </article>
+                    <article class="panel">
+                        <div class="panel-head"><div><div class="eyebrow">Session Stats</div><h3>Chat summary</h3></div></div>
+                        <div class="stack-list" id="chatSummary"></div>
+                    </article>
+                </div>
+            </section>
 
-                    <div class="card">
-                        <div class="card-header">
-                            <h3><i class="fas fa-shield-halved"></i> Security</h3>
+            <section class="content view" id="view-tasks">
+                <div class="workspace-grid two-up">
+                    <article class="panel">
+                        <div class="panel-head"><div><div class="eyebrow">Queue Composer</div><h3>Create a task with metadata</h3></div></div>
+                        <div class="compose-stack">
+                            <textarea id="taskComposerText" class="text-area" rows="5" placeholder="Task description..."></textarea>
+                            <div class="inline-fields triple">
+                                <label><span>Priority</span><input id="taskComposerPriority" class="field-input" value="5"></label>
+                                <label><span>Lane</span><select id="taskComposerLane" class="field-input"><option value="user">user</option><option value="autonomy">autonomy</option></select></label>
+                                <label><span>Source</span><input id="taskComposerSource" class="field-input" value="gateway-chat"></label>
+                            </div>
+                            <textarea id="taskComposerMeta" class="text-area code-input" rows="6" placeholder='{"sourceId":"gateway-web"}'></textarea>
+                            <button class="btn primary" id="taskComposerSubmit">Push Task</button>
                         </div>
-                        <div class="card-body">
-                            <div class="config-section">
-                                <div class="config-row">
-                                    <div>
-                                        <div class="label">API Key</div>
-                                        <div class="sublabel">Gateway authentication</div>
-                                    </div>
-                                    <button class="btn btn-secondary" onclick="openApiKeyModal()">
-                                        <i class="fas fa-key"></i> Change
-                                    </button>
-                                </div>
-                                <div class="config-row">
-                                    <div>
-                                        <div class="label">Gateway Port</div>
-                                        <div class="sublabel">HTTP API port</div>
-                                    </div>
-                                    <span class="config-value" id="configPort">-</span>
-                                </div>
+                    </article>
+                    <article class="panel panel-tall">
+                        <div class="panel-head"><div><div class="eyebrow">Queue State</div><h3>Tasks and active actions</h3></div><button class="btn ghost small" id="refreshTasksBtn">Refresh</button></div>
+                        <div class="queue-list" id="taskListView"></div>
+                    </article>
+                </div>
+            </section>
+
+            <section class="content view" id="view-services">
+                <div class="workspace-grid two-up">
+                    <article class="panel panel-tall">
+                        <div class="panel-head"><div><div class="eyebrow">Registry</div><h3>Service catalog</h3></div></div>
+                        <div class="service-grid" id="servicesGrid"></div>
+                    </article>
+                    <article class="panel panel-tall">
+                        <div class="panel-head"><div><div class="eyebrow">Snapshot</div><h3 id="serviceDetailTitle">Select a service</h3></div></div>
+                        <div class="detail-stack" id="serviceDetail"></div>
+                    </article>
+                </div>
+            </section>
+
+            <section class="content view" id="view-data-home">
+                <div class="workspace-grid two-up data-home-layout">
+                    <article class="panel panel-tall">
+                        <div class="panel-head">
+                            <div><div class="eyebrow">Browser</div><h3>Managed .orcbot directory</h3></div>
+                            <div class="inline-actions">
+                                <button class="btn ghost small" id="dataHomeUpBtn">Up</button>
+                                <button class="btn ghost small" id="dataHomeRootBtn">Root</button>
+                                <button class="btn ghost small" id="refreshDataHomeBtn">Refresh</button>
                             </div>
                         </div>
-                    </div>
+                        <div class="detail-stack compact-list data-home-summary" id="dataHomeSummary"></div>
+                        <div class="data-home-breadcrumbs" id="dataHomeBreadcrumbs"></div>
+                        <div class="data-home-toolbar">
+                            <input id="dataHomePathInput" class="field-input" placeholder="folder path within data home">
+                            <div class="inline-actions">
+                                <button class="btn ghost small" id="dataHomeBrowseBtn">Browse</button>
+                                <button class="btn ghost small" id="dataHomeCreateDirBtn">New Folder</button>
+                            </div>
+                        </div>
+                        <div class="data-home-tree scroll-region" id="dataHomeTree"></div>
+                    </article>
+                    <article class="panel panel-tall">
+                        <div class="panel-head">
+                            <div><div class="eyebrow">Editor</div><h3 id="dataHomeEditorTitle">Select a file or folder</h3></div>
+                            <div class="inline-actions">
+                                <button class="btn ghost small" id="dataHomeNewFileBtn">New File</button>
+                                <button class="btn ghost small" id="dataHomeRenameBtn">Rename</button>
+                                <button class="btn ghost small" id="dataHomeDeleteBtn">Delete</button>
+                            </div>
+                        </div>
+                        <div class="compose-stack">
+                            <input id="dataHomeFilePath" class="field-input mono" placeholder="relative file path">
+                            <textarea id="dataHomeEditor" class="text-area code-input data-home-editor" rows="18" placeholder="Select a text file to edit its contents."></textarea>
+                            <div class="data-home-preview" id="dataHomePreview"></div>
+                            <div class="inline-actions">
+                                <button class="btn primary" id="dataHomeSaveBtn">Save File</button>
+                                <button class="btn ghost" id="dataHomeInspectBtn">Inspect Selection</button>
+                            </div>
+                            <div class="stack-list compact-list scroll-region" id="dataHomeMeta"></div>
+                        </div>
+                    </article>
                 </div>
+            </section>
 
-                <div class="card">
-                    <div class="card-header">
-                        <h3><i class="fas fa-database"></i> All Configuration</h3>
-                    </div>
-                    <div class="card-body">
-                        <div id="allConfigList">Loading...</div>
-                    </div>
+            <section class="content view" id="view-memory">
+                <div class="workspace-grid two-up">
+                    <article class="panel">
+                        <div class="panel-head"><div><div class="eyebrow">Search</div><h3>Memory query</h3></div></div>
+                        <div class="compose-stack">
+                            <input id="memorySearchInput" class="field-input" placeholder="Search memory text...">
+                            <div class="inline-fields">
+                                <label><span>Type</span><select id="memorySearchType" class="field-input"><option value="short">short</option><option value="episodic">episodic</option><option value="long">long</option></select></label>
+                                <label><span>Limit</span><input id="memorySearchLimit" class="field-input" value="25"></label>
+                            </div>
+                            <button class="btn primary" id="memorySearchBtn">Search</button>
+                        </div>
+                    </article>
+                    <article class="panel panel-tall">
+                        <div class="panel-head"><div><div class="eyebrow">Timeline</div><h3>Recent memory</h3></div><button class="btn ghost small" id="refreshMemoryBtn">Refresh</button></div>
+                        <div class="timeline" id="memoryTimeline"></div>
+                    </article>
                 </div>
-            </div>
+            </section>
 
-            <!-- Chat Page -->
-            <div class="page" id="page-chat">
-                <div class="chat-container">
-                    <div class="chat-header">
-                        <h3>
-                            <i class="fas fa-comments"></i>
-                            Chat with OrcBot
-                        </h3>
-                        <button class="btn btn-danger btn-sm" onclick="clearChat()">
-                            <i class="fas fa-trash"></i> Clear Chat
-                        </button>
-                    </div>
-                    
-                    <div class="chat-messages" id="chatMessages">
-                        <div class="chat-empty">
-                            <i class="fas fa-comments"></i>
-                            <h3>Start a conversation</h3>
-                            <p>Send a message to OrcBot and get instant responses powered by AI</p>
+            <section class="content view" id="view-logs">
+                <article class="panel panel-tall">
+                    <div class="panel-head">
+                        <div><div class="eyebrow">Observability</div><h3>Foreground logs</h3></div>
+                        <div class="inline-actions">
+                            <select id="logLevel" class="field-input compact"><option value="all">all</option><option value="error">error</option><option value="warn">warn</option><option value="info">info</option></select>
+                            <input id="logSearch" class="field-input compact" placeholder="filter text">
+                            <button class="btn ghost small" id="refreshLogsBtn">Refresh</button>
                         </div>
                     </div>
-                    
-                    <div class="chat-input-container">
-                        <div class="chat-input-wrapper">
-                            <textarea 
-                                class="chat-input" 
-                                id="chatInput" 
-                                placeholder="Type your message..."
-                                rows="1"
-                            ></textarea>
-                            <button class="chat-send-btn" id="chatSendBtn" onclick="sendChatMessage()">
-                                <i class="fas fa-paper-plane"></i>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </main>
+                    <div class="log-summary" id="logSummary"></div>
+                    <pre class="log-surface" id="logSurface">Loading logs...</pre>
+                </article>
+            </section>
 
-    <!-- Task Modal -->
-    <div class="modal-overlay" id="taskModal">
-        <div class="modal">
-            <div class="modal-header">
-                <h3>New Task</h3>
-                <button class="modal-close" onclick="closeTaskModal()">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div class="form-group">
-                    <label>Task Description</label>
-                    <textarea class="form-input" id="modalTaskInput" rows="3" placeholder="Describe what OrcBot should do..."></textarea>
+            <section class="content view" id="view-api">
+                <div class="workspace-grid two-up">
+                    <article class="panel">
+                        <div class="panel-head"><div><div class="eyebrow">API Lab</div><h3>Test REST endpoints</h3></div></div>
+                        <div class="compose-stack">
+                            <div class="inline-fields triple">
+                                <label><span>Method</span><select id="apiMethod" class="field-input"><option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option></select></label>
+                                <label class="span-2"><span>Endpoint</span><input id="apiEndpointInput" class="field-input" value="/dashboard/overview"></label>
+                            </div>
+                            <textarea id="apiPayload" class="text-area code-input" rows="8" placeholder='{"task":"Hello"}'></textarea>
+                            <div class="inline-actions">
+                                <button class="btn primary" id="runApiBtn">Run Request</button>
+                                <button class="btn ghost" id="loadCapabilitiesBtn">Load Endpoint Catalog</button>
+                            </div>
+                        </div>
+                    </article>
+                    <article class="panel panel-tall">
+                        <div class="panel-head"><div><div class="eyebrow">Response</div><h3>Result inspector</h3></div></div>
+                        <pre class="code-surface tall" id="apiResponse">Run a request to inspect JSON here.</pre>
+                    </article>
                 </div>
-                <div class="form-group">
-                    <label>Priority (1-10)</label>
-                    <select class="form-input" id="modalPriority">
-                        <option value="10">10 - Critical</option>
-                        <option value="8">8 - High</option>
-                        <option value="5" selected>5 - Normal</option>
-                        <option value="3">3 - Low</option>
-                        <option value="1">1 - Background</option>
-                    </select>
+                <article class="panel">
+                    <div class="panel-head"><div><div class="eyebrow">Endpoint Catalog</div><h3>Capabilities and services</h3></div></div>
+                    <div class="endpoint-grid" id="endpointCatalog"></div>
+                </article>
+            </section>
+
+            <section class="content view" id="view-config">
+                <article class="panel panel-tall">
+                    <div class="panel-head"><div><div class="eyebrow">Safe Config</div><h3>Runtime configuration</h3></div><div class="inline-actions"><input id="configSearchInput" class="field-input compact wide-input" placeholder="filter config"><button class="btn ghost small" id="refreshConfigBtn">Refresh</button></div></div>
+                    <div class="config-grid compact-list scroll-region" id="configGrid"></div>
+                </article>
+            </section>
+
+            <section class="content view" id="view-security">
+                <div class="workspace-grid two-up">
+                    <article class="panel">
+                        <div class="panel-head"><div><div class="eyebrow">Gateway Auth</div><h3>Token, policy, and execution controls</h3></div><div class="inline-actions"><button class="btn ghost small" id="refreshSecurityBtn">Refresh</button><button class="btn primary small" id="rotateGatewayTokenBtn">Rotate Token</button></div></div>
+                        <div class="stack-list compact-list scroll-region" id="securitySummary"></div>
+                    </article>
+                    <article class="panel panel-tall">
+                        <div class="panel-head"><div><div class="eyebrow">Hardening</div><h3>Gateway security surface</h3></div></div>
+                        <div class="detail-stack compact-list scroll-region" id="securityGuidance"></div>
+                    </article>
                 </div>
-                <button class="btn btn-primary" style="width: 100%;" onclick="submitTask()">
-                    <i class="fas fa-paper-plane"></i> Push Task
-                </button>
-            </div>
-        </div>
+            </section>
+        </main>
     </div>
 
-    <!-- Toast Container -->
-    <div class="toast-container" id="toastContainer"></div>
+    <div class="toast-stack" id="toastStack"></div>
 
-    <!-- API Key Modal -->
-    <div class="modal-overlay" id="apiKeyModal">
-        <div class="modal">
-            <div class="modal-header">
-                <h3><i class="fas fa-key"></i> Set API Key</h3>
-                <button class="modal-close" onclick="closeApiKeyModal()">&times;</button>
-            </div>
-            <div class="modal-body">
-                <p style="font-size: 13px; color: var(--text-dim); margin-bottom: 16px; line-height: 1.5;">
-                    Enter the gateway API key. It is stored in your browser's localStorage and sent via <code>X-Api-Key</code> header.
-                </p>
-                <div class="form-group">
-                    <label>API Key</label>
-                    <div style="display: flex; gap: 8px;">
-                        <input type="password" class="form-input" id="apiKeyInput" placeholder="Paste your API key here" style="flex: 1;">
-                        <button class="btn btn-secondary" style="padding: 12px 14px;" onclick="toggleApiKeyVisibility()" title="Show/hide">
-                            <i class="fas fa-eye" id="apiKeyEyeIcon"></i>
-                        </button>
-                    </div>
-                </div>
-                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                    <button class="btn btn-primary" style="flex: 1;" onclick="saveApiKeyFromModal()">
-                        <i class="fas fa-save"></i> Save Key
-                    </button>
-                    <button class="btn btn-secondary" onclick="clearApiKey()">
-                        <i class="fas fa-trash"></i> Clear
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Rotate Token Confirm Modal -->
-    <div class="modal-overlay" id="rotateTokenModal">
-        <div class="modal">
-            <div class="modal-header">
-                <h3><i class="fas fa-rotate"></i> Rotate API Token</h3>
-                <button class="modal-close" onclick="document.getElementById('rotateTokenModal').classList.remove('active')">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div class="security-alert warning" style="margin-bottom: 12px;">
-                    <i class="fas fa-triangle-exclamation" style="flex-shrink:0;margin-top:2px;"></i>
-                    <span>This will generate a new 64-character random token and invalidate the current one immediately. Update all clients before rotating.</span>
-                </div>
-                <div id="rotateResultBox" style="display:none; margin-bottom:12px;"></div>
-                <div style="display: flex; gap: 10px;">
-                    <button class="btn btn-danger" style="flex: 1;" onclick="confirmRotateToken()">
-                        <i class="fas fa-rotate"></i> Confirm Rotate
-                    </button>
-                    <button class="btn btn-secondary" onclick="document.getElementById('rotateTokenModal').classList.remove('active')">
-                        Cancel
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Skill Execute Modal -->
-    <div class="modal-overlay" id="skillExecModal">
-        <div class="modal" style="max-width: 600px;">
-            <div class="modal-header">
-                <h3><i class="fas fa-play"></i> Execute: <span id="skillExecName">—</span></h3>
-                <button class="modal-close" onclick="document.getElementById('skillExecModal').classList.remove('active')">&times;</button>
-            </div>
-            <div class="modal-body">
-                <input type="hidden" id="execSkillName">
-                <div class="form-group">
-                    <label>Arguments (JSON)</label>
-                    <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px;" id="skillExecUsageHint"></div>
-                    <textarea class="form-input" id="skillExecArgs" rows="6" placeholder='{"arg1": "value"}'>{}</textarea>
-                    <div class="helper-card" style="margin-top:8px;">
-                        <h4 style="margin-bottom:4px;"><i class="fas fa-lightbulb"></i> Tips</h4>
-                        <ul class="helper-list">
-                            <li>Use strict JSON (double quotes).</li>
-                            <li>Start with the template button below when usage details are limited.</li>
-                            <li>Skill execution sends this JSON body directly to <code>/api/skills/:name/execute</code>.</li>
-                        </ul>
-                        <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
-                            <button class="btn btn-secondary" type="button" onclick="useSkillTemplate('empty')"><i class="fas fa-square"></i> Empty</button>
-                            <button class="btn btn-secondary" type="button" onclick="useSkillTemplate('query')"><i class="fas fa-magnifying-glass"></i> Query</button>
-                            <button class="btn btn-secondary" type="button" onclick="useSkillTemplate('url')"><i class="fas fa-link"></i> URL</button>
-                            <button class="btn btn-secondary" type="button" onclick="useSkillTemplate('file')"><i class="fas fa-file-lines"></i> File</button>
-                        </div>
-                    </div>
-                </div>
-                <button class="btn btn-primary" style="width: 100%; margin-bottom: 12px;" onclick="runSkillExecution()">
-                    <i class="fas fa-play"></i> Run
-                </button>
-                <div id="skillExecResult" class="log-viewer" style="display:none; max-height:260px; overflow-y:auto; white-space:pre-wrap; word-break:break-all;"></div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        // State
-        let apiKey = localStorage.getItem('orcbot_api_key') || '';
-        let ws = null;
-        let currentPage = 'dashboard';
-
-        // API helpers
-        const API_BASE = window.location.origin + '/api';
-        function getWsUrl() {
-            const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-            const keyPart = apiKey ? `?apiKey=${encodeURIComponent(apiKey)}` : '';
-            return `${protocol}://${window.location.host}/${keyPart}`;
-        }
-
-        function getHeaders() {
-            const headers = { 'Content-Type': 'application/json' };
-            if (apiKey) headers['X-Api-Key'] = apiKey;
-            return headers;
-        }
-
-        async function api(endpoint, options = {}) {
-            try {
-                const optHeaders = options.headers || {};
-                const res = await fetch(API_BASE + endpoint, { ...options, headers: { ...getHeaders(), ...optHeaders } });
-                if (res.status === 401) {
-                    showToast('Authentication required', 'error');
-                    openApiKeyModal();
-                    throw new Error('Unauthorized');
-                }
-                return await res.json();
-            } catch (e) {
-                console.error('API Error:', e);
-                throw e;
-            }
-        }
-
-        // Toast notifications
-        function showToast(message, type = 'success') {
-            const container = document.getElementById('toastContainer');
-            const toast = document.createElement('div');
-            toast.className = `toast ${type}`;
-            toast.innerHTML = `
-                <i class="fas ${type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle'} toast-icon"></i>
-                <span>${message}</span>
-            `;
-            container.appendChild(toast);
-            setTimeout(() => toast.remove(), 4000);
-        }
-
-        // Navigation
-        document.querySelectorAll('.nav-item').forEach(item => {
-            item.addEventListener('click', () => {
-                const page = item.dataset.page;
-                navigateTo(page);
-            });
-        });
-
-        function navigateTo(page) {
-            currentPage = page;
-            document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
-            document.querySelector(`.nav-item[data-page="${page}"]`).classList.add('active');
-            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-            document.getElementById(`page-${page}`).classList.add('active');
-            const pageTitles = {
-                dashboard: 'Dashboard',
-                tasks: 'Task Queue',
-                skills: 'Skills',
-                memory: 'Memory',
-                orchestrator: 'Orchestrator',
-                channels: 'Channels',
-                logs: 'Logs',
-                security: 'Security',
-                api: 'API Explorer',
-                config: 'Configuration',
-                chat: 'Chat'
-            };
-            document.getElementById('pageTitle').textContent = pageTitles[page] || (page.charAt(0).toUpperCase() + page.slice(1));
-            
-            // Load page-specific data
-            if (page === 'tasks') loadTasks();
-            if (page === 'skills') loadSkills();
-            if (page === 'memory') loadFullMemory();
-            if (page === 'orchestrator') loadOrchestrator();
-            if (page === 'channels') loadChannels();
-            if (page === 'logs') loadLogs();
-            if (page === 'security') loadSecurity();
-            if (page === 'api') loadApiExplorer();
-            if (page === 'config') loadConfig();
-            if (page === 'chat') loadChatHistory();
-        }
-
-        // WebSocket
-        function connectWS() {
-            if (ws) ws.close();
-            ws = new WebSocket(getWsUrl());
-            
-            ws.onopen = () => {
-                document.getElementById('wsStatusDot').classList.add('connected');
-                document.getElementById('wsStatusText').textContent = 'Connected';
-                addEvent('system', 'WebSocket connected');
-            };
-            
-            ws.onclose = () => {
-                document.getElementById('wsStatusDot').classList.remove('connected');
-                document.getElementById('wsStatusText').textContent = 'Disconnected';
-                setTimeout(connectWS, 5000);
-            };
-            
-            ws.onmessage = (e) => {
-                try {
-                    const data = JSON.parse(e.data);
-                    if (data.type === 'event' && data.event) {
-                        addEvent(data.event.split(':')[1] || data.event, data.data?.message || JSON.stringify(data.data || {}));
-                        
-                        // Handle chat events (wrapped in event envelope)
-                        if (data.event === 'chat:message' && data.data) {
-                            handleIncomingChatMessage(data.data);
-                        }
-                        if (data.event === 'chat:cleared') {
-                            handleChatCleared();
-                        }
-                    }
-                    // Handle chat messages sent directly as { type: 'chat:message', ... }
-                    if (data.type === 'chat:message') {
-                        handleIncomingChatMessage(data);
-                    }
-                    // Handle file/image deliveries from the agent
-                    if (data.type === 'chat:file') {
-                        handleIncomingChatFile(data);
-                    }
-                    if (data.type === 'chat:cleared') {
-                        handleChatCleared();
-                    }
-                    if (data.type === 'status') loadStatus();
-                } catch (err) {
-                    addEvent('system', e.data);
-                }
-            };
-        }
-
-        function addEvent(type, message) {
-            const feed = document.getElementById('eventsFeed');
-            const isEmpty = feed.querySelector('.empty-state');
-            if (isEmpty) feed.innerHTML = '';
-
-            const time = new Date().toLocaleTimeString();
-            const div = document.createElement('div');
-            div.className = 'event-item';
-            div.innerHTML = `
-                <span class="event-time">${time}</span>
-                <span class="event-type ${type}">${type}</span>
-                <span class="event-message">${escapeHtml(String(message).substring(0, 150))}</span>
-            `;
-            feed.insertBefore(div, feed.firstChild);
-            
-            // Keep only last 20 events
-            while (feed.children.length > 20) feed.removeChild(feed.lastChild);
-        }
-
-        // Data loaders
-        async function loadStatus() {
-            try {
-                const data = await api('/status');
-                document.getElementById('apiEndpoint').textContent = API_BASE;
-                document.getElementById('wsEndpoint').textContent = getWsUrl();
-                document.getElementById('gatewayMode').textContent = data.mode || 'unknown';
-                
-                // Show status based on mode
-                if (data.running) {
-                    document.getElementById('agentStatusValue').textContent = '● Running';
-                    document.getElementById('agentStatusValue').classList.add('accent');
-                    document.getElementById('agentStatusSub').textContent = data.modeDescription || 'Agent loop active';
-                } else if (data.mode === 'gateway-only') {
-                    document.getElementById('agentStatusValue').textContent = '◐ Gateway Only';
-                    document.getElementById('agentStatusValue').classList.remove('accent');
-                    document.getElementById('agentStatusValue').style.color = 'var(--yellow)';
-                    document.getElementById('agentStatusSub').textContent = data.modeDescription || 'Add --with-agent to start agent loop';
-                } else {
-                    document.getElementById('agentStatusValue').textContent = '○ Stopped';
-                    document.getElementById('agentStatusValue').classList.remove('accent');
-                    document.getElementById('agentStatusSub').textContent = 'Agent stopped';
-                }
-                
-                document.getElementById('modelValue').textContent = data.model || 'Not configured';
-                // Show actual provider that will be used
-                let providerLabel = data.provider || 'auto';
-                const inferredProvider = data.inferredProvider || '';
-                
-                if (providerLabel === 'auto' && inferredProvider) {
-                    // Show which provider will be used based on model inference
-                    const providerDisplayNames = {
-                        'openai': 'OpenAI',
-                        'google': 'Google',
-                        'anthropic': 'Anthropic',
-                        'openrouter': 'OpenRouter',
-                        'nvidia': 'NVIDIA',
-                        'bedrock': 'Bedrock'
-                    };
-                    providerLabel = (providerDisplayNames[inferredProvider] || inferredProvider) + ' (auto)';
-                } else if (providerLabel !== 'auto') {
-                    // Explicit provider set
-                    const providerDisplayNames = {
-                        'openai': 'OpenAI',
-                        'google': 'Google',
-                        'anthropic': 'Anthropic',
-                        'openrouter': 'OpenRouter',
-                        'nvidia': 'NVIDIA',
-                        'bedrock': 'Bedrock'
-                    };
-                    providerLabel = providerDisplayNames[providerLabel] || providerLabel;
-                }
-                document.getElementById('providerValue').textContent = providerLabel;
-                document.getElementById('skillCountValue').textContent = data.skillCount || 0;
-            } catch (e) {
-                document.getElementById('agentStatusValue').textContent = '? Unknown';
-            }
-        }
-
-        async function loadTasks() {
-            try {
-                const data = await api('/tasks');
-                const tasks = data.tasks || [];
-                document.getElementById('taskCountValue').textContent = tasks.length;
-                document.getElementById('taskQueueSub').textContent = tasks.length === 0 ? 'No pending tasks' : `${tasks.length} task(s) queued`;
-
-                const list = document.getElementById('taskList');
-                if (tasks.length === 0) {
-                    list.innerHTML = '<div class="empty-state"><i class="fas fa-inbox"></i><p>No tasks in queue</p></div>';
-                    return;
-                }
-
-                list.innerHTML = tasks.map(t => {
-                    const priClass = t.priority >= 8 ? 'high' : t.priority >= 4 ? 'medium' : 'low';
-                    const statusClass = t.status === 'completed' ? 'done' : t.status === 'in-progress' ? 'processing' : 'pending';
-                    const taskDesc = t.payload?.description || t.task || '(No description)';
-                    const canCancel = t.status === 'pending' || t.status === 'in-progress';
-                    return `
-                        <li class="task-item">
-                            <div class="task-priority ${priClass}">${t.priority}</div>
-                            <div class="task-content">
-                                <div class="task-text">${escapeHtml(taskDesc)}</div>
-                                <div class="task-meta">ID: ${t.id} • ${t.timestamp ? new Date(t.timestamp).toLocaleString() : ''}</div>
-                            </div>
-                            <span class="task-status ${statusClass}">${t.status}</span>
-                            ${canCancel ? `<button class="btn btn-danger" style="padding: 4px 10px; font-size: 11px;" onclick="cancelTask('${t.id}')"><i class="fas fa-stop"></i></button>` : ''}
-                        </li>
-                    `;
-                }).join('');
-            } catch (e) {
-                console.error('Failed to load tasks:', e);
-            }
-        }
-
-        async function loadSkills() {
-            try {
-                const data = await api('/skills');
-                const skills = data.skills || [];
-                document.getElementById('skillsCount').textContent = `${skills.length} skills`;
-
-                const grid = document.getElementById('skillsGrid');
-                if (skills.length === 0) {
-                    grid.innerHTML = '<div class="empty-state"><i class="fas fa-puzzle-piece"></i><p>No skills available</p></div>';
-                    return;
-                }
-
-                grid.innerHTML = skills.map(s => {
-                    const isPlugin = !!s.isPlugin;
-                    const badge = isPlugin
-                        ? `<span class="badge yellow" style="font-size:10px;"><i class="fas fa-plug"></i> plugin</span>`
-                        : `<span style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;">core</span>`;
-                    const deleteBtn = isPlugin
-                        ? `<button class="btn btn-danger" style="padding:3px 8px;font-size:11px;" onclick="deleteSkill('${escapeHtml(s.name)}')" title="Uninstall plugin skill"><i class="fas fa-trash"></i></button>`
-                        : '';
-                    return `
-                        <div class="skill-card">
-                            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;margin-bottom:6px;">
-                                <div class="skill-name" style="margin-bottom:0;">${escapeHtml(s.name)}</div>
-                                ${badge}
-                            </div>
-                            <div class="skill-desc">${escapeHtml(s.description || 'No description')}</div>
-                            <div style="font-family:monospace;font-size:11px;color:var(--text-muted);margin-top:8px;word-break:break-all;">${escapeHtml(s.usage || '')}</div>
-                            <div style="display:flex;gap:6px;margin-top:10px;">
-                                <button class="btn btn-secondary" style="flex:1;padding:5px 8px;font-size:11px;" onclick="openSkillExecute('${escapeHtml(s.name)}','${escapeHtml(s.usage || '')}')">
-                                    <i class="fas fa-play"></i> Execute
-                                </button>
-                                ${deleteBtn}
-                            </div>
-                        </div>
-                    `;
-                }).join('');
-            } catch (e) {
-                console.error('Failed to load skills:', e);
-            }
-        }
-
-        function openSkillExecute(name, usage) {
-            document.getElementById('skillExecName').textContent = name;
-            document.getElementById('skillExecUsageHint').textContent = usage ? `Usage hint: ${usage}` : 'No formal usage hint provided by this skill. Start with a small JSON payload.';
-            document.getElementById('skillExecArgs').value = '{}';
-            document.getElementById('skillExecResult').style.display = 'none';
-            document.getElementById('skillExecModal').classList.add('active');
-            document.getElementById('execSkillName').value = name;
-        }
-
-        function useSkillTemplate(kind) {
-            const el = document.getElementById('skillExecArgs');
-            if (!el) return;
-            const templates = {
-                empty: {},
-                query: { query: 'replace me' },
-                url: { url: 'https://example.com' },
-                file: { path: '/tmp/file.txt', content: 'replace me' }
-            };
-            const payload = templates[kind] || templates.empty;
-            el.value = JSON.stringify(payload, null, 2);
-        }
-
-        async function runSkillExecution() {
-            const name = document.getElementById('execSkillName').value;
-            const argsRaw = document.getElementById('skillExecArgs').value.trim();
-            const resultBox = document.getElementById('skillExecResult');
-            let args = {};
-            if (argsRaw && argsRaw !== '{}') {
-                try { args = JSON.parse(argsRaw); } catch { showToast('Invalid JSON args', 'error'); return; }
-            }
-            resultBox.style.display = 'block';
-            resultBox.innerHTML = `<span style="color:var(--text-muted);">Running ${escapeHtml(name)}…</span>`;
-            try {
-                const data = await api(`/skills/${encodeURIComponent(name)}/execute`, {
-                    method: 'POST', body: JSON.stringify(args)
-                });
-                resultBox.innerHTML = `<pre style="white-space:pre-wrap;word-break:break-all;font-size:12px;margin:0;">${escapeHtml(JSON.stringify(data.result ?? data, null, 2))}</pre>`;
-            } catch (e) {
-                resultBox.innerHTML = `<span style="color:var(--red);">${escapeHtml(String(e?.message || e))}</span>`;
-            }
-        }
-
-        async function deleteSkill(name) {
-            if (!confirm(`Uninstall plugin skill '${name}'? This deletes the plugin file.`)) return;
-            try {
-                const data = await api(`/skills/${encodeURIComponent(name)}`, { method: 'DELETE' });
-                showToast(data.message || (data.success ? 'Uninstalled' : 'Failed'), data.success ? 'success' : 'error');
-                loadSkills();
-            } catch (e) { showToast('Uninstall failed', 'error'); }
-        }
-
-        async function installSkillFromSkillsPage() {
-            const input = document.getElementById('skillsInstallInput');
-            const result = document.getElementById('skillsInstallResult');
-            const packageRef = input?.value.trim();
-            if (!packageRef) { showToast('Enter a package reference', 'error'); return; }
-            if (result) result.textContent = `Installing ${packageRef}…`;
-            try {
-                const data = await api('/skills/install', { method: 'POST', body: JSON.stringify({ packageRef }) });
-                if (result) {
-                    result.style.color = data.installed ? 'var(--accent)' : 'var(--red)';
-                    result.textContent = data.message || (data.installed ? 'Installed!' : 'Failed');
-                }
-                if (data.installed) { showToast('Skill installed!'); loadSkills(); if (input) input.value = ''; }
-                else showToast(data.message || 'Install failed', 'error');
-            } catch (e) {
-                if (result) { result.style.color = 'var(--red)'; result.textContent = String(e?.message || e); }
-                showToast('Install failed', 'error');
-            }
-        }
-
-        async function loadMemory() {
-            try {
-                const data = await api('/memory?limit=5');
-                renderMemory(data.memories || [], 'recentMemory');
-            } catch (e) {
-                console.error('Failed to load memory:', e);
-            }
-        }
-
-        async function loadFullMemory() {
-            try {
-                const data = await api('/memory');
-                const stats = await api('/memory/stats');
-                
-                const total = stats.totalMemories || stats.total || 0;
-                document.getElementById('memoryTotal').textContent = total;
-                document.getElementById('memoryShortTerm').textContent = stats.shortTerm || 0;
-                document.getElementById('memoryEpisodic').textContent = stats.episodic || 0;
-                
-                renderMemory(data.memories || [], 'fullMemoryList');
-            } catch (e) {
-                console.error('Failed to load memory:', e);
-            }
-        }
-
-        function renderMemory(memories, containerId) {
-            const container = document.getElementById(containerId);
-            if (memories.length === 0) {
-                container.innerHTML = '<div class="empty-state"><i class="fas fa-brain"></i><p>No memories yet</p></div>';
-                return;
-            }
-
-            container.innerHTML = memories.slice(0, 20).map(m => {
-                const icon = m.type === 'conversation' ? 'fa-comment' : 
-                            m.type === 'task' ? 'fa-check' : 
-                            m.type === 'observation' ? 'fa-eye' : 'fa-lightbulb';
-                return `
-                    <div class="memory-item">
-                        <div class="memory-icon"><i class="fas ${icon}"></i></div>
-                        <div class="memory-content">
-                            <div class="type">${m.type || 'memory'}</div>
-                            <div class="text">${escapeHtml(String(m.content || m.text || '').substring(0, 200))}</div>
-                            <div class="time">${m.timestamp ? new Date(m.timestamp).toLocaleString() : ''}</div>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-        }
-
-        async function loadChannels() {
-            try {
-                const data = await api('/connections');
-                const conn = data.connections || {};
-                
-                document.getElementById('channelsGrid').innerHTML = `
-                    <div class="channel-card">
-                        <div class="channel-header">
-                            <div class="channel-icon telegram"><i class="fab fa-telegram"></i></div>
-                            <div class="channel-info">
-                                <h4>Telegram</h4>
-                                <div class="status ${conn.telegram?.configured ? 'active' : ''}">${conn.telegram?.configured ? '● Configured' : '○ Not configured'}</div>
-                            </div>
-                        </div>
-                        <div class="channel-stats">
-                            <div class="channel-stat">
-                                <div class="value">${conn.telegram?.autoReply ? 'ON' : 'OFF'}</div>
-                                <div class="label">Auto-Reply</div>
-                            </div>
-                            <div class="channel-stat">
-                                <div class="value">${conn.telegram?.configured ? '✓' : '—'}</div>
-                                <div class="label">Token</div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="channel-card">
-                        <div class="channel-header">
-                            <div class="channel-icon whatsapp"><i class="fab fa-whatsapp"></i></div>
-                            <div class="channel-info">
-                                <h4>WhatsApp</h4>
-                                <div class="status ${conn.whatsapp?.configured ? 'active' : ''}">${conn.whatsapp?.configured ? '● Configured' : '○ Not configured'}</div>
-                            </div>
-                        </div>
-                        <div class="channel-stats">
-                            <div class="channel-stat">
-                                <div class="value">${conn.whatsapp?.autoReply ? 'ON' : 'OFF'}</div>
-                                <div class="label">Auto-Reply</div>
-                            </div>
-                            <div class="channel-stat">
-                                <div class="value">${conn.whatsapp?.configured ? '✓' : '—'}</div>
-                                <div class="label">Config</div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="channel-card">
-                        <div class="channel-header">
-                            <div class="channel-icon discord"><i class="fab fa-discord"></i></div>
-                            <div class="channel-info">
-                                <h4>Discord</h4>
-                                <div class="status ${conn.discord?.configured ? 'active' : ''}">${conn.discord?.configured ? '● Configured' : '○ Not configured'}</div>
-                            </div>
-                        </div>
-                        <div class="channel-stats">
-                            <div class="channel-stat">
-                                <div class="value">${conn.discord?.autoReply ? 'ON' : 'OFF'}</div>
-                                <div class="label">Auto-Reply</div>
-                            </div>
-                            <div class="channel-stat">
-                                <div class="value">${conn.discord?.configured ? '✓' : '—'}</div>
-                                <div class="label">Token</div>
-                            </div>
-                        </div>
-                    </div>
-                `;
-            } catch (e) {
-                console.error('Failed to load channels:', e);
-            }
-        }
-
-        async function loadLogs() {
-            try {
-                const filter = document.getElementById('logFilter')?.value || 'all';
-                const levelParam = filter !== 'all' ? `&level=${filter}` : '';
-                const data = await api(`/logs?lines=200${levelParam}`);
-                const logs = data.logs || [];
-                
-                const viewer = document.getElementById('logViewer');
-                if (logs.length === 0) {
-                    viewer.innerHTML = '<span style="color: var(--text-muted);">No logs matching filter</span>';
-                    return;
-                }
-
-                // Show total count if filtered
-                const headerInfo = data.filtered ? `<div class="log-filter-info">Showing ${logs.length} of ${data.total} logs</div>` : '';
-                
-                const logLines = logs.map(l => {
-                    let cls = 'log-line';
-                    const levelMatch = l.match(/\[(error|warn|info|debug)\]/i);
-                    if (levelMatch) {
-                        const level = levelMatch[1].toLowerCase();
-                        cls += ' ' + level;
-                    }
-                    return `<div class="${cls}">${escapeHtml(l)}</div>`;
-                }).join('');
-                
-                viewer.innerHTML = headerInfo + logLines;
-                viewer.scrollTop = viewer.scrollHeight;
-            } catch (e) {
-                console.error('Failed to load logs:', e);
-            }
-        }
-
-        function parseEndpointDescriptor(descriptor) {
-            const parts = String(descriptor || '').trim().split(/\s+/);
-            if (parts.length < 2) return { method: 'GET', path: String(descriptor || '') };
-            return { method: parts[0].toUpperCase(), path: parts.slice(1).join(' ') };
-        }
-
-        function buildCatalogSection(title, endpoints = []) {
-            if (!Array.isArray(endpoints) || endpoints.length === 0) return '';
-            const rows = endpoints.map(ep => {
-                const parsed = parseEndpointDescriptor(ep);
-                return `
-                    <div class="config-row" style="align-items: center; gap: 10px;">
-                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                            <span class="task-status pending" style="font-size: 10px;">${parsed.method}</span>
-                            <span class="config-value" style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">${escapeHtml(parsed.path)}</span>
-                        </div>
-                        <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 11px;" onclick="prefillApiTest('${parsed.method}', '${parsed.path.replace(/'/g, "\\'")}')">
-                            <i class="fas fa-arrow-down"></i> Use
-                        </button>
-                    </div>
-                `;
-            }).join('');
-
-            return `
-                <div class="card" style="margin: 0;">
-                    <div class="card-header" style="padding: 10px 14px;">
-                        <h3 style="font-size: 13px;"><i class="fas fa-layer-group"></i> ${escapeHtml(title)}</h3>
-                    </div>
-                    <div class="card-body" style="padding: 10px 12px; display: grid; gap: 8px;">
-                        ${rows}
-                    </div>
-                </div>
-            `;
-        }
-
-        function prefillApiTest(method, endpoint) {
-            const m = String(method || 'GET').toUpperCase();
-            const p = String(endpoint || '/status').trim();
-            const methodEl = document.getElementById('apiTestMethod');
-            const endpointEl = document.getElementById('apiTestEndpoint');
-            if (methodEl) methodEl.value = m;
-            if (endpointEl) endpointEl.value = p.startsWith('/api/') ? p.slice(4) : p;
-            showToast(`Loaded ${m} ${p} into tester`);
-        }
-
-        async function loadApiExplorer() {
-            const catalog = document.getElementById('apiCatalog');
-            if (!catalog) return;
-
-            try {
-                const caps = await api('/gateway/capabilities');
-                const apiGroups = caps.api || {};
-
-                const sections = [
-                    buildCatalogSection('Status', apiGroups.status),
-                    buildCatalogSection('Tasks', apiGroups.tasks),
-                    buildCatalogSection('Chat', apiGroups.chat),
-                    buildCatalogSection('Memory', apiGroups.memory),
-                    buildCatalogSection('Runtime', apiGroups.runtime),
-                    buildCatalogSection('Skills', apiGroups.skills),
-                    buildCatalogSection('Orchestrator', apiGroups.orchestrator)
-                ].filter(Boolean).join('');
-
-                catalog.innerHTML = sections || '<div class="empty-state"><i class="fas fa-plug"></i><p>No endpoint metadata available</p></div>';
-            } catch (e) {
-                console.error('Failed to load API capabilities:', e);
-                catalog.innerHTML = '<div class="empty-state"><i class="fas fa-triangle-exclamation"></i><p>Failed to load capabilities</p></div>';
-            }
-        }
-
-        async function runApiTest() {
-            const method = (document.getElementById('apiTestMethod')?.value || 'GET').toUpperCase();
-            const endpointRaw = (document.getElementById('apiTestEndpoint')?.value || '/status').trim();
-            const bodyRaw = (document.getElementById('apiTestBody')?.value || '').trim();
-            const output = document.getElementById('apiTestResult');
-
-            if (!output) return;
-            if (!endpointRaw.startsWith('/')) {
-                output.textContent = 'Endpoint must start with /';
-                return;
-            }
-
-            const endpoint = endpointRaw.startsWith('/api/') ? endpointRaw.slice(4) : endpointRaw;
-
-            try {
-                output.textContent = `Running ${method} ${endpoint}...`;
-                let response;
-                if (method === 'GET') {
-                    response = await api(endpoint, { method: 'GET' });
-                } else {
-                    let parsedBody = {};
-                    if (bodyRaw) {
-                        try {
-                            parsedBody = JSON.parse(bodyRaw);
-                        } catch {
-                            output.textContent = 'Invalid JSON body';
-                            return;
-                        }
-                    }
-                    response = await api(endpoint, {
-                        method,
-                        body: JSON.stringify(parsedBody)
-                    });
-                }
-
-                output.textContent = JSON.stringify({
-                    request: { method, endpoint },
-                    response
-                }, null, 2);
-            } catch (e) {
-                output.textContent = `Request failed: ${e?.message || e}`;
-            }
-        }
-
-        async function loadConfig() {
-            try {
-                const data = await api('/config');
-                const cfg = data.config || {};
-                
-                document.getElementById('configModel').textContent = cfg.modelName || 'auto';
-                // Show provider with display name
-                const llmProvider = cfg.llmProvider || cfg.provider || 'auto';
-                const providerDisplayNames = {
-                    'openai': 'OpenAI',
-                    'google': 'Google', 
-                    'anthropic': 'Anthropic',
-                    'openrouter': 'OpenRouter',
-                    'nvidia': 'NVIDIA',
-                    'bedrock': 'Bedrock',
-                    'auto': 'Auto'
-                };
-                document.getElementById('configProvider').textContent = providerDisplayNames[llmProvider] || llmProvider;
-                document.getElementById('configPort').textContent = window.location.port || '3100';
-                
-                const toggle = document.getElementById('safeModeToggle');
-                if (cfg.safeMode) toggle.classList.add('active');
-                else toggle.classList.remove('active');
-
-                // All config
-                const list = document.getElementById('allConfigList');
-                const entries = Object.entries(cfg).filter(([k]) => !k.toLowerCase().includes('key') && !k.toLowerCase().includes('token') && !k.toLowerCase().includes('secret'));
-                list.innerHTML = entries.map(([k, v]) => `
-                    <div class="config-row">
-                        <span class="label">${k}</span>
-                        <span class="config-value">${typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
-                    </div>
-                `).join('');
-            } catch (e) {
-                console.error('Failed to load config:', e);
-            }
-        }
-
-        // Actions
-        async function quickPushTask() {
-            const input = document.getElementById('quickTaskInput');
-            const task = input.value.trim();
-            if (!task) return showToast('Enter a task', 'error');
-
-            try {
-                await api('/tasks', { method: 'POST', body: JSON.stringify({ task, priority: 5 }) });
-                showToast('Task pushed!');
-                input.value = '';
-                loadTasks();
-            } catch (e) {
-                showToast('Failed to push task', 'error');
-            }
-        }
-
-        function pushPreset(task) {
-            document.getElementById('quickTaskInput').value = task;
-            quickPushTask();
-        }
-
-        async function submitTask() {
-            const task = document.getElementById('modalTaskInput').value.trim();
-            const priority = parseInt(document.getElementById('modalPriority').value);
-            if (!task) return showToast('Enter a task', 'error');
-
-            try {
-                await api('/tasks', { method: 'POST', body: JSON.stringify({ task, priority }) });
-                showToast('Task pushed!');
-                closeTaskModal();
-                loadTasks();
-            } catch (e) {
-                showToast('Failed to push task', 'error');
-            }
-        }
-
-        async function toggleSafeMode() {
-            const toggle = document.getElementById('safeModeToggle');
-            const newValue = !toggle.classList.contains('active');
-            
-            try {
-                await api('/security', { method: 'PUT', body: JSON.stringify({ safeMode: newValue }) });
-                toggle.classList.toggle('active', newValue);
-                showToast(`Safe mode ${newValue ? 'enabled' : 'disabled'}`);
-            } catch (e) {
-                showToast('Failed to update', 'error');
-            }
-        }
-
-        async function cancelTask(id) {
-            if (!confirm('Cancel this task?')) return;
-            try {
-                const res = await api(`/tasks/${id}/cancel`, { method: 'POST', body: JSON.stringify({ reason: 'Cancelled via dashboard' }) });
-                showToast(res.message || 'Task cancelled');
-                loadTasks();
-            } catch (e) {
-                showToast('Failed to cancel task', 'error');
-            }
-        }
-
-        async function clearAllTasks() {
-            if (!confirm('Clear all pending/in-progress tasks?')) return;
-            try {
-                const res = await api('/tasks/clear', { method: 'POST', body: JSON.stringify({ reason: 'Cleared via dashboard' }) });
-                showToast(`Cleared ${res.cleared} task(s)`);
-                loadTasks();
-            } catch (e) {
-                showToast('Failed to clear tasks', 'error');
-            }
-        }
-
-        async function loadOrchestrator() {
-            try {
-                const [agentsRes, tasksRes] = await Promise.all([
-                    api('/orchestrator/agents'),
-                    api('/orchestrator/tasks')
-                ]);
-                const agents = agentsRes.agents || [];
-                const tasks = tasksRes.tasks || [];
-
-                document.getElementById('orchAgentCount').textContent = agents.length;
-                document.getElementById('orchActiveAgents').textContent = agents.filter(a => a.status === 'working').length;
-                document.getElementById('orchPendingTasks').textContent = tasks.filter(t => t.status === 'pending' || t.status === 'assigned').length;
-
-                // Render agents
-                const agentsList = document.getElementById('orchAgentsList');
-                if (agents.length === 0) {
-                    agentsList.innerHTML = '<div class="empty-state"><i class="fas fa-robot"></i><p>No agents</p></div>';
-                } else {
-                    agentsList.innerHTML = agents.map(a => {
-                        const canTerminate = a.id !== 'primary' && a.status !== 'terminated';
-                        const statusColor = a.status === 'working' ? 'var(--purple)' : a.status === 'idle' ? 'var(--accent)' : a.status === 'terminated' ? 'var(--red)' : 'var(--text-muted)';
-                        return `
-                            <li class="task-item">
-                                <div class="task-priority" style="background: ${statusColor}20; color: ${statusColor};">
-                                    <i class="fas fa-robot"></i>
-                                </div>
-                                <div class="task-content">
-                                    <div class="task-text">${escapeHtml(a.name)} <span style="color: var(--text-muted);">(${a.role})</span></div>
-                                    <div class="task-meta">ID: ${a.id} • ${a.currentTask ? 'Task: ' + a.currentTask : 'No active task'}</div>
-                                </div>
-                                <span class="task-status" style="background: ${statusColor}20; color: ${statusColor};">${a.status}</span>
-                                ${canTerminate ? `<button class="btn btn-danger" style="padding: 4px 10px; font-size: 11px;" onclick="terminateAgent('${a.id}')"><i class="fas fa-skull"></i></button>` : ''}
-                            </li>
-                        `;
-                    }).join('');
-                }
-
-                // Render tasks
-                const tasksList = document.getElementById('orchTasksList');
-                if (tasks.length === 0) {
-                    tasksList.innerHTML = '<div class="empty-state"><i class="fas fa-tasks"></i><p>No delegated tasks</p></div>';
-                } else {
-                    tasksList.innerHTML = tasks.map(t => {
-                        const statusColor = t.status === 'completed' ? 'var(--accent)' : t.status === 'failed' ? 'var(--red)' : t.status === 'in-progress' ? 'var(--purple)' : 'var(--blue)';
-                        const canCancel = t.status === 'pending' || t.status === 'assigned' || t.status === 'in-progress';
-                        return `
-                            <li class="task-item">
-                                <div class="task-priority" style="background: ${statusColor}20; color: ${statusColor};">${t.priority}</div>
-                                <div class="task-content">
-                                    <div class="task-text">${escapeHtml(t.description)}</div>
-                                    <div class="task-meta">ID: ${t.id} • Assigned: ${t.assignedTo || 'None'}</div>
-                                </div>
-                                <span class="task-status" style="background: ${statusColor}20; color: ${statusColor};">${t.status}</span>
-                                ${canCancel ? `<button class="btn btn-danger" style="padding: 4px 10px; font-size: 11px;" onclick="cancelDelegatedTask('${t.id}')"><i class="fas fa-stop"></i></button>` : ''}
-                            </li>
-                        `;
-                    }).join('');
-                }
-            } catch (e) {
-                console.error('Failed to load orchestrator:', e);
-            }
-        }
-
-        async function terminateAgent(id) {
-            if (!confirm('Terminate this agent?')) return;
-            try {
-                const res = await api(`/orchestrator/agents/${id}/terminate`, { method: 'POST' });
-                showToast(res.message || 'Agent terminated');
-                loadOrchestrator();
-            } catch (e) {
-                showToast('Failed to terminate agent', 'error');
-            }
-        }
-
-        async function cancelDelegatedTask(id) {
-            if (!confirm('Cancel this delegated task?')) return;
-            try {
-                const res = await api(`/orchestrator/tasks/${id}/cancel`, { method: 'POST', body: JSON.stringify({ reason: 'Cancelled via dashboard' }) });
-                showToast(res.message || 'Task cancelled');
-                loadOrchestrator();
-            } catch (e) {
-                showToast('Failed to cancel task', 'error');
-            }
-        }
-
-        // Chat Functions
-        let chatMessages = [];
-        let isTyping = false;
-
-        async function loadChatHistory() {
-            try {
-                const data = await api('/chat/history');
-                chatMessages = data.messages || [];
-                renderChatMessages();
-            } catch (e) {
-                console.error('Failed to load chat history:', e);
-            }
-        }
-
-        function renderChatMessages() {
-            const container = document.getElementById('chatMessages');
-            
-            if (chatMessages.length === 0 && !isTyping) {
-                container.innerHTML = `
-                    <div class="chat-empty">
-                        <i class="fas fa-comments"></i>
-                        <h3>Start a conversation</h3>
-                        <p>Send a message to OrcBot and get instant responses powered by AI</p>
-                    </div>
-                `;
-                return;
-            }
-
-            container.innerHTML = '';
-            
-            chatMessages.forEach(msg => {
-                const messageEl = createChatMessage(msg.role, msg.content, msg.timestamp, msg.imageData, msg.imageType, msg.imageName);
-                container.appendChild(messageEl);
-            });
-
-            if (isTyping) {
-                const typingEl = createTypingIndicator();
-                container.appendChild(typingEl);
-            }
-
-            // Auto-scroll to bottom
-            scrollChatToBottom();
-        }
-
-        function createChatMessage(role, content, timestamp, imageData, imageType, imageName) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `chat-message ${role}`;
-            
-            const avatar = role === 'user' ? '👤' : '🤖';
-            const time = timestamp ? new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-            
-            const avatarDiv = document.createElement('div');
-            avatarDiv.className = 'chat-message-avatar';
-            avatarDiv.textContent = avatar;
-            
-            const contentDiv = document.createElement('div');
-            contentDiv.className = 'chat-message-content';
-            
-            const bubbleDiv = document.createElement('div');
-            bubbleDiv.className = 'chat-message-bubble';
-
-            if (imageData) {
-                // Inline image/file rendering
-                const isImage = (imageType || '').startsWith('image/');
-                if (isImage) {
-                    const img = document.createElement('img');
-                    img.src = `data:${imageType};base64,${imageData}`;
-                    img.alt = imageName || 'Image';
-                    img.style.cssText = 'max-width:100%;max-height:400px;border-radius:8px;display:block;cursor:pointer;';
-                    img.title = 'Click to open full size';
-                    img.onclick = () => window.open(img.src, '_blank');
-                    bubbleDiv.appendChild(img);
-                    if (content && content !== imageName) {
-                        const captionEl = document.createElement('p');
-                        captionEl.style.cssText = 'margin:6px 0 0;font-size:0.85em;opacity:0.8;';
-                        captionEl.textContent = content;
-                        bubbleDiv.appendChild(captionEl);
-                    }
-                } else {
-                    // Non-image file: show download link
-                    const a = document.createElement('a');
-                    a.href = `data:${imageType || 'application/octet-stream'};base64,${imageData}`;
-                    a.download = imageName || 'file';
-                    a.textContent = `📎 ${imageName || 'Download file'}`;
-                    a.style.cssText = 'color:inherit;text-decoration:underline;';
-                    bubbleDiv.appendChild(a);
-                }
-            } else {
-                bubbleDiv.textContent = content;
-            }
-            
-            contentDiv.appendChild(bubbleDiv);
-            
-            if (time) {
-                const timeDiv = document.createElement('div');
-                timeDiv.className = 'chat-message-time';
-                timeDiv.textContent = time;
-                contentDiv.appendChild(timeDiv);
-            }
-            
-            messageDiv.appendChild(avatarDiv);
-            messageDiv.appendChild(contentDiv);
-            
-            return messageDiv;
-        }
-
-        function createTypingIndicator() {
-            const typingDiv = document.createElement('div');
-            typingDiv.className = 'chat-typing';
-            typingDiv.innerHTML = `
-                <div class="chat-message-avatar">🤖</div>
-                <div class="chat-typing-bubble">
-                    <div class="chat-typing-dot"></div>
-                    <div class="chat-typing-dot"></div>
-                    <div class="chat-typing-dot"></div>
-                </div>
-            `;
-            return typingDiv;
-        }
-
-        function scrollChatToBottom() {
-            const container = document.getElementById('chatMessages');
-            setTimeout(() => {
-                container.scrollTop = container.scrollHeight;
-            }, 100);
-        }
-
-        async function sendChatMessage() {
-            const input = document.getElementById('chatInput');
-            const message = input.value.trim();
-            
-            if (!message) return;
-
-            // Disable input
-            input.disabled = true;
-            document.getElementById('chatSendBtn').disabled = true;
-
-            try {
-                // Send via REST API
-                const data = await api('/chat/send', {
-                    method: 'POST',
-                    body: JSON.stringify({ message })
-                });
-
-                // Add user message with messageId returned from server
-                const userMsg = {
-                    role: 'user',
-                    content: message,
-                    timestamp: new Date().toISOString(),
-                    messageId: data.messageId
-                };
-                chatMessages.push(userMsg);
-                input.value = '';
-                
-                // Show user message and typing indicator
-                isTyping = true;
-                renderChatMessages();
-
-                // Remove typing indicator
-                isTyping = false;
-                renderChatMessages();
-            } catch (e) {
-                console.error('Failed to send message:', e);
-                showToast('Failed to send message', 'error');
-                isTyping = false;
-                renderChatMessages();
-            } finally {
-                // Re-enable input
-                input.disabled = false;
-                document.getElementById('chatSendBtn').disabled = false;
-                input.focus();
-            }
-        }
-
-        function handleIncomingChatMessage(data) {
-            // Only add if not already in our messages array (use messageId for precise duplicate detection)
-            if (data.role && data.content) {
-                const exists = data.messageId && chatMessages.some(msg => 
-                    msg.messageId === data.messageId
-                );
-                
-                if (!exists) {
-                    chatMessages.push({
-                        role: data.role,
-                        content: data.content,
-                        timestamp: data.timestamp || new Date().toISOString(),
-                        messageId: data.messageId || `local-${Date.now()}`
-                    });
-                    
-                    // Remove typing indicator if assistant message
-                    if (data.role === 'assistant') {
-                        isTyping = false;
-                    }
-                    
-                    renderChatMessages();
-                }
-            }
-        }
-
-        function handleIncomingChatFile(data) {
-            if (!data.data) return;
-            const exists = data.messageId && chatMessages.some(msg => msg.messageId === data.messageId);
-            if (!exists) {
-                chatMessages.push({
-                    role: data.role || 'assistant',
-                    content: data.caption || data.fileName || 'File',
-                    imageData: data.data,
-                    imageType: data.fileType || 'image/png',
-                    imageName: data.fileName || 'image.png',
-                    timestamp: data.timestamp || new Date().toISOString(),
-                    messageId: data.messageId || `file-${Date.now()}`
-                });
-                isTyping = false;
-                renderChatMessages();
-            }
-        }
-
-        function handleChatCleared() {
-            chatMessages = [];
-            isTyping = false;
-            renderChatMessages();
-            showToast('Chat cleared');
-        }
-
-        async function clearChat() {
-            if (!confirm('Are you sure you want to clear all chat history?')) {
-                return;
-            }
-
-            try {
-                await api('/chat/clear', { method: 'POST' });
-                chatMessages = [];
-                isTyping = false;
-                renderChatMessages();
-                showToast('Chat cleared');
-            } catch (e) {
-                console.error('Failed to clear chat:', e);
-                showToast('Failed to clear chat', 'error');
-            }
-        }
-
-        // Chat input auto-resize
-        document.addEventListener('DOMContentLoaded', () => {
-            const chatInput = document.getElementById('chatInput');
-            if (chatInput) {
-                chatInput.addEventListener('input', function() {
-                    this.style.height = 'auto';
-                    this.style.height = Math.min(this.scrollHeight, 120) + 'px';
-                });
-
-                chatInput.addEventListener('keydown', function(e) {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        sendChatMessage();
-                    }
-                });
-            }
-        });
-
-        function openApiKeyModal() {
-            const modal = document.getElementById('apiKeyModal');
-            const input = document.getElementById('apiKeyInput');
-            if (input) { input.value = apiKey || ''; input.type = 'password'; }
-            const eye = document.getElementById('apiKeyEyeIcon');
-            if (eye) { eye.className = 'fas fa-eye'; }
-            modal.classList.add('active');
-            setTimeout(() => input && input.focus(), 100);
-        }
-
-        function closeApiKeyModal() {
-            document.getElementById('apiKeyModal').classList.remove('active');
-        }
-
-        function toggleApiKeyVisibility() {
-            const input = document.getElementById('apiKeyInput');
-            const icon = document.getElementById('apiKeyEyeIcon');
-            if (!input) return;
-            if (input.type === 'password') {
-                input.type = 'text';
-                icon.className = 'fas fa-eye-slash';
-            } else {
-                input.type = 'password';
-                icon.className = 'fas fa-eye';
-            }
-        }
-
-        function saveApiKeyFromModal() {
-            const input = document.getElementById('apiKeyInput');
-            const key = input ? input.value.trim() : '';
-            apiKey = key;
-            if (key) {
-                localStorage.setItem('orcbot_api_key', key);
-                showToast('API key saved — reconnecting...');
-            } else {
-                localStorage.removeItem('orcbot_api_key');
-                showToast('API key cleared');
-            }
-            closeApiKeyModal();
-            connectWS();
-            refreshAll();
-        }
-
-        function clearApiKey() {
-            document.getElementById('apiKeyInput').value = '';
-            apiKey = '';
-            localStorage.removeItem('orcbot_api_key');
-            showToast('API key cleared');
-            closeApiKeyModal();
-            connectWS();
-        }
-
-        // === Security Page ===
-        let _rotatedToken = null;
-
-        async function loadSecurity() {
-            try {
-                const data = await api('/gateway/token/status');
-                const badge = document.getElementById('tokenAuthBadge');
-                const partial = document.getElementById('tokenPartialEl');
-                const lengthEl = document.getElementById('tokenLengthEl');
-                const alertBanner = document.getElementById('tokenAlertBanner');
-                const wsAuth = document.getElementById('secWsAuth');
-                const safeModeToggle = document.getElementById('secSafeModeToggle');
-
-                if (badge) {
-                    badge.className = `badge ${data.authEnabled ? 'green' : 'red'}`;
-                    badge.innerHTML = data.authEnabled
-                        ? '<i class="fas fa-lock"></i> Auth Enabled'
-                        : '<i class="fas fa-unlock"></i> Open (No Auth)';
-                }
-
-                if (partial) partial.textContent = data.tokenPartial || '— not set —';
-                if (lengthEl) lengthEl.textContent = data.tokenLength ? `${data.tokenLength} chars` : '—';
-
-                if (alertBanner) {
-                    if (!data.authEnabled) {
-                        alertBanner.innerHTML = `
-                            <div class="security-alert warning">
-                                <i class="fas fa-triangle-exclamation" style="flex-shrink:0;margin-top:2px;"></i>
-                                <span><strong>Gateway is open!</strong> Anyone with network access can control your agent. Click <em>Rotate Token</em> to generate an API key.</span>
-                            </div>`;
-                    } else {
-                        alertBanner.innerHTML = `
-                            <div class="security-alert success">
-                                <i class="fas fa-shield-halved" style="flex-shrink:0;margin-top:2px;"></i>
-                                <span>Authentication is active. Use the token stored in your browser via the Config page.</span>
-                            </div>`;
-                    }
-                }
-
-                if (wsAuth) wsAuth.textContent = data.authEnabled ? 'Required' : 'Not required';
-
-                // Sync safe mode toggle
-                const cfg = await api('/config');
-                if (safeModeToggle) {
-                    safeModeToggle.classList.toggle('active', !!(cfg.config?.safeMode));
-                }
-
-                // Load allow/deny lists
-                const secData = await api('/security');
-                if (document.getElementById('secAllowList')) {
-                    document.getElementById('secAllowList').value = (secData.allowList || []).join(', ');
-                }
-                if (document.getElementById('secDenyList')) {
-                    document.getElementById('secDenyList').value = (secData.denyList || []).join(', ');
-                }
-            } catch (e) {
-                console.error('Failed to load security info:', e);
-            }
-        }
-
-        function rotateApiToken() {
-            _rotatedToken = null;
-            const resultBox = document.getElementById('rotateResultBox');
-            if (resultBox) { resultBox.style.display = 'none'; resultBox.innerHTML = ''; }
-            document.getElementById('rotateTokenModal').classList.add('active');
-        }
-
-        async function confirmRotateToken() {
-            const resultBox = document.getElementById('rotateResultBox');
-            try {
-                const data = await api('/gateway/token/rotate', { method: 'POST' });
-                _rotatedToken = data.token || null;
-
-                if (resultBox) {
-                    resultBox.style.display = 'block';
-                    resultBox.innerHTML = `
-                        <div class="security-alert success">
-                            <i class="fas fa-check-circle" style="flex-shrink:0;margin-top:2px;"></i>
-                            <div>
-                                <strong>New Token (copy now!):</strong><br>
-                                <span style="font-family:monospace;word-break:break-all;font-size:12px;">${escapeHtml(data.token || '')}</span>
-                            </div>
-                        </div>
-                        <button class="btn btn-secondary" style="margin-top:8px;width:100%;" onclick="applyRotatedToken()">
-                            <i class="fas fa-key"></i> Save &amp; Use This Token
-                        </button>`;
-                }
-                showToast('Token rotated! Save it now.');
-                loadSecurity();
-            } catch (e) {
-                if (resultBox) {
-                    resultBox.style.display = 'block';
-                    resultBox.innerHTML = `<div class="security-alert danger"><i class="fas fa-xmark"></i> <span>Rotation failed: ${escapeHtml(String(e?.message || e))}</span></div>`;
-                }
-            }
-        }
-
-        function applyRotatedToken() {
-            if (!_rotatedToken) return;
-            apiKey = _rotatedToken;
-            localStorage.setItem('orcbot_api_key', _rotatedToken);
-            showToast('New token saved to browser — reconnecting...');
-            document.getElementById('rotateTokenModal').classList.remove('active');
-            connectWS();
-        }
-
-        function copyStoredApiKey() {
-            const key = apiKey || localStorage.getItem('orcbot_api_key') || '';
-            if (!key) { showToast('No API key stored in browser', 'error'); return; }
-            navigator.clipboard.writeText(key).then(() => showToast('Token copied to clipboard')).catch(() => {
-                prompt('Copy token:', key);
-            });
-        }
-
-        async function toggleSecSafeMode() {
-            const toggle = document.getElementById('secSafeModeToggle');
-            const newValue = !toggle.classList.contains('active');
-            try {
-                await api('/security', { method: 'PUT', body: JSON.stringify({ safeMode: newValue }) });
-                toggle.classList.toggle('active', newValue);
-                showToast(`Safe mode ${newValue ? 'enabled' : 'disabled'}`);
-                // Keep Config page toggle in sync
-                const cfgToggle = document.getElementById('safeModeToggle');
-                if (cfgToggle) cfgToggle.classList.toggle('active', newValue);
-            } catch (e) { showToast('Failed to update', 'error'); }
-        }
-
-        async function saveSecurityLists() {
-            const allowRaw = (document.getElementById('secAllowList')?.value || '').trim();
-            const denyRaw = (document.getElementById('secDenyList')?.value || '').trim();
-            const allowList = allowRaw ? allowRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
-            const denyList = denyRaw ? denyRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
-            try {
-                await api('/security', { method: 'PUT', body: JSON.stringify({ allowList, denyList }) });
-                showToast('Access lists saved');
-            } catch (e) { showToast('Failed to save', 'error'); }
-        }
-
-        async function installSkillFromDashboard() {
-            const input = document.getElementById('skillInstallInput');
-            const result = document.getElementById('skillInstallResult');
-            const packageRef = input?.value.trim();
-            if (!packageRef) { showToast('Enter a package reference', 'error'); return; }
-            if (result) result.textContent = `Installing ${packageRef}…`;
-            try {
-                const data = await api('/skills/install', { method: 'POST', body: JSON.stringify({ packageRef }) });
-                if (result) {
-                    result.style.color = data.installed ? 'var(--accent)' : 'var(--red)';
-                    result.textContent = data.message || (data.installed ? 'Installed!' : 'Failed');
-                }
-                if (data.installed) { showToast(`Skill installed!`); loadSkills(); }
-                else showToast(data.message || 'Install failed', 'error');
-            } catch (e) {
-                if (result) { result.style.color='var(--red)'; result.textContent = String(e?.message || e); }
-                showToast('Install failed', 'error');
-            }
-        }
-
-        // Modal helpers
-        function openTaskModal() {
-            document.getElementById('taskModal').classList.add('active');
-            document.getElementById('modalTaskInput').value = '';
-            document.getElementById('modalTaskInput').focus();
-        }
-
-        function closeTaskModal() {
-            document.getElementById('taskModal').classList.remove('active');
-        }
-
-        // Utils
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        async function refreshAll() {
-            await Promise.all([loadStatus(), loadTasks(), loadMemory()]);
-            showToast('Refreshed');
-        }
-
-        // Init
-        document.getElementById('quickTaskInput').addEventListener('keydown', e => {
-            if (e.key === 'Enter') quickPushTask();
-        });
-
-        document.getElementById('taskModal').addEventListener('click', e => {
-            if (e.target.id === 'taskModal') closeTaskModal();
-        });
-
-        document.getElementById('apiKeyModal').addEventListener('click', e => {
-            if (e.target.id === 'apiKeyModal') closeApiKeyModal();
-        });
-
-        document.getElementById('rotateTokenModal').addEventListener('click', e => {
-            if (e.target.id === 'rotateTokenModal') document.getElementById('rotateTokenModal').classList.remove('active');
-        });
-
-        document.getElementById('skillExecModal').addEventListener('click', e => {
-            if (e.target.id === 'skillExecModal') document.getElementById('skillExecModal').classList.remove('active');
-        });
-
-        // Load initial data
-        loadStatus();
-        loadTasks();
-        loadMemory();
-        connectWS();
-
-        // Auto-refresh
-        setInterval(loadStatus, 30000);
-        setInterval(() => { if (currentPage === 'logs') loadLogs(); }, 10000);
-    </script>
+    <script src="./app.js"></script>
 </body>
 </html>

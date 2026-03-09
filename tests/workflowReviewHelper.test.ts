@@ -45,11 +45,15 @@ describe('WorkflowReviewHelper', () => {
             errorMessage: 'Command timed out after several retries',
             consecutiveFailures: 2,
             queuedToolsSkipped: 1,
+            errorType: 'timeout',
+            retryable: true,
         });
 
         expect(memory).toContain('WORKFLOW_SIGNAL');
         expect(memory).toContain('queued_tools_skipped=1');
+        expect(memory).toContain('error_type=timeout');
         expect(memory).toContain('fallback path');
+        expect(memory).toContain('smaller scope');
         expect(memory).toContain('batch was paused');
         expect(memory.length).toBeLessThanOrEqual(480);
     });

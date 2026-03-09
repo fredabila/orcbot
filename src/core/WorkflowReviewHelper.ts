@@ -10,6 +10,8 @@ export interface WorkflowSignalInput {
     errorMessage?: string;
     consecutiveFailures?: number;
     queuedToolsSkipped?: number;
+    errorType?: string;
+    retryable?: boolean;
 }
 
 const SLOW_TOOL_THRESHOLD_MS = 12_000;
@@ -42,21 +44,37 @@ export function buildWorkflowSignalMemory(input: WorkflowSignalInput): string {
     if (input.queuedToolsSkipped && input.queuedToolsSkipped > 0) {
         parts.push(`queued_tools_skipped=${input.queuedToolsSkipped}`);
     }
+    if (input.errorType) {
+        parts.push(`error_type=${input.errorType}`);
+    }
+    if (typeof input.retryable === 'boolean') {
+        parts.push(`retryable=${input.retryable}`);
+    }
 
     const hints: string[] = [];
     if (input.level === 'error') {
         hints.push('Do not repeat the exact same failing call without changing inputs or strategy.');
         hints.push('State what failed and choose a fallback path.');
+        if ((input.queuedToolsSkipped || 0) > 0) {
+            hints.push('A batch was paused after failure. Re-plan from the latest error context first.');
+        }
+
+        const normalizedType = String(input.errorType || '').toLowerCase();
+        if (normalizedType === 'rate_limit') {
+            hints.push('Wait briefly or switch tools/providers before retrying.');
+        } else if (normalizedType === 'timeout' || normalizedType === 'network_error') {
+            hints.push('Retry only with smaller scope, different inputs, or an alternate tool/path.');
+        } else if (normalizedType === 'context_overflow' || normalizedType === 'invalid_response') {
+            hints.push('Reduce payload size or simplify the request before retrying.');
+        } else if (input.retryable === false) {
+            hints.push('This failure is not retryable. Pivot tools, change parameters, or ask for clarification.');
+        }
     } else if ((input.consecutiveFailures || 0) >= 2) {
         hints.push('Failure pattern detected. Switch tools or adjust parameters before retrying.');
     }
 
     if (Number(input.toolDurationMs || 0) >= SLOW_TOOL_THRESHOLD_MS) {
         hints.push('This step was slow. Send a brief progress update if the user has not been updated recently.');
-    }
-
-    if ((input.queuedToolsSkipped || 0) > 0) {
-        hints.push('A batch was paused after failure. Re-plan from the latest error context first.');
     }
 
     const detailSuffix = parts.length ? ` Details: ${parts.join(' | ')}.` : '';
@@ -72,7 +90,9 @@ export function buildWorkflowSignalLog(input: WorkflowSignalInput): string {
     const duration = typeof input.toolDurationMs === 'number' ? ` duration=${Math.round(input.toolDurationMs)}ms` : '';
     const failures = input.consecutiveFailures ? ` failures=${input.consecutiveFailures}` : '';
     const skipped = input.queuedToolsSkipped ? ` skipped=${input.queuedToolsSkipped}` : '';
+    const errorType = input.errorType ? ` errorType=${input.errorType}` : '';
+    const retryable = typeof input.retryable === 'boolean' ? ` retryable=${input.retryable}` : '';
     const error = summarizeError(input.errorMessage);
     const errorPart = error ? ` error="${error}"` : '';
-    return `WorkflowSignal action=${input.actionId} step=${input.step} tool=${input.toolName} level=${input.level}${duration}${failures}${skipped}${errorPart}`;
+    return `WorkflowSignal action=${input.actionId} step=${input.step} tool=${input.toolName} level=${input.level}${duration}${failures}${skipped}${errorType}${retryable}${errorPart}`;
 }

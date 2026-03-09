@@ -92,6 +92,8 @@ orcbot gateway -p 8080 -s ./apps/dashboard</code></pre>
           <table>
             <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
             <tr><td>GET</td><td><code>/api/status</code></td><td>Agent status and current action</td></tr>
+            <tr><td>GET</td><td><code>/api/doctor</code></td><td>Health report including runtime lock/PID checks</td></tr>
+            <tr><td>GET</td><td><code>/api/security/audit</code></td><td>Filtered security and gateway audit report</td></tr>
             <tr><td>GET</td><td><code>/api/skills</code></td><td>List all registered skills</td></tr>
             <tr><td>POST</td><td><code>/api/tasks</code></td><td>Push a new task to the queue</td></tr>
             <tr><td>GET</td><td><code>/api/config</code></td><td>View current configuration</td></tr>
@@ -136,6 +138,29 @@ gatewayApiKey: your-secret-key
 
 # In requests
 curl -H "X-Api-Key: your-secret-key" http://localhost:3100/api/status</code></pre>
+        </div>
+
+        <div class="card">
+          <h2>🛡️ Security Model</h2>
+          <ul>
+            <li>The gateway is an operator-facing control plane, not a public chat endpoint. Do not expose it on a public interface without <code>gatewayApiKey</code> and restricted CORS.</li>
+            <li>Clients should send a stable <code>sourceId</code> or <code>clientId</code> so OrcBot can keep messages in the correct session scope and route follow-ups deterministically.</li>
+            <li>Worker processes do not reply to gateway clients directly. Delegated task results return through the primary agent, which preserves the original reply context.</li>
+            <li>Use <code>/api/doctor</code> and <code>/api/security/audit</code> to verify runtime state, stale lock files, gateway exposure, and security posture before enabling remote access.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h2>🧭 Gateway Chat Routing</h2>
+          <p>Inbound gateway chat follows the same deterministic routing rules as other channels:</p>
+          <ol>
+            <li>Resolve a stable thread scope from <code>sourceId</code> or <code>clientId</code></li>
+            <li>Resume an existing waiting action for that thread if one exists</li>
+            <li>Fail stale pending thread actions so they cannot run after a newer user message</li>
+            <li>Queue behind an active in-progress thread action when necessary</li>
+            <li>Route worker completions back through the originating gateway chat thread</li>
+          </ol>
+          <p>This keeps web-chat sessions aligned with Telegram, WhatsApp, Discord, Slack, and Email behavior instead of using a separate routing model.</p>
         </div>
 
         <div class="card">

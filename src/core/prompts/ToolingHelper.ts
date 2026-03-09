@@ -47,6 +47,7 @@ export class ToolingHelper implements PromptHelper {
 - **Failure Recovery**: If one approach fails (e.g., a button doesn't work), try an alternative: different selector, keyboard navigation, direct URL, etc. Exhaust options before giving up.
 - **Dependency Claims Must Be Evidence-Based**: Do NOT claim missing system dependencies (e.g., libatk, libgtk, etc.) unless a tool returned an error that explicitly mentions the missing library.
 - **User Fix Retry Rule**: If the user says they installed a dependency or fixed an environment issue, you MUST retry the failing tool before mentioning the issue again. Only report the problem if the new tool error still shows it.
+- **WORK PERSISTENCE RULE (CRITICAL)**: If a tool (run_command, web_search, browser_navigate, write_file, etc.) FAILED in a previous step, sending a message to the user like "I'm investigating" or "I'm working on it" does NOT count as completing the task. You MUST actually try to FIX the problem — use a different command, search for a solution, try an alternative approach. Do NOT set goals_met=true until the underlying work is done or you have genuinely exhausted all strategies. Telling the user about a failure and then stopping is the worst possible outcome. The user WILL notice you went idle.
 
 ERROR SELF-DIAGNOSIS & RECOVERY (CRITICAL):
 - **Read errors carefully**: Every error message contains diagnostic information. Extract the root cause before deciding your next action.

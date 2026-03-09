@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import * as p from '@clack/prompts';
 import inquirer from 'inquirer';
 import { Agent } from '../core/Agent';
 import { logger } from '../utils/logger';
@@ -18,6 +19,7 @@ import { TokenTracker } from '../core/TokenTracker';
 import { OllamaHelper } from '../utils/OllamaHelper';
 import { aggregateWorldEvents, fetchWorldEvents, summarizeWorldEvents, WorldEvent, WorldEventSource, getRootCodeLabel } from '../tools/WorldEvents';
 import { piBox, isPiTuiAvailable } from '../core/PiTuiRenderer';
+import { collectDoctorReport } from './Doctor';
 
 dotenv.config(); // Local .env
 dotenv.config({ path: path.join(os.homedir(), '.orcbot', '.env') }); // Global .env
@@ -1051,6 +1053,94 @@ program
 
         console.log('\n--- Memory & Queue ---');
         showStatus();
+    });
+
+program
+    .command('doctor')
+    .description('Run a local health and deployment audit for OrcBot')
+    .option('--deep', 'Include additional filesystem/state checks')
+    .option('--json', 'Print the report as JSON')
+    .action((opts) => {
+        const report = collectDoctorReport(agent.config, { deep: !!opts.deep });
+
+        if (opts.json) {
+            console.log(JSON.stringify(report, null, 2));
+            return;
+        }
+
+        console.log('\n=== OrcBot Doctor ===\n');
+        console.log(`Checked: ${report.checkedAt}`);
+        console.log(`Data home: ${report.facts.dataHome}`);
+        console.log(`Gateway: ${report.facts.gatewayHost}:${report.facts.gatewayPort} ${report.facts.gatewayAuthEnabled ? '(auth enabled)' : '(no auth)'}`);
+        console.log(`Channels: ${report.facts.channelsConfigured.length > 0 ? report.facts.channelsConfigured.join(', ') : 'none'}`);
+        console.log(`Providers: ${report.facts.providersConfigured.length > 0 ? report.facts.providersConfigured.join(', ') : 'none'}`);
+        console.log('');
+
+        const summaryLines = [
+            `${c.white}Critical${c.reset}  ${report.summary.critical > 0 ? brightRed(bold(String(report.summary.critical))) : green('0')}`,
+            `${c.white}Warnings${c.reset}  ${report.summary.warn > 0 ? brightYellow(bold(String(report.summary.warn))) : green('0')}`,
+            `${c.white}Info${c.reset}      ${report.summary.info > 0 ? brightCyan(String(report.summary.info)) : gray('0')}`,
+        ];
+        box(summaryLines, { title: '🩺 DOCTOR SUMMARY', width: 40, color: report.summary.critical > 0 ? c.red : (report.summary.warn > 0 ? c.yellow : c.green) });
+        console.log('');
+
+        if (report.findings.length === 0) {
+            console.log(`${green('✓')} No findings. Your current OrcBot setup looks healthy.\n`);
+            return;
+        }
+
+        for (const finding of report.findings) {
+            const tone = finding.severity === 'critical' ? brightRed('CRITICAL') : finding.severity === 'warn' ? brightYellow('WARN') : brightCyan('INFO');
+            console.log(`${tone} ${bold(finding.title)}`);
+            console.log(`  ${finding.message}`);
+            if (finding.recommendation) {
+                console.log(`  ${dim('Fix:')} ${finding.recommendation}`);
+            }
+            console.log('');
+        }
+    });
+
+const securityCommand = program
+    .command('security')
+    .description('Security-focused checks and configuration helpers');
+
+securityCommand
+    .command('audit')
+    .description('Run a security-oriented audit of the current OrcBot configuration')
+    .option('--deep', 'Include additional filesystem/state checks')
+    .option('--json', 'Print the report as JSON')
+    .action((opts) => {
+        const report = collectDoctorReport(agent.config, { deep: !!opts.deep });
+        const securityFindings = report.findings.filter(f => f.area === 'security' || f.area === 'gateway' || f.area === 'channels');
+        const filtered = {
+            ...report,
+            summary: {
+                critical: securityFindings.filter(f => f.severity === 'critical').length,
+                warn: securityFindings.filter(f => f.severity === 'warn').length,
+                info: securityFindings.filter(f => f.severity === 'info').length,
+                ok: Math.max(0, 6 - securityFindings.filter(f => f.severity !== 'info').length)
+            },
+            findings: securityFindings
+        };
+
+        if (opts.json) {
+            console.log(JSON.stringify(filtered, null, 2));
+            return;
+        }
+
+        console.log('\n=== OrcBot Security Audit ===\n');
+        if (filtered.findings.length === 0) {
+            console.log(`${green('✓')} No security findings in the current audit scope.\n`);
+            return;
+        }
+
+        for (const finding of filtered.findings) {
+            const tone = finding.severity === 'critical' ? brightRed('CRITICAL') : finding.severity === 'warn' ? brightYellow('WARN') : brightCyan('INFO');
+            console.log(`${tone} ${bold(finding.title)}`);
+            console.log(`  ${finding.message}`);
+            if (finding.recommendation) console.log(`  ${dim('Fix:')} ${finding.recommendation}`);
+            console.log('');
+        }
     });
 
 program
@@ -2287,42 +2377,42 @@ async function showMainMenu() {
     ], { title: 'DASHBOARD', width: 56 });
     console.log('');
 
-    const { action } = await inquirer.prompt([
-        {
-            type: 'list',
-            name: 'action',
-            message: `${c.bold}${c.brightWhite}What would you like to do?${c.reset}`,
-            choices: [
-                new inquirer.Separator(`${c.brightCyan} ── RUN ${'─'.repeat(35)}${c.reset}`),
-                { name: `  ${c.brightGreen}▶${c.reset}  ${c.bold}Start Agent Loop${c.reset}`, value: 'start' },
-                { name: `  ${c.yellow}📋${c.reset}  Push Task`, value: 'push' },
-                { name: `  ${c.cyan}📊${c.reset}  View Status`, value: 'status' },
-                new inquirer.Separator(`${c.brightCyan} ── CONFIGURE ${'─'.repeat(29)}${c.reset}`),
-                { name: `  ${c.magenta}🧠${c.reset}  Manage AI Models`, value: 'models' },
-                { name: `  ${c.brightBlue}🔌${c.reset}  Manage Connections`, value: 'connections' },
-                { name: `  ${c.brightCyan}⚡${c.reset}  Manage Skills  ${c.gray}(${agent.skills.getAgentSkills().length} installed)${c.reset}`, value: 'skills' },
-                { name: `  ${c.brightBlue}🌍${c.reset}  World Governance`, value: 'world' },
-                { name: `  ${c.brightMagenta}🧰${c.reset}  Manage Tools   ${c.gray}(${agent.tools.listTools().length} installed)${c.reset}`, value: 'tools' },
-                { name: `  ${c.yellow}🔧${c.reset}  Tooling & APIs`, value: 'tooling' },
-                new inquirer.Separator(`${c.brightCyan} ── ADVANCED ${'─'.repeat(30)}${c.reset}`),
-                { name: `  ${c.brightGreen}🌐${c.reset}  Web Gateway`, value: 'gateway' },
-                { name: `  ${c.brightMagenta}🪪${c.reset}   Worker Profile`, value: 'worker' },
-                { name: `  ${c.brightCyan}🐙${c.reset}  Multi-Agent Orchestration`, value: 'orchestration' },
-                { name: `  ${c.brightYellow}🤖${c.reset}  Agentic User ${c.gray}(HITL Proxy)${c.reset}`, value: 'agentic_user' },
-                { name: `  ${c.brightRed}🔒${c.reset}  Security & Permissions`, value: 'security' },
-                { name: `  ${c.brightGreen}📈${c.reset}  Token Usage`, value: 'tokens' },
-                { name: `  ${c.cyan}🧪${c.reset}  Guardrail Metrics`, value: 'metrics' },
-                { name: `  ${c.brightBlue}🌍${c.reset}  World Events Live`, value: 'world_events' },
-                { name: `  ${c.brightCyan}⏱️${c.reset}   Latency Benchmark`, value: 'latency' },
-                new inquirer.Separator(`${c.brightCyan} ── SYSTEM ${'─'.repeat(32)}${c.reset}`),
-                { name: `  ${c.white}📂${c.reset}  Open Build Workspace`, value: 'open_build_workspace' },
-                { name: `  ${c.white}⚙️${c.reset}   Configure Agent`, value: 'config' },
-                { name: `  ${c.white}⬆️${c.reset}   Update OrcBot`, value: 'update' },
-                { name: `  ${c.gray}← Exit${c.reset}`, value: 'exit' },
-            ],
-            pageSize: 24
-        },
-    ]);
+    const action = await p.select({
+        message: `${c.bold}${c.brightWhite}What would you like to do?${c.reset}`,
+        maxItems: 24,
+        options: [
+            { label: `── RUN ───────────────────────────────────`, value: 'separator_run', disabled: true },
+            { label: `  ${c.brightGreen}▶${c.reset}  ${c.bold}Start Agent Loop${c.reset}`, value: 'start' },
+            { label: `  ${c.yellow}📋${c.reset}  Push Task`, value: 'push' },
+            { label: `  ${c.cyan}📊${c.reset}  View Status`, value: 'status' },
+            { label: `── CONFIGURE ─────────────────────────────`, value: 'separator_config', disabled: true },
+            { label: `  ${c.magenta}🧠${c.reset}  Manage AI Models`, value: 'models' },
+            { label: `  ${c.brightBlue}🔌${c.reset}  Manage Connections`, value: 'connections' },
+            { label: `  ${c.brightCyan}⚡${c.reset}  Manage Skills  ${c.gray}(${agent.skills.getAgentSkills().length} installed)${c.reset}`, value: 'skills' },
+            { label: `  ${c.brightBlue}🌍${c.reset}  World Governance`, value: 'world' },
+            { label: `  ${c.brightMagenta}🧰${c.reset}  Manage Tools   ${c.gray}(${agent.tools.listTools().length} installed)${c.reset}`, value: 'tools' },
+            { label: `  ${c.yellow}🔧${c.reset}  Tooling & APIs`, value: 'tooling' },
+            { label: `── ADVANCED ──────────────────────────────`, value: 'separator_adv', disabled: true },
+            { label: `  ${c.brightGreen}🌐${c.reset}  Web Gateway`, value: 'gateway' },
+            { label: `  ${c.brightMagenta}🪪${c.reset}   Worker Profile`, value: 'worker' },
+            { label: `  ${c.brightCyan}🐙${c.reset}  Multi-Agent Orchestration`, value: 'orchestration' },
+            { label: `  ${c.brightYellow}🤖${c.reset}  Agentic User ${c.gray}(HITL Proxy)${c.reset}`, value: 'agentic_user' },
+            { label: `  ${c.brightRed}🔒${c.reset}  Security & Permissions`, value: 'security' },
+            { label: `  ${c.brightGreen}📈${c.reset}  Token Usage`, value: 'tokens' },
+            { label: `  ${c.cyan}🧪${c.reset}  Guardrail Metrics`, value: 'metrics' },
+            { label: `  ${c.brightBlue}🌍${c.reset}  World Events Live`, value: 'world_events' },
+            { label: `  ${c.brightCyan}⏱️${c.reset}   Latency Benchmark`, value: 'latency' },
+            { label: `── SYSTEM ────────────────────────────────`, value: 'separator_sys', disabled: true },
+            { label: `  ${c.white}📂${c.reset}  Open Build Workspace`, value: 'open_build_workspace' },
+            { label: `  ${c.white}⚙️${c.reset}   Configure Agent`, value: 'config' },
+            { label: `  ${c.white}⬆️${c.reset}   Update OrcBot`, value: 'update' },
+            { label: `  ${c.gray}← Exit${c.reset}`, value: 'exit' },
+        ]
+    });
+
+    if (p.isCancel(action)) {
+        process.exit(0);
+    }
 
     switch (action) {
         case 'start':
@@ -4461,6 +4551,7 @@ async function showSlackConfig() {
 async function showEmailConfig() {
     const enabled = agent.config.get('emailEnabled') === true;
     const autoReply = agent.config.get('emailAutoReplyEnabled') === true;
+    const processUnreadOnStart = agent.config.get('emailProcessUnreadOnStart') === true;
     const emailAddress = agent.config.get('emailAddress') || agent.config.get('smtpUsername') || 'Not Set';
     const smtpHost = agent.config.get('smtpHost') || 'Not Set';
     const imapHost = agent.config.get('imapHost') || 'Not Set';
@@ -4485,12 +4576,13 @@ async function showEmailConfig() {
         `${dim('IMAP Security')} ${imapSecure ? green('Direct TLS (IMAPS)') : (imapStartTls ? green('STARTTLS') : yellow('Plain (not recommended)'))}`,
         `${dim('Socket Timeout')} ${timeoutMs}ms`,
         `${dim('Auto-Reply')}   ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
+        `${dim('Startup Inbox')} ${processUnreadOnStart ? yellow('Process existing unread') : green('Ignore existing unread')}`,
     ];
     box(lines, { title: '📧 EMAIL', width: 58, color: c.yellow });
     console.log(dim('SMTP = sending outbound mail.'));
     console.log(dim('IMAP = reading inbound inbox (auto-reply/tasks). Not required for SMTP-only sending/tests.'));
-    console.log(yellow('Note: On first connect, OrcBot processes existing UNREAD (UNSEEN) inbox emails as inbound messages.'));
-    console.log(dim('Tip: mark/archive old mail before enabling email if you only want brand-new messages.'));
+    console.log(dim('Default: OrcBot ignores unread backlog on connect and only processes new inbound mail.'));
+    console.log(dim('Enable startup backlog processing only if you intentionally want the agent to catch up on old unread mail.'));
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -4504,6 +4596,7 @@ async function showEmailConfig() {
                 { name: 'Set SMTP Settings', value: 'set_smtp' },
                 { name: 'Set IMAP Settings', value: 'set_imap' },
                 { name: autoReply ? 'Disable Auto-Reply' : 'Enable Auto-Reply', value: 'toggle_auto' },
+                { name: processUnreadOnStart ? 'Disable Startup Backlog Processing' : 'Enable Startup Backlog Processing', value: 'toggle_startup_backlog' },
                 { name: autonomyAllowed ? 'Disable Autonomous Messaging' : 'Enable Autonomous Messaging', value: 'toggle_autonomy' },
                 { name: 'Test SMTP Connection', value: 'test_smtp' },
                 { name: 'Test IMAP Connection', value: 'test_imap' },
@@ -4581,6 +4674,11 @@ async function showEmailConfig() {
 
     if (action === 'toggle_auto') {
         agent.config.set('emailAutoReplyEnabled', !autoReply);
+        return showEmailConfig();
+    }
+
+    if (action === 'toggle_startup_backlog') {
+        agent.config.set('emailProcessUnreadOnStart', !processUnreadOnStart);
         return showEmailConfig();
     }
 

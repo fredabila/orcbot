@@ -498,16 +498,27 @@ export class TelegramChannel implements IChannel {
             const useHtml = caption ? hasMarkdown(caption) : false;
             const formattedCaption = useHtml && caption ? renderMarkdown(caption, 'telegram_html') : caption;
             const captionOpts = useHtml ? { caption: formattedCaption, parse_mode: 'HTML' as const } : { caption: formattedCaption };
+            const ext = path.extname(filePath).toLowerCase();
+            const isSvg = ext === '.svg';
 
-            if (isImageFile(filePath)) {
-                await this.bot.telegram.sendPhoto(to, { source: filePath }, captionOpts);
+            if (isImageFile(filePath) && !isSvg) {
+                try {
+                    await this.bot.telegram.sendPhoto(to, { source: filePath }, captionOpts);
+                } catch (imageErr: any) {
+                    const description = String(imageErr?.response?.description || imageErr?.description || imageErr?.message || imageErr || '');
+                    if (/IMAGE_PROCESS_FAILED/i.test(description)) {
+                        logger.warn(`TelegramChannel: sendPhoto failed for ${filePath}; retrying as document. Error: ${description}`);
+                        await this.bot.telegram.sendDocument(to, { source: filePath }, captionOpts);
+                    } else {
+                        throw imageErr;
+                    }
+                }
             } else if (isVideoFile(filePath)) {
                 await this.bot.telegram.sendVideo(to, { source: filePath }, captionOpts);
             } else if (isAudioFile(filePath)) {
                 try {
                     await this.bot.telegram.sendAudio(to, { source: filePath }, captionOpts);
                 } catch (audioErr) {
-                    const ext = path.extname(filePath).toLowerCase();
                     if (ext === '.ogg' || ext === '.opus' || ext === '.webm') {
                         logger.warn(`TelegramChannel: sendAudio failed for ${filePath}; retrying as voice. Error: ${audioErr}`);
                         await this.bot.telegram.sendVoice(to, { source: filePath }, captionOpts);

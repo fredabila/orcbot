@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { logger } from '../utils/logger';
 import { LLMParser, ParserLLM } from './LLMParser';
+import JSON5 from 'json5';
 
 export const ToolCallSchema = z.object({
     name: z.string(),
@@ -85,6 +86,29 @@ export class ParserLayer {
                 }
             }
 
+            if (toolName === 'send_slack') {
+                if (metadata.channel_id == null) {
+                    metadata.channel_id = metadata.channelId ?? metadata.channel ?? metadata.id ?? metadata.to ?? metadata.sourceId;
+                }
+            }
+
+            if (toolName === 'send_gateway_chat') {
+                if (metadata.chatId == null) {
+                    metadata.chatId = metadata.chat_id ?? metadata.chatid ?? metadata.id ?? metadata.to ?? metadata.sourceId;
+                }
+            }
+
+            if (toolName === 'browser_navigate') {
+                if (metadata.url == null) {
+                    const urlCandidate = metadata.link ?? metadata.site ?? metadata.href;
+                    if (urlCandidate != null) {
+                        metadata.url = String(urlCandidate);
+                    } else if (typeof metadata.query === 'string' && /^https?:\/\//i.test(metadata.query.trim())) {
+                        metadata.url = metadata.query.trim();
+                    }
+                }
+            }
+
             // Normalize browser tool fields to what ResponseValidator expects.
             // The LLM frequently uses selector_or_ref/ref/css/value, while the executor and validator
             // prefer canonical keys: selector + text.
@@ -140,6 +164,34 @@ export class ParserLayer {
         return result;
     }
 
+    private static tryParseStructuredJson(jsonStr: string): any {
+        try {
+            return JSON.parse(jsonStr);
+        } catch (firstError) {
+            logger.debug('ParserLayer: Initial parse failed, attempting sanitization...');
+
+            try {
+                const sanitized = this.sanitizeJsonString(jsonStr);
+                const parsed = JSON.parse(sanitized);
+                logger.debug('ParserLayer: Sanitization succeeded');
+                return parsed;
+            } catch {
+                logger.debug('ParserLayer: Strict JSON parsing failed, attempting JSON5 fallback...');
+            }
+
+            try {
+                const parsed = JSON5.parse(jsonStr);
+                logger.debug('ParserLayer: JSON5 fallback succeeded');
+                return parsed;
+            } catch {
+                const sanitized = this.sanitizeJsonString(jsonStr);
+                const parsed = JSON5.parse(sanitized);
+                logger.debug('ParserLayer: Sanitized JSON5 fallback succeeded');
+                return parsed;
+            }
+        }
+    }
+
     public static normalize(rawResponse: string): StandardResponse {
         try {
             // Find JSON block if it exists
@@ -147,24 +199,15 @@ export class ParserLayer {
             if (jsonMatch) {
                 let jsonStr = jsonMatch[0];
                 
-                // Try parsing as-is first
                 let parsed: any;
                 try {
-                    parsed = JSON.parse(jsonStr);
+                    parsed = this.tryParseStructuredJson(jsonStr);
                 } catch (firstError) {
-                    // Try sanitizing the JSON
-                    logger.debug('ParserLayer: Initial parse failed, attempting sanitization...');
-                    try {
-                        const sanitized = this.sanitizeJsonString(jsonStr);
-                        parsed = JSON.parse(sanitized);
-                        logger.debug('ParserLayer: Sanitization succeeded');
-                    } catch (sanitizeError) {
-                        // Last resort: try to extract key fields manually
-                        logger.warn('ParserLayer: Sanitization failed, attempting manual extraction...');
-                        parsed = this.extractFieldsManually(jsonStr);
-                        if (!parsed) {
-                            throw firstError; // Re-throw original error
-                        }
+                    // Last resort: try to extract key fields manually
+                    logger.warn('ParserLayer: Structured parsing failed, attempting manual extraction...');
+                    parsed = this.extractFieldsManually(jsonStr);
+                    if (!parsed) {
+                        throw firstError;
                     }
                 }
 
@@ -403,7 +446,7 @@ export class ParserLayer {
             const jsonMatch = textContent.match(/\{[\s\S]*\}/);
             if (jsonMatch) {
                 try {
-                    const parsed = JSON.parse(jsonMatch[0]);
+                    const parsed = this.tryParseStructuredJson(jsonMatch[0]);
                     reasoning = parsed.reasoning;
                     verification = parsed.verification;
                     content = parsed.content;
@@ -486,6 +529,7 @@ Do NOT wait for a separate turn to set goals_met=true if you have already delive
         return `
 IMPORTANT: You MUST always respond with a valid JSON object wrapped in code blocks.
 You can call MULTIPLE tools in a single turn using the "tools" array - use this for parallel/independent operations.
+The tool names shown below are illustrative examples only. The authoritative list of tools you may call is provided separately under "Available Skills" or "Tools" for the current step.
 
 JSON Format:
 - Always optimize your workflow based on the provided SYSTEM ENVIRONMENT (CPU/RAM/OS).
@@ -501,7 +545,7 @@ JSON Format:
     "estimated_steps_remaining": 3
   },
   "tools": [
-    { "name": "browser_navigate", "metadata": { "query": "http://google.com" } },
+        { "name": "browser_navigate", "metadata": { "url": "http://google.com" } },
     { "name": "web_search", "metadata": { "query": "robotics breakthroughs 2026" } },
     { "name": "send_telegram", "metadata": { "chatId": "user123", "message": "Researching now..." } }
   ],
@@ -513,6 +557,12 @@ Single tool shorthand (still supported):
 \`\`\`json
 {
   "action": "EXECUTE",
+    "reasoning": "I should perform the requested tool call now.",
+    "verification": {
+        "goals_met": false,
+        "analysis": "Executing the requested tool.",
+        "estimated_steps_remaining": 1
+    },
   "tool": "web_search",
   "metadata": { "query": "example" },
   "content": "..."

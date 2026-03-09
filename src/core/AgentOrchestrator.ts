@@ -3,6 +3,7 @@ import path from 'path';
 import os from 'os';
 import { EventEmitter } from 'events';
 import { ChildProcess, fork } from 'child_process';
+import yaml from 'yaml';
 import { logger } from '../utils/logger';
 import { v4 as uuidv4 } from 'uuid';
 import { IPCMessage, IPCResponse, WorkerConfig } from './AgentWorker';
@@ -32,6 +33,13 @@ export interface OrchestratorTask {
     error?: string;
     createdAt: string;
     completedAt?: string;
+    metadata?: Record<string, any>;
+}
+
+interface TaskRoutingPreferences {
+    requiredCapabilities: string[];
+    preferredCapabilities: string[];
+    preferredRoles: string[];
 }
 
 export interface AgentMessage {
@@ -347,12 +355,20 @@ export class AgentOrchestrator extends EventEmitter {
                             taskId: message.taskId,
                             taskDescription: task.description,
                             result: result || 'Task completed',
+                            metadata: task.metadata,
                             completedAt: new Date().toISOString()
                         });
                     }
+
+                    this.emit('worker:task-completed', {
+                        agentId,
+                        taskId: message.taskId,
+                        result,
+                        task
+                    });
+                    logger.info(`Orchestrator: Worker ${agentId} completed task ${message.taskId}`);
+                    break;
                 }
-                this.emit('worker:task-completed', { agentId, taskId: message.taskId, result: message.payload?.result });
-                logger.info(`Orchestrator: Worker ${agentId} completed task ${message.taskId}`);
                 break;
 
             case 'task-failed':
@@ -368,12 +384,20 @@ export class AgentOrchestrator extends EventEmitter {
                             taskId: message.taskId,
                             taskDescription: task.description,
                             error: message.error || 'Unknown error',
+                            metadata: task.metadata,
                             failedAt: new Date().toISOString()
                         });
                     }
+
+                    this.emit('worker:task-failed', {
+                        agentId,
+                        taskId: message.taskId,
+                        error: message.error,
+                        task
+                    });
+                    logger.warn(`Orchestrator: Worker ${agentId} failed task ${message.taskId}: ${message.error}`);
+                    break;
                 }
-                this.emit('worker:task-failed', { agentId, taskId: message.taskId, error: message.error });
-                logger.warn(`Orchestrator: Worker ${agentId} failed task ${message.taskId}: ${message.error}`);
                 break;
 
             case 'status':
@@ -576,6 +600,118 @@ export class AgentOrchestrator extends EventEmitter {
         });
     }
 
+    private normalizeCapabilityAlias(capability: string): string {
+        const normalized = String(capability || '').trim().toLowerCase();
+        const aliases: Record<string, string> = {
+            browser: 'browse',
+            browser_perform: 'browse',
+            browser_navigate: 'browse',
+            web: 'browse',
+            websearch: 'web_search',
+            search: 'web_search',
+            research: 'web_search',
+            read: 'read_file',
+            file: 'read_file',
+            files: 'read_file',
+            write: 'write_file',
+            code: 'run_command',
+            shell: 'run_command',
+            execute: 'execute',
+            analysis: 'analyze',
+            analyze_media: 'analyze'
+        };
+
+        return aliases[normalized] || normalized;
+    }
+
+    private extractRoutingPreferences(task: OrchestratorTask): TaskRoutingPreferences {
+        const metadata = task.metadata || {};
+        const description = String(task.description || '').toLowerCase();
+        const toList = (value: unknown): string[] => {
+            if (Array.isArray(value)) {
+                return value.map(v => this.normalizeCapabilityAlias(String(v))).filter(Boolean);
+            }
+            if (typeof value === 'string' && value.trim()) {
+                return [this.normalizeCapabilityAlias(value)];
+            }
+            return [];
+        };
+
+        const requiredCapabilities = new Set<string>(['execute']);
+        const preferredCapabilities = new Set<string>();
+        const preferredRoles = new Set<string>();
+
+        for (const cap of toList(metadata.requiredCapabilities)) requiredCapabilities.add(cap);
+        for (const cap of toList(metadata.preferredCapabilities)) preferredCapabilities.add(cap);
+        for (const role of toList(metadata.preferredRoles || metadata.preferredRole)) preferredRoles.add(role);
+
+        if (metadata.delegationKind === 'browse_async') {
+            requiredCapabilities.add('browse');
+            preferredCapabilities.add('web_search');
+            preferredCapabilities.add('read_file');
+            preferredRoles.add('browser_specialist');
+        }
+
+        if (/(browse|browser|navigate|website|web page|url|click|scrape|extract)/i.test(description)) {
+            requiredCapabilities.add('browse');
+            preferredCapabilities.add('web_search');
+        }
+        if (/(search|research|look up|find online|google|bing|duckduckgo)/i.test(description)) {
+            preferredCapabilities.add('web_search');
+        }
+        if (/(read_file|file|codebase|source file|typescript|javascript|build|test|command|shell|npm)/i.test(description)) {
+            preferredCapabilities.add('read_file');
+            preferredCapabilities.add('run_command');
+        }
+        if (/(analy[sz]e|vision|image|audio|video|transcrib)/i.test(description)) {
+            preferredCapabilities.add('analyze');
+        }
+
+        return {
+            requiredCapabilities: Array.from(requiredCapabilities),
+            preferredCapabilities: Array.from(preferredCapabilities),
+            preferredRoles: Array.from(preferredRoles)
+        };
+    }
+
+    private selectBestAgentForTask(task: OrchestratorTask): AgentInstanceConfig | undefined {
+        const available = this.getAvailableAgents('execute');
+        if (available.length === 0) return undefined;
+
+        const preferences = this.extractRoutingPreferences(task);
+        const eligible = available.filter(agent => {
+            const agentCaps = new Set(agent.capabilities.map(cap => this.normalizeCapabilityAlias(cap)));
+            return preferences.requiredCapabilities.every(cap => agentCaps.has(this.normalizeCapabilityAlias(cap)));
+        });
+
+        const candidates = eligible.length > 0 ? eligible : available;
+        const scoreAgent = (agent: AgentInstanceConfig): number => {
+            const agentCaps = new Set(agent.capabilities.map(cap => this.normalizeCapabilityAlias(cap)));
+            let score = 0;
+
+            for (const cap of preferences.preferredCapabilities) {
+                if (agentCaps.has(this.normalizeCapabilityAlias(cap))) score += 3;
+            }
+            for (const cap of preferences.requiredCapabilities) {
+                if (agentCaps.has(this.normalizeCapabilityAlias(cap))) score += 2;
+            }
+            if (preferences.preferredRoles.includes(String(agent.role || '').toLowerCase())) {
+                score += 4;
+            }
+            if (String(agent.name || '').toLowerCase().includes('browser') && preferences.preferredRoles.includes('browser_specialist')) {
+                score += 2;
+            }
+
+            const lastActive = Date.parse(agent.lastActiveAt || '') || 0;
+            score += Math.max(0, Math.floor((Date.now() - lastActive) / 60000) / 1000);
+            return score;
+        };
+
+        return candidates
+            .slice()
+            .sort((a, b) => scoreAgent(b) - scoreAgent(a))[0];
+    }
+
     /**
      * Update agent status
      */
@@ -595,14 +731,15 @@ export class AgentOrchestrator extends EventEmitter {
     /**
      * Create a task for distribution
      */
-    public createTask(description: string, priority: number = 5): OrchestratorTask {
+    public createTask(description: string, priority: number = 5, metadata?: Record<string, any>): OrchestratorTask {
         const task: OrchestratorTask = {
             id: `task-${uuidv4().slice(0, 8)}`,
             description,
             assignedTo: null,
             status: 'pending',
             priority,
-            createdAt: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            metadata
         };
 
         this.tasks.set(task.id, task);
@@ -739,11 +876,8 @@ export class AgentOrchestrator extends EventEmitter {
         let assigned = 0;
 
         for (const task of pendingTasks) {
-            const available = this.getAvailableAgents('execute');
-            if (available.length === 0) break;
-
-            // Simple round-robin: pick first available
-            const agent = available[0];
+            const agent = this.selectBestAgentForTask(task);
+            if (!agent) break;
             if (this.assignTask(task.id, agent.id)) {
                 assigned++;
             }
@@ -947,6 +1081,18 @@ export class AgentOrchestrator extends EventEmitter {
         currentTaskDescription: string | null;
         lastActiveAt: string;
         role: string;
+        capabilityProfile: {
+            enforced: boolean;
+            capabilities: string[];
+            allowChannels: boolean;
+        };
+        lastCapabilityBlock: {
+            blocked: boolean;
+            skillName: string;
+            requiredCapability?: string;
+            reason: string;
+            timestamp: string;
+        } | null;
     }> {
         const results: Array<{
             agentId: string;
@@ -958,15 +1104,55 @@ export class AgentOrchestrator extends EventEmitter {
             currentTaskDescription: string | null;
             lastActiveAt: string;
             role: string;
+            capabilityProfile: {
+                enforced: boolean;
+                capabilities: string[];
+                allowChannels: boolean;
+            };
+            lastCapabilityBlock: {
+                blocked: boolean;
+                skillName: string;
+                requiredCapability?: string;
+                reason: string;
+                timestamp: string;
+            } | null;
         }> = [];
 
         for (const agent of this.agents.values()) {
             if (agent.status === 'terminated' || agent.id === this.primaryAgentId) continue;
 
+            const workerDir = path.dirname(agent.memoryPath);
+            const workerConfigPath = path.join(workerDir, 'orcbot.config.yaml');
+            const capabilityStatusPath = path.join(workerDir, 'worker-capability-status.json');
+
             let taskDescription: string | null = null;
             if (agent.currentTask) {
                 const task = this.tasks.get(agent.currentTask);
                 taskDescription = task?.description || null;
+            }
+
+            let workerConfig: any = {};
+            if (fs.existsSync(workerConfigPath)) {
+                try {
+                    workerConfig = yaml.parse(fs.readFileSync(workerConfigPath, 'utf-8')) || {};
+                } catch {
+                    workerConfig = {};
+                }
+            }
+
+            let lastCapabilityBlock: {
+                blocked: boolean;
+                skillName: string;
+                requiredCapability?: string;
+                reason: string;
+                timestamp: string;
+            } | null = null;
+            if (fs.existsSync(capabilityStatusPath)) {
+                try {
+                    lastCapabilityBlock = JSON.parse(fs.readFileSync(capabilityStatusPath, 'utf-8'));
+                } catch {
+                    lastCapabilityBlock = null;
+                }
             }
 
             results.push({
@@ -978,7 +1164,13 @@ export class AgentOrchestrator extends EventEmitter {
                 currentTaskId: agent.currentTask,
                 currentTaskDescription: taskDescription,
                 lastActiveAt: agent.lastActiveAt,
-                role: agent.role
+                role: agent.role,
+                capabilityProfile: {
+                    enforced: workerConfig.workerCapabilityEnforcement !== false,
+                    capabilities: Array.isArray(workerConfig.workerCapabilities) ? workerConfig.workerCapabilities : agent.capabilities,
+                    allowChannels: workerConfig.allowWorkerChannels === true
+                },
+                lastCapabilityBlock
             });
         }
 

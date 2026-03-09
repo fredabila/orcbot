@@ -151,6 +151,32 @@
           </ol>
         </div>
 
+        <div class="card">
+          <h2>🔐 Trust Boundaries</h2>
+          <table>
+            <tr><th>Boundary</th><th>Trust Level</th><th>Notes</th></tr>
+            <tr><td>Inbound channels</td><td>Untrusted input</td><td>Telegram, WhatsApp, Discord, Slack, Email, and Gateway Chat payloads are treated as user-controlled input and must pass through session scoping, tool policy, and prompt guardrails.</td></tr>
+            <tr><td>Gateway API</td><td>Operator surface</td><td>The gateway is an admin/control-plane interface. Remote exposure requires <code>gatewayApiKey</code>, explicit CORS, and a stable <code>sourceId</code> for correct session routing.</td></tr>
+            <tr><td>Primary agent</td><td>Trusted runtime</td><td>The primary agent owns channel delivery, final user replies, and all cross-channel policy enforcement. Worker results are returned through this agent rather than sent directly.</td></tr>
+            <tr><td>Worker processes</td><td>Constrained trusted code</td><td>Workers inherit execution capabilities needed for delegated tasks, but channel tokens are stripped from their environment by default so they cannot silently impersonate the primary channel endpoints.</td></tr>
+            <tr><td>Plugins and custom skills</td><td>Fully trusted code</td><td>Plugins execute with local code privileges. Treat them as code deployment, not prompt configuration. Review and allow-list them before use on shared systems.</td></tr>
+            <tr><td>LLM providers and external APIs</td><td>External systems</td><td>Model providers, search providers, browsers, and third-party APIs are outside OrcBot's trust boundary. Keep secrets in config/env, not in memory or prompts.</td></tr>
+          </table>
+        </div>
+
+        <div class="card">
+          <h2>🧭 Deterministic Inbound Routing</h2>
+          <p>OrcBot routes inbound user messages by thread before they become executable actions. The order is explicit and stable:</p>
+          <ol>
+            <li><strong>Resolve session scope:</strong> Every inbound message is mapped to a <code>sessionScopeId</code> using the configured session policy (<code>main</code>, <code>per-peer</code>, or <code>per-channel-peer</code>).</li>
+            <li><strong>Resume waiting work first:</strong> If the same thread already has an action in <code>waiting</code> state, the new inbound message resumes that action instead of spawning a parallel replacement.</li>
+            <li><strong>Supersede stale pending work:</strong> Older pending user-lane actions for the same thread are failed before the new message is queued, preventing stacked stale requests from replaying out of order.</li>
+            <li><strong>Serialize behind active work:</strong> If the thread already has an in-progress action, the new request is queued behind it and tagged with routing metadata rather than being ambiguously merged.</li>
+            <li><strong>Return delegated work through primary:</strong> Worker and clone results are reported back through the primary agent using the original reply context so final user delivery stays on the correct channel thread.</li>
+          </ol>
+          <p>These routing decisions are recorded as inbound route metadata on memories and actions, making them inspectable from logs, memory, and gateway/API surfaces.</p>
+        </div>
+
         <footer class="page-footer">
           <span>© 2026 OrcBot Project</span>
           <div class="footer-nav">
