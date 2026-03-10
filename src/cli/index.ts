@@ -4500,15 +4500,27 @@ async function showConnectionsMenu() {
 async function showTelegramConfig() {
     const currentToken = agent.config.get('telegramToken') || 'Not Set';
     const autoReply = agent.config.get('telegramAutoReplyEnabled');
+    const channelsEnabled = agent.config.get('telegramChannelsEnabled');
     const autonomyAllowed = isAutonomyEnabledForChannel('telegram');
+    const groupsEnabled = agent.config.get('telegramGroupsEnabled');
+    const groupPolicy = String(agent.config.get('telegramGroupPolicy') || 'mention_only');
+    const allowedGroups = (agent.config.get('telegramAllowedGroups') || []) as string[];
+    const blockedGroups = (agent.config.get('telegramBlockedGroups') || []) as string[];
     console.clear();
     banner();
     sectionHeader('✈️', 'Telegram Settings');
     console.log('');
+    const groupPolicyLabel = groupPolicy === 'mention_only' ? yellow('MENTION ONLY') : groupPolicy === 'reply_only' ? yellow('REPLY TO BOT ONLY') : groupPolicy === 'allowlist' ? yellow('ALLOWLIST') : green('ALL MESSAGES');
     const tgLines = [
-        `${dim('Token')}       ${currentToken === 'Not Set' ? gray('Not Set') : green(currentToken.substring(0, 12) + '…')}`,
-        `${dim('Auto-Reply')}  ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
-        `${dim('Autonomy')}    ${autonomyAllowed ? green(bold('● ENABLED')) : gray('○ DISABLED')}`,
+        `${dim('Token')}          ${currentToken === 'Not Set' ? gray('Not Set') : green(currentToken.substring(0, 12) + '…')}`,
+        `${dim('Auto-Reply')}     ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
+        `${dim('Channel Posts')}  ${channelsEnabled ? green(bold('● ON')) : gray('○ OFF')}`,
+        `${dim('Autonomy')}       ${autonomyAllowed ? green(bold('● ENABLED')) : gray('○ DISABLED')}`,
+        ``,
+        `${dim('Group Support')}  ${groupsEnabled ? green(bold('● ON')) : gray('○ OFF')}`,
+        `${dim('Group Policy')}   ${groupsEnabled ? groupPolicyLabel : gray('n/a')}`,
+        `${dim('Allowed Groups')} ${cyan(String(allowedGroups.length))}`,
+        `${dim('Blocked Groups')} ${cyan(String(blockedGroups.length))}`,
     ];
     box(tgLines, { title: '✈️  TELEGRAM', width: 46, color: c.cyan });
     console.log('');
@@ -4521,7 +4533,10 @@ async function showTelegramConfig() {
             choices: [
                 { name: 'Set Token', value: 'set' },
                 { name: autoReply ? 'Disable Auto-Reply' : 'Enable Auto-Reply', value: 'toggle_auto' },
+                { name: channelsEnabled ? 'Disable Channel Post Processing' : 'Enable Channel Post Processing', value: 'toggle_channels' },
                 { name: autonomyAllowed ? 'Disable Autonomous Messaging' : 'Enable Autonomous Messaging', value: 'toggle_autonomy' },
+                { name: groupsEnabled ? 'Disable Group Chat Support' : 'Enable Group Chat Support', value: 'toggle_groups' },
+                { name: 'Manage Group Policy', value: 'manage_group_policy' },
                 { name: 'Back', value: 'back' }
             ]
         }
@@ -4540,8 +4555,84 @@ async function showTelegramConfig() {
     } else if (action === 'toggle_auto') {
         agent.config.set('telegramAutoReplyEnabled', !autoReply);
         return showTelegramConfig();
+    } else if (action === 'toggle_channels') {
+        agent.config.set('telegramChannelsEnabled', !channelsEnabled);
+        return showTelegramConfig();
     } else if (action === 'toggle_autonomy') {
         toggleAutonomyChannel('telegram');
+        return showTelegramConfig();
+    } else if (action === 'toggle_groups') {
+        agent.config.set('telegramGroupsEnabled', !groupsEnabled);
+        return showTelegramConfig();
+    } else if (action === 'manage_group_policy') {
+        const { groupPolicyAction } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'groupPolicyAction',
+                message: 'Telegram Group Policy:',
+                choices: [
+                    { name: 'Mode: All group messages', value: 'mode_all' },
+                    { name: 'Mode: Only when @mentioned', value: 'mode_mention_only' },
+                    { name: 'Mode: Only replies to the bot', value: 'mode_reply_only' },
+                    { name: 'Mode: Allowlisted groups only', value: 'mode_allowlist' },
+                    new inquirer.Separator('── Allowed Groups ──'),
+                    { name: `Add group to allowlist (${allowedGroups.length})`, value: 'group_allow_add' },
+                    { name: `Remove group from allowlist (${allowedGroups.length})`, value: 'group_allow_remove' },
+                    { name: 'Clear group allowlist', value: 'group_allow_clear' },
+                    new inquirer.Separator('── Blocked Groups ──'),
+                    { name: `Add group to blocklist (${blockedGroups.length})`, value: 'group_block_add' },
+                    { name: `Remove group from blocklist (${blockedGroups.length})`, value: 'group_block_remove' },
+                    { name: 'Clear group blocklist', value: 'group_block_clear' },
+                    { name: 'Back', value: 'back' }
+                ]
+            }
+        ]);
+
+        if (groupPolicyAction === 'mode_all') {
+            agent.config.set('telegramGroupPolicy', 'all');
+            console.log(green('Group policy set to: all messages'));
+        } else if (groupPolicyAction === 'mode_mention_only') {
+            agent.config.set('telegramGroupPolicy', 'mention_only');
+            console.log(green('Group policy set to: mention only'));
+        } else if (groupPolicyAction === 'mode_reply_only') {
+            agent.config.set('telegramGroupPolicy', 'reply_only');
+            console.log(green('Group policy set to: reply to bot only'));
+        } else if (groupPolicyAction === 'mode_allowlist') {
+            agent.config.set('telegramGroupPolicy', 'allowlist');
+            console.log(green('Group policy set to: allowlist'));
+        } else if (groupPolicyAction === 'group_allow_add') {
+            const { gid } = await inquirer.prompt([{ type: 'input', name: 'gid', message: 'Enter Telegram group chat ID (negative number, e.g. -100123456):' }]);
+            const norm = String(gid || '').trim();
+            if (norm) {
+                agent.config.set('telegramAllowedGroups', Array.from(new Set([...allowedGroups, norm])));
+                console.log(green(`Added group to allowlist: ${norm}`));
+            }
+        } else if (groupPolicyAction === 'group_allow_remove') {
+            if (allowedGroups.length > 0) {
+                const { gid } = await inquirer.prompt([{ type: 'list', name: 'gid', message: 'Select group to remove from allowlist:', choices: allowedGroups }]);
+                agent.config.set('telegramAllowedGroups', allowedGroups.filter(g => g !== gid));
+            }
+        } else if (groupPolicyAction === 'group_allow_clear') {
+            agent.config.set('telegramAllowedGroups', []);
+            console.log(yellow('Group allowlist cleared'));
+        } else if (groupPolicyAction === 'group_block_add') {
+            const { gid } = await inquirer.prompt([{ type: 'input', name: 'gid', message: 'Enter Telegram group chat ID to block:' }]);
+            const norm = String(gid || '').trim();
+            if (norm) {
+                agent.config.set('telegramBlockedGroups', Array.from(new Set([...blockedGroups, norm])));
+                console.log(yellow(`Added group to blocklist: ${norm}`));
+            }
+        } else if (groupPolicyAction === 'group_block_remove') {
+            if (blockedGroups.length > 0) {
+                const { gid } = await inquirer.prompt([{ type: 'list', name: 'gid', message: 'Select group to remove from blocklist:', choices: blockedGroups }]);
+                agent.config.set('telegramBlockedGroups', blockedGroups.filter(g => g !== gid));
+            }
+        } else if (groupPolicyAction === 'group_block_clear') {
+            agent.config.set('telegramBlockedGroups', []);
+            console.log(yellow('Group blocklist cleared'));
+        }
+
+        await waitKeyPress();
         return showTelegramConfig();
     }
 }
@@ -4550,8 +4641,16 @@ async function showWhatsAppConfig() {
     const enabled = agent.config.get('whatsappEnabled');
     const autoReply = agent.config.get('whatsappAutoReplyEnabled');
     const statusReply = agent.config.get('whatsappStatusReplyEnabled');
+    const statusMediaMode = String(agent.config.get('whatsappStatusMediaMode') || 'off');
     const autoReact = agent.config.get('whatsappAutoReactEnabled');
     const contextProfiling = agent.config.get('whatsappContextProfilingEnabled');
+    const contactAccessMode = String(agent.config.get('whatsappContactAccessMode') || 'all');
+    const allowedContacts = (agent.config.get('whatsappAllowedContacts') || []) as string[];
+    const blockedContacts = (agent.config.get('whatsappBlockedContacts') || []) as string[];
+    const groupsEnabled = agent.config.get('whatsappGroupsEnabled');
+    const groupPolicy = String(agent.config.get('whatsappGroupPolicy') || 'mention_only');
+    const allowedGroups = (agent.config.get('whatsappAllowedGroups') || []) as string[];
+    const blockedGroups = (agent.config.get('whatsappBlockedGroups') || []) as string[];
     const ownerJid = agent.config.get('whatsappOwnerJID') || 'Not Linked';
     const autonomyAllowed = isAutonomyEnabledForChannel('whatsapp');
 
@@ -4560,13 +4659,24 @@ async function showWhatsAppConfig() {
     sectionHeader('💬', 'WhatsApp Settings');
     console.log('');
     const onOff = (v: any) => v ? green(bold('● ON')) : gray('○ OFF');
+    const groupPolicyLabel = groupPolicy === 'mention_only' ? yellow('MENTION ONLY') : groupPolicy === 'owner_only' ? yellow('OWNER ONLY') : groupPolicy === 'allowlist' ? yellow('ALLOWLIST') : green('ALL MESSAGES');
+    const statusMediaLabel = statusMediaMode === 'download_and_analyze' ? green('DOWNLOAD + ANALYZE') : statusMediaMode === 'download_only' ? yellow('DOWNLOAD ONLY') : gray('OFF');
     const waLines = [
         `${dim('Status')}            ${enabled ? green(bold('ENABLED')) : red(bold('DISABLED'))}`,
         `${dim('Linked Account')}    ${ownerJid === 'Not Linked' ? gray(ownerJid) : cyan(ownerJid)}`,
         `${dim('Autonomy')}          ${autonomyAllowed ? green(bold('● ENABLED')) : gray('○ DISABLED')}`,
+        `${dim('Contact Policy')}    ${contactAccessMode === 'allowlist' ? yellow('ALLOWLIST ONLY') : contactAccessMode === 'blocklist' ? yellow('BLOCKLIST') : green('ALL CONTACTS')}`,
+        `${dim('Allowed Contacts')}  ${cyan(String(allowedContacts.length))}`,
+        `${dim('Blocked Contacts')}  ${cyan(String(blockedContacts.length))}`,
+        ``,
+        `${dim('Group Support')}     ${groupsEnabled ? green(bold('● ON')) : gray('○ OFF')}`,
+        `${dim('Group Policy')}      ${groupsEnabled ? groupPolicyLabel : gray('n/a')}`,
+        `${dim('Allowed Groups')}    ${cyan(String(allowedGroups.length))}`,
+        `${dim('Blocked Groups')}    ${cyan(String(blockedGroups.length))}`,
         ``,
         `${dim('Auto-Reply (1‑on‑1)')}  ${onOff(autoReply)}`,
         `${dim('Status Interactions')}  ${onOff(statusReply)}`,
+        `${dim('Status Media Mode')}    ${statusReply ? statusMediaLabel : gray('n/a (status off)')}`,
         `${dim('Auto-React (Emojis)')}  ${onOff(autoReact)}`,
         `${dim('Context Profiling')}    ${onOff(contextProfiling)}`,
     ];
@@ -4583,8 +4693,12 @@ async function showWhatsAppConfig() {
                 { name: autoReply ? 'Disable Auto-Reply' : 'Enable Auto-Reply', value: 'toggle_auto' },
                 { name: autonomyAllowed ? 'Disable Autonomous Messaging' : 'Enable Autonomous Messaging', value: 'toggle_autonomy' },
                 { name: statusReply ? 'Disable Status Interactions' : 'Enable Status Interactions', value: 'toggle_status' },
+                { name: 'Manage Status Media Processing', value: 'manage_status_media' },
                 { name: autoReact ? 'Disable Auto-React' : 'Enable Auto-React', value: 'toggle_react' },
                 { name: contextProfiling ? 'Disable Context Profiling' : 'Enable Context Profiling', value: 'toggle_profile' },
+                { name: 'Manage Contact Filter Policy', value: 'manage_contact_policy' },
+                { name: groupsEnabled ? 'Disable Group Chat Support' : 'Enable Group Chat Support', value: 'toggle_groups' },
+                { name: 'Manage Group Policy', value: 'manage_group_policy' },
                 { name: 'Run Context Profiling (Batch)', value: 'trigger_profiling' },
                 { name: 'Link Account / Show QR', value: 'link' },
                 { name: 'Back', value: 'back' }
@@ -4607,12 +4721,202 @@ async function showWhatsAppConfig() {
         case 'toggle_status':
             agent.config.set('whatsappStatusReplyEnabled', !statusReply);
             break;
+        case 'manage_status_media': {
+            const { mode } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'mode',
+                    message: 'Status Media Processing Mode:',
+                    choices: [
+                        { name: 'Off (ignore status media)', value: 'off' },
+                        { name: 'Download only (no AI analysis)', value: 'download_only' },
+                        { name: 'Download + analyze (audio/image/video/doc)', value: 'download_and_analyze' }
+                    ],
+                    default: statusMediaMode
+                }
+            ]);
+            agent.config.set('whatsappStatusMediaMode', mode);
+            break;
+        }
         case 'toggle_react':
             agent.config.set('whatsappAutoReactEnabled', !autoReact);
             break;
         case 'toggle_profile':
             agent.config.set('whatsappContextProfilingEnabled', !contextProfiling);
             break;
+        case 'manage_contact_policy': {
+            const normalizeJid = (input: string): string => {
+                let id = String(input || '').trim();
+                if (!id) return '';
+                if (!id.includes('@')) id = `${id}@s.whatsapp.net`;
+                return id;
+            };
+
+            const knownContacts = agent.whatsapp?.getRecentContacts() || [];
+            const pickContactFromKnown = async (message: string): Promise<string | null> => {
+                if (knownContacts.length === 0) return null;
+                const { pick } = await inquirer.prompt([
+                    {
+                        type: 'list',
+                        name: 'pick',
+                        message,
+                        choices: [
+                            ...knownContacts.slice(0, 150).map(c => ({ name: `${c.name} (${c.jid})`, value: c.jid })),
+                            { name: 'Enter JID manually', value: '__manual__' },
+                            { name: 'Cancel', value: '__cancel__' }
+                        ]
+                    }
+                ]);
+                if (pick === '__cancel__') return null;
+                if (pick !== '__manual__') return pick;
+                const { manual } = await inquirer.prompt([{ type: 'input', name: 'manual', message: 'Enter WhatsApp JID or phone number:' }]);
+                return normalizeJid(manual);
+            };
+
+            const promptManual = async (message: string): Promise<string | null> => {
+                const { jid } = await inquirer.prompt([{ type: 'input', name: 'jid', message }]);
+                const normalized = normalizeJid(jid);
+                return normalized || null;
+            };
+
+            const { policyAction } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'policyAction',
+                    message: 'Contact Filter Policy:',
+                    choices: [
+                        { name: 'Mode: Allow all contacts', value: 'mode_all' },
+                        { name: 'Mode: Reply only to allowlist', value: 'mode_allowlist' },
+                        { name: 'Mode: Block listed contacts', value: 'mode_blocklist' },
+                        new inquirer.Separator('── Allowlist ──'),
+                        { name: `Add to allowlist (${allowedContacts.length})`, value: 'allow_add' },
+                        { name: `Remove from allowlist (${allowedContacts.length})`, value: 'allow_remove' },
+                        { name: 'Clear allowlist', value: 'allow_clear' },
+                        new inquirer.Separator('── Blocklist ──'),
+                        { name: `Add to blocklist (${blockedContacts.length})`, value: 'block_add' },
+                        { name: `Remove from blocklist (${blockedContacts.length})`, value: 'block_remove' },
+                        { name: 'Clear blocklist', value: 'block_clear' },
+                        { name: 'Back', value: 'back' }
+                    ]
+                }
+            ]);
+
+            if (policyAction === 'mode_all') {
+                agent.config.set('whatsappContactAccessMode', 'all');
+            } else if (policyAction === 'mode_allowlist') {
+                agent.config.set('whatsappContactAccessMode', 'allowlist');
+            } else if (policyAction === 'mode_blocklist') {
+                agent.config.set('whatsappContactAccessMode', 'blocklist');
+            } else if (policyAction === 'allow_add') {
+                const picked = (await pickContactFromKnown('Pick contact to allow')) || (await promptManual('Enter contact to allow:'));
+                if (picked) {
+                    const next = Array.from(new Set([...(allowedContacts || []), picked]));
+                    agent.config.set('whatsappAllowedContacts', next);
+                    console.log(green(`Added to allowlist: ${picked}`));
+                }
+            } else if (policyAction === 'allow_remove') {
+                if (allowedContacts.length > 0) {
+                    const { jid } = await inquirer.prompt([{ type: 'list', name: 'jid', message: 'Select allowlist contact to remove:', choices: allowedContacts }]);
+                    agent.config.set('whatsappAllowedContacts', allowedContacts.filter(j => j !== jid));
+                }
+            } else if (policyAction === 'allow_clear') {
+                agent.config.set('whatsappAllowedContacts', []);
+            } else if (policyAction === 'block_add') {
+                const picked = (await pickContactFromKnown('Pick contact to block')) || (await promptManual('Enter contact to block:'));
+                if (picked) {
+                    const next = Array.from(new Set([...(blockedContacts || []), picked]));
+                    agent.config.set('whatsappBlockedContacts', next);
+                    console.log(yellow(`Added to blocklist: ${picked}`));
+                }
+            } else if (policyAction === 'block_remove') {
+                if (blockedContacts.length > 0) {
+                    const { jid } = await inquirer.prompt([{ type: 'list', name: 'jid', message: 'Select blocklist contact to remove:', choices: blockedContacts }]);
+                    agent.config.set('whatsappBlockedContacts', blockedContacts.filter(j => j !== jid));
+                }
+            } else if (policyAction === 'block_clear') {
+                agent.config.set('whatsappBlockedContacts', []);
+            }
+            break;
+        }
+        case 'toggle_groups':
+            agent.config.set('whatsappGroupsEnabled', !groupsEnabled);
+            break;
+        case 'manage_group_policy': {
+            const normalizeGroupJid = (input: string): string => {
+                let id = String(input || '').trim();
+                if (!id) return '';
+                if (!id.includes('@')) id = `${id}@g.us`;
+                return id;
+            };
+
+            const { groupPolicyAction } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'groupPolicyAction',
+                    message: 'Group Policy:',
+                    choices: [
+                        { name: 'Mode: All group messages', value: 'mode_all' },
+                        { name: 'Mode: Only when @mentioned', value: 'mode_mention_only' },
+                        { name: 'Mode: Only messages from owner', value: 'mode_owner_only' },
+                        { name: 'Mode: Allowlisted groups only', value: 'mode_allowlist' },
+                        new inquirer.Separator('── Allowed Groups ──'),
+                        { name: `Add group to allowlist (${allowedGroups.length})`, value: 'group_allow_add' },
+                        { name: `Remove group from allowlist (${allowedGroups.length})`, value: 'group_allow_remove' },
+                        { name: 'Clear group allowlist', value: 'group_allow_clear' },
+                        new inquirer.Separator('── Blocked Groups ──'),
+                        { name: `Add group to blocklist (${blockedGroups.length})`, value: 'group_block_add' },
+                        { name: `Remove group from blocklist (${blockedGroups.length})`, value: 'group_block_remove' },
+                        { name: 'Clear group blocklist', value: 'group_block_clear' },
+                        { name: 'Back', value: 'back' }
+                    ]
+                }
+            ]);
+
+            if (groupPolicyAction === 'mode_all') {
+                agent.config.set('whatsappGroupPolicy', 'all');
+                console.log(green('Group policy set to: all messages'));
+            } else if (groupPolicyAction === 'mode_mention_only') {
+                agent.config.set('whatsappGroupPolicy', 'mention_only');
+                console.log(green('Group policy set to: mention only'));
+            } else if (groupPolicyAction === 'mode_owner_only') {
+                agent.config.set('whatsappGroupPolicy', 'owner_only');
+                console.log(green('Group policy set to: owner only'));
+            } else if (groupPolicyAction === 'mode_allowlist') {
+                agent.config.set('whatsappGroupPolicy', 'allowlist');
+                console.log(green('Group policy set to: allowlist'));
+            } else if (groupPolicyAction === 'group_allow_add') {
+                const { gid } = await inquirer.prompt([{ type: 'input', name: 'gid', message: 'Enter group JID or ID (e.g. 12345678@g.us):' }]);
+                const norm = normalizeGroupJid(gid);
+                if (norm) {
+                    agent.config.set('whatsappAllowedGroups', Array.from(new Set([...allowedGroups, norm])));
+                    console.log(green(`Added group to allowlist: ${norm}`));
+                }
+            } else if (groupPolicyAction === 'group_allow_remove') {
+                if (allowedGroups.length > 0) {
+                    const { gid } = await inquirer.prompt([{ type: 'list', name: 'gid', message: 'Select group to remove from allowlist:', choices: allowedGroups }]);
+                    agent.config.set('whatsappAllowedGroups', allowedGroups.filter(g => g !== gid));
+                }
+            } else if (groupPolicyAction === 'group_allow_clear') {
+                agent.config.set('whatsappAllowedGroups', []);
+                console.log(yellow('Group allowlist cleared'));
+            } else if (groupPolicyAction === 'group_block_add') {
+                const { gid } = await inquirer.prompt([{ type: 'input', name: 'gid', message: 'Enter group JID or ID to block:' }]);
+                const norm = normalizeGroupJid(gid);
+                if (norm) {
+                    agent.config.set('whatsappBlockedGroups', Array.from(new Set([...blockedGroups, norm])));
+                    console.log(yellow(`Added group to blocklist: ${norm}`));
+                }
+            } else if (groupPolicyAction === 'group_block_remove') {
+                if (blockedGroups.length > 0) {
+                    const { gid } = await inquirer.prompt([{ type: 'list', name: 'gid', message: 'Select group to remove from blocklist:', choices: blockedGroups }]);
+                    agent.config.set('whatsappBlockedGroups', blockedGroups.filter(g => g !== gid));
+                }
+            } else if (groupPolicyAction === 'group_block_clear') {
+                agent.config.set('whatsappBlockedGroups', []);
+                console.log(yellow('Group blocklist cleared'));
+            }
+            break;
+        }
         case 'trigger_profiling': {
             if (!agent.whatsapp) {
                 console.log(red('\nWhatsApp is not connected.'));
@@ -6477,7 +6781,10 @@ async function showConfigMenu() {
         'openrouterApiKey', 'openrouterBaseUrl', 'openrouterReferer', 'openrouterAppName',
         'googleApiKey', 'nvidiaApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl',
         'searchProviderOrder', 'captchaApiKey', 'autonomyInterval', 'telegramToken',
-        'whatsappEnabled', 'slackBotToken', 'slackAutoReplyEnabled', 'whatsappAutoReplyEnabled',
+        'whatsappEnabled', 'slackBotToken', 'slackAutoReplyEnabled', 'whatsappAutoReplyEnabled', 'whatsappStatusMediaMode',
+        'whatsappContactAccessMode', 'whatsappAllowedContacts', 'whatsappBlockedContacts',
+        'whatsappGroupsEnabled', 'whatsappGroupPolicy', 'whatsappAllowedGroups', 'whatsappBlockedGroups',
+        'telegramChannelsEnabled', 'telegramGroupsEnabled', 'telegramGroupPolicy', 'telegramAllowedGroups', 'telegramBlockedGroups',
         'progressFeedbackEnabled', 'progressFeedbackStepInterval', 'progressFeedbackForceInitial',
         'progressFeedbackTypingOnly', 'enforceExplicitFileRequestForSendFile', 'onboardingQuestionnaireEnabled',
         'reconnectBriefingEnabled', 'reconnectBriefingThresholdDays', 'reconnectBriefingMaxCompletions',
@@ -6536,10 +6843,10 @@ async function showConfigMenu() {
         { type: 'input', name: 'value', message: `Enter new value for ${key}:` },
     ]);
 
-    if (key === 'searchProviderOrder' || key === 'commandAllowList' || key === 'commandDenyList' || key === 'pluginAllowList' || key === 'pluginDenyList' || key === 'guidanceAckPatterns' || key === 'guidanceLowValuePatterns' || key === 'guidanceClarificationKeywords' || key === 'guidanceQuestionStopWords' || key === 'orcbotControlCliAllowList' || key === 'orcbotControlCliDenyList') {
+    if (key === 'searchProviderOrder' || key === 'commandAllowList' || key === 'commandDenyList' || key === 'pluginAllowList' || key === 'pluginDenyList' || key === 'guidanceAckPatterns' || key === 'guidanceLowValuePatterns' || key === 'guidanceClarificationKeywords' || key === 'guidanceQuestionStopWords' || key === 'orcbotControlCliAllowList' || key === 'orcbotControlCliDenyList' || key === 'whatsappAllowedContacts' || key === 'whatsappBlockedContacts' || key === 'whatsappAllowedGroups' || key === 'whatsappBlockedGroups' || key === 'telegramAllowedGroups' || key === 'telegramBlockedGroups') {
         const parsed = (value || '').split(',').map((s: string) => s.trim()).filter(Boolean);
         agent.config.set(key as any, parsed);
-    } else if (key === 'safeMode' || key === 'sudoMode' || key === 'progressFeedbackEnabled' || key === 'progressFeedbackForceInitial' || key === 'progressFeedbackTypingOnly' || key === 'enforceExplicitFileRequestForSendFile' || key === 'onboardingQuestionnaireEnabled' || key === 'reconnectBriefingEnabled' || key === 'whatsappEnabled' || key === 'slackAutoReplyEnabled' || key === 'whatsappAutoReplyEnabled' || key === 'robustReasoningMode' || key === 'reasoningExposeChecklist' || key === 'orcbotControlEnabled') {
+    } else if (key === 'safeMode' || key === 'sudoMode' || key === 'progressFeedbackEnabled' || key === 'progressFeedbackForceInitial' || key === 'progressFeedbackTypingOnly' || key === 'enforceExplicitFileRequestForSendFile' || key === 'onboardingQuestionnaireEnabled' || key === 'reconnectBriefingEnabled' || key === 'whatsappEnabled' || key === 'slackAutoReplyEnabled' || key === 'whatsappAutoReplyEnabled' || key === 'telegramChannelsEnabled' || key === 'robustReasoningMode' || key === 'reasoningExposeChecklist' || key === 'orcbotControlEnabled') {
         const normalized = String(value).trim().toLowerCase();
         agent.config.set(key as any, normalized === 'true' || normalized === '1' || normalized === 'yes');
     } else if (key === 'guidanceRepeatQuestionThreshold') {

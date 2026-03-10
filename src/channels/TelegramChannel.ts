@@ -14,6 +14,7 @@ export class TelegramChannel implements IChannel {
     public name = 'telegram';
     private bot: Telegraf;
     private agent: Agent;
+    private botUsername: string = '';
 
     constructor(token: string, agent: Agent) {
         this.bot = new Telegraf(token);
@@ -215,14 +216,23 @@ export class TelegramChannel implements IChannel {
             const userId = ctx.from.id.toString();
             const chatId = (ctx.chat?.id != null ? ctx.chat.id.toString() : userId);
             const chatType = ctx.chat?.type || 'private';
+            const isBroadcastChannel = (chatType as string) === 'channel';
             const isGroupChat = chatType === 'group' || chatType === 'supergroup' || (chatType as string) === 'channel';
             const userName = ctx.from.first_name;
             const autoReplyEnabled = this.agent.config.get('telegramAutoReplyEnabled');
+            const channelsEnabled = this.agent.config.get('telegramChannelsEnabled');
             const sessionScopeId = this.agent.resolveSessionScopeId('telegram', {
                 sourceId: chatId,
                 userId,
                 chatId
             });
+
+            // Telegram broadcast channels are often non-actionable unless the bot is
+            // explicitly configured/admin-capable. Skip by default to avoid wasted tasks.
+            if (isBroadcastChannel && !channelsEnabled) {
+                logger.debug(`Telegram: Skipping channel post from ${chatId} (telegramChannelsEnabled=false)`);
+                return;
+            }
 
             let text = message.text || message.caption || '';
 
@@ -277,6 +287,9 @@ export class TelegramChannel implements IChannel {
                     const result = await this.agent.llm.analyzeMedia(mediaPath, 'Transcribe this audio message exactly. Return only the transcription text.');
                     // Strip "Transcription result:\n" prefix that Whisper path adds
                     transcription = result.replace(/^Transcription result:\n/i, '').trim();
+                    if (transcription.startsWith('Media analysis skipped:')) {
+                        transcription = '';
+                    }
                     if (transcription) {
                         logger.info(`Telegram: Transcribed voice from ${userName}: "${transcription.substring(0, 100)}..."`);
                     }
@@ -296,6 +309,9 @@ export class TelegramChannel implements IChannel {
                         ? `The user sent this ${mediaType} with the message: "${text}". Describe what you see in detail.`
                         : `Describe the content of this ${mediaType} in detail.`;
                     mediaAnalysis = await this.agent.llm.analyzeMedia(mediaPath, prompt);
+                    if (mediaAnalysis.startsWith('Media analysis skipped:')) {
+                        mediaAnalysis = '';
+                    }
                     if (mediaAnalysis) {
                         logger.info(`Telegram: Analyzed ${mediaType} from ${userName}: "${mediaAnalysis.substring(0, 100)}..."`);
                     }
@@ -307,6 +323,47 @@ export class TelegramChannel implements IChannel {
             if (!text && !mediaPath) return;
 
             logger.info(`Telegram: Message from ${userName} (${userId}): ${text || transcription || '[Media]'} | autoReply=${autoReplyEnabled}`);
+
+            // Group policy enforcement
+            if (isGroupChat) {
+                const groupsEnabled = this.agent.config.get('telegramGroupsEnabled');
+                if (!groupsEnabled) {
+                    logger.debug(`Telegram: Skipping group message from ${chatId} (telegramGroupsEnabled=false)`);
+                    return;
+                }
+                const groupPolicy = String(this.agent.config.get('telegramGroupPolicy') || 'mention_only');
+                const allowedGroups = ((this.agent.config.get('telegramAllowedGroups') || []) as string[]).map(String);
+                const blockedGroups = ((this.agent.config.get('telegramBlockedGroups') || []) as string[]).map(String);
+
+                if (blockedGroups.includes(chatId)) {
+                    logger.info(`Telegram: Skipping message from blocked group ${chatId}`);
+                    return;
+                }
+                if (groupPolicy === 'allowlist' && !allowedGroups.includes(chatId)) {
+                    logger.debug(`Telegram: Skipping group ${chatId} not in allowlist (policy=allowlist)`);
+                    return;
+                }
+                if (groupPolicy === 'mention_only') {
+                    const bn = this.botUsername.toLowerCase();
+                    const entities: Array<{type: string; offset: number; length: number}> =
+                        (message.entities || message.caption_entities || []);
+                    const isMentioned =
+                        (bn && text.toLowerCase().includes('@' + bn)) ||
+                        entities.some(e => e.type === 'mention' &&
+                            text.substring(e.offset, e.offset + e.length).toLowerCase() === '@' + bn);
+                    if (!isMentioned) {
+                        logger.debug(`Telegram: Skipping group message (policy=mention_only, not mentioned)`);
+                        return;
+                    }
+                }
+                if (groupPolicy === 'reply_only') {
+                    const isReplyToBot = message.reply_to_message?.from?.is_bot === true;
+                    if (!isReplyToBot) {
+                        logger.debug(`Telegram: Skipping group message (policy=reply_only, not a reply to bot)`);
+                        return;
+                    }
+                }
+            }
 
             // Dispatch to unified MessageBus
             await this.agent.messageBus.dispatch({
@@ -378,6 +435,14 @@ export class TelegramChannel implements IChannel {
             await this.bot.launch(() => {
                 logger.info('TelegramChannel: Bot started successfully');
             });
+            // Cache bot username for group mention detection
+            try {
+                const me = await this.bot.telegram.getMe();
+                this.botUsername = me.username || '';
+                if (this.botUsername) logger.info(`TelegramChannel: Bot username cached: @${this.botUsername}`);
+            } catch (e) {
+                logger.warn(`TelegramChannel: Could not cache bot username: ${e}`);
+            }
 
             // Enable graceful stop
             process.once('SIGINT', () => this.bot.stop('SIGINT'));

@@ -18,6 +18,7 @@ import { KnowledgeStore } from '../memory/KnowledgeStore';
 import { BookLogManager } from '../memory/BookLogManager';
 import { ToolsManager } from './ToolsManager';
 import { Environment } from './utils/Environment';
+import { SystemProfiler } from './SystemProfiler';
 import type { ValidationResult } from './ResponseValidator';
 
 export class DecisionEngine {
@@ -32,6 +33,7 @@ export class DecisionEngine {
     private knowledgeStore?: KnowledgeStore;
     private bookLog?: BookLogManager;
     private tools?: ToolsManager;
+    private systemProfiler?: SystemProfiler;
     private repoContext: string;
 
     // ── Per-action prompt cache ──
@@ -77,6 +79,13 @@ export class DecisionEngine {
      */
     setBookLog(log: BookLogManager): void {
         this.bookLog = log;
+    }
+
+    /**
+     * Set the SystemProfiler for system knowledge injection into prompts.
+     */
+    setSystemProfiler(profiler: SystemProfiler): void {
+        this.systemProfiler = profiler;
     }
 
     /**
@@ -1452,10 +1461,14 @@ Respond conversationally. If the user asks you to do something that requires ele
             ? trimmedUserContext.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#')).slice(0, 4).join(' | ').slice(0, 200)
             : '';
 
+        // System profile — agent's knowledge about what system it's running on
+        const systemProfileSummary = this.systemProfiler && !isHeartbeat ? this.systemProfiler.getSummary() : '';
+
         // Full prompt for all steps - don't risk losing context
         const systemPrompt = `
 ${runtimeLine}
 ${quickUserProfile ? `USER: ${quickUserProfile}` : ''}
+${systemProfileSummary ? `\n${systemProfileSummary}` : ''}
 
 ${coreInstructions}
 

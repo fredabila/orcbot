@@ -23,6 +23,7 @@ import { BootstrapManager } from './BootstrapManager';
 import { UsagePing } from './UsagePing';
 import { AgenticUser } from './AgenticUser';
 import { KnowledgeStore } from '../memory/KnowledgeStore';
+import { SystemProfiler } from './SystemProfiler';
 import { memoryToolsSkills } from '../skills/memoryTools';
 import { pythonToolsSkills } from '../skills/pythonTools';
 import { canvasToolsSkills } from '../skills/canvasTools';
@@ -94,6 +95,7 @@ export class Agent {
     public pollingManager: PollingManager;
     public usagePing: UsagePing;
     public config: ConfigManager;
+    public systemProfiler: SystemProfiler;
     public telegram: TelegramChannel | undefined;
     public whatsapp: WhatsAppChannel | undefined;
     public discord: DiscordChannel | undefined;
@@ -194,6 +196,8 @@ export class Agent {
         this.agentConfigFile = this.config.get('agentIdentityPath');
         this.initializeStorage();
         this.messageBus = new MessageBus(this);
+        // Initialize system profiler - will be loaded/profiled during startup
+        this.systemProfiler = new SystemProfiler(this.config.getDataHome());
 
         this.tools = new ToolsManager(
             this.config.get('toolsPath') || path.join(this.config.getDataHome(), 'tools')
@@ -311,6 +315,7 @@ export class Agent {
         );
         this.decisionEngine.setKnowledgeStore(this.knowledgeStore);
         this.decisionEngine.setBookLog(this.bookLog);
+        this.decisionEngine.setSystemProfiler(this.systemProfiler);
         this.simulationEngine = new SimulationEngine(this.llm);
         this.blockReviewer = new BlockReviewer(this.llm);
         this.actionQueue = new ActionQueue(this.config.get('actionQueuePath') || './actions.json', {
@@ -12764,6 +12769,27 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 logger.error(`Agent: Failed to start ${name} channel: ${result.reason?.message || result.reason}`);
             }
         });
+        
+        // ── System Profiling ──
+        // Profile and cache the system the agent is running on so it knows
+        // what platforms, channels, and capabilities are available.
+        // This prevents the agent from asking "dumb questions" about the system.
+        try {
+            await this.systemProfiler.loadOrCreate({
+                memory: this.memory,
+                channels: {
+                    telegram: this.telegram,
+                    whatsapp: this.whatsapp,
+                    discord: this.discord,
+                    slack: this.slack,
+                    email: this.email
+                },
+                skills: this.skills,
+                config: this.config
+            });
+        } catch (e) {
+            logger.warn(`Agent: Failed to profile system: ${e}`);
+        }
         
         // ── Ollama Warm-up ──
         // If Ollama is the selected provider, trigger a pre-load of the model

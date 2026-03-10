@@ -136,6 +136,9 @@ export class DiscordChannel implements IChannel {
                         logger.info(`Discord: Auto-transcribing audio from ${username}...`);
                         const result = await this.agent.llm.analyzeMedia(localPath, 'Transcribe this audio message exactly. Return only the transcription text.');
                         const text = result.replace(/^Transcription result:\n/i, '').trim();
+                        if (text.startsWith('Media analysis skipped:')) {
+                            continue;
+                        }
                         if (text) {
                             logger.info(`Discord: Transcribed audio from ${username}: "${text.substring(0, 100)}..."`);
                             transcriptionResult += (transcriptionResult ? '\n' : '') + `[Audio: ${text}]`;

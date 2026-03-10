@@ -261,13 +261,13 @@ export class MultiLLM {
     }
 
     public async call(prompt: string, systemMessage?: string, provider?: LLMProvider, modelOverride?: string): Promise<string> {
-        const primaryProvider = provider || this.preferredProvider || this.inferProvider(modelOverride || this.modelName);
         const primaryModel = modelOverride || this.modelName;
+        const primaryProvider = this.resolveProviderForModel(provider || this.preferredProvider, primaryModel);
         let piAiError: Error | undefined;
 
         if (this.usePiAI && primaryProvider !== 'ollama') {
             try {
-                return await piAiCall(prompt, systemMessage, this.getPiAIOptions(modelOverride, provider));
+                return await piAiCall(prompt, systemMessage, this.getPiAIOptions(primaryModel, primaryProvider));
             } catch (e) {
                 piAiError = e as Error;
                 logger.warn(`MultiLLM: pi-ai call failed for ${primaryProvider}/${primaryModel}, falling back to legacy path - ${piAiError.message}`);
@@ -293,7 +293,7 @@ export class MultiLLM {
 
         return ErrorHandler.withFallback(
             async () => {
-                const primaryProviderResolved = provider || this.preferredProvider || this.inferProvider(primaryModel);
+                const primaryProviderResolved = this.resolveProviderForModel(provider || this.preferredProvider, primaryModel);
                 if (piAiError && !this.hasKeyForProvider(primaryProviderResolved)) {
                     throw new Error(`Primary provider (${primaryProviderResolved}) via pi-ai failed: ${piAiError.message}`);
                 }
@@ -321,12 +321,13 @@ export class MultiLLM {
         provider?: LLMProvider,
         modelOverride?: string
     ): Promise<LLMToolResponse> {
-        const primaryProvider = provider || this.preferredProvider || this.inferProvider(modelOverride || this.modelName);
+        const primaryModel = modelOverride || this.modelName;
+        const primaryProvider = this.resolveProviderForModel(provider || this.preferredProvider, primaryModel);
         let piAiToolError: Error | undefined;
 
         if (this.usePiAI && primaryProvider !== 'ollama') {
             try {
-                return await piAiCallWithTools(prompt, systemMessage, tools, this.getPiAIOptions(modelOverride, provider));
+                return await piAiCallWithTools(prompt, systemMessage, tools, this.getPiAIOptions(primaryModel, primaryProvider));
             } catch (e) {
                 piAiToolError = e as Error;
                 logger.warn(`MultiLLM: pi-ai callWithTools failed, falling back to legacy - ${piAiToolError.message}`);
@@ -780,6 +781,48 @@ export class MultiLLM {
         return modelName.replace(/^ollama:/i, '').replace(/^local:/i, '');
     }
 
+    private hasStrongProviderSignal(modelName: string): boolean {
+        const lower = (modelName || '').toLowerCase();
+        return lower.startsWith('ollama:') ||
+            lower.startsWith('local:') ||
+            lower.startsWith('ol:') ||
+            lower.includes('bedrock') ||
+            lower.startsWith('br:') ||
+            lower.includes('claude') ||
+            lower.startsWith('anthropic:') ||
+            lower.startsWith('ant:') ||
+            lower.startsWith('openrouter:') ||
+            lower.startsWith('openrouter/') ||
+            lower.startsWith('or:') ||
+            lower.startsWith('nvidia:') ||
+            lower.startsWith('nv:') ||
+            lower.startsWith('mistral:') ||
+            lower.startsWith('mi:') ||
+            lower.startsWith('groq:') ||
+            lower.startsWith('gr:') ||
+            lower.startsWith('deepseek:') ||
+            lower.startsWith('ds:') ||
+            lower.startsWith('xai:') ||
+            lower.startsWith('xi:') ||
+            lower.startsWith('perplexity:') ||
+            lower.startsWith('pp:') ||
+            lower.startsWith('cerebras:') ||
+            lower.startsWith('cb:') ||
+            lower.includes('gemini') ||
+            lower.includes('gpt-') ||
+            lower.includes('o1-');
+    }
+
+    private resolveProviderForModel(requestedProvider: LLMProvider | undefined, modelName: string): LLMProvider {
+        const inferred = this.inferProvider(modelName);
+        if (!requestedProvider) return inferred;
+        if (requestedProvider !== inferred && this.hasStrongProviderSignal(modelName)) {
+            logger.warn(`MultiLLM: Provider/model mismatch detected (${requestedProvider}/${modelName}); using inferred provider ${inferred} instead.`);
+            return inferred;
+        }
+        return requestedProvider;
+    }
+
     private async callOpenAI(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
         if (!this.openaiKey) throw new Error('OpenAI API key not configured');
         const messages: LLMMessage[] = [];
@@ -1136,7 +1179,41 @@ export class MultiLLM {
     }
 
     public async analyzeMedia(filePath: string, prompt: string): Promise<string> {
-        return this.inferProvider(this.modelName) === 'google' ? this.analyzeMediaGoogle(filePath, prompt) : this.analyzeMediaOpenAI(filePath, prompt);
+        const preferred = this.preferredProvider || this.inferProvider(this.modelName);
+
+        const tryProvider = async (provider: LLMProvider): Promise<string> => {
+            if (provider === 'google') {
+                if (!this.googleKey) throw new Error('Google API key not configured');
+                return this.analyzeMediaGoogle(filePath, prompt);
+            }
+            if (provider === 'openai') {
+                if (!this.openaiKey) throw new Error('OpenAI API key not configured');
+                return this.analyzeMediaOpenAI(filePath, prompt);
+            }
+            throw new Error(`Provider ${provider} does not have native media analysis in current adapter path`);
+        };
+
+        // 1) Try media analysis on the active provider when supported.
+        try {
+            return await tryProvider(preferred);
+        } catch (primaryErr) {
+            logger.warn(`MultiLLM: analyzeMedia primary route failed for ${preferred}: ${(primaryErr as Error).message}`);
+        }
+
+        // 2) Auto-fallback between Google/OpenAI if one is configured.
+        const fallbackOrder: LLMProvider[] = preferred === 'google' ? ['openai'] : ['google', 'openai'];
+        for (const p of fallbackOrder) {
+            try {
+                return await tryProvider(p);
+            } catch (fallbackErr) {
+                logger.warn(`MultiLLM: analyzeMedia fallback route failed for ${p}: ${(fallbackErr as Error).message}`);
+            }
+        }
+
+        // 3) Graceful degradation for OAuth/pi-ai or text-only providers.
+        // Return a deterministic message instead of throwing so channel listeners
+        // can continue normal message flow without noisy errors.
+        return 'Media analysis skipped: no media-capable provider is configured for the current model. Configure Google/OpenAI media credentials or switch to a media-capable route.';
     }
 
     public async analyzeMediaWithModel(filePath: string, prompt: string, modelName: string): Promise<string> {
@@ -1176,7 +1253,9 @@ export class MultiLLM {
     }
 
     private getPiAIOptions(modelOverride?: string, providerOverride?: LLMProvider): PiAIAdapterOptions {
-        return { provider: providerOverride ?? 'auto', model: modelOverride || this.modelName, apiKeys: { openai: this.openaiKey, google: this.googleKey, anthropic: this.anthropicKey, openrouter: this.openrouterKey, nvidia: this.nvidiaKey, bedrockAccessKeyId: this.bedrockAccessKeyId, bedrockSecretAccessKey: this.bedrockSecretAccessKey, bedrockRegion: this.bedrockRegion, bedrockSessionToken: this.bedrockSessionToken, groq: this.groqKey, mistral: this.mistralKey, cerebras: this.cerebrasKey, xai: this.xaiKey, huggingface: this.huggingfaceKey, kimi: this.kimiKey, minimax: this.minimaxKey, zai: this.zaiKey, perplexity: this.perplexityKey, deepseek: this.deepseekKey, opencode: this.opencodeKey, azureEndpoint: this.azureEndpoint, googleProjectId: this.googleProjectId, googleLocation: this.googleLocation } };
+        const model = modelOverride || this.modelName;
+        const provider = this.resolveProviderForModel(providerOverride ?? this.preferredProvider, model);
+        return { provider: provider ?? 'auto', model, apiKeys: { openai: this.openaiKey, google: this.googleKey, anthropic: this.anthropicKey, openrouter: this.openrouterKey, nvidia: this.nvidiaKey, bedrockAccessKeyId: this.bedrockAccessKeyId, bedrockSecretAccessKey: this.bedrockSecretAccessKey, bedrockRegion: this.bedrockRegion, bedrockSessionToken: this.bedrockSessionToken, groq: this.groqKey, mistral: this.mistralKey, cerebras: this.cerebrasKey, xai: this.xaiKey, huggingface: this.huggingfaceKey, kimi: this.kimiKey, minimax: this.minimaxKey, zai: this.zaiKey, perplexity: this.perplexityKey, deepseek: this.deepseekKey, opencode: this.opencodeKey, azureEndpoint: this.azureEndpoint, googleProjectId: this.googleProjectId, googleLocation: this.googleLocation } };
     }
 
     public async piAiLogin(providerKey: string): Promise<void> { await piAiLogin(providerKey); }
@@ -1192,6 +1271,9 @@ export class MultiLLM {
 
     public setModel(modelName: string): void {
         this.modelName = modelName;
+        if (this.hasStrongProviderSignal(modelName)) {
+            this.preferredProvider = this.resolveProviderForModel(this.preferredProvider, modelName);
+        }
         logger.info(`MultiLLM: Model changed to ${modelName}`);
     }
 
