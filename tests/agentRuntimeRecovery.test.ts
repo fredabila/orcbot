@@ -213,6 +213,92 @@ describe('Agent runtime recovery supervision', () => {
         expect(harness.agent.currentActionId).toBeNull();
     });
 
+    it('builds a grounded no-response fallback from actual continuation evidence', () => {
+        const action = createAction('continuation-fallback');
+        action.payload = {
+            ...action.payload,
+            source: 'telegram',
+            sourceId: '8077489121',
+            description: 'CONTINUATION: The user asked on telegram "are u done" about the earlier Shopify setup.',
+            continuationIntent: 'resume_prior_commitment'
+        };
+
+        const harness = createAgentHarness({
+            action,
+            decisions: [],
+            executeSkill: async () => ({ success: true })
+        });
+
+        harness.savedMemories.push(
+            {
+                id: 'continuation-fallback-step-2-browser_navigate',
+                type: 'short',
+                content: 'Tool browser_navigate returned: {"url":"https://admin.shopify.com/","title":"Log in — Shopify"}',
+                metadata: { actionId: action.id, step: 2, tool: 'browser_navigate' }
+            },
+            {
+                id: 'continuation-fallback-step-3-browser_vision',
+                type: 'short',
+                content: '[SYSTEM: WORKFLOW_SIGNAL] browser_vision failed: Error analyzing screenshot: Error: OpenAI API key not configured',
+                metadata: { actionId: action.id, step: 3, tool: 'browser_vision' }
+            },
+            {
+                id: 'continuation-fallback-step-2-search_memory_logs',
+                type: 'short',
+                content: 'Tool search_memory_logs returned: []',
+                metadata: { actionId: action.id, step: 2, tool: 'search_memory_logs' }
+            }
+        );
+
+        const message = (harness.agent as any).buildGroundedNoResponseMessage(action, 'action-failed');
+
+        expect(message).toContain('Quick grounded update: not done yet.');
+        expect(message).toContain('Shopify admin login page');
+        expect(message).toContain('OpenAI API key is not configured');
+        expect(message).toContain('Shopify admin login email');
+    });
+
+    it('forces grounded delivery early for looping continuation actions with no tools', async () => {
+        const action = createAction('continuation-loop');
+        action.payload = {
+            ...action.payload,
+            source: 'telegram',
+            sourceId: '8077489121',
+            description: 'CONTINUATION: The user asked on telegram "are u done" about the Shopify setup.',
+            continuationIntent: 'resume_prior_commitment'
+        };
+
+        const harness = createAgentHarness({
+            action,
+            decisions: [],
+            executeSkill: async () => ({ success: true })
+        });
+
+        harness.agent.buildGroundedNoResponseMessage = vi.fn(() => 'Quick grounded update: not done yet.');
+        harness.agent.sendNoResponseFallback = vi.fn(async () => true);
+
+        const outcome = await (harness.agent as any).handleNoToolDecision({
+            action,
+            currentStep: 4,
+            decision: {
+                verification: {
+                    goals_met: false,
+                    analysis: 'Loop detected (4x repeated response). No message sent to user yet — agent must deliver available results before terminating.'
+                },
+                tools: []
+            },
+            isChannelTask: true,
+            messagesSent: 0,
+            maxSteps: 15,
+            maxNoToolsRetries: 3,
+            noToolsRetryCount: 1,
+        });
+
+        expect(harness.agent.sendNoResponseFallback).toHaveBeenCalledWith(action, 'loop-exhausted');
+        expect(outcome.forcedDeliverySent).toBe(true);
+        expect(outcome.outcome).toBe('break');
+    });
+
     it('continues draining pending work after finishing the current action', async () => {
         vi.useFakeTimers();
         try {
@@ -550,13 +636,54 @@ describe('Agent runtime recovery supervision', () => {
         });
 
         await (harness.agent as any).processNextAction();
-
         const sendCalls = harness.executeSkillMock.mock.calls
             .filter(call => call[0] === 'send_reply')
             .map(call => call[1]?.message);
 
         expect(sendCalls).toEqual(['First reply']);
         expect(action.status).toBe('completed');
+    });
+
+    it('reuses an earlier user-facing question instead of sending request_supporting_data later in the same action', async () => {
+        const action = createAction('clarification-dedup-action');
+        action.payload = {
+            ...action.payload,
+            source: 'telegram',
+            sourceId: 'chat-1',
+            description: 'Help the user continue setup and ask for the missing store URL if needed.'
+        };
+
+        const decisions = [
+            {
+                reasoning: 'Ask the user for the missing detail in the normal reply.',
+                verification: { goals_met: false, analysis: 'Need the user to answer first.' },
+                tools: [{ name: 'send_reply', metadata: { message: 'I can build it, but what is your store URL?', chatId: 'chat-1' } }]
+            },
+            {
+                reasoning: 'Ask for supporting data.',
+                verification: { goals_met: false, analysis: 'Need clarification before continuing.' },
+                tools: [{ name: 'request_supporting_data', metadata: { question: 'What is your store URL?' } }]
+            }
+        ];
+
+        const harness = createAgentHarness({
+            action,
+            decisions,
+            getSkill: (name: string) => {
+                if (name === 'send_reply') return { isSideEffect: true, isSend: true };
+                if (name === 'request_supporting_data') return { isSideEffect: true, isSend: true };
+                return { isSideEffect: false, isSend: false };
+            },
+            executeSkill: async (_name: string, metadata: any) => ({ success: true, delivered: metadata?.message || metadata?.question })
+        });
+
+        await (harness.agent as any).processNextAction();
+
+        const executedToolNames = harness.executeSkillMock.mock.calls.map(call => call[0]);
+        expect(executedToolNames).toEqual(['send_reply']);
+        expect(harness.updateStatusMock).toHaveBeenCalledWith(action.id, 'waiting');
+        expect(harness.savedMemories.some(entry => entry.content.includes('CLARIFICATION ALREADY ASKED'))).toBe(true);
+        expect(action.status).toBe('waiting');
     });
 
     it('passes metadata arguments through the shared parallel executor', async () => {

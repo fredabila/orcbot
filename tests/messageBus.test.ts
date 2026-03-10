@@ -18,6 +18,18 @@ function createMockAgent() {
             saveMemory: vi.fn(),
             searchMemory: vi.fn(() => [])
         },
+        llm: {
+            callFast: vi.fn(async (prompt: string) => {
+                const normalized = prompt.toLowerCase();
+                if ((normalized.includes('new user message: """i dont care"""') || normalized.includes('new user message: """your call"""')) && normalized.includes('proceed with the build')) {
+                    return JSON.stringify({ intent: 'continue_pending_work', subtype: 'permission', confidence: 0.93 });
+                }
+                if (normalized.includes('new user message: """ave you started"""') && (normalized.includes('setting up the theme') || normalized.includes('started. shopify selected'))) {
+                    return JSON.stringify({ intent: 'continue_pending_work', subtype: 'status_check', confidence: 0.91 });
+                }
+                return JSON.stringify({ intent: 'normal_reply', subtype: 'none', confidence: 0.9 });
+            })
+        },
         pushTask: vi.fn(async () => undefined)
     } as any;
 }
@@ -162,5 +174,42 @@ describe('MessageBus continuation routing', () => {
         });
 
         expect(agent.pushTask).not.toHaveBeenCalled();
+    });
+
+    it('promotes status-check follow-ups on pending work into continuation tasks', async () => {
+        const agent = createMockAgent();
+        agent.memory.searchMemory = vi.fn(() => [
+            {
+                id: 'tg-out-3',
+                type: 'short',
+                content: 'Assistant sent Telegram message to chat-1: Yeah — started. Shopify selected. I\'m setting up the theme and core pages first, then products and payments after that.',
+                timestamp: new Date().toISOString(),
+                metadata: {
+                    source: 'telegram',
+                    role: 'assistant',
+                    chatId: 'chat-1'
+                }
+            }
+        ]);
+
+        const bus = new MessageBus(agent);
+
+        await bus.dispatch({
+            source: 'telegram',
+            sourceId: 'chat-1',
+            userId: 'user-1',
+            senderName: 'Frederick',
+            content: 'ave you started',
+            messageId: 'msg-6'
+        });
+
+        expect(agent.pushTask).toHaveBeenCalledTimes(1);
+        const [description, priority, metadata] = agent.pushTask.mock.calls[0];
+        expect(description).toContain('CONTINUATION:');
+        expect(description).toContain('Verify the real state');
+        expect(description).toContain('resume it now');
+        expect(priority).toBe(12);
+        expect(metadata.continuationIntent).toBe('resume_prior_commitment');
+        expect(metadata.followUpIntent).toBe('status_check_on_pending_work');
     });
 });

@@ -8531,15 +8531,103 @@ The plugin handles all logic internally. See the plugin source for implementatio
      * Last-resort user-visible response for channel actions that otherwise produced no output.
      * This bypasses progress-feedback toggles so users are never left with total silence.
      */
+    private buildGroundedNoResponseMessage(action: Action, reason?: string): string | null {
+        const memories = this.memory.getActionMemories(action.id) || [];
+        if (memories.length === 0) return null;
+
+        const loweredDescription = String(action.payload?.description || '').toLowerCase();
+        const isContinuationTask = loweredDescription.startsWith('continuation:') ||
+            String(action.payload?.continuationIntent || '').toLowerCase() === 'resume_prior_commitment';
+
+        const findings = new Set<string>();
+        const blockers = new Set<string>();
+
+        for (const memoryEntry of memories.slice(-20)) {
+            const content = String(memoryEntry.content || '');
+            const lowered = content.toLowerCase();
+            const tool = String(memoryEntry.metadata?.tool || '').toLowerCase();
+
+            if (tool === 'search_chat_history') {
+                findings.add('I re-checked the Telegram thread before continuing.');
+            }
+
+            if (tool === 'search_memory_logs' || tool === 'recall_memory') {
+                findings.add('I checked saved memory/logs for existing Shopify progress and draft-link evidence.');
+            }
+
+            if (tool === 'browser_navigate' && lowered.includes('admin.shopify.com')) {
+                if (lowered.includes('log in')) {
+                    findings.add('I resumed the Shopify work and reached the Shopify admin login page.');
+                    blockers.add('The store is not yet in a completed state I can verify from this runtime because Shopify still requires a real login/session to continue.');
+                } else {
+                    findings.add('I resumed the Shopify admin flow in the browser.');
+                }
+            }
+
+            if (tool === 'browser_find_element') {
+                findings.add('I started probing the Shopify admin UI to continue the theme/pages setup.');
+            }
+
+            if (lowered.includes('openai api key not configured')) {
+                blockers.add('The browser-vision fallback is unavailable in this runtime because the OpenAI API key is not configured.');
+            }
+
+            if (lowered.includes('2fa') || lowered.includes('two-factor')) {
+                blockers.add('The next step likely requires Shopify login approval or 2FA confirmation.');
+            }
+
+            if (lowered.includes('no draft link') || lowered.includes('no preview link')) {
+                blockers.add('I do not have a real draft/preview link yet.');
+            }
+        }
+
+        const packet = this.buildContinuationPacket(action.id);
+        if (packet.artifactPaths.some(pathItem => /shopify|myshopify|admin\.shopify/i.test(pathItem))) {
+            findings.add('I found Shopify-related workspace/session context while resuming the task.');
+        }
+
+        if (findings.size === 0 && blockers.size === 0) return null;
+
+        const lines: string[] = [];
+        if (isContinuationTask) {
+            lines.push('Quick grounded update: not done yet.');
+        } else {
+            lines.push('Quick grounded update: I hit a blocker before I could send a normal reply.');
+        }
+
+        if (findings.size > 0) {
+            lines.push('What I did:');
+            for (const finding of Array.from(findings).slice(0, 3)) {
+                lines.push(`- ${finding}`);
+            }
+        }
+
+        if (blockers.size > 0) {
+            lines.push('Current blocker:');
+            for (const blocker of Array.from(blockers).slice(0, 2)) {
+                lines.push(`- ${blocker}`);
+            }
+        }
+
+        if (isContinuationTask && /shopify/.test(loweredDescription)) {
+            lines.push('To continue immediately, send the Shopify admin login email / approve the login if prompted, or add staff access for the store.');
+        } else if (reason === 'action-failed') {
+            lines.push('I can continue once the blocker above is cleared.');
+        }
+
+        return lines.join('\n');
+    }
+
     private async sendNoResponseFallback(action: Action, reason?: string): Promise<boolean> {
         const source = action.payload?.source;
         const sourceId = action.payload?.sourceId;
         if (!source) return false;
         if (source !== 'gateway-chat' && !sourceId) return false;
 
-        const message = reason
+        const groundedMessage = this.buildGroundedNoResponseMessage(action, reason);
+        const message = groundedMessage || (reason
             ? `🔄 I encountered a slight technical hitch while processing that (${reason.slice(0, 80)}...). I'm attempting to resolve it or you can try rephrasing.`
-            : '🔄 I hit a brief snag before I could deliver my full response. I am looking into it now.';
+            : '🔄 I hit a brief snag before I could deliver my full response. I am looking into it now.');
 
         try {
             if (source === 'telegram' && this.telegram) {
@@ -9034,6 +9122,11 @@ REFLECTION: <1-2 sentences>`;
      * Falls back to a lightweight heuristic if LLM is unavailable or fails.
      */
     private async classifyTaskComplexity(description: string): Promise<'trivial' | 'simple' | 'standard' | 'complex'> {
+        const normalizedDescription = String(description || '').trim().toLowerCase();
+        if (normalizedDescription.startsWith('continuation:')) {
+            return 'standard';
+        }
+
         // Extract the actual user message from the task description
         const quotedMatch = description.match(/"([^"]+)"/);
         const payload = (quotedMatch?.[1] || description).trim();
@@ -9506,6 +9599,7 @@ REFLECTION: <1-2 sentences>`;
         sentMessagesInAction?: string[];
         sentMessageAlreadyInStep?: boolean;
         bonusMessageSent?: boolean;
+        clarificationAlreadyAsked?: boolean;
         applyTurnCooldown?: boolean;
         contextLabel: 'main' | 'bonus';
     }): string | null {
@@ -9519,6 +9613,7 @@ REFLECTION: <1-2 sentences>`;
             sentMessagesInAction = [],
             sentMessageAlreadyInStep = false,
             bonusMessageSent = false,
+            clarificationAlreadyAsked = false,
             applyTurnCooldown = false,
             contextLabel,
         } = params;
@@ -9549,6 +9644,14 @@ REFLECTION: <1-2 sentences>`;
 
         if (applyTurnCooldown && toolMeta.isSend && sentMessageAlreadyInStep && !this.isSequentialUIComponent(toolCall.name)) {
             return `Blocked redundant tool '${toolCall.name}' due to turn cooldown (action ${action.id})`;
+        }
+
+        if (
+            contextLabel === 'main' &&
+            toolCall.name === 'request_supporting_data' &&
+            (clarificationAlreadyAsked || sentMessagesInAction.some(message => this.messageContainsQuestion(message)))
+        ) {
+            return `Blocked duplicate clarification request after a prior user-facing question in action ${action.id}`;
         }
 
         if (contextLabel !== 'bonus') {
@@ -9618,6 +9721,7 @@ REFLECTION: <1-2 sentences>`;
             forceBreak: boolean;
             goalsMet: boolean;
             waitingForClarification: boolean;
+            clarificationAlreadyAsked: boolean;
             deepToolExecutedSinceLastMessage: boolean;
             messagesSent: number;
             anyUserDeliverySuccess: boolean;
@@ -9662,11 +9766,28 @@ REFLECTION: <1-2 sentences>`;
                 sentMessagesInAction,
                 sentMessageAlreadyInStep: state.sentMessageCountInStep > 0,
                 bonusMessageSent: state.bonusMessageSent,
+                clarificationAlreadyAsked: state.clarificationAlreadyAsked,
                 applyTurnCooldown: options.applyTurnCooldown,
                 contextLabel: options.contextLabel,
             });
             if (blockReason) {
                 options.onBlocked?.(blockReason);
+                if (
+                    options.contextLabel === 'main' &&
+                    toolCall.name === 'request_supporting_data' &&
+                    (state.clarificationAlreadyAsked || sentMessagesInAction.some(message => this.messageContainsQuestion(message)))
+                ) {
+                    logger.info(`Agent: ${blockReason}. Reusing the earlier user-facing question and pausing for clarification.`);
+                    this.memory.saveMemory({
+                        id: `${options.memoryIdPrefix}-${toolCall.name}-deduped`,
+                        type: 'short',
+                        content: '[SYSTEM: CLARIFICATION ALREADY ASKED] A prior user-facing message in this action already asked the required question. Do not send a second clarification message. Pause and wait for the user response instead.',
+                        metadata: { actionId: action.id, step: currentStep, tool: toolCall.name, dedupedClarification: true }
+                    });
+                    state.waitingForClarification = true;
+                    state.forceBreak = true;
+                    break;
+                }
                 continue;
             }
 
@@ -9733,11 +9854,16 @@ REFLECTION: <1-2 sentences>`;
                     state.sentMessageCountInStep++;
                     state.deepToolExecutedSinceLastMessage = false;
                     if (delivery.substantiveDelivery) state.substantiveDeliveriesSent++;
+                    if (delivery.outboundMessage && !sentMessagesInAction.includes(delivery.outboundMessage)) {
+                        sentMessagesInAction.push(delivery.outboundMessage);
+                    }
+                    if (delivery.outboundMessage && this.messageContainsQuestion(delivery.outboundMessage)) {
+                        state.clarificationAlreadyAsked = true;
+                    }
 
                     if (options.contextLabel === 'bonus') {
                         state.bonusMessageSent = true;
                         state.goalsMet = true;
-                        sentMessagesInAction.push(delivery.outboundMessage);
                         state.lastUserDeliveryAtMs = Date.now();
                     }
                 }
@@ -9796,6 +9922,7 @@ REFLECTION: <1-2 sentences>`;
             forceBreak: boolean;
             goalsMet: boolean;
             waitingForClarification: boolean;
+            clarificationAlreadyAsked: boolean;
             deepToolExecutedSinceLastMessage: boolean;
             messagesSent: number;
             anyUserDeliverySuccess: boolean;
@@ -9901,6 +10028,9 @@ REFLECTION: <1-2 sentences>`;
                     state.anyUserDeliverySuccess = true;
                     state.deepToolExecutedSinceLastMessage = false;
                     if (delivery.substantiveDelivery) state.substantiveDeliveriesSent++;
+                    if (delivery.outboundMessage && this.messageContainsQuestion(delivery.outboundMessage)) {
+                        state.clarificationAlreadyAsked = true;
+                    }
                 }
             }
 
@@ -9937,6 +10067,7 @@ REFLECTION: <1-2 sentences>`;
         forceBreak: boolean;
         goalsMet: boolean;
         waitingForClarification: boolean;
+        clarificationAlreadyAsked: boolean;
         deepToolExecutedSinceLastMessage: boolean;
         messagesSent: number;
         anyUserDeliverySuccess: boolean;
@@ -9946,6 +10077,7 @@ REFLECTION: <1-2 sentences>`;
         forceBreak: boolean;
         goalsMet: boolean;
         waitingForClarification: boolean;
+        clarificationAlreadyAsked: boolean;
         deepToolExecutedSinceLastMessage: boolean;
         messagesSent: number;
         anyUserDeliverySuccess: boolean;
@@ -9956,6 +10088,7 @@ REFLECTION: <1-2 sentences>`;
             forceBreak: state.forceBreak,
             goalsMet: state.goalsMet,
             waitingForClarification: state.waitingForClarification,
+            clarificationAlreadyAsked: state.clarificationAlreadyAsked,
             deepToolExecutedSinceLastMessage: state.deepToolExecutedSinceLastMessage,
             messagesSent: state.messagesSent,
             anyUserDeliverySuccess: state.anyUserDeliverySuccess,
@@ -9964,7 +10097,7 @@ REFLECTION: <1-2 sentences>`;
         };
     }
 
-    private handleNoToolDecision(params: {
+    private async handleNoToolDecision(params: {
         action: Action;
         currentStep: number;
         decision: any;
@@ -9973,10 +10106,11 @@ REFLECTION: <1-2 sentences>`;
         maxSteps: number;
         maxNoToolsRetries: number;
         noToolsRetryCount: number;
-    }): {
+    }): Promise<{
+        forcedDeliverySent: boolean;
         noToolsRetryCount: number;
         outcome: 'continue' | 'break' | 'complete';
-    } {
+    }> {
         const {
             action,
             currentStep,
@@ -9992,7 +10126,36 @@ REFLECTION: <1-2 sentences>`;
         if (goalsNotMet) {
             this.injectDecisionRecoveryGuidance(action, currentStep, decision);
             const nextRetryCount = noToolsRetryCount + 1;
+
+            const groundedLoopAnalysis = String(decision?.verification?.analysis || '').toLowerCase();
+            const isContinuationTask = String(action.payload?.continuationIntent || '').toLowerCase() === 'resume_prior_commitment' ||
+                String(action.payload?.description || '').toLowerCase().startsWith('continuation:');
+            const groundedMessageAvailable = isChannelTask && messagesSent === 0 && !!this.buildGroundedNoResponseMessage(action, 'loop-exhausted');
+            const shouldForceGroundedDelivery = groundedMessageAvailable && (
+                nextRetryCount >= maxNoToolsRetries ||
+                (isContinuationTask && nextRetryCount >= 2 && groundedLoopAnalysis.includes('loop detected'))
+            );
+
+            if (shouldForceGroundedDelivery) {
+                logger.warn(`Agent: Forcing grounded delivery for ${action.id} after repeated no-tool continuation retries (${nextRetryCount}/${maxNoToolsRetries}).`);
+                const fallbackSent = await this.sendNoResponseFallback(action, 'loop-exhausted');
+                if (fallbackSent) {
+                    this.memory.saveMemory({
+                        id: `${action.id}-step-${currentStep}-grounded-delivery-forced`,
+                        type: 'short',
+                        content: `[SYSTEM: GROUNDED DELIVERY FORCED. Repeated no-tool recovery attempts were exhausted, so an evidence-based user update was sent instead of retrying again.]`,
+                        metadata: { actionId: action.id, step: currentStep, forcedDelivery: true }
+                    });
+                    return {
+                        forcedDeliverySent: true,
+                        noToolsRetryCount: nextRetryCount,
+                        outcome: 'break',
+                    };
+                }
+            }
+
             return {
+                forcedDeliverySent: false,
                 noToolsRetryCount: nextRetryCount,
                 outcome: nextRetryCount >= maxNoToolsRetries ? 'break' : 'continue',
             };
@@ -10009,17 +10172,20 @@ REFLECTION: <1-2 sentences>`;
                     metadata: { actionId: action.id, step: currentStep, error: 'silent_termination_blocked' }
                 });
                 return {
+                    forcedDeliverySent: false,
                     noToolsRetryCount: nextRetryCount,
                     outcome: 'continue',
                 };
             }
             return {
+                forcedDeliverySent: false,
                 noToolsRetryCount: nextRetryCount,
                 outcome: 'break',
             };
         }
 
         return {
+            forcedDeliverySent: false,
             noToolsRetryCount,
             outcome: 'complete',
         };
@@ -13939,6 +14105,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             let lastProgressFeedbackStep = 0;
             let consecutiveNonDeepTurns = 0;
             let waitingForClarification = false; // Track if we're paused for user input
+            let clarificationAlreadyAsked = false;
             const sentMessagesInAction: string[] = [];
             let substantiveDeliveriesSent = 0;
             let anyUserDeliverySuccess = false;
@@ -14318,6 +14485,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         forceBreak,
                         goalsMet,
                         waitingForClarification,
+                        clarificationAlreadyAsked,
                         deepToolExecutedSinceLastMessage,
                         messagesSent,
                         anyUserDeliverySuccess,
@@ -14355,6 +14523,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 forceBreak,
                                 goalsMet,
                                 waitingForClarification,
+                                clarificationAlreadyAsked,
                                 deepToolExecutedSinceLastMessage,
                                 messagesSent,
                                 anyUserDeliverySuccess,
@@ -14400,6 +14569,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 forceBreak,
                                 goalsMet,
                                 waitingForClarification,
+                                clarificationAlreadyAsked,
                                 deepToolExecutedSinceLastMessage,
                                 messagesSent,
                                 anyUserDeliverySuccess,
@@ -14465,7 +14635,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                     if (forceBreak) break;
                 } else {
-                    const noToolOutcome = this.handleNoToolDecision({
+                    const noToolOutcome = await this.handleNoToolDecision({
                         action,
                         currentStep,
                         decision,
@@ -14476,6 +14646,12 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         noToolsRetryCount,
                     });
                     noToolsRetryCount = noToolOutcome.noToolsRetryCount;
+                    if (noToolOutcome.forcedDeliverySent) {
+                        messagesSent++;
+                        anyUserDeliverySuccess = true;
+                        substantiveDeliveriesSent++;
+                        lastUserDeliveryAtMs = Date.now();
+                    }
                     if (noToolOutcome.outcome === 'continue') {
                         continue;
                     }
@@ -14605,6 +14781,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 forceBreak,
                                 goalsMet,
                                 waitingForClarification,
+                                clarificationAlreadyAsked,
                                 deepToolExecutedSinceLastMessage,
                                 messagesSent,
                                 anyUserDeliverySuccess,
@@ -14639,6 +14816,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 forceBreak,
                                 goalsMet,
                                 waitingForClarification,
+                                clarificationAlreadyAsked,
                                 deepToolExecutedSinceLastMessage,
                                 messagesSent,
                                 anyUserDeliverySuccess,
