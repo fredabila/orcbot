@@ -25,7 +25,8 @@ function createAction(id: string): Action {
 }
 
 function createAgentHarness(options: {
-    action: Action;
+    action?: Action;
+    actions?: Action[];
     decisions: any[];
     executeSkill: (name: string, metadata: any) => Promise<any>;
     getSkill?: (name: string) => any;
@@ -34,7 +35,8 @@ function createAgentHarness(options: {
     configOverrides?: Record<string, any>;
 }) {
     const savedMemories: SavedMemory[] = [];
-    const actions = [options.action];
+    const actions = options.actions ? [...options.actions] : (options.action ? [options.action] : []);
+    const primaryAction = actions[0];
     const decisionMock = vi.fn(async () => {
         const next = options.decisions.shift();
         if (!next) {
@@ -94,7 +96,7 @@ function createAgentHarness(options: {
         saveMemory: vi.fn((entry: SavedMemory) => {
             savedMemories.push(entry);
         }),
-        getActionMemories: vi.fn(() => savedMemories.filter(entry => (entry.metadata?.actionId || '').toString() === options.action.id)),
+        getActionMemories: vi.fn((actionId?: string) => savedMemories.filter(entry => (entry.metadata?.actionId || '').toString() === String(actionId || primaryAction?.id || ''))),
         cleanupActionMemories: vi.fn(),
         flushToDisk: vi.fn(),
         consolidate: vi.fn().mockResolvedValue(undefined),
@@ -158,6 +160,7 @@ function createAgentHarness(options: {
 
     return {
         agent,
+        actions,
         savedMemories,
         decisionMock,
         executeSkillMock,
@@ -208,6 +211,77 @@ describe('Agent runtime recovery supervision', () => {
         expect(harness.updateStatusMock).toHaveBeenCalledWith(action.id, 'failed');
         expect(harness.agent.isBusy).toBe(false);
         expect(harness.agent.currentActionId).toBeNull();
+    });
+
+    it('continues draining pending work after finishing the current action', async () => {
+        vi.useFakeTimers();
+        try {
+            const first = createAction('queued-first');
+            const second = createAction('queued-second');
+            const harness = createAgentHarness({
+                actions: [first, second],
+                decisions: [
+                    {
+                        reasoning: 'First action is already complete.',
+                        verification: { goals_met: true, analysis: 'Done.' },
+                        tools: []
+                    },
+                    {
+                        reasoning: 'Second action is already complete.',
+                        verification: { goals_met: true, analysis: 'Done.' },
+                        tools: []
+                    }
+                ],
+                executeSkill: async () => ({ success: true }),
+                taskComplexity: 'trivial'
+            });
+
+            await (harness.agent as any).processNextAction();
+            await vi.runAllTimersAsync();
+
+            expect(harness.decisionMock).toHaveBeenCalledTimes(2);
+            expect(harness.updateStatusMock).toHaveBeenCalledWith(first.id, 'completed');
+            expect(harness.updateStatusMock).toHaveBeenCalledWith(second.id, 'completed');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('does not send a premature start status before real deep work is planned', async () => {
+        const action = createAction('truthful-progress-action');
+        action.payload.source = 'telegram';
+        action.payload.sourceId = 'chat-1';
+
+        const harness = createAgentHarness({
+            action,
+            decisions: [
+                {
+                    reasoning: 'Begin with real tool work.',
+                    verification: { goals_met: false, analysis: 'Need deep work first' },
+                    tools: [{ name: 'alpha', metadata: { command: 'real-work' } }]
+                },
+                {
+                    reasoning: 'The work is complete.',
+                    verification: { goals_met: true, analysis: 'Done.' },
+                    tools: []
+                }
+            ],
+            executeSkill: async () => ({ success: true }),
+            taskComplexity: 'standard',
+            configOverrides: {
+                progressFeedbackEnabled: true,
+                progressFeedbackTypingOnly: false,
+                progressFeedbackForceInitial: true
+            }
+        });
+        harness.agent.sendProgressFeedback = vi.fn(async () => true);
+
+        await (harness.agent as any).processNextAction();
+
+        const progressCalls = harness.agent.sendProgressFeedback.mock.calls;
+        expect(progressCalls.some((call: any[]) => call[1] === 'start')).toBe(false);
+        expect(progressCalls[0]?.[1]).toBe('working');
+        expect(progressCalls[0]?.[2]).toContain('Started your task');
     });
 
     it('replans immediately after a serial tool failure and skips later tools in that batch', async () => {

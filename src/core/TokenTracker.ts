@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { logger } from '../utils/logger';
+import { getOrcBotDataHome } from '../utils/dataHome';
 
 export interface TokenUsageEntry {
     ts: string;
@@ -51,7 +52,7 @@ export class TokenTracker {
     private sessionUsage: SessionUsage;
 
     constructor(summaryPath?: string, logPath?: string) {
-        const dataHome = process.env.ORCBOT_DATA_DIR || path.join(os.homedir(), '.orcbot');
+        const dataHome = getOrcBotDataHome();
         this.summaryPath = summaryPath || path.join(dataHome, 'token-usage-summary.json');
         this.logPath = logPath || path.join(dataHome, 'token-usage.log');
         this.sessionUsage = {

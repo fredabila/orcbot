@@ -109,6 +109,8 @@ describe('DecisionEngine - System Prompt Persistence', () => {
     expect(mainSystemPrompt).toContain('STRATEGIC REASONING PROTOCOLS');
     expect(mainSystemPrompt).toContain('Available Skills');
     expect(mainSystemPrompt).toContain('send_telegram');
+    expect(mainSystemPrompt).toContain('EXECUTION DISCIPLINE');
+    expect(mainSystemPrompt).toContain('Treat the execution plan as your default checklist');
 
     // CRITICAL: Verify review call ALSO has core instructions
     expect(reviewSystemPrompt).toContain('TOOLING RULE');

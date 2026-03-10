@@ -1473,6 +1473,12 @@ ${this.buildTimeSignalsNudge(metadata)}
 EXECUTION PLAN:
 ${metadata.executionPlan || 'Proceed with standard reasoning.'}
 
+EXECUTION DISCIPLINE:
+- Treat the execution plan as your default checklist for this step.
+- Do not ignore the plan unless current evidence, tool failures, or new user input force a better path.
+- If you deviate from the plan, explain why in reasoning and choose tools that still advance the task.
+- Do NOT send a status-only "working on it" style message unless real work has already started or you are reporting a concrete blocker/recovery.
+
 ${metadata.sessionContinuityHint ? `SESSION CONTINUITY (carry this forward):
 ${metadata.sessionContinuityHint}` : ''}
 

@@ -28,6 +28,129 @@ export interface InboundMessage {
 export class MessageBus {
     constructor(private agent: Agent) {}
 
+    private getRecentAssistantThreadMessage(
+        source: string,
+        sourceId: string,
+        sessionScopeId: string,
+        userId?: string
+    ): { text?: string; timestamp?: string } {
+        const searchMemory = this.agent.memory?.searchMemory;
+        const shortAll = typeof searchMemory === 'function' ? searchMemory.call(this.agent.memory, 'short') : [];
+        const normalizedSource = String(source || '').toLowerCase();
+        const telegramChatId = normalizedSource === 'telegram' ? sourceId : undefined;
+        const telegramUserId = normalizedSource === 'telegram' ? userId : undefined;
+
+        const candidates = shortAll
+            .filter(memory => {
+                const md: any = memory.metadata || {};
+                if (String(md.role || '').toLowerCase() !== 'assistant') return false;
+                if (String(md.source || '').toLowerCase() !== normalizedSource) return false;
+
+                if (md.sessionScopeId?.toString() === sessionScopeId.toString()) return true;
+
+                if (normalizedSource === 'telegram') {
+                    return telegramChatId != null && md.chatId?.toString() === telegramChatId.toString();
+                }
+
+                if (normalizedSource === 'whatsapp') {
+                    return sourceId != null && (
+                        md.senderId?.toString() === sourceId.toString() ||
+                        md.sourceId?.toString() === sourceId.toString() ||
+                        md.chatId?.toString() === sourceId.toString()
+                    );
+                }
+
+                if (normalizedSource === 'discord' || normalizedSource === 'slack') {
+                    return sourceId != null && (
+                        md.channelId?.toString() === sourceId.toString() ||
+                        md.sourceId?.toString() === sourceId.toString()
+                    );
+                }
+
+                if (normalizedSource === 'gateway-chat') {
+                    return sourceId != null && (
+                        md.chatId?.toString() === sourceId.toString() ||
+                        md.sourceId?.toString() === sourceId.toString()
+                    );
+                }
+
+                if (telegramUserId != null && md.userId?.toString() === telegramUserId.toString()) {
+                    return true;
+                }
+
+                return false;
+            })
+            .sort((a, b) => {
+                const ta = a.timestamp ? Date.parse(a.timestamp) || 0 : 0;
+                const tb = b.timestamp ? Date.parse(b.timestamp) || 0 : 0;
+                return tb - ta;
+            });
+
+        const latest = candidates[0];
+        if (!latest) return {};
+
+        const rawContent = String(latest.content || '');
+        const extractedText = rawContent.replace(/^Assistant sent [^:]+:\s*/i, '').trim();
+        return {
+            text: extractedText || rawContent,
+            timestamp: latest.timestamp
+        };
+    }
+
+    private parseReplyContext(replyContext?: string): { repliedUser?: string; repliedText?: string } {
+        if (!replyContext) return {};
+
+        const match = replyContext.match(/^\[Replying to (.+?)'s message: ["“](.*)["”]\]$/);
+        if (!match) return {};
+
+        return {
+            repliedUser: match[1]?.trim(),
+            repliedText: match[2]?.trim()
+        };
+    }
+
+    private isReplyToAgent(repliedUser?: string, metadata?: Record<string, any>): boolean {
+        if (metadata?.replyToIsBot === true) return true;
+
+        const normalizedUser = String(repliedUser || '').trim().toLowerCase();
+        const normalizedAgentName = String(this.agent.config.get('agentName') || 'orcbot').trim().toLowerCase();
+
+        if (!normalizedUser) return false;
+        if (normalizedUser === normalizedAgentName) return true;
+        if (normalizedUser.includes(normalizedAgentName) || normalizedAgentName.includes(normalizedUser)) return true;
+        return /\b(orcbot|assistant|bot)\b/i.test(normalizedUser);
+    }
+
+    private shouldTreatAsContinuationReply(
+        source: string,
+        sourceId: string,
+        sessionScopeId: string,
+        baseContent: string,
+        replyContext?: string,
+        metadata?: Record<string, any>
+    ): { shouldContinue: boolean; repliedText?: string } {
+        const { repliedUser, repliedText } = this.parseReplyContext(replyContext);
+        const normalizedBase = String(baseContent || '').trim().toLowerCase();
+        const directReplyToAgent = this.isReplyToAgent(repliedUser, metadata);
+        const recentAssistantContext = this.getRecentAssistantThreadMessage(source, sourceId, sessionScopeId, metadata?.userId);
+        const normalizedReplyText = String(repliedText || recentAssistantContext.text || '').trim().toLowerCase();
+
+        const shortContinuationReply = /^(i don't care|i dont care|idc|whatever|either|your call|up to you|you choose|choose|decide|do whatever|any is fine|fine|ok|okay|k|sure|go ahead|proceed|continue|default is fine|pick one)$/i.test(normalizedBase);
+        const priorMessageSignalsPendingWork = /(i('| wi)ll|let me|going to|default to|proceed|continue|resume|work on|build|finish|deliver|send|handle|check|look up|do that|take care of|next)/i.test(normalizedReplyText);
+        const assistantMessageIsRecent = (() => {
+            if (!recentAssistantContext.timestamp) return false;
+            const ageMs = Date.now() - (Date.parse(recentAssistantContext.timestamp) || 0);
+            return ageMs >= 0 && ageMs <= 15 * 60 * 1000;
+        })();
+
+        const inferredReplyToAgent = directReplyToAgent || (assistantMessageIsRecent && priorMessageSignalsPendingWork);
+
+        return {
+            shouldContinue: shortContinuationReply && inferredReplyToAgent && priorMessageSignalsPendingWork,
+            repliedText: repliedText || recentAssistantContext.text
+        };
+    }
+
     public async dispatch(msg: InboundMessage): Promise<void> {
         // 1. Resolve Session Scope
         const sessionScopeId = this.agent.resolveSessionScopeId(msg.source, {
@@ -88,6 +211,7 @@ export class MessageBus {
         // 5. Construct Task
         let priority = 10;
         let taskDescription = '';
+        const continuationReply = this.shouldTreatAsContinuationReply(msg.source, msg.sourceId, sessionScopeId, baseContent, msg.replyContext, msg.metadata);
         const whatsappReactionHint = msg.source === 'whatsapp' && msg.metadata?.autoReact && msg.messageId
             ? `\nIf a lightweight emoji reaction is more appropriate than a full reply, you may use 'react_whatsapp' with jid '${msg.sourceId}' and message_id '${msg.messageId}'.`
             : '';
@@ -122,6 +246,9 @@ The reply will appear as a proper status reply inside their status thread, not a
             taskDescription = `EXTERNAL ${msg.source.toUpperCase()} MESSAGE from ${sender} (ID: ${msg.messageId}): "${baseContent}"${msg.mediaAnalysis ? ` [Media analysis: ${msg.mediaAnalysis}]` : ''}${msg.replyContext ? ' ' + msg.replyContext : ''}. 
 
 Goal: Decide if you should respond based on our history and my persona. If yes, use 'send_${msg.source}'.${whatsappReactionHint}`;
+        } else if (continuationReply.shouldContinue) {
+            priority = 12;
+            taskDescription = `CONTINUATION: The user replied on ${msg.source} with "${baseContent}" to my earlier message${continuationReply.repliedText ? ` "${continuationReply.repliedText}"` : ''}. Treat this as permission to continue the previously promised substantive work. Resume the same objective, make the default choice if needed, do the actual work, and deliver real results to the user. Do not stop after a mere acknowledgment.${whatsappReactionHint}`;
         } else {
             taskDescription = `Respond to ${msg.source} message from ${sender}${channelStr}: "${baseContent}"${msg.mediaAnalysis ? ` [Media analysis: ${msg.mediaAnalysis}]` : ''}${msg.replyContext ? ' ' + msg.replyContext : ''}${whatsappReactionHint}`;
         }
@@ -144,6 +271,9 @@ Goal: Decide if you should respond based on our history and my persona. If yes, 
                 senderName: msg.senderName,
                 userId: msg.userId,
                 messageId: msg.messageId,
+                continuationIntent: continuationReply.shouldContinue ? 'resume_prior_commitment' : undefined,
+                replyToAgentMessage: continuationReply.shouldContinue || undefined,
+                replyToAgentText: continuationReply.repliedText,
                 isExternal: msg.isExternal,
                 ...msg.metadata
             }

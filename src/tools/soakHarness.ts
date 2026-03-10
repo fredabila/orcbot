@@ -1,6 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { getOrcBotDataHome } from '../utils/dataHome';
 
 type SoakTask = {
     description: string;
@@ -110,7 +111,7 @@ function resolveDataHome(argDataHome?: string): string {
     const env = process.env.ORCBOT_DATA_DIR;
     if (argDataHome && argDataHome.trim()) return path.resolve(argDataHome);
     if (env && env.trim()) return path.resolve(env);
-    return path.join(os.homedir(), '.orcbot');
+    return getOrcBotDataHome();
 }
 
 function defaultQueuePath(dataHome: string): string {

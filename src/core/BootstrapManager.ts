@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { logger } from '../utils/logger';
+import { getOrcBotDataHome } from '../utils/dataHome';
 
 /**
  * Bootstrap file system inspired by OpenClaw.
@@ -27,8 +28,7 @@ export class BootstrapManager {
     private _cache: Map<string, { content: string; mtimeMs: number }> = new Map();
 
     constructor(workspaceDir?: string) {
-        this.workspaceDir = workspaceDir || path.join(os.homedir(), '.orcbot');
-        
+        this.workspaceDir = workspaceDir || getOrcBotDataHome();
         // Ensure workspace exists
         if (!fs.existsSync(this.workspaceDir)) {
             fs.mkdirSync(this.workspaceDir, { recursive: true });

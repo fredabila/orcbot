@@ -1,5 +1,6 @@
 import puppeteer, { Browser, Page } from 'puppeteer';
 import { logger } from '../utils/logger';
+import { getOrcBotDataHome, resolveDataHomePath } from '../utils/dataHome';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
@@ -29,7 +30,7 @@ export class PuppeteerBrowser {
             return;
         }
 
-        const profileRoot = this.profileDir || path.join(os.homedir(), '.orcbot', 'puppeteer-profiles');
+        const profileRoot = this.profileDir || resolveDataHomePath('puppeteer-profiles');
         const userDataDir = path.join(profileRoot, this.profileName);
         if (!fs.existsSync(userDataDir)) fs.mkdirSync(userDataDir, { recursive: true });
 

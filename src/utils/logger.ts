@@ -3,11 +3,12 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { getOrcBotDataHome } from './dataHome';
 
 dotenv.config();
 
 const logDir = process.env.ORCBOT_LOG_DIR
-    || path.join(process.env.ORCBOT_DATA_DIR || path.join(os.homedir(), '.orcbot'), 'logs');
+    || path.join(getOrcBotDataHome(), 'logs');
 
 if (!fs.existsSync(logDir)) {
     fs.mkdirSync(logDir, { recursive: true });

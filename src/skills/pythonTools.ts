@@ -1,11 +1,12 @@
 import { spawn } from 'child_process';
+import { getOrcBotDataHome } from '../utils/dataHome';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { logger } from '../utils/logger';
 
 function getPaths(context: any) {
-    const dataHome = context?.config?.getDataHome?.() || path.join(os.homedir(), '.orcbot');
+    const dataHome = context?.config?.getDataHome?.() || getOrcBotDataHome();
     const envDir = path.join(dataHome, 'plugins', 'python-env');
     const scriptsDir = path.join(envDir, 'scripts');
     const exec = process.platform === 'win32' 

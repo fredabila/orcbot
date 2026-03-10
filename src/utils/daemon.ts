@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { logger } from './logger';
+import { getOrcBotDataHome } from './dataHome';
 
 export interface DaemonOptions {
     pidFile: string;
@@ -259,7 +260,7 @@ export class DaemonManager {
      * Create a default DaemonManager instance with standard paths
      */
     public static createDefault(): DaemonManager {
-        const dataDir = path.join(os.homedir(), '.orcbot');
+        const dataDir = getOrcBotDataHome();
         const pidFile = path.join(dataDir, 'orcbot.pid');
         const logFile = path.join(dataDir, 'daemon.log');
 

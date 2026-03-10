@@ -1,6 +1,7 @@
 import { chromium, Browser, Page, BrowserContext } from 'playwright';
 import puppeteer, { Browser as PuppeteerBrowser, Page as PuppeteerPage } from 'puppeteer';
 import { logger } from '../utils/logger';
+import { resolveDataHomePath } from '../utils/dataHome';
 import { RuntimeTuner } from '../core/RuntimeTuner';
 import { BrowserStateManager } from './BrowserStateManager';
 import path from 'path';
@@ -108,7 +109,7 @@ export class WebBrowser {
         this.stateManager = new BrowserStateManager();
         this.debugAlwaysSaveArtifacts = Boolean(debugOptions?.alwaysSaveArtifacts);
         this.traceEnabled = Boolean(debugOptions?.traceEnabled);
-        this.traceDir = debugOptions?.traceDir || path.join(os.homedir(), '.orcbot', 'browser-traces');
+        this.traceDir = debugOptions?.traceDir || resolveDataHomePath('browser-traces');
         this.traceScreenshots = debugOptions?.traceScreenshots !== false;
         this.traceSnapshots = debugOptions?.traceSnapshots !== false;
     }
@@ -164,7 +165,7 @@ export class WebBrowser {
 
         if (this.browserEngine === 'puppeteer') {
             if (!this.browser || !this._page || this._page.isClosed()) {
-                const profileRoot = this.profileDir || path.join(os.homedir(), '.orcbot', 'puppeteer-profiles');
+                const profileRoot = this.profileDir || resolveDataHomePath('puppeteer-profiles');
                 const userDataDir = path.join(profileRoot, this.profileName);
                 if (!fs.existsSync(userDataDir)) fs.mkdirSync(userDataDir, { recursive: true });
 
@@ -207,7 +208,7 @@ export class WebBrowser {
 
         if (!this.browser && !this.context) {
             // Use --disable-blink-features=AutomationControlled to reduce detection
-            const profileRoot = this.profileDir || path.join(os.homedir(), '.orcbot', 'browser-profiles');
+            const profileRoot = this.profileDir || resolveDataHomePath('browser-profiles');
             const profileName = this.profileName || 'default';
             const userDataDir = path.join(profileRoot, profileName);
             if (!fs.existsSync(userDataDir)) fs.mkdirSync(userDataDir, { recursive: true });
@@ -1482,7 +1483,7 @@ export class WebBrowser {
                     logger.info(`Semantic snapshot thin (${interactiveLineCount} elements, ${contentLength} bytes) — triggering auto-vision`);
                     const screenshotResult = await this.screenshot();
                     if (!String(screenshotResult).startsWith('Failed')) {
-                        const screenshotPath = path.join(os.homedir(), '.orcbot', 'screenshot.png');
+                        const screenshotPath = resolveDataHomePath('screenshot.png');
                         if (fs.existsSync(screenshotPath)) {
                             const visionDescription = await this._visionAnalyzer(
                                 screenshotPath,
@@ -1523,7 +1524,7 @@ export class WebBrowser {
                     logger.info(`Semantic snapshot thin (${interactiveLineCount} elements, ${contentLength} bytes HTML) — triggering auto-vision fallback`);
                     const screenshotResult = await this.screenshot();
                     if (!String(screenshotResult).startsWith('Failed')) {
-                        const screenshotPath = path.join(os.homedir(), '.orcbot', 'screenshot.png');
+                        const screenshotPath = resolveDataHomePath('screenshot.png');
                         if (fs.existsSync(screenshotPath)) {
                             const visionDescription = await this._visionAnalyzer(
                                 screenshotPath,
@@ -2431,7 +2432,7 @@ export class WebBrowser {
             await this.page!.waitForLoadState('load', { timeout: 2000 }).catch(() => {});
             await this.page!.waitForTimeout(150); // Minimal paint wait
 
-            const screenshotPath = path.join(os.homedir(), '.orcbot', 'screenshot.png');
+            const screenshotPath = resolveDataHomePath('screenshot.png');
             await this.page!.screenshot({ path: screenshotPath, type: 'png' });
 
             const minBytes = 15000;
@@ -2466,7 +2467,7 @@ export class WebBrowser {
     private async saveDebugArtifacts(tag: string, html?: string): Promise<{ screenshotPath?: string; htmlPath?: string } | null> {
         try {
             if (!this.page) return null;
-            const debugDir = path.join(os.homedir(), '.orcbot', 'browser-debug');
+            const debugDir = resolveDataHomePath('browser-debug');
             if (!fs.existsSync(debugDir)) {
                 fs.mkdirSync(debugDir, { recursive: true });
             }

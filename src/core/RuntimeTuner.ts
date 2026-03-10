@@ -1,4 +1,5 @@
 import { logger } from '../utils/logger';
+import { getOrcBotDataHome } from '../utils/dataHome';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -110,7 +111,7 @@ export class RuntimeTuner {
     private maxLearnings: number = 100;
 
     constructor(dataDir?: string) {
-        const dir = dataDir || path.join(os.homedir(), '.orcbot');
+        const dir = dataDir || getOrcBotDataHome();
         this.statePath = path.join(dir, 'runtime-tuning.json');
         this.state = this.loadState();
     }

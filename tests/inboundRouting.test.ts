@@ -110,4 +110,72 @@ describe('Agent.pushTask inbound routing', () => {
         expect(pushed[0].payload.inboundRoute).toBe('supersede_pending');
         expect(pushed[0].payload.inboundSupersededActionIds).toEqual(['old-pending']);
     });
+
+    it('wakes the agent immediately when a waiting action is resumed', async () => {
+        vi.useFakeTimers();
+        try {
+            const updated: Array<{ id: string; status: string }> = [];
+            const payloadUpdates: Array<{ id: string; patch: any }> = [];
+
+            const agent = Object.create(Agent.prototype) as any;
+            agent.isBusy = false;
+            agent.resolveSessionScopeId = vi.fn(() => 'scope:thread-1');
+            agent.processNextAction = vi.fn(async () => undefined);
+            agent.actionQueue = {
+                getQueue: vi.fn(() => [
+                    {
+                        id: 'wait-1',
+                        type: 'TASK',
+                        payload: {
+                            sessionScopeId: 'scope:thread-1',
+                            source: 'telegram',
+                            sourceId: 'chat-1',
+                            description: 'Which environment should I use?'
+                        },
+                        priority: 10,
+                        lane: 'user',
+                        status: 'waiting',
+                        timestamp: '2026-03-08T00:00:00.000Z'
+                    }
+                ]),
+                updateStatus: vi.fn((id: string, status: string) => updated.push({ id, status })),
+                updatePayload: vi.fn((id: string, patch: any) => payloadUpdates.push({ id, patch })),
+                push: vi.fn()
+            };
+            agent.recentTaskFingerprints = new Map();
+            agent.recentTaskDedupWindowMs = 60000;
+            agent.processedMessages = new Set();
+            agent.processedMessagesMaxSize = 5000;
+            agent.trackKnownUser = vi.fn();
+            agent.maybeReconnectBriefing = vi.fn(async () => undefined);
+            agent.maybeCaptureOnboardingQuestionnaireResponse = vi.fn(async () => ({ captured: false, onboardingOnly: false }));
+            agent.isUserAdmin = vi.fn(() => false);
+            agent.getGuidanceMode = vi.fn(() => 'balanced');
+            agent.buildContinuationPacket = vi.fn(() => ({ artifactPaths: [], successHighlights: [], repeatFailureHints: [] }));
+            agent.memory = {
+                getActionStepCount: vi.fn(() => 0),
+                cleanupActionMemories: vi.fn(),
+                saveMemory: vi.fn()
+            };
+            agent.config = {
+                get: vi.fn((key: string) => {
+                    if (key === 'guidanceMode') return 'balanced';
+                    return undefined;
+                })
+            };
+
+            await agent.pushTask('production', 10, {
+                source: 'telegram',
+                sourceId: 'chat-1',
+                messageId: 'msg-new'
+            }, 'user');
+            await vi.runAllTimersAsync();
+
+            expect(updated).toEqual([{ id: 'wait-1', status: 'pending' }]);
+            expect(payloadUpdates).toHaveLength(1);
+            expect(agent.processNextAction).toHaveBeenCalledTimes(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
 });

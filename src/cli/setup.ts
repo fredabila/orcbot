@@ -5,6 +5,7 @@ import path from 'path';
 import yaml from 'yaml';
 import os from 'os';
 import { logger } from '../utils/logger';
+import { getOrcBotDataHome } from '../utils/dataHome';
 
 function checkCancel(val: any) {
     if (p.isCancel(val)) {
@@ -17,7 +18,7 @@ function checkCancel(val: any) {
 export async function runSetup() {
     p.intro(chalk.bgCyan.black(' 🤖 Welcome to the OrcBot Setup Wizard! '));
 
-    const dataHome = path.join(os.homedir(), '.orcbot');
+    const dataHome = getOrcBotDataHome();
     if (!fs.existsSync(dataHome)) fs.mkdirSync(dataHome, { recursive: true });
 
     const configPath = path.join(dataHome, 'orcbot.config.yaml');

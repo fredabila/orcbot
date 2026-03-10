@@ -3,6 +3,7 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import { logger } from '../utils/logger';
+import { getOrcBotDataHome } from '../utils/dataHome';
 
 export interface WorkerProfileData {
     handle: string;
@@ -25,7 +26,7 @@ export class WorkerProfileManager {
     private encryptionKey: Buffer;
 
     constructor(dataDir?: string) {
-        const baseDir = dataDir || path.join(os.homedir(), '.orcbot');
+        const baseDir = dataDir || getOrcBotDataHome();
         this.profilePath = path.join(baseDir, 'worker-profile.json');
 
         // Derive a machine-specific encryption key

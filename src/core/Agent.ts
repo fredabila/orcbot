@@ -57,6 +57,7 @@ import { resolveBrowserScratchpadTarget } from './BrowserScratchpad';
 import { collectCompletionAuditIssues, StepLedger, auditDelivery } from './CompletionAudit';
 import { buildDelegatedTaskFollowupAction } from './DelegatedTaskFollowup';
 import { resolveInboundRoute } from './InboundRouting';
+import { resolveDataHomePath } from '../utils/dataHome';
 import {
     BuildLaunchPlanOptions,
     LaunchPlanResult,
@@ -5068,7 +5069,7 @@ Respond with: "VERIFIED: <reason>" or "FAILED: <reason>"`;
                     return screenshotResult;
                 }
 
-                const screenshotPath = path.join(os.homedir(), '.orcbot', 'screenshot.png');
+                const screenshotPath = resolveDataHomePath('screenshot.png');
                 if (!fs.existsSync(screenshotPath)) {
                     return `Error: Screenshot file not found at ${screenshotPath}`;
                 }
@@ -8759,7 +8760,8 @@ The plugin handles all logic internally. See the plugin source for implementatio
 
             // Only check follow-up-style actions (user asking about status/completion)
             const taskDesc = (action.payload?.description || '').toLowerCase();
-            const isFollowUpInquiry = /\b(are (you|u) done|is it (ready|done|finished)|status|update|what('?s| is) (the )?(progress|status)|how('?s| is) it going|finished yet|ready yet|done yet|completed)\b/.test(taskDesc);
+            const continuationIntent = String(action.payload?.continuationIntent || '').toLowerCase() === 'resume_prior_commitment';
+            const isFollowUpInquiry = continuationIntent || /\b(are (you|u) done|is it (ready|done|finished)|status|update|what('?s| is) (the )?(progress|status)|how('?s| is) it going|finished yet|ready yet|done yet|completed)\b/.test(taskDesc);
             if (!isFollowUpInquiry) return;
 
             // Check if any sent message acknowledges incomplete work
@@ -11851,6 +11853,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
         this.isBusy = false;
         this.currentActionId = null;
         this.currentActionStartAt = null;
+        this.scheduleProcessNextAction('stalled action recovery');
     }
 
     private recoverStaleInProgressActions() {
@@ -12647,7 +12650,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
     }
 
     private getInstanceLockPath(): string {
-        const actionQueuePath = this.config.get('actionQueuePath') || path.join(os.homedir(), '.orcbot', 'actions.json');
+        const actionQueuePath = this.config.get('actionQueuePath') || resolveDataHomePath('actions.json');
         return path.join(path.dirname(actionQueuePath), 'orcbot.lock');
     }
 
@@ -13560,6 +13563,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     resumedFromWaitingAt: new Date().toISOString()
                 });
                 this.actionQueue.updateStatus(waitingAction.id, 'pending');
+                this.scheduleProcessNextAction(`resume waiting action ${waitingAction.id}`);
 
                 this.memory.saveMemory({
                     id: `${waitingAction.id}-resume-${messageId || Date.now()}`,
@@ -13693,6 +13697,20 @@ Respond with a single actionable task description (one sentence). Be specific ab
             this.persistentTypingTimer = null;
         }
     }
+
+    private scheduleProcessNextAction(reason: string): void {
+        setImmediate(() => {
+            if (this.isBusy) {
+                logger.debug(`Agent: Skipping scheduled queue wake-up (${reason}) because another action is already running`);
+                return;
+            }
+
+            this.processNextAction().catch(e => {
+                logger.error(`Agent: Scheduled queue wake-up failed (${reason}): ${e}`);
+            });
+        });
+    }
+
     private async processNextAction() {
         if (this.isBusy) return;
 
@@ -13787,27 +13805,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
             logger.info(`Agent: Task complexity="${taskComplexity}" for action ${action.id}`);
 
             const isSimpleTask = taskComplexity === 'trivial' || taskComplexity === 'simple' || isGenericHeartbeat;
+            const isRetryAttempt = (action.retry?.attempts ?? 0) > 0;
             const actionStartedAtMs = Date.now();
             let lastUserDeliveryAtMs = actionStartedAtMs;
-
-            // PROGRESS FEEDBACK: Let user know we're working on non-trivial tasks
-            // Skip for heartbeats — no user initiated this task
-            // On retry attempts, say "trying again" rather than "working on it" so the
-            // user knows this is a recovery pass, not a fresh start.
-            if (!isSimpleTask && action.payload.source && !action.payload?.suppressProgressFeedback) {
-                const isRetryAttempt = (action.retry?.attempts ?? 0) > 0;
-                if (isRetryAttempt) {
-                    const progressSent = await this.sendProgressFeedback(action, 'retry', `Trying again on your request...`);
-                    if (progressSent) {
-                        lastUserDeliveryAtMs = Date.now();
-                    }
-                } else {
-                    const progressSent = await this.sendProgressFeedback(action, 'start');
-                    if (progressSent) {
-                        lastUserDeliveryAtMs = Date.now();
-                    }
-                }
-            }
 
             const executionPlan = isSimpleTask
                 ? 'Simple task: Respond directly and terminate. No multi-step planning needed.'
@@ -14158,9 +14158,10 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                     if (shouldSendProactive) {
                         const details = shouldForceInitial
-                            ? 'Started your task and working through it now...'
+                            ? (isRetryAttempt ? 'Trying again on your request...' : 'Started your task and working through it now...')
                             : `Still working and making progress (step ${currentStep})...`;
-                        const progressSent = await this.sendProgressFeedback(action, 'working', details);
+                        const progressType = shouldForceInitial && isRetryAttempt ? 'retry' : 'working';
+                        const progressSent = await this.sendProgressFeedback(action, progressType, details);
                         if (progressSent) {
                             lastUserDeliveryAtMs = Date.now();
                             messagesSent++;
@@ -14990,6 +14991,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
             this.isBusy = false;
             this.currentActionId = null;
             this.currentActionStartAt = null;
+
+            const hasQueuedWork = this.actionQueue.getQueue().some(entry => entry.status === 'pending');
+            if (hasQueuedWork) {
+                this.scheduleProcessNextAction(`drain queue after ${action.id}`);
+            }
 
             // Flush any pending memory writes to disk before moving on
             this.memory.flushToDisk();

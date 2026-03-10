@@ -1,5 +1,6 @@
 import { DailyMemory } from '../memory/DailyMemory';
 import { logger } from '../utils/logger';
+import { getOrcBotDataHome } from '../utils/dataHome';
 import path from 'path';
 import os from 'os';
 
@@ -20,7 +21,7 @@ export async function memorySearchSkill(args: any, context: any): Promise<string
         }
 
         const memoryManager = context?.agent?.memory;
-        const dataHome = memoryManager?.dataHome || context?.config?.getDataHome?.() || process.env.ORCBOT_DATA_DIR || path.join(os.homedir(), '.orcbot');
+        const dataHome = memoryManager?.dataHome || context?.config?.getDataHome?.() || getOrcBotDataHome();
         const dailyMemory = memoryManager?.getDailyMemory() || new DailyMemory(dataHome);
         
         const results: Array<{
@@ -111,7 +112,7 @@ export async function memoryGetSkill(args: any, context: any): Promise<string> {
         }
 
         const memoryManager = context?.agent?.memory;
-        const dataHome = memoryManager?.dataHome || context?.config?.getDataHome?.() || process.env.ORCBOT_DATA_DIR || path.join(os.homedir(), '.orcbot');
+        const dataHome = memoryManager?.dataHome || context?.config?.getDataHome?.() || getOrcBotDataHome();
         const dailyMemory = memoryManager?.getDailyMemory() || new DailyMemory(dataHome);
         
         // Handle different file path formats
@@ -162,7 +163,7 @@ export async function memoryWriteSkill(args: any, context: any): Promise<string>
         }
 
         const memoryManager = context?.agent?.memory;
-        const dataHome = memoryManager?.dataHome || context?.config?.getDataHome?.() || process.env.ORCBOT_DATA_DIR || path.join(os.homedir(), '.orcbot');
+        const dataHome = memoryManager?.dataHome || context?.config?.getDataHome?.() || getOrcBotDataHome();
         const dailyMemory = memoryManager?.getDailyMemory() || new DailyMemory(dataHome);
 
         if (type === 'long-term' || type === 'longterm') {
@@ -206,7 +207,7 @@ export async function memoryWriteSkill(args: any, context: any): Promise<string>
 export async function memoryStatsSkill(args: any, context: any): Promise<string> {
     try {
         const memoryManager = context?.agent?.memory;
-        const dataHome = memoryManager?.dataHome || context?.config?.getDataHome?.() || process.env.ORCBOT_DATA_DIR || path.join(os.homedir(), '.orcbot');
+        const dataHome = memoryManager?.dataHome || context?.config?.getDataHome?.() || getOrcBotDataHome();
         const dailyMemory = memoryManager?.getDailyMemory() || new DailyMemory(dataHome);
         const stats = dailyMemory.getStats();
         const recentFiles = dailyMemory.listDailyMemories().slice(0, 10);

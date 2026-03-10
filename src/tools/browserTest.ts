@@ -1,5 +1,6 @@
 import { ConfigManager } from '../config/ConfigManager';
 import { WebBrowser } from './WebBrowser';
+import { resolveDataHomePath } from '../utils/dataHome';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -11,7 +12,7 @@ async function run() {
   const wantsScreenshot = args.includes('--screenshot');
   const wantsHtml = args.includes('--html');
   const outArg = args.find(a => a.startsWith('--out='));
-  const outDir = outArg ? outArg.split('=')[1] : path.join(os.homedir(), '.orcbot', 'browser-test');
+  const outDir = outArg ? outArg.split('=')[1] : resolveDataHomePath('browser-test');
   const delayArg = args.find(a => a.startsWith('--delay='));
   const delayMs = delayArg ? parseInt(delayArg.split('=')[1], 10) : 0;
 

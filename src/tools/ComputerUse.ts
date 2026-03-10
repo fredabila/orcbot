@@ -12,6 +12,7 @@
  */
 
 import { logger } from '../utils/logger';
+import { resolveDataHomePath } from '../utils/dataHome';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
@@ -97,7 +98,7 @@ export class ComputerUse {
     private screenSize: { width: number; height: number } = { width: 1920, height: 1080 };
 
     constructor() {
-        this.screenshotDir = path.join(os.homedir(), '.orcbot');
+        this.screenshotDir = resolveDataHomePath();
         this.platform = process.platform;
         if (!fs.existsSync(this.screenshotDir)) {
             fs.mkdirSync(this.screenshotDir, { recursive: true });

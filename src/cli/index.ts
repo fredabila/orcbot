@@ -15,6 +15,7 @@ import fs from 'fs';
 import { spawnSync } from 'child_process';
 import { WorkerProfileManager } from '../core/WorkerProfile';
 import { DaemonManager } from '../utils/daemon';
+import { getOrcBotDataHome, resolveDataHomePath } from '../utils/dataHome';
 import { TokenTracker } from '../core/TokenTracker';
 import { OllamaHelper } from '../utils/OllamaHelper';
 import { aggregateWorldEvents, fetchWorldEvents, summarizeWorldEvents, WorldEvent, WorldEventSource, getRootCodeLabel } from '../tools/WorldEvents';
@@ -22,7 +23,7 @@ import { piBox, isPiTuiAvailable } from '../core/PiTuiRenderer';
 import { collectDoctorReport, collectLLMCompatibilityReport } from './Doctor';
 
 dotenv.config(); // Local .env
-dotenv.config({ path: path.join(os.homedir(), '.orcbot', '.env') }); // Global .env
+dotenv.config({ path: resolveDataHomePath('.env') }); // Global .env
 
 // ── ANSI color helpers (zero deps) ─────────────────────────────────────
 const c = {
@@ -432,8 +433,7 @@ program
     .command('init')
     .description('Initialize a new agent environment')
     .action(async () => {
-        const os = require('os');
-        const dataHome = path.join(os.homedir(), '.orcbot');
+        const dataHome = getOrcBotDataHome();
         const configPath = path.join(dataHome, 'orcbot.config.yaml');
 
         if (fs.existsSync(configPath)) {
@@ -603,7 +603,7 @@ program
     .description('Stop all running OrcBot instances (daemon, background, gateway)')
     .option('-f, --force', 'Force kill (SIGKILL) if graceful shutdown fails')
     .action(async (options) => {
-        const dataDir = path.join(os.homedir(), '.orcbot');
+        const dataDir = getOrcBotDataHome();
         let killed = 0;
         let failed = 0;
 
@@ -703,7 +703,7 @@ program
         const status = daemonManager.isRunning();
 
         // Check for ANY existing OrcBot instance via lock file
-        const lockPath = path.join(os.homedir(), '.orcbot', 'orcbot.lock');
+        const lockPath = resolveDataHomePath('orcbot.lock');
         let existingInstance: { pid: number; startedAt: string; host: string } | null = null;
 
         if (fs.existsSync(lockPath)) {
@@ -748,7 +748,7 @@ program
             const nodePath = process.execPath;
             const scriptPath = process.argv[1];
 
-            const dataDir = path.join(os.homedir(), '.orcbot');
+            const dataDir = getOrcBotDataHome();
             if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
             const logPath = path.join(dataDir, 'foreground.log');
             const out = fs.openSync(logPath, 'a');
@@ -1013,7 +1013,7 @@ program
     .description('View agent status, memory and action queue')
     .action(() => {
         // Check for running instance
-        const lockPath = path.join(os.homedir(), '.orcbot', 'orcbot.lock');
+        const lockPath = resolveDataHomePath('orcbot.lock');
         console.log('\n=== OrcBot Status ===\n');
 
         if (fs.existsSync(lockPath)) {
@@ -1339,7 +1339,7 @@ program
             const nodePath = process.execPath;
             const scriptPath = process.argv[1];
 
-            const dataDir = path.join(os.homedir(), '.orcbot');
+            const dataDir = getOrcBotDataHome();
             if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
             const logPath = path.join(dataDir, 'gateway.log');
             const out = fs.openSync(logPath, 'a');
@@ -1450,7 +1450,7 @@ const lightpandaCommand = program
 lightpandaCommand
     .command('install')
     .description('Download and install Lightpanda browser')
-    .option('-d, --dir <path>', 'Installation directory', path.join(os.homedir(), '.orcbot', 'lightpanda'))
+    .option('-d, --dir <path>', 'Installation directory', resolveDataHomePath('lightpanda'))
     .action(async (options) => {
         const installDir = options.dir;
         const platform = process.platform;
@@ -1584,7 +1584,7 @@ lightpandaCommand
     .option('-t, --timeout <number>', 'Inactivity timeout in seconds (0 = no timeout)', '300')
     .option('-b, --background', 'Run in background')
     .action(async (options) => {
-        const lightpandaPath = agent.config.get('lightpandaPath') || path.join(os.homedir(), '.orcbot', 'lightpanda', 'lightpanda');
+        const lightpandaPath = agent.config.get('lightpandaPath') || resolveDataHomePath('lightpanda', 'lightpanda');
 
         if (!fs.existsSync(lightpandaPath)) {
             console.error('❌ Lightpanda not found. Run: orcbot lightpanda install');
@@ -1599,7 +1599,7 @@ lightpandaCommand
         console.log(`   Endpoint: ws://${options.host}:${options.port}\n`);
 
         if (options.background) {
-            const dataDir = path.join(os.homedir(), '.orcbot');
+            const dataDir = getOrcBotDataHome();
             const logPath = path.join(dataDir, 'lightpanda.log');
             const pidPath = path.join(dataDir, 'lightpanda.pid');
             const out = fs.openSync(logPath, 'a');
@@ -1642,7 +1642,7 @@ lightpandaCommand
     .command('stop')
     .description('Stop Lightpanda browser server')
     .action(() => {
-        const pidPath = path.join(os.homedir(), '.orcbot', 'lightpanda.pid');
+        const pidPath = resolveDataHomePath('lightpanda.pid');
 
         if (!fs.existsSync(pidPath)) {
             console.log('Lightpanda is not running (no PID file found)');
@@ -1668,7 +1668,7 @@ lightpandaCommand
     .command('status')
     .description('Check Lightpanda browser status')
     .action(() => {
-        const pidPath = path.join(os.homedir(), '.orcbot', 'lightpanda.pid');
+        const pidPath = resolveDataHomePath('lightpanda.pid');
         const lightpandaPath = agent.config.get('lightpandaPath');
         const endpoint = agent.config.get('lightpandaEndpoint') || 'ws://127.0.0.1:9222';
         const engineSetting = agent.config.get('browserEngine') || 'puppeteer';
@@ -2579,7 +2579,7 @@ async function showBrowserMenu() {
     const currentEngine = agent.config.get('browserEngine') || 'puppeteer';
     const lightpandaPath = agent.config.get('lightpandaPath');
     const lightpandaEndpoint = agent.config.get('lightpandaEndpoint') || 'ws://127.0.0.1:9222';
-    const pidPath = path.join(os.homedir(), '.orcbot', 'lightpanda.pid');
+    const pidPath = resolveDataHomePath('lightpanda.pid');
 
     // Check if Lightpanda is installed
     const isInstalled = lightpandaPath && fs.existsSync(lightpandaPath);
@@ -2707,7 +2707,7 @@ async function showBrowserMenu() {
         console.log('   orcbot lightpanda install\n');
     } else if (action === 'start') {
         const { spawn } = require('child_process');
-        const dataDir = path.join(os.homedir(), '.orcbot');
+        const dataDir = getOrcBotDataHome();
         const logPath = path.join(dataDir, 'lightpanda.log');
         const out = fs.openSync(logPath, 'a');
 

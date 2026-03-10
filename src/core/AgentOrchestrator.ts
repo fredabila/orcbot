@@ -5,6 +5,7 @@ import { EventEmitter } from 'events';
 import { ChildProcess, fork } from 'child_process';
 import yaml from 'yaml';
 import { logger } from '../utils/logger';
+import { getOrcBotDataHome, resolveDataHomePath } from '../utils/dataHome';
 import { v4 as uuidv4 } from 'uuid';
 import { IPCMessage, IPCResponse, WorkerConfig } from './AgentWorker';
 
@@ -67,7 +68,7 @@ export class AgentOrchestrator extends EventEmitter {
 
     constructor(dataDir?: string, primaryAgentId?: string) {
         super();
-        this.dataDir = dataDir || path.join(os.homedir(), '.orcbot', 'orchestrator');
+        this.dataDir = dataDir || resolveDataHomePath('orchestrator');
         this.agentsFilePath = path.join(this.dataDir, 'agents.json');
         this.tasksFilePath = path.join(this.dataDir, 'tasks.json');
         this.primaryAgentId = primaryAgentId || 'primary';
@@ -132,8 +133,8 @@ export class AgentOrchestrator extends EventEmitter {
                 currentTask: null,
                 createdAt: new Date().toISOString(),
                 lastActiveAt: new Date().toISOString(),
-                memoryPath: path.join(os.homedir(), '.orcbot', 'memory.json'),
-                profilePath: path.join(os.homedir(), '.orcbot', 'worker-profile.json')
+                memoryPath: resolveDataHomePath('memory.json'),
+                profilePath: resolveDataHomePath('worker-profile.json')
             };
             this.agents.set(this.primaryAgentId, primary);
             this.save();
@@ -283,7 +284,7 @@ export class AgentOrchestrator extends EventEmitter {
                 capabilities: agent.capabilities,
                 memoryPath: agent.memoryPath,
                 profilePath: agent.profilePath,
-                parentDataDir: path.join(os.homedir(), '.orcbot')
+                parentDataDir: getOrcBotDataHome()
             };
 
             this.sendToWorker(agent.id, { type: 'init', payload: workerConfig });

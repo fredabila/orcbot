@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { logger } from '../utils/logger';
+import { getOrcBotDataHome } from '../utils/dataHome';
 
 /**
  * DailyMemory manages daily markdown-based memory logs inspired by OpenClaw.
@@ -12,7 +13,7 @@ export class DailyMemory {
     private memoryDir: string;
     private longTermMemoryPath: string;
 
-    constructor(dataHome: string = path.join(os.homedir(), '.orcbot')) {
+    constructor(dataHome: string = getOrcBotDataHome()) {
         this.memoryDir = path.join(dataHome, 'memory');
         this.longTermMemoryPath = path.join(dataHome, 'MEMORY.md');
         
