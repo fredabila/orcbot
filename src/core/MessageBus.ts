@@ -151,6 +151,27 @@ export class MessageBus {
         };
     }
 
+    private isLikelySubstantiveInboundTask(msg: InboundMessage, continuationReply: { shouldContinue: boolean }): boolean {
+        if (continuationReply.shouldContinue) return true;
+        if ((msg.mediaPaths || []).length > 0) return true;
+        if (msg.mediaAnalysis && msg.mediaAnalysis.trim().length > 0) return true;
+
+        const normalized = String(msg.content || '').trim().toLowerCase();
+        if (!normalized) return false;
+
+        if (/^(hi|hey|hello|yo|sup|lol|ok|okay|k|kk|thanks|thank you|ty|cool|nice|great|bye|gn|gm|👍|🙏|❤️)$/i.test(normalized)) {
+            return false;
+        }
+
+        if (normalized.length >= 40) return true;
+        if (/[?]/.test(normalized)) return true;
+        if (/https?:\/\//i.test(normalized)) return true;
+        if (/```|\{[^\n]{3,}\}|\[[^\n]{3,}\]|\b[A-Z_]{3,}\b/.test(String(msg.content || ''))) return true;
+        if (/\b(can you|could you|please|check|look up|build|fix|search|find|update|continue|proceed|resume|send|write|make|create|run|install|debug|investigate|review|analyze|help me)\b/i.test(normalized)) return true;
+
+        return false;
+    }
+
     public async dispatch(msg: InboundMessage): Promise<void> {
         // 1. Resolve Session Scope
         const sessionScopeId = this.agent.resolveSessionScopeId(msg.source, {
@@ -201,17 +222,24 @@ export class MessageBus {
 
         // 4. Auto-Reply & Privacy Check
         // Explicit commands usually bypass auto-reply disable
+        const continuationReply = this.shouldTreatAsContinuationReply(msg.source, msg.sourceId, sessionScopeId, baseContent, msg.replyContext, msg.metadata);
+        const substantiveInboundTask = this.isLikelySubstantiveInboundTask(msg, continuationReply);
         const autoReplyEnabled = this.agent.config.get(`${msg.source}AutoReplyEnabled`) ?? true;
-        if ((!autoReplyEnabled || msg.metadata?.suppressReply) && !msg.isCommand) {
-            const reason = msg.metadata?.suppressReply ? 'suppressReply flag' : 'auto-reply disabled';
+        const replyTemporarilySuppressed = msg.metadata?.suppressReply === true;
+
+        if ((!autoReplyEnabled || (replyTemporarilySuppressed && !substantiveInboundTask)) && !msg.isCommand) {
+            const reason = !autoReplyEnabled ? 'auto-reply disabled' : 'suppressReply flag';
             logger.debug(`MessageBus: Suppressed reply to ${msg.source} message (${reason})`);
             return;
+        }
+
+        if (replyTemporarilySuppressed && substantiveInboundTask && !msg.isCommand) {
+            logger.info(`MessageBus: Queueing substantive ${msg.source} task in quiet mode despite suppressReply flag.`);
         }
 
         // 5. Construct Task
         let priority = 10;
         let taskDescription = '';
-        const continuationReply = this.shouldTreatAsContinuationReply(msg.source, msg.sourceId, sessionScopeId, baseContent, msg.replyContext, msg.metadata);
         const whatsappReactionHint = msg.source === 'whatsapp' && msg.metadata?.autoReact && msg.messageId
             ? `\nIf a lightweight emoji reaction is more appropriate than a full reply, you may use 'react_whatsapp' with jid '${msg.sourceId}' and message_id '${msg.messageId}'.`
             : '';
@@ -257,6 +285,10 @@ Goal: Decide if you should respond based on our history and my persona. If yes, 
             taskDescription += ` (Files stored at: ${msg.mediaPaths.join(', ')})`;
         }
 
+        if (replyTemporarilySuppressed && substantiveInboundTask && !msg.isCommand) {
+            taskDescription += `\n\nQUIET MODE: The user is active in the chat or the channel requested reply suppression. Do NOT send a low-value acknowledgment or progress ping. Continue the work silently. Only send a user-facing message if you have substantive results or a real blocker.`;
+        }
+
         // 6. Push Task to Agent
         await this.agent.pushTask(
             taskDescription,
@@ -274,6 +306,8 @@ Goal: Decide if you should respond based on our history and my persona. If yes, 
                 continuationIntent: continuationReply.shouldContinue ? 'resume_prior_commitment' : undefined,
                 replyToAgentMessage: continuationReply.shouldContinue || undefined,
                 replyToAgentText: continuationReply.repliedText,
+                suppressProgressFeedback: replyTemporarilySuppressed && substantiveInboundTask ? true : undefined,
+                quietMode: replyTemporarilySuppressed && substantiveInboundTask ? true : undefined,
                 isExternal: msg.isExternal,
                 ...msg.metadata
             }

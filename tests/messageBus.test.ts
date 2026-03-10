@@ -106,4 +106,61 @@ describe('MessageBus continuation routing', () => {
         expect(metadata.continuationIntent).toBe('resume_prior_commitment');
         expect(metadata.replyToAgentText).toContain('default to Shopify');
     });
+
+    it('queues quiet-mode continuation work even when reply suppression is requested', async () => {
+        const agent = createMockAgent();
+        agent.memory.searchMemory = vi.fn(() => [
+            {
+                id: 'tg-out-2',
+                type: 'short',
+                content: 'Assistant sent Telegram message to chat-1: I\'ll proceed with the build and send you the result.',
+                timestamp: new Date().toISOString(),
+                metadata: {
+                    source: 'telegram',
+                    role: 'assistant',
+                    chatId: 'chat-1'
+                }
+            }
+        ]);
+
+        const bus = new MessageBus(agent);
+
+        await bus.dispatch({
+            source: 'telegram',
+            sourceId: 'chat-1',
+            userId: 'user-1',
+            senderName: 'Frederick',
+            content: 'your call',
+            messageId: 'msg-4',
+            metadata: {
+                suppressReply: true
+            }
+        });
+
+        expect(agent.pushTask).toHaveBeenCalledTimes(1);
+        const [description, , metadata] = agent.pushTask.mock.calls[0];
+        expect(description).toContain('CONTINUATION:');
+        expect(description).toContain('QUIET MODE:');
+        expect(metadata.quietMode).toBe(true);
+        expect(metadata.suppressProgressFeedback).toBe(true);
+    });
+
+    it('still suppresses trivial chatter when reply suppression is requested', async () => {
+        const agent = createMockAgent();
+        const bus = new MessageBus(agent);
+
+        await bus.dispatch({
+            source: 'telegram',
+            sourceId: 'chat-1',
+            userId: 'user-1',
+            senderName: 'Frederick',
+            content: 'ok',
+            messageId: 'msg-5',
+            metadata: {
+                suppressReply: true
+            }
+        });
+
+        expect(agent.pushTask).not.toHaveBeenCalled();
+    });
 });
