@@ -44,6 +44,20 @@ export class ConfigPolicy {
             reason: 'Non-sensitive endpoint configuration',
             validation: (value: any) => typeof value === 'string' && value.length > 0
         }],
+        ['googleWorkspaceCliPath', {
+            key: 'googleWorkspaceCliPath',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Path to the Google Workspace CLI binary',
+            reason: 'Non-sensitive local tool path configuration',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['googleWorkspaceCliAccount', {
+            key: 'googleWorkspaceCliAccount',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Default Google Workspace CLI account selector',
+            reason: 'Non-sensitive account routing for multi-account CLI use',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
         ['memoryContextLimit', {
             key: 'memoryContextLimit',
             level: ConfigChangeLevel.SAFE,

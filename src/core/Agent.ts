@@ -25,6 +25,7 @@ import { AgenticUser } from './AgenticUser';
 import { KnowledgeStore } from '../memory/KnowledgeStore';
 import { SystemProfiler } from './SystemProfiler';
 import { GoogleIdentityManager } from './GoogleIdentityManager';
+import { GoogleWorkspaceCli } from './GoogleWorkspaceCli';
 import { memoryToolsSkills } from '../skills/memoryTools';
 import { pythonToolsSkills } from '../skills/pythonTools';
 import { canvasToolsSkills } from '../skills/canvasTools';
@@ -43,6 +44,7 @@ import { ErrorClassifier } from './ErrorClassifier';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import crypto from 'crypto';
 import { SyntaxChecker } from '../utils/SyntaxChecker';
 import { isDeepEqual } from '../utils/ObjectUtils';
 import { shellSessions } from '../utils/ShellSession';
@@ -98,6 +100,7 @@ export class Agent {
     public config: ConfigManager;
     public systemProfiler: SystemProfiler;
     public googleIdentity: GoogleIdentityManager;
+    public googleWorkspaceCli: GoogleWorkspaceCli;
     public telegram: TelegramChannel | undefined;
     public whatsapp: WhatsAppChannel | undefined;
     public discord: DiscordChannel | undefined;
@@ -201,6 +204,7 @@ export class Agent {
         // Initialize system profiler - will be loaded/profiled during startup
         this.systemProfiler = new SystemProfiler(this.config.getDataHome());
         this.googleIdentity = new GoogleIdentityManager(this.config);
+        this.googleWorkspaceCli = new GoogleWorkspaceCli(this.config);
 
         this.tools = new ToolsManager(
             this.config.get('toolsPath') || path.join(this.config.getDataHome(), 'tools')
@@ -485,17 +489,7 @@ export class Agent {
                 if (key === 'actionQueue') defaultContent = '[]';
                 if (key === 'memory') defaultContent = '{"memories":[]}';
                 if (key === 'skills') {
-                    // Try process.cwd() first (if run locally in dev), then fallback to relative to __dirname (when built/installed globally)
-                    const localSkillsPath = path.resolve(process.cwd(), 'SKILLS.md');
-                    const packageSkillsPath = path.resolve(__dirname, '../../SKILLS.md'); // __dirname is dist/core/ in prod
-                    
-                    if (fs.existsSync(localSkillsPath)) {
-                        defaultContent = fs.readFileSync(localSkillsPath, 'utf-8');
-                    } else if (fs.existsSync(packageSkillsPath)) {
-                        defaultContent = fs.readFileSync(packageSkillsPath, 'utf-8');
-                    } else {
-                        defaultContent = '# OrcBot Skills Registry\n\n(Workspace SKILLS.md not found. Populate this file manually.)\n';
-                    }
+                    defaultContent = this.getBuiltinSkillsRegistryContent();
                 }
 
                 try {
@@ -504,53 +498,94 @@ export class Agent {
                 } catch (e) {
                     logger.error(`Failed to initialize ${key} at ${filePath}: ${e}`);
                 }
-            } else if (key === 'skills') {
-                // AUTO-SYNC: If SKILLS.md exists, merge any NEW core skills from the package
-                try {
-                    const localSkillsPath = path.resolve(process.cwd(), 'SKILLS.md');
-                    const packageSkillsPath = path.resolve(__dirname, '../../SKILLS.md');
-                    const masterSkillsPath = fs.existsSync(localSkillsPath) ? localSkillsPath : (fs.existsSync(packageSkillsPath) ? packageSkillsPath : null);
-
-                    if (masterSkillsPath) {
-                        const masterContent = fs.readFileSync(masterSkillsPath, 'utf-8');
-                        const currentContent = fs.readFileSync(filePath, 'utf-8');
-                        
-                        // Simple sync logic: extract skill names (lines starting with - **name)
-                        // and append any that are in master but not in current.
-                        const extractSkillNames = (content: string) => {
-                            const regex = /- \*\*([a-zA-Z0-9_]+)\(/g;
-                            const names = new Set<string>();
-                            let match;
-                            while ((match = regex.exec(content)) !== null) {
-                                names.add(match[1]);
-                            }
-                            return names;
-                        };
-
-                        const masterSkills = extractSkillNames(masterContent);
-                        const currentSkills = extractSkillNames(currentContent);
-                        
-                        const missingSkills: string[] = [];
-                        for (const skill of masterSkills) {
-                            if (!currentSkills.has(skill)) {
-                                // Find the line in master content for this skill
-                                const lines = masterContent.split('\n');
-                                const skillLine = lines.find(l => l.startsWith(`- **${skill}(`));
-                                if (skillLine) missingSkills.push(skillLine);
-                            }
-                        }
-
-                        if (missingSkills.length > 0) {
-                            logger.info(`Agent: Syncing ${missingSkills.length} new core skills to ${filePath}`);
-                            const updatedContent = currentContent.trim() + '\n\n## Newly Added Core Skills\n' + missingSkills.join('\n') + '\n';
-                            fs.writeFileSync(filePath, updatedContent);
-                        }
-                    }
-                } catch (e) {
-                    logger.warn(`Agent: Failed to sync SKILLS.md: ${e}`);
-                }
             }
         }
+
+        try {
+            this.syncSkillsRegistryFiles();
+        } catch (e) {
+            logger.warn(`Agent: Failed to sync SKILLS.md: ${e}`);
+        }
+    }
+
+    private getBuiltinSkillsRegistrySourcePath(): string | null {
+        const localSkillsPath = path.resolve(process.cwd(), 'SKILLS.md');
+        const packageSkillsPath = path.resolve(__dirname, '../../SKILLS.md');
+
+        if (fs.existsSync(localSkillsPath)) {
+            return localSkillsPath;
+        }
+        if (fs.existsSync(packageSkillsPath)) {
+            return packageSkillsPath;
+        }
+        return null;
+    }
+
+    private getBuiltinSkillsRegistryContent(): string {
+        const sourcePath = this.getBuiltinSkillsRegistrySourcePath();
+        if (!sourcePath) {
+            return '# OrcBot Skills Registry\n\n(Workspace SKILLS.md not found. Populate this file manually.)\n';
+        }
+        return fs.readFileSync(sourcePath, 'utf-8');
+    }
+
+    private getSkillsRegistryTargets(): string[] {
+        const configuredSkillsPath = this.config.get('skillsPath');
+        const dataHomeSkillsPath = path.join(this.config.getDataHome(), 'SKILLS.md');
+        return Array.from(new Set([configuredSkillsPath, dataHomeSkillsPath].filter((value): value is string => !!value)));
+    }
+
+    private extractSkillDefinitionLines(content: string): Map<string, string> {
+        const definitions = new Map<string, string>();
+        for (const line of content.split(/\r?\n/)) {
+            const match = line.match(/^- \*\*([a-zA-Z0-9_]+)\(/);
+            if (match) {
+                definitions.set(match[1], line);
+            }
+        }
+        return definitions;
+    }
+
+    private mergeBuiltinAndLocalSkills(masterContent: string, currentContent: string): string {
+        const masterDefinitions = this.extractSkillDefinitionLines(masterContent);
+        const currentDefinitions = this.extractSkillDefinitionLines(currentContent);
+        const customLines = Array.from(currentDefinitions.entries())
+            .filter(([skillName, line]) => !masterDefinitions.has(skillName) || masterDefinitions.get(skillName) !== line)
+            .map(([, line]) => line);
+
+        let merged = masterContent.trimEnd();
+        if (customLines.length > 0) {
+            merged += '\n\n## Local Skill Notes\n' + customLines.join('\n');
+        }
+        return merged + '\n';
+    }
+
+    private syncSkillsRegistryFiles(sourceContent?: string): void {
+        const masterContent = sourceContent ?? this.getBuiltinSkillsRegistryContent();
+
+        for (const targetPath of this.getSkillsRegistryTargets()) {
+            const targetDir = path.dirname(targetPath);
+            if (!fs.existsSync(targetDir)) {
+                fs.mkdirSync(targetDir, { recursive: true });
+            }
+
+            const currentContent = fs.existsSync(targetPath) ? fs.readFileSync(targetPath, 'utf-8') : '';
+            const desiredContent = this.mergeBuiltinAndLocalSkills(masterContent, currentContent);
+            if (currentContent !== desiredContent) {
+                fs.writeFileSync(targetPath, desiredContent);
+                logger.info(`Agent: Synced skills registry to ${targetPath}`);
+            }
+        }
+    }
+
+    public syncSkillsRegistryNow(): { success: boolean; targets: string[]; sourcePath: string | null } {
+        const sourcePath = this.getBuiltinSkillsRegistrySourcePath();
+        this.syncSkillsRegistryFiles();
+        return {
+            success: true,
+            targets: this.getSkillsRegistryTargets(),
+            sourcePath,
+        };
     }
 
     private isSequentialUIComponent(skillName: string): boolean {
@@ -2826,6 +2861,457 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             }
         });
 
+        this.skills.registerSkill({
+            name: 'google_workspace_status',
+            description: 'Check whether Google Workspace CLI (gws) is installed and whether its auth/account context appears available.',
+            usage: 'google_workspace_status()',
+            isElevated: true,
+            handler: async () => {
+                const status = await this.googleWorkspaceCli.getStatus();
+                return {
+                    success: true,
+                    ...status,
+                    note: status.installed
+                        ? 'Google Workspace CLI is installed. Use google_workspace_command or higher-level Google Workspace skills.'
+                        : 'Google Workspace CLI is not installed or not on PATH.'
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_workspace_command',
+            description: 'Run a structured Google Workspace CLI (gws) command without using a shell. Args must be an array of raw CLI tokens, e.g. ["drive","files","list"].',
+            usage: 'google_workspace_command(args:array, json?, account?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const commandArgs = Array.isArray(args.args)
+                    ? args.args.map((item: any) => String(item))
+                    : [];
+                if (commandArgs.length === 0) {
+                    return { success: false, error: 'Missing args array. Example: { args: ["drive", "files", "list"] }' };
+                }
+
+                const json = args.json !== false && args.json !== 'false';
+                const account = String(args.account || '').trim() || undefined;
+                const result = await this.googleWorkspaceCli.run(commandArgs, { json, account });
+                return result.success
+                    ? {
+                        success: true,
+                        binary: result.binary,
+                        args: result.args,
+                        data: result.data,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        binary: result.binary,
+                        args: result.args,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_docs_create',
+            description: 'Create a Google Doc through Google Workspace CLI. Optionally append initial content after creation.',
+            usage: 'google_docs_create(title, content?, account?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const title = String(args.title || args.name || '').trim();
+                const content = String(args.content || args.text || '').trim();
+                const account = String(args.account || '').trim() || undefined;
+                if (!title) return { success: false, error: 'Missing title.' };
+
+                const createResult = await this.googleWorkspaceCli.createDoc(title, account);
+                if (!createResult.success) {
+                    return { success: false, error: createResult.error || createResult.stderr || createResult.stdout };
+                }
+
+                const documentId = createResult.data?.documentId || createResult.data?.document_id;
+                if (!documentId) {
+                    return {
+                        success: false,
+                        error: 'Document create did not return a documentId.',
+                        data: createResult.data,
+                        stdout: createResult.stdout
+                    };
+                }
+
+                let appendResult: any;
+                if (content) {
+                    appendResult = await this.googleWorkspaceCli.appendToDoc(String(documentId), content, account);
+                    if (!appendResult.success) {
+                        return {
+                            success: false,
+                            error: appendResult.error || appendResult.stderr || appendResult.stdout,
+                            documentId,
+                            documentUrl: `https://docs.google.com/document/d/${documentId}/edit`
+                        };
+                    }
+                }
+
+                return {
+                    success: true,
+                    title,
+                    documentId,
+                    documentUrl: `https://docs.google.com/document/d/${documentId}/edit`,
+                    created: createResult.data,
+                    appendOutput: appendResult?.stdout,
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_docs_write',
+            description: 'Append plain text to an existing Google Doc through Google Workspace CLI.',
+            usage: 'google_docs_write(document_id, text, account?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const documentId = String(args.document_id || args.documentId || args.id || '').trim();
+                const text = String(args.text || args.content || '').trim();
+                const account = String(args.account || '').trim() || undefined;
+                if (!documentId) return { success: false, error: 'Missing document_id.' };
+                if (!text) return { success: false, error: 'Missing text.' };
+
+                const result = await this.googleWorkspaceCli.appendToDoc(documentId, text, account);
+                return result.success
+                    ? {
+                        success: true,
+                        documentId,
+                        documentUrl: `https://docs.google.com/document/d/${documentId}/edit`,
+                        output: result.stdout,
+                    }
+                    : {
+                        success: false,
+                        error: result.error || result.stderr || result.stdout,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_drive_list',
+            description: 'List Google Drive files via Google Workspace CLI with optional Drive query filtering.',
+            usage: 'google_drive_list(query?, pageSize?, account?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const query = String(args.query || args.q || '').trim() || undefined;
+                const pageSize = Number(args.pageSize || args.page_size || 10);
+                const account = String(args.account || '').trim() || undefined;
+
+                const result = await this.googleWorkspaceCli.listDriveFiles({ query, pageSize, account });
+                if (!result.success) {
+                    return { success: false, error: result.error || result.stderr || result.stdout };
+                }
+
+                return {
+                    success: true,
+                    count: Array.isArray(result.data?.files) ? result.data.files.length : 0,
+                    files: result.data?.files || [],
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_sheets_create',
+            description: 'Create a Google Sheets spreadsheet via Google Workspace CLI.',
+            usage: 'google_sheets_create(title, account?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const title = String(args.title || args.name || '').trim();
+                const account = String(args.account || '').trim() || undefined;
+                if (!title) return { success: false, error: 'Missing title.' };
+
+                const result = await this.googleWorkspaceCli.createSpreadsheet(title, account);
+                if (!result.success) {
+                    return { success: false, error: result.error || result.stderr || result.stdout };
+                }
+
+                const spreadsheetId = result.data?.spreadsheetId || result.data?.spreadsheet_id;
+                return {
+                    success: true,
+                    title,
+                    spreadsheetId,
+                    spreadsheetUrl: spreadsheetId ? `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit` : undefined,
+                    created: result.data,
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_sheets_read',
+            description: 'Read cell values from a Google Sheet via Google Workspace CLI.',
+            usage: 'google_sheets_read(spreadsheet_id, range, account?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const spreadsheetId = String(args.spreadsheet_id || args.spreadsheetId || args.id || '').trim();
+                const range = String(args.range || '').trim();
+                const account = String(args.account || '').trim() || undefined;
+                if (!spreadsheetId) return { success: false, error: 'Missing spreadsheet_id.' };
+                if (!range) return { success: false, error: 'Missing range.' };
+
+                const result = await this.googleWorkspaceCli.readSheet({ spreadsheetId, range, account });
+                if (!result.success) {
+                    return { success: false, error: result.error || result.stderr || result.stdout };
+                }
+
+                return {
+                    success: true,
+                    spreadsheetId,
+                    range,
+                    values: result.data?.values || [],
+                    data: result.data,
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_sheets_append',
+            description: 'Append one or more rows to a Google Sheet via Google Workspace CLI.',
+            usage: 'google_sheets_append(spreadsheet_id, values|json_values, account?, dryRun?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const spreadsheetId = String(args.spreadsheet_id || args.spreadsheetId || args.id || '').trim();
+                const account = String(args.account || '').trim() || undefined;
+                const dryRun = args.dryRun === true || args.dry_run === true || args.dryRun === 'true' || args.dry_run === 'true';
+                if (!spreadsheetId) return { success: false, error: 'Missing spreadsheet_id.' };
+
+                const jsonValues = Array.isArray(args.json_values)
+                    ? args.json_values
+                    : Array.isArray(args.jsonValues)
+                        ? args.jsonValues
+                        : undefined;
+                const values = Array.isArray(args.values)
+                    ? args.values
+                    : typeof args.values === 'string'
+                        ? args.values
+                        : undefined;
+
+                if (!jsonValues && !values) {
+                    return { success: false, error: 'Missing values. Provide values as an array/string or json_values as a 2D array.' };
+                }
+
+                const result = await this.googleWorkspaceCli.appendSheet({
+                    spreadsheetId,
+                    values,
+                    jsonValues,
+                    account,
+                    dryRun,
+                });
+                if (!result.success) {
+                    return { success: false, error: result.error || result.stderr || result.stdout };
+                }
+
+                return {
+                    success: true,
+                    spreadsheetId,
+                    dryRun,
+                    output: result.data || result.stdout,
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_calendar_create_event',
+            description: 'Create a Google Calendar event via Google Workspace CLI.',
+            usage: 'google_calendar_create_event(summary, start, end, calendar?, location?, description?, attendees?, account?, dryRun?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const summary = String(args.summary || args.title || '').trim();
+                const start = String(args.start || '').trim();
+                const end = String(args.end || '').trim();
+                const calendar = String(args.calendar || args.calendar_id || args.calendarId || '').trim() || undefined;
+                const location = String(args.location || '').trim() || undefined;
+                const description = String(args.description || args.body || '').trim() || undefined;
+                const account = String(args.account || '').trim() || undefined;
+                const dryRun = args.dryRun === true || args.dry_run === true || args.dryRun === 'true' || args.dry_run === 'true';
+                const attendees = Array.isArray(args.attendees)
+                    ? args.attendees.map((value: any) => String(value || '').trim()).filter(Boolean)
+                    : typeof args.attendees === 'string'
+                        ? args.attendees.split(',').map((value: string) => value.trim()).filter(Boolean)
+                        : [];
+
+                if (!summary) return { success: false, error: 'Missing summary.' };
+                if (!start) return { success: false, error: 'Missing start.' };
+                if (!end) return { success: false, error: 'Missing end.' };
+
+                const result = await this.googleWorkspaceCli.createCalendarEvent({
+                    summary,
+                    start,
+                    end,
+                    calendar,
+                    location,
+                    description,
+                    attendees,
+                    account,
+                    dryRun,
+                });
+                if (!result.success) {
+                    return { success: false, error: result.error || result.stderr || result.stdout };
+                }
+
+                return {
+                    success: true,
+                    calendar: calendar || 'primary',
+                    event: result.data || result.stdout,
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_gmail_triage',
+            description: 'Show an unread Gmail summary through Google Workspace CLI.',
+            usage: 'google_gmail_triage(max?, query?, labels?, account?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const max = Number(args.max || 20);
+                const query = String(args.query || '').trim() || undefined;
+                const labels = args.labels === true || args.labels === 'true';
+                const account = String(args.account || '').trim() || undefined;
+
+                const result = await this.googleWorkspaceCli.gmailTriage({ max, query, labels, account });
+                if (!result.success) {
+                    return { success: false, error: result.error || result.stderr || result.stdout };
+                }
+
+                return {
+                    success: true,
+                    count: Array.isArray(result.data) ? result.data.length : 0,
+                    messages: Array.isArray(result.data) ? result.data : result.data?.messages || [],
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_gmail_send',
+            description: 'Send a plain-text Gmail message through Google Workspace CLI.',
+            usage: 'google_gmail_send(to, subject, body, cc?, bcc?, account?, dryRun?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const to = Array.isArray(args.to) ? args.to : String(args.to || '').trim();
+                const subject = String(args.subject || '').trim();
+                const body = String(args.body || args.message || args.text || '').trim();
+                const cc = Array.isArray(args.cc) ? args.cc : String(args.cc || '').trim() || undefined;
+                const bcc = Array.isArray(args.bcc) ? args.bcc : String(args.bcc || '').trim() || undefined;
+                const account = String(args.account || '').trim() || undefined;
+                const dryRun = args.dryRun === true || args.dry_run === true || args.dryRun === 'true' || args.dry_run === 'true';
+
+                if (!to || (Array.isArray(to) && to.length === 0)) return { success: false, error: 'Missing to recipient(s).' };
+                if (!subject) return { success: false, error: 'Missing subject.' };
+                if (!body) return { success: false, error: 'Missing body.' };
+
+                const result = await this.googleWorkspaceCli.sendGmail({ to, subject, body, cc, bcc, account, dryRun });
+                if (!result.success) {
+                    return { success: false, error: result.error || result.stderr || result.stdout };
+                }
+
+                return {
+                    success: true,
+                    dryRun,
+                    output: result.data || result.stdout,
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_gmail_reply',
+            description: 'Reply to a Gmail message through Google Workspace CLI, preserving thread headers automatically.',
+            usage: 'google_gmail_reply(message_id, body, to?, cc?, bcc?, from?, account?, dryRun?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const messageId = String(args.message_id || args.messageId || args.id || '').trim();
+                const body = String(args.body || args.message || args.text || '').trim();
+                const from = String(args.from || '').trim() || undefined;
+                const to = Array.isArray(args.to) ? args.to : String(args.to || '').trim() || undefined;
+                const cc = Array.isArray(args.cc) ? args.cc : String(args.cc || '').trim() || undefined;
+                const bcc = Array.isArray(args.bcc) ? args.bcc : String(args.bcc || '').trim() || undefined;
+                const account = String(args.account || '').trim() || undefined;
+                const dryRun = args.dryRun === true || args.dry_run === true || args.dryRun === 'true' || args.dry_run === 'true';
+
+                if (!messageId) return { success: false, error: 'Missing message_id.' };
+                if (!body) return { success: false, error: 'Missing body.' };
+
+                const result = await this.googleWorkspaceCli.replyGmail({
+                    messageId,
+                    body,
+                    from,
+                    to,
+                    cc,
+                    bcc,
+                    account,
+                    dryRun,
+                });
+                if (!result.success) {
+                    return { success: false, error: result.error || result.stderr || result.stdout };
+                }
+
+                return {
+                    success: true,
+                    messageId,
+                    dryRun,
+                    output: result.data || result.stdout,
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_gmail_reply_all',
+            description: 'Reply-all to a Gmail thread through Google Workspace CLI.',
+            usage: 'google_gmail_reply_all(message_id, body, to?, cc?, bcc?, remove?, from?, account?, dryRun?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const messageId = String(args.message_id || args.messageId || args.id || '').trim();
+                const body = String(args.body || args.message || args.text || '').trim();
+                const from = String(args.from || '').trim() || undefined;
+                const to = Array.isArray(args.to) ? args.to : String(args.to || '').trim() || undefined;
+                const cc = Array.isArray(args.cc) ? args.cc : String(args.cc || '').trim() || undefined;
+                const bcc = Array.isArray(args.bcc) ? args.bcc : String(args.bcc || '').trim() || undefined;
+                const remove = Array.isArray(args.remove) ? args.remove : String(args.remove || '').trim() || undefined;
+                const account = String(args.account || '').trim() || undefined;
+                const dryRun = args.dryRun === true || args.dry_run === true || args.dryRun === 'true' || args.dry_run === 'true';
+
+                if (!messageId) return { success: false, error: 'Missing message_id.' };
+                if (!body) return { success: false, error: 'Missing body.' };
+
+                const result = await this.googleWorkspaceCli.replyGmail({
+                    messageId,
+                    body,
+                    from,
+                    to,
+                    cc,
+                    bcc,
+                    remove,
+                    account,
+                    dryRun,
+                    replyAll: true,
+                });
+                if (!result.success) {
+                    return { success: false, error: result.error || result.stderr || result.stdout };
+                }
+
+                return {
+                    success: true,
+                    messageId,
+                    dryRun,
+                    output: result.data || result.stdout,
+                };
+            }
+        });
+
         // Skill: React to WhatsApp Message
         this.skills.registerSkill({
             name: 'react_whatsapp',
@@ -4184,6 +4670,8 @@ Output the fixed CommonJS code now:`;
                 const skillsPath = this.config.get('skillsPath');
                 try {
                     fs.appendFileSync(skillsPath, `\n\n${skill_definition}`);
+                    const updatedContent = fs.readFileSync(skillsPath, 'utf-8');
+                    this.syncSkillsRegistryFiles(updatedContent);
                     // Instead of re-instantiating, we just log. 
                     // Manual skills are already registered. Plugins can be reloaded.
                     this.skills.loadPlugins();
@@ -9459,6 +9947,141 @@ REFLECTION: <1-2 sentences>`;
         return Array.from(new Set(matches)).slice(0, maxItems);
     }
 
+    private isLikelyBase64Payload(text: string): boolean {
+        const trimmed = String(text || '').trim();
+        if (!trimmed) return false;
+        if (trimmed.startsWith('data:') && trimmed.includes(';base64,')) return true;
+        if (trimmed.length < 512) return false;
+        if (!/^[A-Za-z0-9+/=\r\n]+$/.test(trimmed)) return false;
+        const normalized = trimmed.replace(/[\r\n]/g, '');
+        return normalized.length >= 512 && normalized.length % 4 === 0;
+    }
+
+    private safeSerializeToolResult(toolResult: any): { raw: string; format: 'json' | 'text' } {
+        if (typeof toolResult === 'string') {
+            return { raw: toolResult, format: 'text' };
+        }
+
+        try {
+            return { raw: JSON.stringify(toolResult, null, 2), format: 'json' };
+        } catch {
+            return { raw: String(toolResult), format: 'text' };
+        }
+    }
+
+    private buildCompactToolResult(value: any, depth: number = 0): any {
+        if (value === null || value === undefined) return value;
+        if (depth >= 2) {
+            if (Array.isArray(value)) return `[array:${value.length}]`;
+            if (typeof value === 'object') return '[object]';
+            return value;
+        }
+
+        if (typeof value === 'string') {
+            const trimmed = value.trim();
+            if (this.isLikelyBase64Payload(trimmed)) {
+                return `[base64 payload omitted: ${trimmed.length} chars]`;
+            }
+            if (trimmed.length > 800) {
+                return `${trimmed.slice(0, 280)} ... [${trimmed.length - 560} chars omitted] ... ${trimmed.slice(-280)}`;
+            }
+            return value;
+        }
+
+        if (typeof value !== 'object') return value;
+
+        if (Array.isArray(value)) {
+            const compactItems = value.slice(0, 5).map((entry) => this.buildCompactToolResult(entry, depth + 1));
+            if (value.length > 5) compactItems.push(`[${value.length - 5} more item(s)]`);
+            return compactItems;
+        }
+
+        const compact: Record<string, any> = {};
+        const entries = Object.entries(value);
+        for (const [key, entryValue] of entries.slice(0, 12)) {
+            compact[key] = this.buildCompactToolResult(entryValue, depth + 1);
+        }
+        if (entries.length > 12) {
+            compact.__truncatedKeys = entries.length - 12;
+        }
+        return compact;
+    }
+
+    private getToolResultArtifactDir(): string {
+        const dir = path.join(this.config.getDataHome(), 'tool-results');
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        return dir;
+    }
+
+    private persistToolResultArtifact(action: Action, step: number, toolName: string, rawContent: string, format: 'json' | 'text'): {
+        path: string;
+        bytes: number;
+        sha1: string;
+    } {
+        const digest = crypto.createHash('sha1').update(rawContent).digest('hex').slice(0, 12);
+        const ext = format === 'json' ? 'json' : 'txt';
+        const safeToolName = String(toolName || 'tool').replace(/[^a-zA-Z0-9_-]/g, '_');
+        const fileName = `${action.id}-step-${step}-${safeToolName}-${digest}.${ext}`;
+        const artifactPath = path.join(this.getToolResultArtifactDir(), fileName);
+        fs.writeFileSync(artifactPath, rawContent, 'utf8');
+        return {
+            path: artifactPath,
+            bytes: Buffer.byteLength(rawContent, 'utf8'),
+            sha1: digest,
+        };
+    }
+
+    private formatToolResultForContext(action: Action, step: number, toolName: string, toolResult: any): {
+        summaryString: string;
+        memoryContent: string;
+        memoryMetadata: Record<string, any>;
+        ledgerSnippet: string;
+        artifactPath?: string;
+    } {
+        const serialized = this.safeSerializeToolResult(toolResult);
+        const compactResult = this.buildCompactToolResult(toolResult);
+        const compactString = typeof compactResult === 'string'
+            ? compactResult
+            : JSON.stringify(compactResult);
+
+        const shouldPersistArtifact =
+            serialized.raw.length > 6000 ||
+            this.isLikelyBase64Payload(serialized.raw) ||
+            (compactString !== serialized.raw && serialized.raw.length > 2000);
+
+        let artifactInfo: { path: string; bytes: number; sha1: string } | undefined;
+        if (shouldPersistArtifact) {
+            artifactInfo = this.persistToolResultArtifact(action, step, toolName, serialized.raw, serialized.format);
+        }
+
+        const summaryBase = compactString.length > 2000 ? `${compactString.slice(0, 2000)}...` : compactString;
+        const summaryString = artifactInfo
+            ? `${summaryBase} [raw tool result stored at ${artifactInfo.path}]`
+            : summaryBase;
+
+        return {
+            summaryString,
+            memoryContent: artifactInfo
+                ? `Tool ${toolName} returned a large result. Summary: ${summaryBase}. Raw artifact: ${artifactInfo.path} (${artifactInfo.bytes} bytes).`
+                : `Tool ${toolName} returned: ${summaryBase}`,
+            memoryMetadata: artifactInfo
+                ? {
+                    resultPreview: compactResult,
+                    resultArtifact: {
+                        path: artifactInfo.path,
+                        bytes: artifactInfo.bytes,
+                        sha1: artifactInfo.sha1,
+                        format: serialized.format,
+                    }
+                }
+                : { resultPreview: compactResult },
+            ledgerSnippet: summaryBase.slice(0, 200),
+            artifactPath: artifactInfo?.path,
+        };
+    }
+
     private buildToolSignatureKey(toolName: string, metadata: any): string {
         const md = metadata || {};
         const salient = md.command || md.cmd || md.url || md.query || md.path || md.selector || md.text || md.message || JSON.stringify(md);
@@ -9671,6 +10294,10 @@ REFLECTION: <1-2 sentences>`;
         resultString: string;
         resultIndicatesError: boolean;
         forceBreak: boolean;
+        memoryContent: string;
+        memoryMetadata: Record<string, any>;
+        ledgerSnippet: string;
+        artifactPath?: string;
     }> {
         const {
             action,
@@ -9686,7 +10313,8 @@ REFLECTION: <1-2 sentences>`;
         } = params;
 
         const toolSignature = this.buildToolSignatureKey(toolCall.name, toolCall.metadata || {});
-        const resultString = JSON.stringify(toolResult) || '';
+        const formattedResult = this.formatToolResultForContext(action, currentStep, toolCall.name, toolResult);
+        const resultString = formattedResult.summaryString;
         const resultIndicatesError = this.doesToolResultIndicateError(toolResult);
 
         if (resultIndicatesError) {
@@ -9713,6 +10341,10 @@ REFLECTION: <1-2 sentences>`;
                         resultString,
                         resultIndicatesError,
                         forceBreak: true,
+                        memoryContent: formattedResult.memoryContent,
+                        memoryMetadata: formattedResult.memoryMetadata,
+                        ledgerSnippet: formattedResult.ledgerSnippet,
+                        artifactPath: formattedResult.artifactPath,
                     };
                 }
                 skillFailCounts[toolCall.name] = 0;
@@ -9730,6 +10362,10 @@ REFLECTION: <1-2 sentences>`;
             resultString,
             resultIndicatesError,
             forceBreak: false,
+            memoryContent: formattedResult.memoryContent,
+            memoryMetadata: formattedResult.memoryMetadata,
+            ledgerSnippet: formattedResult.ledgerSnippet,
+            artifactPath: formattedResult.artifactPath,
         };
     }
 
@@ -9960,9 +10596,6 @@ REFLECTION: <1-2 sentences>`;
                 break;
             }
 
-            const resultString = options.contextLabel === 'bonus'
-                ? JSON.stringify(toolResult).slice(0, 500)
-                : (JSON.stringify(toolResult) || '');
             const toolDurationMs = Date.now() - toolStartedAt;
             const isInternalTool = ['update_journal', 'update_user_profile', 'update_learning', 'book_log_add', 'update_world'].includes(toolCall.name);
             const assessed = await this.assessToolExecutionOutcome({
@@ -9977,7 +10610,15 @@ REFLECTION: <1-2 sentences>`;
                 blockedFailedSignatures: options.blockedFailedSignatures,
                 skillFailCounts: options.skillFailCounts,
             });
-            const { resultIndicatesError, forceBreak: toolForceBreak } = assessed;
+            const {
+                resultIndicatesError,
+                forceBreak: toolForceBreak,
+                resultString,
+                memoryContent,
+                memoryMetadata,
+                ledgerSnippet,
+                artifactPath,
+            } = assessed;
 
             if (toolForceBreak) {
                 state.forceBreak = true;
@@ -10017,11 +10658,11 @@ REFLECTION: <1-2 sentences>`;
                 id: `${options.memoryIdPrefix}-${toolCall.name}`,
                 type: 'short',
                 content: options.memoryContentPrefix
-                    ? `${options.memoryContentPrefix} Tool ${toolCall.name} returned: ${resultString}`
-                    : `Tool ${toolCall.name} returned: ${resultString.slice(0, 1000)}`,
+                    ? `${options.memoryContentPrefix} ${memoryContent}`
+                    : memoryContent,
                 metadata: options.contextLabel === 'bonus'
-                    ? { actionId: action.id, step: currentStep, tool: toolCall.name, result: toolResult }
-                    : { tool: toolCall.name, result: toolResult }
+                    ? { actionId: action.id, step: currentStep, tool: toolCall.name, result: toolResult, ...memoryMetadata }
+                    : { tool: toolCall.name, result: toolResult, ...memoryMetadata }
             });
 
             // Record in step ledger for delivery audit
@@ -10034,8 +10675,9 @@ REFLECTION: <1-2 sentences>`;
                     success: !resultIndicatesError,
                     isDeep: !!toolMeta.isDeep && !isInternalTool,
                     isSideEffect: !!toolMeta.isSideEffect,
-                    resultSnippet: resultIndicatesError ? undefined : String(resultString).slice(0, 200),
-                    errorSnippet: resultIndicatesError ? String(resultString).slice(0, 200) : undefined,
+                    resultSnippet: resultIndicatesError ? undefined : ledgerSnippet,
+                    errorSnippet: resultIndicatesError ? ledgerSnippet : undefined,
+                    artifactPath,
                     timestamp: Date.now(),
                 });
             }
@@ -10153,7 +10795,15 @@ REFLECTION: <1-2 sentences>`;
                 blockedFailedSignatures: options.blockedFailedSignatures,
                 skillFailCounts: options.skillFailCounts,
             });
-            const { resultIndicatesError, resultString, forceBreak: toolForceBreak } = assessed;
+            const {
+                resultIndicatesError,
+                resultString,
+                forceBreak: toolForceBreak,
+                memoryContent,
+                memoryMetadata,
+                ledgerSnippet,
+                artifactPath,
+            } = assessed;
 
             if (toolForceBreak) {
                 state.forceBreak = true;
@@ -10181,8 +10831,14 @@ REFLECTION: <1-2 sentences>`;
             this.memory.saveMemory({
                 id: `${options.memoryIdPrefix}-${toolCall.name}-${Math.random().toString(36).slice(2, 7)}`,
                 type: 'short',
-                content: `[TOOL: ${toolCall.name}] Result: ${String(toolResult).slice(0, 2000)}`,
-                metadata: { actionId: action.id, step: currentStep, tool: toolCall.name, success: !resultIndicatesError }
+                content: `[TOOL: ${toolCall.name}] ${memoryContent}`,
+                metadata: {
+                    actionId: action.id,
+                    step: currentStep,
+                    tool: toolCall.name,
+                    success: !resultIndicatesError,
+                    ...memoryMetadata,
+                }
             });
 
             // Record in step ledger for delivery audit
@@ -10195,8 +10851,9 @@ REFLECTION: <1-2 sentences>`;
                     success: !resultIndicatesError,
                     isDeep: !!toolMeta.isDeep && !isInternalTool,
                     isSideEffect: !!toolMeta.isSideEffect,
-                    resultSnippet: resultIndicatesError ? undefined : String(toolResult).slice(0, 200),
-                    errorSnippet: resultIndicatesError ? String(toolResult).slice(0, 200) : undefined,
+                    resultSnippet: resultIndicatesError ? undefined : ledgerSnippet,
+                    errorSnippet: resultIndicatesError ? ledgerSnippet : undefined,
+                    artifactPath,
                     timestamp: Date.now(),
                 });
             }

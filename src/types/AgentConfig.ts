@@ -36,6 +36,8 @@ export const AgentConfigSchema = z.object({
     googleOAuthClientId: z.string().optional(),
     googleOAuthClientSecret: z.string().optional(),
     googleOAuthRedirectUri: z.string().default('http://localhost'),
+    googleWorkspaceCliPath: z.string().optional(),
+    googleWorkspaceCliAccount: z.string().optional(),
     nvidiaApiKey: z.string().optional(),
     anthropicApiKey: z.string().optional(),
     braveSearchApiKey: z.string().optional(),
@@ -101,7 +103,7 @@ export const AgentConfigSchema = z.object({
         'npm', 'node', 'npx', 'git', 'python', 'pip', 'pip3', 'curl', 'wget', 'powershell',
         'pwsh', 'bash', 'apt', 'apt-get', 'yum', 'dnf', 'pacman', 'brew', 'sudo', 'systemctl',
         'service', 'cat', 'ls', 'dir', 'echo', 'mkdir', 'touch', 'cp', 'mv', 'head', 'tail',
-        'grep', 'find', 'which', 'whoami', 'uname', 'hostname', 'orcbot'
+        'grep', 'find', 'which', 'whoami', 'uname', 'hostname', 'orcbot', 'gws'
     ]),
     commandDenyList: z.array(z.string()).default([
         'rm', 'rmdir', 'del', 'erase', 'format', 'mkfs', 'dd', 'shutdown', 'reboot', 'poweroff',

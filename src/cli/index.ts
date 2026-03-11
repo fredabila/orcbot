@@ -3363,6 +3363,11 @@ async function showToolingMenu() {
     const imageGenLabel = imageGenModel ? `${imageGenModel}` : imageGenProvider ? `${imageGenProvider} (auto)` : hasImageGen ? 'Auto-detect' : 'Not configured';
     const googleIdentityStatus = agent.googleIdentity.getStatus();
     const hasGoogleIdentity = googleIdentityStatus.connected;
+    const googleWorkspaceStatus = await agent.googleWorkspaceCli.getStatus();
+    const hasGoogleWorkspace = googleWorkspaceStatus.installed;
+    const googleWorkspaceLabel = hasGoogleWorkspace
+        ? googleWorkspaceStatus.configuredAccount || googleWorkspaceStatus.binary || 'Installed'
+        : 'Not installed';
 
     console.log('');
     const toolLines = [
@@ -3373,6 +3378,7 @@ async function showToolingMenu() {
         `${statusDot(hasCaptcha, '')} ${bold('2Captcha')}      ${hasCaptcha ? green('Configured') : gray('Not set')}`,
         `${statusDot(hasImageGen, '')} ${bold('Image Gen')}    ${hasImageGen ? green(imageGenLabel) : gray('Not set')}`,
         `${statusDot(hasGoogleIdentity, '')} ${bold('Google Identity')} ${hasGoogleIdentity ? green(googleIdentityStatus.email || 'Connected') : gray('Not connected')}`,
+        `${statusDot(hasGoogleWorkspace, '')} ${bold('Google Workspace')} ${hasGoogleWorkspace ? green(googleWorkspaceLabel) : gray(googleWorkspaceLabel)}`,
     ];
     box(toolLines, { title: '🛠️  TOOL STATUS', width: 52, color: c.yellow });
     console.log('');
@@ -3393,6 +3399,7 @@ async function showToolingMenu() {
                 { name: `  ${statusDot(hasCaptcha, '')} 2Captcha ${dim('(CAPTCHA Solver)')}`, value: 'captcha' },
                 { name: `  ${statusDot(hasImageGen, '')} 🎨 ${bold('Image Generation')} ${dim(`(${imageGenLabel})`)}`, value: 'imagegen' },
                 { name: `  ${statusDot(hasGoogleIdentity, '')} 🔐 ${bold('Google Identity')} ${dim('(OAuth + Gmail OTP)')}`, value: 'google_identity' },
+                { name: `  ${statusDot(hasGoogleWorkspace, '')} 🏢 ${bold('Google Workspace CLI')} ${dim(`(${googleWorkspaceLabel})`)}`, value: 'google_workspace' },
                 new inquirer.Separator(gradient('  ──────────────────────────────────', [c.yellow, c.gray])),
                 { name: dim('  ← Back'), value: 'back' }
             ]
@@ -3539,6 +3546,9 @@ async function showToolingMenu() {
         }
     } else if (tool === 'google_identity') {
         await showGoogleIdentityMenu();
+        return;
+    } else if (tool === 'google_workspace') {
+        await showGoogleWorkspaceCliMenu();
         return;
     }
 
@@ -3696,6 +3706,136 @@ async function showGoogleIdentityMenu() {
 
     await waitKeyPress();
     return showGoogleIdentityMenu();
+}
+
+async function showGoogleWorkspaceCliMenu() {
+    console.clear();
+    banner();
+    sectionHeader('🏢', 'Google Workspace CLI (gws)');
+
+    const status = await agent.googleWorkspaceCli.getStatus();
+    const configuredPath = String(agent.config.get('googleWorkspaceCliPath') || '').trim();
+    const configuredAccount = String(agent.config.get('googleWorkspaceCliAccount') || '').trim();
+
+    console.log('');
+    box([
+        `${dim('Installed')}      ${status.installed ? green('● yes') : gray('○ no')}`,
+        `${dim('Binary')}         ${status.binary ? cyan(status.binary) : gray(configuredPath || '(not found)')}`,
+        `${dim('Config Path')}    ${configuredPath ? cyan(configuredPath) : gray('(auto-detect)')}`,
+        `${dim('Account')}        ${configuredAccount ? cyan(configuredAccount) : gray('(default account)')}`,
+        `${dim('Auth')}           ${status.authError ? yellow('check needed') : status.authStatus ? green('looks ready') : gray('(unknown)')}`,
+    ], { title: 'GOOGLE WORKSPACE STATUS', width: 68, color: status.installed ? c.green : c.yellow });
+    console.log('');
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: cyan('Google Workspace CLI Options:'),
+            choices: [
+                { name: `  📦 ${bold('Install / Update gws')}`, value: 'install' },
+                { name: `  ⚙️ ${bold('Set Binary Path / Default Account')}`, value: 'configure' },
+                { name: `  🔐 ${bold('Run gws auth setup')}`, value: 'auth_setup' },
+                { name: `  🔑 ${bold('Run gws auth login')}`, value: 'auth_login' },
+                { name: `  📋 ${bold('Show Auth Status Details')}`, value: 'auth_status' },
+                { name: `  ℹ️ ${bold('Show Setup Help')}`, value: 'help' },
+                { name: dim('  ← Back'), value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showToolingMenu();
+
+    const runInteractiveGws = (args: string[]) => {
+        const binary = agent.googleWorkspaceCli.findBinary() || configuredPath;
+        if (!binary) {
+            console.log('\n❌ gws is not installed or not configured yet.');
+            return;
+        }
+
+        const result = spawnSync(binary, args, { stdio: 'inherit' });
+        if (result.error) {
+            console.log(`\n❌ ${result.error.message}`);
+            return;
+        }
+        if (typeof result.status === 'number' && result.status !== 0) {
+            console.log(`\n⚠️ Command exited with status ${result.status}.`);
+        }
+    };
+
+    if (action === 'install') {
+        const { ok } = await inquirer.prompt([
+            { type: 'confirm', name: 'ok', message: 'Install or update @googleworkspace/cli globally with npm?', default: true }
+        ]);
+        if (ok) {
+            const npmBinary = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+            const result = spawnSync(npmBinary, ['install', '-g', '@googleworkspace/cli'], { stdio: 'inherit' });
+            if (result.error) {
+                console.log(`\n❌ ${result.error.message}`);
+            } else if (typeof result.status === 'number' && result.status !== 0) {
+                console.log(`\n⚠️ npm exited with status ${result.status}.`);
+            } else {
+                console.log('\n✅ gws install/update completed.');
+            }
+        }
+    } else if (action === 'configure') {
+        const ans = await inquirer.prompt([
+            {
+                type: 'input',
+                name: 'binaryPath',
+                message: 'gws binary path or command (leave blank for auto-detect):',
+                default: configuredPath
+            },
+            {
+                type: 'input',
+                name: 'account',
+                message: 'Default Google Workspace account (leave blank to unset):',
+                default: configuredAccount
+            }
+        ]);
+
+        const binaryPath = String(ans.binaryPath || '').trim();
+        const account = String(ans.account || '').trim();
+        agent.config.set('googleWorkspaceCliPath' as any, binaryPath || undefined);
+        agent.config.set('googleWorkspaceCliAccount' as any, account || undefined);
+        agent.googleWorkspaceCli.invalidateBinaryCache();
+        console.log('\n✅ Google Workspace CLI configuration updated.');
+    } else if (action === 'auth_setup') {
+        runInteractiveGws(['auth', 'setup']);
+    } else if (action === 'auth_login') {
+        runInteractiveGws(['auth', 'login']);
+    } else if (action === 'auth_status') {
+        const latestStatus = await agent.googleWorkspaceCli.getStatus();
+        console.log('');
+        console.log(dim('Installed:'), latestStatus.installed ? green('yes') : red('no'));
+        if (latestStatus.binary) console.log(dim('Binary:'), latestStatus.binary);
+        if (latestStatus.configuredAccount) console.log(dim('Account:'), latestStatus.configuredAccount);
+        if (latestStatus.authError) {
+            console.log(dim('Auth error:'), yellow(latestStatus.authError));
+        }
+        if (latestStatus.authStatus !== undefined) {
+            console.log(dim('Auth status:'));
+            console.log(typeof latestStatus.authStatus === 'string'
+                ? latestStatus.authStatus
+                : JSON.stringify(latestStatus.authStatus, null, 2));
+        }
+    } else if (action === 'help') {
+        console.log('');
+        console.log(bold('Recommended setup:'));
+        console.log(`  ${cyan('1.')} npm install -g @googleworkspace/cli`);
+        console.log(`  ${cyan('2.')} gws auth setup`);
+        console.log(`  ${cyan('3.')} gws auth login`);
+        console.log('');
+        console.log(bold('Built-in OrcBot skills:'));
+        console.log('  google_workspace_status, google_workspace_command');
+        console.log('  google_docs_create, google_docs_write, google_drive_list');
+        console.log('  google_sheets_create, google_sheets_read, google_sheets_append');
+        console.log('  google_calendar_create_event');
+        console.log('  google_gmail_triage, google_gmail_send, google_gmail_reply, google_gmail_reply_all');
+    }
+
+    await waitKeyPress();
+    return showGoogleWorkspaceCliMenu();
 }
 
 async function showGatewayMenu() {
@@ -7546,7 +7686,7 @@ async function showConfigMenu() {
     const keys = [
         'agentName', 'llmProvider', 'modelName', 'projectRoot', 'openaiApiKey', 'anthropicApiKey',
         'openrouterApiKey', 'openrouterBaseUrl', 'openrouterReferer', 'openrouterAppName',
-        'googleApiKey', 'googleOAuthClientId', 'googleOAuthClientSecret', 'googleOAuthRedirectUri', 'nvidiaApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl',
+        'googleApiKey', 'googleOAuthClientId', 'googleOAuthClientSecret', 'googleOAuthRedirectUri', 'googleWorkspaceCliPath', 'googleWorkspaceCliAccount', 'nvidiaApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl',
         'searchProviderOrder', 'captchaApiKey', 'autonomyInterval', 'telegramToken',
         'whatsappEnabled', 'slackBotToken', 'slackAutoReplyEnabled', 'whatsappAutoReplyEnabled', 'whatsappStatusMediaMode',
         'whatsappContactAccessMode', 'whatsappAllowedContacts', 'whatsappBlockedContacts',
@@ -7848,6 +7988,7 @@ async function showSkillsMenu() {
     choices.push({ name: `  ✨ ${bold('Create New Skill')}`, value: 'create' });
     choices.push({ name: `  🔨 ${bold('Build Skill from Spec URL')} ${dim('(Legacy)')}`, value: 'build' });
     choices.push({ name: `  ✅ ${bold('Validate Skill')}`, value: 'validate' });
+    choices.push({ name: `  🔄 ${bold('Resync Skills Registry Files')}`, value: 'resync_registry' });
     choices.push(new inquirer.Separator(gradient('  ──────────────────────────────────', [c.gray, c.gray])));
     choices.push({ name: dim('  ← Back'), value: 'back' });
 
@@ -8040,6 +8181,23 @@ async function showSkillsMenu() {
                 console.log(`❌ ${result.errors.length} issue(s):`);
                 result.errors.forEach(e => console.log(`  - ${e}`));
             }
+        }
+        await waitKeyPress();
+        return showSkillsMenu();
+    }
+
+    if (selection === 'resync_registry') {
+        try {
+            const result = agent.syncSkillsRegistryNow();
+            console.log('\n✅ Skills registry files resynced.');
+            if (result.sourcePath) {
+                console.log(`   Source: ${result.sourcePath}`);
+            }
+            for (const target of result.targets) {
+                console.log(`   Target: ${target}`);
+            }
+        } catch (e: any) {
+            console.log(`\n❌ Failed to resync skills registries: ${e?.message || e}`);
         }
         await waitKeyPress();
         return showSkillsMenu();

@@ -11,6 +11,7 @@ export interface StepLedgerEntry {
     isSideEffect: boolean;     // user-facing send_* tool
     resultSnippet?: string;    // first 200 chars of result
     errorSnippet?: string;     // first 200 chars of error (if failed)
+    artifactPath?: string;
     timestamp: number;
 }
 

@@ -41,6 +41,19 @@ This file lists the available skills for the agent.
 - **google_identity_connect(client_id?, client_secret?, code_or_redirect_url?, email?)**: [EMAIL/AUTH TOOL] Configure Google OAuth credentials and connect the agent by exchanging an authorization code or redirect URL. If no code is provided, returns a consent URL.
 - **google_inbox_search(query, maxResults?)**: [EMAIL/AUTH TOOL] Search the connected Gmail inbox for login emails, magic links, verification messages, or other auth-related mail.
 - **google_latest_otp(from_contains?, subject_contains?)**: [EMAIL/AUTH TOOL] Extract the latest numeric OTP code from recent Gmail messages, optionally filtered by sender or subject.
+- **google_workspace_status()**: [GOOGLE WORKSPACE TOOL] Check whether the Google Workspace CLI (`gws`) is installed and whether its auth context is available.
+- **google_workspace_command(args:array, json?, account?)**: [GOOGLE WORKSPACE TOOL] Run a structured `gws` command without a shell. Use this for broad Workspace access across Gmail, Drive, Docs, Sheets, Calendar, and related services.
+- **google_docs_create(title, content?, account?)**: [GOOGLE WORKSPACE TOOL] Create a Google Doc via `gws`, optionally writing initial content right after creation.
+- **google_docs_write(document_id, text, account?)**: [GOOGLE WORKSPACE TOOL] Append plain text to an existing Google Doc via `gws`.
+- **google_drive_list(query?, pageSize?, account?)**: [GOOGLE WORKSPACE TOOL] List Google Drive files with optional Drive query filtering.
+- **google_sheets_create(title, account?)**: [GOOGLE WORKSPACE TOOL] Create a Google Sheets spreadsheet via `gws`.
+- **google_sheets_read(spreadsheet_id, range, account?)**: [GOOGLE WORKSPACE TOOL] Read a range of cell values from a Google Sheet via `gws`.
+- **google_sheets_append(spreadsheet_id, values|json_values, account?, dryRun?)**: [GOOGLE WORKSPACE TOOL] Append one or more rows to a Google Sheet via `gws`.
+- **google_calendar_create_event(summary, start, end, calendar?, location?, description?, attendees?, account?, dryRun?)**: [GOOGLE WORKSPACE TOOL] Create a Google Calendar event via `gws`.
+- **google_gmail_triage(max?, query?, labels?, account?)**: [GOOGLE WORKSPACE TOOL] Show an unread Gmail summary via `gws`.
+- **google_gmail_send(to, subject, body, cc?, bcc?, account?, dryRun?)**: [GOOGLE WORKSPACE TOOL] Send a plain-text Gmail message via `gws`.
+- **google_gmail_reply(message_id, body, to?, cc?, bcc?, from?, account?, dryRun?)**: [GOOGLE WORKSPACE TOOL] Reply to a Gmail message via `gws`, preserving thread headers automatically.
+- **google_gmail_reply_all(message_id, body, to?, cc?, bcc?, remove?, from?, account?, dryRun?)**: [GOOGLE WORKSPACE TOOL] Reply-all to a Gmail thread via `gws`.
 
 ## System & Configuration
 - **run_command(command, cwd?)**: [SYSTEM/OS LEVEL] Execute shell commands on the host system (subject to allow/deny lists). Automatically extracts directory from "cd /path && command" or "cd /path ; command" patterns and uses as working directory.

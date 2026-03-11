@@ -357,6 +357,7 @@ Live docs (GitHub Pages): https://fredabila.github.io/orcbot/docs/
 **Key Guides:**
 *   🌐 [**Browser & Identity Improvements**](BROWSER_IDENTITY_IMPROVEMENTS.md) - Loop prevention, state tracking, self-updating system
 *   🔐 [**Google Identity Service**](docs/GOOGLE_IDENTITY.md) - OAuth setup, Gmail OTP workflows, storage model, and security guidance
+*   ☁️ [**Google Workspace CLI Integration**](docs/GOOGLE_WORKSPACE_CLI.md) - Using `gws` as OrcBot's broad Google Workspace backend for Docs, Drive, and more
 *   ⏱️ [**Polling System Guide**](POLLING_USAGE.md) - Event-driven condition monitoring
 *   ⚙️ [**Configuration Guide**](docs/CONFIG_MANAGEMENT.md) - Comprehensive configuration management
 *   🐳 [**Docker Guide**](docs/DOCKER.md) - Container deployment options
@@ -583,6 +584,7 @@ Key settings (excerpt):
 - `llmProvider`: Explicit provider selection (`openai`, `google`, `bedrock`, `openrouter`)
 - `openrouterApiKey`: API key for OpenRouter (access 200+ models)
 - `googleOAuthClientId`, `googleOAuthClientSecret`, `googleOAuthRedirectUri`: Google identity service settings for Gmail-backed auth workflows
+- `googleWorkspaceCliPath`, `googleWorkspaceCliAccount`: Optional Google Workspace CLI binary path and default account selector
 - `telegramToken` / `whatsappEnabled`
 - `maxStepsPerAction`, `maxMessagesPerAction`, `messageDedupWindow`
 - `autonomyEnabled`, `autonomyInterval`, `autonomyBacklogLimit`
@@ -663,6 +665,40 @@ Operational notes:
 - Gmail access is read-only.
 
 Full setup and security guidance: [docs/GOOGLE_IDENTITY.md](docs/GOOGLE_IDENTITY.md)
+
+### Google Workspace CLI
+
+OrcBot can also use the Google Workspace CLI (`gws`) as a broad Google backend for Docs, Drive, Sheets, Calendar, and Gmail operations.
+
+Setup options:
+
+- TUI: `orcbot ui` -> `Tooling` -> `Google Workspace CLI (gws)`
+- Environment variables: `GOOGLE_WORKSPACE_CLI_PATH`, `GOOGLE_WORKSPACE_CLI_ACCOUNT`
+- YAML config: `googleWorkspaceCliPath`, `googleWorkspaceCliAccount`
+
+Core skills:
+
+- `google_workspace_status()`
+- `google_workspace_command(args:array, json?, account?)`
+- `google_docs_create(title, content?, account?)`
+- `google_docs_write(document_id, text, account?)`
+- `google_drive_list(query?, pageSize?, account?)`
+- `google_sheets_create(title, account?)`
+- `google_sheets_read(spreadsheet_id, range, account?)`
+- `google_sheets_append(spreadsheet_id, values|json_values, account?, dryRun?)`
+- `google_calendar_create_event(summary, start, end, calendar?, location?, description?, attendees?, account?, dryRun?)`
+- `google_gmail_triage(max?, query?, labels?, account?)`
+- `google_gmail_send(to, subject, body, cc?, bcc?, account?, dryRun?)`
+- `google_gmail_reply(message_id, body, to?, cc?, bcc?, from?, account?, dryRun?)`
+- `google_gmail_reply_all(message_id, body, to?, cc?, bcc?, remove?, from?, account?, dryRun?)`
+
+Operational notes:
+
+- The TUI can install `@googleworkspace/cli`, run `gws auth setup`, and run `gws auth login` for you.
+- OrcBot executes `gws` without a shell when the agent calls Workspace skills.
+- Workspace write operations remain elevated because they can modify user data.
+
+Full setup and usage guidance: [docs/GOOGLE_WORKSPACE_CLI.md](docs/GOOGLE_WORKSPACE_CLI.md)
 
 ---
 
