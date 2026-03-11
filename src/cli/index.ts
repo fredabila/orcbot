@@ -3361,6 +3361,8 @@ async function showToolingMenu() {
     const imageGenModel = agent.config.get('imageGenModel');
     const hasImageGen = !!(imageGenProvider || imageGenModel || agent.config.get('openaiApiKey') || agent.config.get('googleApiKey'));
     const imageGenLabel = imageGenModel ? `${imageGenModel}` : imageGenProvider ? `${imageGenProvider} (auto)` : hasImageGen ? 'Auto-detect' : 'Not configured';
+    const googleIdentityStatus = agent.googleIdentity.getStatus();
+    const hasGoogleIdentity = googleIdentityStatus.connected;
 
     console.log('');
     const toolLines = [
@@ -3370,6 +3372,7 @@ async function showToolingMenu() {
         `${statusDot(hasSearxng, '')} ${bold('SearxNG')}       ${hasSearxng ? green('Configured') : gray('Not set')}`,
         `${statusDot(hasCaptcha, '')} ${bold('2Captcha')}      ${hasCaptcha ? green('Configured') : gray('Not set')}`,
         `${statusDot(hasImageGen, '')} ${bold('Image Gen')}    ${hasImageGen ? green(imageGenLabel) : gray('Not set')}`,
+        `${statusDot(hasGoogleIdentity, '')} ${bold('Google Identity')} ${hasGoogleIdentity ? green(googleIdentityStatus.email || 'Connected') : gray('Not connected')}`,
     ];
     box(toolLines, { title: '🛠️  TOOL STATUS', width: 52, color: c.yellow });
     console.log('');
@@ -3389,6 +3392,7 @@ async function showToolingMenu() {
                 new inquirer.Separator(gradient('  ─── Other ────────────────────────', [c.yellow, c.gray])),
                 { name: `  ${statusDot(hasCaptcha, '')} 2Captcha ${dim('(CAPTCHA Solver)')}`, value: 'captcha' },
                 { name: `  ${statusDot(hasImageGen, '')} 🎨 ${bold('Image Generation')} ${dim(`(${imageGenLabel})`)}`, value: 'imagegen' },
+                { name: `  ${statusDot(hasGoogleIdentity, '')} 🔐 ${bold('Google Identity')} ${dim('(OAuth + Gmail OTP)')}`, value: 'google_identity' },
                 new inquirer.Separator(gradient('  ──────────────────────────────────', [c.yellow, c.gray])),
                 { name: dim('  ← Back'), value: 'back' }
             ]
@@ -3533,11 +3537,165 @@ async function showToolingMenu() {
             ]);
             agent.config.set('imageGenQuality', q);
         }
+    } else if (tool === 'google_identity') {
+        await showGoogleIdentityMenu();
+        return;
     }
 
     console.log('Tooling configuration updated!');
     await waitKeyPress();
     return showToolingMenu();
+}
+
+async function showGoogleIdentityMenu() {
+    console.clear();
+    banner();
+    sectionHeader('🔐', 'Google Identity (OAuth + Gmail)');
+
+    const status = agent.googleIdentity.getStatus();
+    const email = status.email || '(unknown)';
+
+    console.log('');
+    box([
+        `${dim('Configured')}   ${status.configured ? green('● yes') : gray('○ no')}`,
+        `${dim('Connected')}    ${status.connected ? green('● yes') : gray('○ no')}`,
+        `${dim('Email')}        ${status.connected ? cyan(email) : gray('(not connected)')}`,
+        `${dim('Client ID')}    ${status.hasClientId ? green('set') : gray('not set')}`,
+        `${dim('Client Secret')} ${status.hasClientSecret ? green('set') : gray('not set')}`,
+        `${dim('Refresh Token')} ${status.hasRefreshToken ? green('stored') : gray('missing')}`,
+        `${dim('Scope')}        ${status.scope ? status.scope.slice(0, 52) : gray('(none)')}`,
+    ], { title: 'GOOGLE IDENTITY STATUS', width: 64, color: status.connected ? c.green : c.yellow });
+    console.log('');
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: cyan('Google Identity Options:'),
+            choices: [
+                { name: `  🧩 ${bold('Set OAuth Client Credentials')}`, value: 'set_credentials' },
+                { name: `  🔗 ${bold('Generate Authorization URL')}`, value: 'auth_url' },
+                { name: `  ✅ ${bold('Exchange Auth Code / Redirect URL')}`, value: 'exchange_code' },
+                { name: `  📬 ${bold('Test Gmail Search')}`, value: 'test_search' },
+                { name: `  🔢 ${bold('Test OTP Extraction')}`, value: 'test_otp' },
+                { name: `  🚪 ${bold('Disconnect (remove refresh token)')}`, value: 'disconnect' },
+                { name: dim('  ← Back'), value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showToolingMenu();
+
+    if (action === 'set_credentials') {
+        const currentClientId = String(agent.config.get('googleOAuthClientId') || '');
+        const currentRedirect = String(agent.config.get('googleOAuthRedirectUri') || 'http://localhost');
+
+        const ans = await inquirer.prompt([
+            {
+                type: 'input',
+                name: 'clientId',
+                message: `Google OAuth Client ID${currentClientId ? ' (leave blank to keep current)' : ''}:`
+            },
+            {
+                type: 'password',
+                name: 'clientSecret',
+                message: `Google OAuth Client Secret${status.hasClientSecret ? ' (leave blank to keep current)' : ''}:`
+            },
+            {
+                type: 'input',
+                name: 'redirectUri',
+                message: 'OAuth Redirect URI:',
+                default: currentRedirect || 'http://localhost'
+            },
+            {
+                type: 'input',
+                name: 'email',
+                message: 'Agent Google email (optional):',
+                default: status.email || ''
+            }
+        ]);
+
+        const clientId = String(ans.clientId || '').trim() || currentClientId;
+        const clientSecret = String(ans.clientSecret || '').trim() || String(agent.config.get('googleOAuthClientSecret') || '');
+        if (!clientId || !clientSecret) {
+            console.log('\n❌ Client ID and Client Secret are required.');
+            await waitKeyPress();
+            return showGoogleIdentityMenu();
+        }
+
+        agent.googleIdentity.setCredentials({ clientId, clientSecret, email: String(ans.email || '').trim() || undefined });
+        agent.config.set('googleOAuthRedirectUri' as any, String(ans.redirectUri || 'http://localhost').trim() || 'http://localhost');
+        console.log('\n✅ Google OAuth credentials saved.');
+    } else if (action === 'auth_url') {
+        try {
+            const url = agent.googleIdentity.getAuthorizationUrl();
+            console.log('\nOpen this URL in your browser and complete consent:');
+            console.log(cyan(url));
+            console.log(dim('\nThen choose "Exchange Auth Code / Redirect URL" and paste either the code or full redirect URL.'));
+        } catch (e) {
+            console.log(`\n❌ ${e}`);
+        }
+    } else if (action === 'exchange_code') {
+        const { codeOrUrl } = await inquirer.prompt([
+            {
+                type: 'input',
+                name: 'codeOrUrl',
+                message: 'Paste Google authorization code OR full redirect URL:'
+            }
+        ]);
+        try {
+            await agent.googleIdentity.exchangeAuthorizationCode(String(codeOrUrl || '').trim());
+            const nextStatus = agent.googleIdentity.getStatus();
+            console.log(`\n✅ Connected Google identity${nextStatus.email ? `: ${nextStatus.email}` : ''}`);
+        } catch (e) {
+            console.log(`\n❌ ${e}`);
+        }
+    } else if (action === 'test_search') {
+        const { query } = await inquirer.prompt([
+            { type: 'input', name: 'query', message: 'Gmail query:', default: 'newer_than:7d (otp OR verification OR code)' }
+        ]);
+        try {
+            const msgs = await agent.googleIdentity.searchInbox(String(query || '').trim(), 5);
+            console.log(`\n✅ Found ${msgs.length} message(s).`);
+            msgs.slice(0, 5).forEach((m, idx) => {
+                console.log(`${idx + 1}. ${m.subject || '(no subject)'} ${dim(`| from: ${m.from || 'unknown'}`)}`);
+                if (m.snippet) console.log(`   ${dim(m.snippet.slice(0, 140))}`);
+            });
+        } catch (e) {
+            console.log(`\n❌ ${e}`);
+        }
+    } else if (action === 'test_otp') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'fromContains', message: 'Optional sender contains:', default: '' },
+            { type: 'input', name: 'subjectContains', message: 'Optional subject contains:', default: '' }
+        ]);
+
+        try {
+            const res = await agent.googleIdentity.findLatestOtp({
+                fromContains: String(ans.fromContains || '').trim() || undefined,
+                subjectContains: String(ans.subjectContains || '').trim() || undefined
+            });
+            if (res.code) {
+                console.log(`\n✅ OTP found: ${bold(res.code)}`);
+                if (res.message?.subject) console.log(`   ${dim('From message:')} ${res.message.subject}`);
+            } else {
+                console.log('\n⚠️ No OTP code found in recent matching messages.');
+            }
+        } catch (e) {
+            console.log(`\n❌ ${e}`);
+        }
+    } else if (action === 'disconnect') {
+        const { ok } = await inquirer.prompt([
+            { type: 'confirm', name: 'ok', message: 'Remove stored Google refresh token?', default: false }
+        ]);
+        if (ok) {
+            agent.googleIdentity.disconnect();
+            console.log('\n✅ Google identity disconnected.');
+        }
+    }
+
+    await waitKeyPress();
+    return showGoogleIdentityMenu();
 }
 
 async function showGatewayMenu() {
@@ -7388,7 +7546,7 @@ async function showConfigMenu() {
     const keys = [
         'agentName', 'llmProvider', 'modelName', 'projectRoot', 'openaiApiKey', 'anthropicApiKey',
         'openrouterApiKey', 'openrouterBaseUrl', 'openrouterReferer', 'openrouterAppName',
-        'googleApiKey', 'nvidiaApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl',
+        'googleApiKey', 'googleOAuthClientId', 'googleOAuthClientSecret', 'googleOAuthRedirectUri', 'nvidiaApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl',
         'searchProviderOrder', 'captchaApiKey', 'autonomyInterval', 'telegramToken',
         'whatsappEnabled', 'slackBotToken', 'slackAutoReplyEnabled', 'whatsappAutoReplyEnabled', 'whatsappStatusMediaMode',
         'whatsappContactAccessMode', 'whatsappAllowedContacts', 'whatsappBlockedContacts',

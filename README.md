@@ -356,6 +356,7 @@ Live docs (GitHub Pages): https://fredabila.github.io/orcbot/docs/
 
 **Key Guides:**
 *   🌐 [**Browser & Identity Improvements**](BROWSER_IDENTITY_IMPROVEMENTS.md) - Loop prevention, state tracking, self-updating system
+*   🔐 [**Google Identity Service**](docs/GOOGLE_IDENTITY.md) - OAuth setup, Gmail OTP workflows, storage model, and security guidance
 *   ⏱️ [**Polling System Guide**](POLLING_USAGE.md) - Event-driven condition monitoring
 *   ⚙️ [**Configuration Guide**](docs/CONFIG_MANAGEMENT.md) - Comprehensive configuration management
 *   🐳 [**Docker Guide**](docs/DOCKER.md) - Container deployment options
@@ -581,6 +582,7 @@ Key settings (excerpt):
 - `modelName`: LLM model to use
 - `llmProvider`: Explicit provider selection (`openai`, `google`, `bedrock`, `openrouter`)
 - `openrouterApiKey`: API key for OpenRouter (access 200+ models)
+- `googleOAuthClientId`, `googleOAuthClientSecret`, `googleOAuthRedirectUri`: Google identity service settings for Gmail-backed auth workflows
 - `telegramToken` / `whatsappEnabled`
 - `maxStepsPerAction`, `maxMessagesPerAction`, `messageDedupWindow`
 - `autonomyEnabled`, `autonomyInterval`, `autonomyBacklogLimit`
@@ -636,6 +638,31 @@ manage_config({ action: "approve", key: "openaiApiKey" })
 ```
 
 See [Config Management Documentation](docs/CONFIG_MANAGEMENT.md) for complete details.
+
+### Google Identity Service
+
+OrcBot can connect to a Google account for mailbox-assisted authentication workflows such as verification emails, magic links, and OTP retrieval.
+
+Setup options:
+
+- TUI: `orcbot ui` -> `Tooling` -> `Google Identity (OAuth + Gmail OTP)`
+- Environment variables: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT_URI`
+- YAML config: `googleOAuthClientId`, `googleOAuthClientSecret`, `googleOAuthRedirectUri`
+
+Core skills:
+
+- `google_identity_status()`
+- `google_identity_connect(client_id?, client_secret?, code_or_redirect_url?, email?)`
+- `google_inbox_search(query, maxResults?)`
+- `google_latest_otp(from_contains?, subject_contains?)`
+
+Operational notes:
+
+- Refresh tokens are persisted under the OrcBot data directory in `google-identity.json`.
+- If `ORCBOT_SECRET_KEY` or `orcbotSecretKey` is set, the refresh token is encrypted before storage.
+- Gmail access is read-only.
+
+Full setup and security guidance: [docs/GOOGLE_IDENTITY.md](docs/GOOGLE_IDENTITY.md)
 
 ---
 

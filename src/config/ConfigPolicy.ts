@@ -200,6 +200,19 @@ export class ConfigPolicy {
             reason: 'API keys are sensitive and should be approved',
             validation: (value: any) => typeof value === 'string' && value.length > 0
         }],
+        ['googleOAuthClientId', {
+            key: 'googleOAuthClientId',
+            level: ConfigChangeLevel.APPROVAL,
+            description: 'Google OAuth client ID',
+            reason: 'OAuth credentials are sensitive and should be approved',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['googleOAuthClientSecret', {
+            key: 'googleOAuthClientSecret',
+            level: ConfigChangeLevel.LOCKED,
+            description: 'Google OAuth client secret',
+            reason: 'Critical authentication credential',
+        }],
         ['nvidiaApiKey', {
             key: 'nvidiaApiKey',
             level: ConfigChangeLevel.APPROVAL,

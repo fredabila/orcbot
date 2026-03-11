@@ -24,6 +24,7 @@ import { UsagePing } from './UsagePing';
 import { AgenticUser } from './AgenticUser';
 import { KnowledgeStore } from '../memory/KnowledgeStore';
 import { SystemProfiler } from './SystemProfiler';
+import { GoogleIdentityManager } from './GoogleIdentityManager';
 import { memoryToolsSkills } from '../skills/memoryTools';
 import { pythonToolsSkills } from '../skills/pythonTools';
 import { canvasToolsSkills } from '../skills/canvasTools';
@@ -96,6 +97,7 @@ export class Agent {
     public usagePing: UsagePing;
     public config: ConfigManager;
     public systemProfiler: SystemProfiler;
+    public googleIdentity: GoogleIdentityManager;
     public telegram: TelegramChannel | undefined;
     public whatsapp: WhatsAppChannel | undefined;
     public discord: DiscordChannel | undefined;
@@ -198,6 +200,7 @@ export class Agent {
         this.messageBus = new MessageBus(this);
         // Initialize system profiler - will be loaded/profiled during startup
         this.systemProfiler = new SystemProfiler(this.config.getDataHome());
+        this.googleIdentity = new GoogleIdentityManager(this.config);
 
         this.tools = new ToolsManager(
             this.config.get('toolsPath') || path.join(this.config.getDataHome(), 'tools')
@@ -2711,6 +2714,115 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
 
                 this.llm.setModel(model);
                 return `Model switched to ${model}${provider ? ` (provider: ${provider})` : ''}${fallbackModel ? `; fallback ${fallbackProvider || this.llm.inferProvider(model)} => ${fallbackModel}` : ''}.`;
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_identity_status',
+            description: 'Check Google identity/OAuth connection status for agent browser authentication workflows.',
+            usage: 'google_identity_status()',
+            handler: async () => {
+                const status = this.googleIdentity.getStatus();
+                return {
+                    success: true,
+                    ...status,
+                    note: status.connected
+                        ? 'Google identity is connected and usable for Gmail/OTP workflows.'
+                        : 'Google identity is not connected yet.'
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_identity_connect',
+            description: 'Connect Google identity by exchanging an OAuth authorization code. If no code is provided, returns an authorization URL.',
+            usage: 'google_identity_connect(client_id?, client_secret?, code_or_redirect_url?, email?)',
+            isElevated: true,
+            handler: async (args: any) => {
+                const clientId = String(args.client_id || args.clientId || '').trim();
+                const clientSecret = String(args.client_secret || args.clientSecret || '').trim();
+                const codeOrRedirect = String(args.code_or_redirect_url || args.code || args.redirect_url || args.redirectUrl || '').trim();
+                const email = String(args.email || '').trim();
+
+                if (clientId && clientSecret) {
+                    this.googleIdentity.setCredentials({ clientId, clientSecret, email: email || undefined });
+                }
+
+                if (!codeOrRedirect) {
+                    try {
+                        const url = this.googleIdentity.getAuthorizationUrl();
+                        return {
+                            success: true,
+                            needsCode: true,
+                            authorizationUrl: url,
+                            instructions: 'Open the URL, approve consent, then call google_identity_connect again with code_or_redirect_url.'
+                        };
+                    } catch (e) {
+                        return { success: false, error: `Unable to build authorization URL: ${e}` };
+                    }
+                }
+
+                try {
+                    await this.googleIdentity.exchangeAuthorizationCode(codeOrRedirect);
+                    const status = this.googleIdentity.getStatus();
+                    return {
+                        success: true,
+                        connected: status.connected,
+                        email: status.email,
+                        scope: status.scope,
+                        updatedAt: status.updatedAt
+                    };
+                } catch (e) {
+                    return { success: false, error: `Google OAuth connect failed: ${e}` };
+                }
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_inbox_search',
+            description: 'Search the connected Google mailbox (Gmail API) for verification emails, magic links, or OTP-related messages.',
+            usage: 'google_inbox_search(query, maxResults?)',
+            isElevated: true,
+            handler: async (args: any) => {
+                const query = String(args.query || args.q || '').trim();
+                const maxResults = Number(args.maxResults || args.max_results || 5);
+                if (!query) return { success: false, error: 'Missing query.' };
+
+                try {
+                    const items = await this.googleIdentity.searchInbox(query, maxResults);
+                    return { success: true, count: items.length, items };
+                } catch (e) {
+                    return { success: false, error: `Inbox search failed: ${e}` };
+                }
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_latest_otp',
+            description: 'Find the latest numeric OTP code from recent Gmail messages using optional sender/subject filters.',
+            usage: 'google_latest_otp(from_contains?, subject_contains?)',
+            isElevated: true,
+            handler: async (args: any) => {
+                const fromContains = String(args.from_contains || args.fromContains || '').trim() || undefined;
+                const subjectContains = String(args.subject_contains || args.subjectContains || '').trim() || undefined;
+
+                try {
+                    const result = await this.googleIdentity.findLatestOtp({ fromContains, subjectContains });
+                    if (result.code) {
+                        return {
+                            success: true,
+                            code: result.code,
+                            message: result.message
+                        };
+                    }
+                    return {
+                        success: false,
+                        error: 'No OTP code found in recent matching emails.',
+                        message: result.message
+                    };
+                } catch (e) {
+                    return { success: false, error: `OTP lookup failed: ${e}` };
+                }
             }
         });
 

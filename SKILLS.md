@@ -37,6 +37,10 @@ This file lists the available skills for the agent.
 - **fetch_email(uid)**: [EMAIL TOOL] Fetch the full content of a specific email by its IMAP UID.
 - **index_emails_to_knowledge_base({ query?, sender?, subject?, daysAgo?, limit?, collection? })**: [EMAIL TOOL] Search and ingest emails into the RAG Knowledge Store for semantic search.
 - **generate_email_report({ topic, emails?, sender?, subject?, query?, daysAgo? })**: [EMAIL TOOL] Analyze multiple emails and generate a synthesized report/summary.
+- **google_identity_status()**: [EMAIL/AUTH TOOL] Check whether Google OAuth credentials and a Gmail-backed identity are configured and connected for browser auth workflows.
+- **google_identity_connect(client_id?, client_secret?, code_or_redirect_url?, email?)**: [EMAIL/AUTH TOOL] Configure Google OAuth credentials and connect the agent by exchanging an authorization code or redirect URL. If no code is provided, returns a consent URL.
+- **google_inbox_search(query, maxResults?)**: [EMAIL/AUTH TOOL] Search the connected Gmail inbox for login emails, magic links, verification messages, or other auth-related mail.
+- **google_latest_otp(from_contains?, subject_contains?)**: [EMAIL/AUTH TOOL] Extract the latest numeric OTP code from recent Gmail messages, optionally filtered by sender or subject.
 
 ## System & Configuration
 - **run_command(command, cwd?)**: [SYSTEM/OS LEVEL] Execute shell commands on the host system (subject to allow/deny lists). Automatically extracts directory from "cd /path && command" or "cd /path ; command" patterns and uses as working directory.
