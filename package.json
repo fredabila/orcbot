@@ -1,6 +1,6 @@
 {
   "name": "@fredabila/orcbot",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Autonomous AI Agent Orchestrator with Puppeteer browsing, multi-channel messaging, and self-tuning capabilities.",
   "main": "./dist/core/Agent.js",
   "types": "./dist/core/Agent.d.ts",
@@ -33,6 +33,7 @@
   "scripts": {
     "build": "tsc",
     "build:fast": "node build.mjs",
+    "release:github": "node scripts/create-github-release.mjs",
     "prepublishOnly": "npm run build",
     "publish:npmjs": "node scripts/publish-npmjs.mjs",
     "postinstall": "npx puppeteer browsers install chrome",
