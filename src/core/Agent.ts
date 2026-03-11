@@ -122,6 +122,7 @@ export class Agent {
     public isRunning: boolean = false;
     private lastActionTime: number;
     private lastHeartbeatAt: number = 0;
+    private lastLightweightHeartbeatAt: number = 0;
     private consecutiveIdleHeartbeats: number = 0;
     private lastHeartbeatProductive: boolean = true;
     private heartbeatRunning: boolean = false;
@@ -10273,10 +10274,148 @@ REFLECTION: <1-2 sentences>`;
             }
         }
 
+        if (action.payload?.isHeartbeat) {
+            this.lastHeartbeatMessageSentAt = Date.now();
+        }
+
         return {
             substantiveDelivery: this.isSubstantiveDeliveryMessage(resultString),
             outboundMessage
         };
+    }
+
+    private heartbeatHasConcreteLead(idleTimeMs: number, intervalMinutes: number): { shouldQueue: boolean; reason: string } {
+        const now = Date.now();
+        const queue = this.actionQueue.getQueue();
+        const recentFailureWindowMs = 6 * 60 * 60 * 1000;
+
+        const hasRecentFailedTask = queue.some(action => {
+            if (action.status !== 'failed' || action.payload?.isHeartbeat) return false;
+            const updatedAt = Date.parse(action.updatedAt || action.timestamp || '') || 0;
+            return updatedAt > 0 && (now - updatedAt) <= recentFailureWindowMs;
+        });
+        if (hasRecentFailedTask) {
+            return { shouldQueue: true, reason: 'recent-failed-task' };
+        }
+
+        const recentContext = this.memory.getRecentContext(12) || [];
+        const hasRecentObjectiveSignal = recentContext.some((memoryEntry: any) => {
+            const ts = memoryEntry?.timestamp ? new Date(memoryEntry.timestamp).getTime() : 0;
+            if (!ts || (now - ts) > recentFailureWindowMs) return false;
+            const content = String(memoryEntry?.content || '').toLowerCase();
+            return content.includes('[objective] active') ||
+                content.includes('[objective] failed') ||
+                content.includes('follow up') ||
+                content.includes('waiting for') ||
+                content.includes('resume when') ||
+                content.includes('urgent');
+        });
+        if (hasRecentObjectiveSignal) {
+            return { shouldQueue: true, reason: 'recent-objective-signal' };
+        }
+
+        const hasGuidedHeartbeatContext = this.heartbeatJobMeta.size > 0 || !!this.manageHeartbeatInstructions('read').trim();
+        if (hasGuidedHeartbeatContext) {
+            return { shouldQueue: true, reason: 'guided-heartbeat-context' };
+        }
+
+        const creativeHeartbeatThresholdMinutes = Math.max(intervalMinutes * 2, 45);
+        if (idleTimeMs >= creativeHeartbeatThresholdMinutes * 60 * 1000) {
+            return { shouldQueue: true, reason: 'long-idle-creative-window' };
+        }
+
+        return {
+            shouldQueue: false,
+            reason: `generic-idle-window-not-met (<${creativeHeartbeatThresholdMinutes}m and no concrete lead)`
+        };
+    }
+
+    private didHeartbeatProduceUsefulWork(params: {
+        stepLedger: StepLedger;
+        substantiveDeliveriesSent: number;
+        anyUserDeliverySuccess: boolean;
+    }): boolean {
+        const { stepLedger, substantiveDeliveriesSent, anyUserDeliverySuccess } = params;
+        if (substantiveDeliveriesSent > 0 || anyUserDeliverySuccess) return true;
+        return stepLedger.all().some(entry => entry.success);
+    }
+
+    private async runLightweightHeartbeat(reason: string): Promise<boolean> {
+        if (this.config.get('lightweightHeartbeatEnabled') === false) return false;
+
+        const configuredInterval = Number(this.config.get('lightweightHeartbeatIntervalMinutes') ?? 10);
+        const intervalMinutes = Math.max(1, Number.isFinite(configuredInterval) ? configuredInterval : 10);
+        const now = Date.now();
+        if ((now - this.lastLightweightHeartbeatAt) < intervalMinutes * 60 * 1000) {
+            return false;
+        }
+
+        this.lastLightweightHeartbeatAt = now;
+        const tasks: string[] = [];
+
+        try {
+            this.memory.flushToDisk();
+            tasks.push('memory-flush');
+        } catch (e) {
+            logger.debug(`Agent: Lightweight heartbeat memory flush skipped: ${e}`);
+        }
+
+        try {
+            const syncResult = this.syncSkillsRegistryNow();
+            if (syncResult.success) tasks.push('skills-sync');
+        } catch (e) {
+            logger.debug(`Agent: Lightweight heartbeat skills sync skipped: ${e}`);
+        }
+
+        try {
+            this.skills.loadPlugins(true);
+            tasks.push('plugin-verify');
+        } catch (e) {
+            logger.debug(`Agent: Lightweight heartbeat plugin verify skipped: ${e}`);
+        }
+
+        const healthIntervalMinutes = Math.max(5, Number(this.config.get('pluginHealthCheckIntervalMinutes') || 15));
+        if ((now - this.lastPluginHealthCheckAt) >= healthIntervalMinutes * 60 * 1000) {
+            try {
+                const health = await this.skills.checkPluginsHealth();
+                this.lastPluginHealthCheckAt = now;
+                if (health.issues.length > 0) {
+                    tasks.push(`plugin-health:${health.issues.length}-issue(s)`);
+                    this.memory.saveMemory({
+                        id: `lightweight-heartbeat-plugin-health-${now}`,
+                        type: 'short',
+                        content: `[SYSTEM: Lightweight heartbeat detected ${health.issues.length} plugin health issue(s).]`,
+                        metadata: {
+                            source: 'lightweight-heartbeat',
+                            category: 'plugin-health',
+                            issues: health.issues.slice(0, 5),
+                        }
+                    });
+                } else if (health.healthy.length > 0) {
+                    tasks.push(`plugin-health:${health.healthy.length}`);
+                }
+            } catch (e) {
+                logger.debug(`Agent: Lightweight heartbeat plugin health skipped: ${e}`);
+            }
+        }
+
+        try {
+            const prep = this.selfTraining.prepareTrainingJobIfNeeded();
+            if (prep?.prepared) {
+                tasks.push(`self-training-prep:${prep.job?.id || 'prepared'}`);
+            }
+        } catch (e) {
+            logger.debug(`Agent: Lightweight heartbeat self-training prep skipped: ${e}`);
+        }
+
+        if (tasks.length === 0) {
+            return false;
+        }
+
+        this.lastHeartbeatProductive = true;
+        this.consecutiveIdleHeartbeats = 0;
+        logger.info(`Agent: Lightweight heartbeat ran (${reason}): ${tasks.join(', ')}`);
+        return true;
     }
 
     private async assessToolExecutionOutcome(params: {
@@ -11952,7 +12091,6 @@ REFLECTION: <1-2 sentences>`;
     private async checkHeartbeat() {
         this.detectStalledAction();
         this.recoverStaleInProgressActions();
-        await this.maybeRefreshWorldEventsContext();
 
         // Mutex: prevent overlapping heartbeat evaluations
         if (this.heartbeatRunning) {
@@ -11975,6 +12113,7 @@ REFLECTION: <1-2 sentences>`;
         if (postUserCooldownMs > 0 && this.lastUserActivityAt > 0) {
             const elapsedSinceUserActivity = Date.now() - this.lastUserActivityAt;
             if (elapsedSinceUserActivity < postUserCooldownMs) {
+                await this.runLightweightHeartbeat('recent-user-activity');
                 logger.debug(`Agent: Heartbeat skipped - recent user activity ${Math.floor(elapsedSinceUserActivity / 1000)}s ago`);
                 return;
             }
@@ -11983,6 +12122,7 @@ REFLECTION: <1-2 sentences>`;
         // Cooldown: skip if any heartbeat (including cron-scheduled) pushed a task very recently
         const heartbeatCooldownMs = 60_000;
         if (Date.now() - this.lastHeartbeatPushAt < heartbeatCooldownMs) {
+            await this.runLightweightHeartbeat('recent-heartbeat-push');
             return;
         }
 
@@ -11994,6 +12134,7 @@ REFLECTION: <1-2 sentences>`;
         // NOTE: 'waiting' tasks do NOT block heartbeat — the agent is idle while waiting
         // for user input, and heartbeat scheduled tasks should still fire.
         if (runningTasks.length > 0) {
+            await this.runLightweightHeartbeat('queue-active');
             logger.debug(`Agent: Heartbeat skipped - ${runningTasks.length} active task(s) in queue`);
             return;
         }
@@ -12002,11 +12143,18 @@ REFLECTION: <1-2 sentences>`;
             (a.status === 'pending' || a.status === 'in-progress') && a.payload?.isHeartbeat
         );
         if (pendingHeartbeat) {
+            await this.runLightweightHeartbeat('heartbeat-already-queued');
             logger.debug(`Agent: Heartbeat skipped - pending heartbeat task ${pendingHeartbeat.id} already queued`);
             return;
         }
 
         const idleTimeMs = Date.now() - this.lastActionTime;
+        const leadAssessment = this.heartbeatHasConcreteLead(idleTimeMs, intervalMinutes);
+        if (!leadAssessment.shouldQueue) {
+            await this.runLightweightHeartbeat(`no-concrete-lead:${leadAssessment.reason}`);
+            logger.debug(`Agent: Heartbeat skipped - ${leadAssessment.reason}`);
+            return;
+        }
 
         try {
             const prep = this.selfTraining.prepareTrainingJobIfNeeded();
@@ -12026,13 +12174,16 @@ REFLECTION: <1-2 sentences>`;
         const effectiveIntervalMs = intervalMinutes * cooldownMultiplier * 60 * 1000;
 
         if ((Date.now() - this.lastHeartbeatAt) <= effectiveIntervalMs) {
+            await this.runLightweightHeartbeat('within-main-heartbeat-cooldown');
             // Still within cooldown window
             return;
         }
 
         this.heartbeatRunning = true;
         try {
-            logger.info(`Agent: Heartbeat trigger - Agent idle for ${Math.floor(idleTimeMs / 60000)}m. Cooldown multiplier: ${cooldownMultiplier}x`);
+            logger.info(`Agent: Heartbeat trigger - Agent idle for ${Math.floor(idleTimeMs / 60000)}m. Cooldown multiplier: ${cooldownMultiplier}x. Lead: ${leadAssessment.reason}`);
+
+            await this.maybeRefreshWorldEventsContext();
 
             // Check if we have workers available for delegation
             const runningWorkers = this.orchestrator.getRunningWorkers();
@@ -12063,6 +12214,7 @@ REFLECTION: <1-2 sentences>`;
 
     private buildSmartHeartbeatPrompt(idleTimeMs: number, workerCount: number, availableWorkers: number): string {
         const now = Date.now();
+        const worldEventsEnabled = this.config.get('worldEventsHeartbeatEnabled') !== false;
 
         // ── 0. Heartbeat state — per-check cadence tracking ──────────────────
         // heartbeat-state.json tracks when each class of proactive check last ran.
@@ -12243,9 +12395,11 @@ REFLECTION: <1-2 sentences>`;
         const worldEventAgeMinutes = this.lastWorldEventsRefreshAt > 0
             ? Math.floor((now - this.lastWorldEventsRefreshAt) / 60000)
             : -1;
-        const worldEventsContext = this.lastWorldEventsSummary
-            ? `LATEST WORLD EVENTS SIGNAL ${worldEventAgeMinutes >= 0 ? `(refreshed ${worldEventAgeMinutes}m ago)` : ''}:\n${this.lastWorldEventsSummary.slice(0, 1200)}`
-            : 'LATEST WORLD EVENTS SIGNAL: No recent world-event summary cached yet.';
+        const worldEventsContext = !worldEventsEnabled
+            ? ''
+            : this.lastWorldEventsSummary
+                ? `LATEST WORLD EVENTS SIGNAL ${worldEventAgeMinutes >= 0 ? `(refreshed ${worldEventAgeMinutes}m ago)` : ''}:\n${this.lastWorldEventsSummary.slice(0, 1200)}`
+                : 'LATEST WORLD EVENTS SIGNAL: No recent world-event summary cached yet.';
 
         return `
 PROACTIVE HEARTBEAT — Idle for ${idleMinutes} minutes.
@@ -12263,7 +12417,7 @@ ${recentContext.slice(0, 2000) || 'No recent activity'}
 TASK QUEUE:
 ${taskSummary}
 
-${worldEventsContext}
+${worldEventsContext ? `\n${worldEventsContext}\n` : ''}
 
 ACTIVE RECURRING SCHEDULES:
 ${activeSchedules}
@@ -12285,7 +12439,7 @@ Look at the context above and act on it:
 2. **Failed tasks** — Retry with a different strategy. Don't repeat the same approach.
 3. **Follow-ups** — User mentioned checking something later, monitoring something, or waiting for a result? Now is the time.
 4. **Stale conversations** — A contact hasn't been replied to? Compose a thoughtful response.
-5. **World-event deltas** — If world events suggest a risk/opportunity relevant to the user, propose a concrete, low-noise next action.
+${worldEventsEnabled ? '5. **World-event deltas** — If world events suggest a risk/opportunity relevant to the user, propose a concrete, low-noise next action.' : ''}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 MODE B — CREATIVE INITIATIVE (your own ideas)
@@ -12338,10 +12492,10 @@ DECISION FRAMEWORK
 
 **Priority Order:**
 1. REACTIVE items from the last few hours (unfinished work, failed retries, pending follow-ups)
-2. Time-sensitive world-event implications relevant to user context (only if actionable)
-3. CREATIVE initiatives that are clearly high-value (real insight, real preparation, real discovery)
-4. Self-improvement (journal reflection, knowledge updates, skill analysis)
-5. If genuinely nothing valuable → terminate with goals_met: true
+2. CREATIVE initiatives that are clearly high-value (real insight, real preparation, real discovery)
+3. Self-improvement (journal reflection, knowledge updates, skill analysis)
+${worldEventsEnabled ? '4. Time-sensitive world-event implications relevant to user context (only if actionable)' : '4. If genuinely nothing valuable → terminate with goals_met: true'}
+${worldEventsEnabled ? '5. If genuinely nothing valuable → terminate with goals_met: true' : ''}
 
 **Time-of-day hints** (${dayOfWeek} ${timeOfDay}):
 ${timeOfDay === 'morning' ? '- Morning: Good time for briefings, daily prep, checking overnight messages' : ''}
@@ -12363,7 +12517,7 @@ ${autonomyLevel === 'low' ? '- Short idle. Prefer reacting to recent context ove
 - If you message the user, have something worth reading. No "just checking in" without substance.
 - ${messagingBarNote}
 - Don't repeat actions that recently failed unless you have a NEW strategy.
-- Keep world-event usage contextual: no generic doomscroll summaries; only tie events to user-relevant impact or planning.
+${worldEventsEnabled ? '- Keep world-event usage contextual: no generic doomscroll summaries; only tie events to user-relevant impact or planning.' : ''}
 - If nothing meaningful to do, terminate cleanly (goals_met: true). Silence is better than noise.
 `;
     }
@@ -14711,7 +14865,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
         this.currentActionStartAt = Date.now();
         this.startPersistentTypingIndicator(action);
         try {
-            this.updateLastActionTime();
+            if (!action.payload?.isHeartbeat) {
+                this.updateLastActionTime();
+            }
 
             // HEARTBEAT FRESHNESS: Rebuild the heartbeat prompt at execution time.
             // Heartbeat prompts embed context (recent memories, task queue, timestamps)
@@ -15932,11 +16088,15 @@ Respond with a single actionable task description (one sentence). Be specific ab
             // Only a heartbeat that exits with goalsMet=false (truly nothing to do) should
             // keep the counter incrementing, to back off genuinely idle periods.
             if (action.payload?.isHeartbeat) {
-                if (goalsMet) {
+                if (this.didHeartbeatProduceUsefulWork({
+                    stepLedger,
+                    substantiveDeliveriesSent,
+                    anyUserDeliverySuccess,
+                })) {
                     this.lastHeartbeatProductive = true;
                     this.consecutiveIdleHeartbeats = 0;
                 }
-                // !goalsMet → preset false + incremented counter from push time are correct
+                // No useful work → preserve the pre-set idle backoff state.
             } else {
                 // Real user-sourced or scheduled task completed — agent is active
                 this.lastHeartbeatProductive = true;

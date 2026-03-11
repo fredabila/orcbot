@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Agent } from '../src/core/Agent';
+import { StepLedger } from '../src/core/CompletionAudit';
 
 const cronerState = vi.hoisted(() => {
     const callbacks = new Map<string, () => void>();
@@ -89,6 +90,106 @@ describe('Heartbeat system', () => {
         expect(prompt).not.toContain(`use write_file on \`${path.join(tempDir, 'heartbeat-state.json')}\``);
     });
 
+    it('skips generic idle heartbeat work before the long-idle threshold and avoids world-event refresh', async () => {
+        const agent = createAgentHarness();
+        agent.config = {
+            get: (key: string) => {
+                const map: Record<string, any> = {
+                    actionQueuePath,
+                    userProfilePath: path.join(tempDir, 'USER.md'),
+                    journalPath: path.join(tempDir, 'JOURNAL.md'),
+                    learningPath: path.join(tempDir, 'LEARNING.md'),
+                    worldPath: path.join(tempDir, 'WORLD.md'),
+                    autonomyEnabled: true,
+                    autonomyInterval: 15,
+                    autonomyPostUserCooldownSeconds: 0,
+                    worldEventsHeartbeatEnabled: true,
+                };
+                return map[key];
+            }
+        };
+        agent.detectStalledAction = vi.fn();
+        agent.recoverStaleInProgressActions = vi.fn();
+        agent.maybeRefreshWorldEventsContext = vi.fn(async () => undefined);
+        agent.selfTraining = {
+            prepareTrainingJobIfNeeded: vi.fn(() => ({ prepared: false }))
+        };
+        agent.orchestrator = {
+            getRunningWorkers: () => [],
+            getAvailableAgents: () => []
+        };
+        agent.lastActionTime = Date.now() - 20 * 60 * 1000;
+        agent.lastHeartbeatAt = 0;
+        agent.lastHeartbeatProductive = true;
+        agent.consecutiveIdleHeartbeats = 0;
+        agent.heartbeatRunning = false;
+
+        await agent.checkHeartbeat();
+
+        expect(agent.maybeRefreshWorldEventsContext).not.toHaveBeenCalled();
+        expect(agent.pushTask).not.toHaveBeenCalled();
+    });
+
+    it('runs lightweight maintenance when the main heartbeat is suppressed by queue activity', async () => {
+        const agent = createAgentHarness();
+        agent.config = {
+            get: (key: string) => {
+                const map: Record<string, any> = {
+                    actionQueuePath,
+                    userProfilePath: path.join(tempDir, 'USER.md'),
+                    journalPath: path.join(tempDir, 'JOURNAL.md'),
+                    learningPath: path.join(tempDir, 'LEARNING.md'),
+                    worldPath: path.join(tempDir, 'WORLD.md'),
+                    autonomyEnabled: true,
+                    autonomyInterval: 15,
+                    autonomyPostUserCooldownSeconds: 0,
+                    lightweightHeartbeatEnabled: true,
+                    lightweightHeartbeatIntervalMinutes: 1,
+                    pluginHealthCheckIntervalMinutes: 60,
+                    worldEventsHeartbeatEnabled: false,
+                };
+                return map[key];
+            }
+        };
+        agent.detectStalledAction = vi.fn();
+        agent.recoverStaleInProgressActions = vi.fn();
+        agent.maybeRefreshWorldEventsContext = vi.fn(async () => undefined);
+        agent.memory = {
+            getRecentContext: () => [],
+            flushToDisk: vi.fn(),
+            saveMemory: vi.fn()
+        };
+        agent.skills = {
+            loadPlugins: vi.fn(),
+            checkPluginsHealth: vi.fn(async () => ({ healthy: [], issues: [] }))
+        };
+        agent.syncSkillsRegistryNow = vi.fn(() => ({ success: true, targets: [], sourcePath: null }));
+        agent.selfTraining = {
+            prepareTrainingJobIfNeeded: vi.fn(() => ({ prepared: false }))
+        };
+        agent.actionQueue = {
+            getQueue: () => [
+                {
+                    id: 'pending-user-task',
+                    status: 'pending',
+                    payload: { description: 'User work pending' }
+                }
+            ]
+        };
+        agent.lastActionTime = Date.now() - 5 * 60 * 1000;
+        agent.lastHeartbeatAt = 0;
+        agent.lastLightweightHeartbeatAt = 0;
+        agent.heartbeatRunning = false;
+
+        await agent.checkHeartbeat();
+
+        expect(agent.memory.flushToDisk).toHaveBeenCalledTimes(1);
+        expect(agent.syncSkillsRegistryNow).toHaveBeenCalledTimes(1);
+        expect(agent.skills.loadPlugins).toHaveBeenCalledWith(true);
+        expect(agent.pushTask).not.toHaveBeenCalled();
+        expect(agent.maybeRefreshWorldEventsContext).not.toHaveBeenCalled();
+    });
+
     it('updates heartbeat check state by merging timestamps safely', () => {
         const agent = createAgentHarness();
         const statePath = path.join(tempDir, 'heartbeat-state.json');
@@ -134,6 +235,54 @@ describe('Heartbeat system', () => {
         expect(description).toContain('SCHEDULED HEARTBEAT TASK');
         expect(description).toContain('Check the support inbox for urgent failures and report only if there is a real blocker.');
         expect(description).toContain('Do NOT replace this scheduled task with a generic idle-time initiative');
+    });
+
+    it('updates the heartbeat message timestamp after a successful heartbeat send', () => {
+        const agent = createAgentHarness();
+        const before = Date.now();
+
+        agent.recordSuccessfulSideEffectDelivery(
+            {
+                id: 'hb-send',
+                type: 'task',
+                priority: 2,
+                lane: 'autonomy',
+                status: 'pending',
+                timestamp: new Date().toISOString(),
+                payload: {
+                    isHeartbeat: true,
+                    source: 'telegram',
+                    sourceId: 'chat-1',
+                    description: 'Heartbeat follow-up'
+                }
+            },
+            { name: 'send_telegram', metadata: { message: 'Actual update' } },
+            'Message sent successfully',
+            new Set<string>()
+        );
+
+        expect(agent.lastHeartbeatMessageSentAt).toBeGreaterThanOrEqual(before);
+    });
+
+    it('treats silent successful tool work as productive heartbeat work', () => {
+        const agent = createAgentHarness();
+        const ledger = new StepLedger();
+        ledger.record({
+            step: 1,
+            tool: 'read_file',
+            success: true,
+            isDeep: true,
+            isSideEffect: false,
+            timestamp: Date.now(),
+        });
+
+        const productive = agent.didHeartbeatProduceUsefulWork({
+            stepLedger: ledger,
+            substantiveDeliveriesSent: 0,
+            anyUserDeliverySuccess: false,
+        });
+
+        expect(productive).toBe(true);
     });
 
     it('enqueues scheduled heartbeat tasks with preserved scheduled metadata', () => {

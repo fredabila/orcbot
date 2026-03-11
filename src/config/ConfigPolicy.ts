@@ -276,6 +276,20 @@ export class ConfigPolicy {
             reason: 'Autonomy settings affect system behavior significantly',
             validation: (value: any) => typeof value === 'number' && value >= 1
         }],
+        ['lightweightHeartbeatEnabled', {
+            key: 'lightweightHeartbeatEnabled',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Enable lightweight maintenance heartbeats',
+            reason: 'Non-sensitive local maintenance tuning',
+            validation: (value: any) => typeof value === 'boolean'
+        }],
+        ['lightweightHeartbeatIntervalMinutes', {
+            key: 'lightweightHeartbeatIntervalMinutes',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Minutes between lightweight maintenance heartbeats',
+            reason: 'Non-sensitive pacing control for low-cost background upkeep',
+            validation: (value: any) => typeof value === 'number' && value >= 1 && value <= 240
+        }],
         ['workerPoolAllowAutonomyDuringUserWork', {
             key: 'workerPoolAllowAutonomyDuringUserWork',
             level: ConfigChangeLevel.APPROVAL,
