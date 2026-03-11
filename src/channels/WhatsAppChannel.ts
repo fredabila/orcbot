@@ -30,9 +30,9 @@ export class WhatsAppChannel implements IChannel {
     private contactNames: Map<string, string> = new Map();
     // Cache of recent status metadata so replies can preserve WhatsApp quote preview context
     // Key: participant JID, Value: latest status metadata
-    private statusRepliesByParticipant: Map<string, { key: any; message: any; timestamp?: number; contentType: string; hasMedia: boolean }> = new Map();
+    private statusRepliesByParticipant: Map<string, { key: any; message: any; timestamp?: number; cachedAtMs: number; contentType: string; hasMedia: boolean }> = new Map();
     // Cache of recent status metadata by status message ID for reactions and context propagation
-    private statusRepliesById: Map<string, { key: any; message: any; timestamp?: number; contentType: string; hasMedia: boolean }> = new Map();
+    private statusRepliesById: Map<string, { key: any; message: any; timestamp?: number; cachedAtMs: number; contentType: string; hasMedia: boolean }> = new Map();
     // Prefix used to identify agent-sent messages (for self-chat distinction)
     private readonly AGENT_MESSAGE_PREFIX = '🤖 ';
     // Cache config values to avoid repeated lookups
@@ -135,6 +135,41 @@ export class WhatsAppChannel implements IChannel {
 
     private hasStatusMedia(message: any): boolean {
         return Boolean(message?.imageMessage || message?.videoMessage || message?.audioMessage || message?.documentMessage);
+    }
+
+    private isStatusMetadataFresh(metadata?: { timestamp?: number; cachedAtMs?: number }): boolean {
+        if (!metadata) return false;
+
+        // WhatsApp statuses expire after ~24h. We use a slightly tighter window to avoid borderline stale context.
+        const maxAgeMs = 23 * 60 * 60 * 1000;
+        const nowMs = Date.now();
+
+        if (typeof metadata.cachedAtMs === 'number' && metadata.cachedAtMs > 0) {
+            if (nowMs - metadata.cachedAtMs <= maxAgeMs) return true;
+            return false;
+        }
+
+        if (typeof metadata.timestamp === 'number' && metadata.timestamp > 0) {
+            const tsMs = metadata.timestamp > 1_000_000_000_000 ? metadata.timestamp : metadata.timestamp * 1000;
+            return nowMs - tsMs <= maxAgeMs;
+        }
+
+        // If timing info is absent, assume stale to avoid replying against wrong status context.
+        return false;
+    }
+
+    private pruneStaleStatusCache(): void {
+        for (const [participant, meta] of this.statusRepliesByParticipant.entries()) {
+            if (!this.isStatusMetadataFresh(meta)) {
+                this.statusRepliesByParticipant.delete(participant);
+            }
+        }
+
+        for (const [id, meta] of this.statusRepliesById.entries()) {
+            if (!this.isStatusMetadataFresh(meta)) {
+                this.statusRepliesById.delete(id);
+            }
+        }
     }
 
     private normalizePolicyJid(raw?: string): string {
@@ -526,6 +561,7 @@ export class WhatsAppChannel implements IChannel {
                                 key: msg.key,
                                 message: msg.message,
                                 timestamp: typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : undefined,
+                                cachedAtMs: receivedAt,
                                 contentType: this.detectStatusContentType(msg.message),
                                 hasMedia: this.hasStatusMedia(msg.message)
                             };
@@ -801,59 +837,82 @@ export class WhatsAppChannel implements IChannel {
     }
 
     /**
-     * Reply to a WhatsApp status update properly.
-     * 
-     * A proper status reply must be sent to 'status@broadcast' with the original
-     * status message quoted. This makes the reply appear in the contact's status
-     * thread, NOT as a standalone DM in their regular chat.
+     * Reply to a WhatsApp status update with explicit delivery mode reporting.
      *
-     * @param participantJid - The JID of the person whose status you're replying to
-     * @param message - The reply text
+     * Primary path: send a native status-thread reply using quoted status context
+     * and statusJidList so WhatsApp can render it like an in-status response.
+     *
+     * Fallback path: send a regular DM if native status-thread delivery fails.
+     *
+     * @param participantJid - JID of the person whose status is being replied to
+     * @param message - Reply text
+     * @param statusMessageId - Optional explicit status message ID for precise targeting
      */
-    public async sendStatusReply(participantJid: string, message: string): Promise<void> {
+    public async sendStatusReply(
+        participantJid: string,
+        message: string,
+        statusMessageId?: string
+    ): Promise<{ success: boolean; mode: 'status_thread' | 'dm_fallback' | 'not_sent'; reason?: string }> {
         if (!this.sock) {
-            throw new Error('WhatsApp socket not connected');
+            return { success: false, mode: 'not_sent', reason: 'socket_not_connected' };
         }
 
-        // Ensure JID is properly formatted
-        let jid = participantJid;
-        if (!jid.includes('@')) {
-            jid = `${jid}@s.whatsapp.net`;
+        const jid = this.normalizePolicyJid(participantJid);
+        if (!jid) {
+            return { success: false, mode: 'not_sent', reason: 'invalid_participant_jid' };
         }
 
-        // Look up the cached message key for this participant's latest status
-        const statusMetadata = this.statusRepliesByParticipant.get(jid);
+        this.pruneStaleStatusCache();
+
+        // Prefer explicit status ID when available, otherwise fall back to latest status by participant.
+        let statusMetadata = statusMessageId ? this.statusRepliesById.get(statusMessageId) : undefined;
         if (!statusMetadata) {
-            logger.warn(`WhatsAppChannel: No cached status key for ${jid}. Falling back to regular DM.`);
-            // Graceful degradation: send as a DM with context prefix so user knows it's related to their status
-            await this.sendMessage(jid, `[Re: your status] ${message}`);
-            return;
+            statusMetadata = this.statusRepliesByParticipant.get(jid);
+        }
+
+        if (statusMetadata && !this.isStatusMetadataFresh(statusMetadata)) {
+            statusMetadata = undefined;
+        }
+
+        if (!statusMetadata) {
+            logger.warn(`WhatsAppChannel: No cached status key for ${jid}. Cannot send native status reply.`);
+            return { success: false, mode: 'not_sent', reason: 'status_context_not_found' };
         }
 
         try {
-            // Convert markdown to WhatsApp-native formatting
             const formatted = hasMarkdown(message) ? renderMarkdown(message, 'whatsapp') : message;
-            // Add agent prefix
             const prefixedMessage = `${this.AGENT_MESSAGE_PREFIX}${formatted}`;
 
-            // The correct Baileys method to reply to a status so it appears as a DM reply:
-            // - Send to the participantJid (the DM thread)
-            // - Provide `quoted` pointing to the original status message
+            // Important: include statusJidList so WhatsApp treats this as a status-thread response
+            // instead of an ordinary DM in cases where quoted context alone is insufficient.
             await this.sock.sendMessage(
                 jid,
                 {
                     text: prefixedMessage,
-                    // `quoted` creates the contextual reply bubble referencing the original status
                     quoted: {
                         key: statusMetadata.key,
                         message: statusMetadata.message
                     }
+                },
+                {
+                    statusJidList: [jid]
                 }
             );
-            logger.info(`WhatsAppChannel: Sent status reply to ${jid}'s status`);
+
+            logger.info(`WhatsAppChannel: Sent native status-thread reply to ${jid}`);
+            return { success: true, mode: 'status_thread' };
         } catch (error) {
-            logger.error(`WhatsAppChannel: Error sending status reply to ${jid}: ${error}`);
-            throw error;
+            logger.warn(`WhatsAppChannel: Native status reply send failed for ${jid}, attempting DM fallback: ${error}`);
+            try {
+                const formatted = hasMarkdown(message) ? renderMarkdown(message, 'whatsapp') : message;
+                const prefixedMessage = `${this.AGENT_MESSAGE_PREFIX}[Re: your status] ${formatted}`;
+                await this.sock.sendMessage(jid, { text: prefixedMessage });
+                logger.info(`WhatsAppChannel: Sent DM fallback for status reply to ${jid}`);
+                return { success: true, mode: 'dm_fallback', reason: 'native_send_failed' };
+            } catch (fallbackError) {
+                logger.error(`WhatsAppChannel: Error sending status reply to ${jid}: ${fallbackError}`);
+                return { success: false, mode: 'not_sent', reason: 'native_and_fallback_failed' };
+            }
         }
     }
 

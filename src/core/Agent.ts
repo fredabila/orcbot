@@ -2739,19 +2739,46 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
         this.skills.registerSkill({
             name: 'reply_whatsapp_status',
             description: 'Reply to a contact\'s WhatsApp status update. This sends the message as a proper status reply, visible inside the status thread — NOT as a standalone DM. Use this when reacting to a status someone posted.',
-            usage: 'reply_whatsapp_status(jid, message)',
+            usage: 'reply_whatsapp_status(jid, message, status_message_id?)',
             handler: async (args: any) => {
-                const jid = args.jid || args.to;
+                const currentAction = this.actionQueue.getQueue().find(a => a.id === this.currentActionId);
+                const actionPayload = currentAction?.payload || {};
+
+                const jid = this.resolveContextualChatId(
+                    args.jid || args.to || actionPayload.sourceId,
+                    'whatsapp'
+                );
                 const message = args.message || args.content || args.text;
+                const statusMessageId =
+                    args.status_message_id ||
+                    args.statusMessageId ||
+                    args.message_id ||
+                    args.messageId ||
+                    actionPayload.statusMessageId ||
+                    actionPayload.messageId;
 
                 if (!jid) return 'Error: Missing jid.';
                 if (!message) return 'Error: Missing message content.';
 
+                const isStatusContext = actionPayload.source === 'whatsapp' && (actionPayload.type === 'status' || actionPayload.statusContentType);
+
                 if (this.whatsapp) {
-                    // Use sendStatusReply which correctly targets the status thread
-                    // rather than opening a new DM conversation
-                    await this.whatsapp.sendStatusReply(jid, message);
-                    return `Replied to ${jid}'s status successfully.`;
+                    // Avoid hard user-facing errors on normal DM tasks where status context is absent.
+                    if (!statusMessageId && !isStatusContext) {
+                        return `No active status context for ${jid}. Use send_whatsapp for a normal DM, or run this immediately after receiving a status update.`;
+                    }
+
+                    const result = await this.whatsapp.sendStatusReply(jid, message, statusMessageId);
+                    if (result.success && result.mode === 'status_thread') {
+                        return `Replied to ${jid}'s status in the native status thread.`;
+                    }
+                    if (result.success && result.mode === 'dm_fallback') {
+                        return `Sent a regular DM to ${jid} because native status context was unavailable.`;
+                    }
+                    if (result.reason === 'status_context_not_found') {
+                        return `Could not find recent status context for ${jid}. Ask the user to post a fresh status or use send_whatsapp for a normal DM.`;
+                    }
+                    return `Could not send status reply to ${jid} (${result.reason || 'unknown_error'}).`;
                 }
                 return 'WhatsApp channel not available';
             }

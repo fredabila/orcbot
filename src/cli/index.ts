@@ -2374,7 +2374,612 @@ async function runWorldEventsMonitor(opts: {
         if (opts.once) break;
         await sleep(refreshMs);
     }
+
 }
+
+    type AITunerPreset = {
+        profileName: string;
+        primaryUseCase: string;
+        roleTitle: string;
+        audience: string;
+        tone: string[];
+        autonomyLevel: 'low' | 'balanced' | 'high';
+        riskTolerance: 'conservative' | 'moderate' | 'aggressive';
+        responseStyle: 'concise' | 'balanced' | 'detailed';
+        preferredChannels: string[];
+        topTasks: string[];
+        hardConstraints: string;
+        domainKeywords: string[];
+        createSkillScaffolds: boolean;
+        skillScaffolds: string[];
+        llmAssisted?: boolean;
+        createdAt: string;
+    };
+
+    type TunerArtifacts = {
+        identity: string;
+        soul: string;
+        agents: string;
+        skills?: Record<string, string>;
+    };
+
+    function tunerProfilesDir(): string {
+        return path.join(agent.config.getDataHome(), 'tuner-profiles');
+    }
+
+    function tunerSlug(input: string): string {
+        return String(input || '')
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '')
+            .slice(0, 64) || 'profile';
+    }
+
+    function parseCommaList(input: string): string[] {
+        return String(input || '')
+            .split(',')
+            .map(s => s.trim())
+            .filter(Boolean);
+    }
+
+    function buildIdentityFromPreset(p: AITunerPreset): string {
+        const styleLine = p.responseStyle === 'concise'
+            ? 'Prefer short, high-signal responses and minimal chatter.'
+            : p.responseStyle === 'detailed'
+                ? 'Prefer thorough, structured responses with rationale and tradeoffs.'
+                : 'Balance concision and detail based on user request complexity.';
+
+        return `# Agent Identity
+
+    **Name:** ${agent.config.get('agentName') || 'OrcBot'}
+    **Version:** 2.0
+    **Type:** ${p.roleTitle}
+    **Mission:** ${p.primaryUseCase}
+
+    ## Operating Context
+
+    - **Primary Audience:** ${p.audience}
+    - **Preferred Channels:** ${p.preferredChannels.join(', ') || 'none specified'}
+    - **Top Task Domains:** ${p.topTasks.join(', ') || 'none specified'}
+
+    ## Response Style
+
+    - ${styleLine}
+    - Keep outputs actionable and aligned to the use case.
+    - Ask clarifying questions only when required to avoid wrong execution.
+    `;
+    }
+
+    function buildSoulFromPreset(p: AITunerPreset): string {
+        const autonomyLine = p.autonomyLevel === 'low'
+            ? 'Low autonomy: ask before major actions, avoid implicit assumptions.'
+            : p.autonomyLevel === 'high'
+                ? 'High autonomy: execute end-to-end where safe, with clear progress updates.'
+                : 'Balanced autonomy: execute routine work directly, ask for high-impact decisions.';
+
+        const riskLine = p.riskTolerance === 'conservative'
+            ? 'Conservative risk: prefer safety checks, reversible steps, and explicit confirmations.'
+            : p.riskTolerance === 'aggressive'
+                ? 'Aggressive risk: prioritize speed and outcomes while respecting hard safety boundaries.'
+                : 'Moderate risk: balance speed and caution based on context and potential impact.';
+
+        const toneLine = p.tone.length > 0 ? p.tone.join(', ') : 'professional, direct';
+
+        return `# Agent Persona & Boundaries
+
+    ## Personality
+
+    - **Tone:** ${toneLine}
+    - **Use Case Focus:** ${p.primaryUseCase}
+    - **Audience Fit:** Optimize communication for ${p.audience}
+
+    ## Execution Principles
+
+    - ${autonomyLine}
+    - ${riskLine}
+    - Stay grounded in actual tool results and known system constraints.
+    - Do not claim completion when key outcomes are still pending.
+
+    ## Hard Constraints
+
+    ${p.hardConstraints || '- No additional constraints specified.'}
+
+    ## Domain Signals
+
+    - Prioritize requests related to: ${p.domainKeywords.join(', ') || 'general operations'}
+    - Prefer workflows and language optimized for this domain context.
+    `;
+    }
+
+    function buildAgentsFromPreset(p: AITunerPreset): string {
+        const taskBullets = p.topTasks.length > 0
+            ? p.topTasks.map(t => `- ${t}`).join('\n')
+            : '- No top-task priorities specified';
+
+        const keywordBullets = p.domainKeywords.length > 0
+            ? p.domainKeywords.map(k => `- ${k}`).join('\n')
+            : '- No domain keywords specified';
+
+        return `# Operating Instructions
+
+    ## Active Tuning Profile
+
+    - **Profile:** ${p.profileName}
+    - **Primary Mission:** ${p.primaryUseCase}
+    - **Role:** ${p.roleTitle}
+    - **Audience:** ${p.audience}
+    - **Autonomy:** ${p.autonomyLevel}
+    - **Risk Posture:** ${p.riskTolerance}
+
+    ## Task Priorities
+
+    ${taskBullets}
+
+    ## Domain Keywords
+
+    ${keywordBullets}
+
+    ## Behavioral Rules
+
+    1. Keep every response aligned to the primary mission.
+    2. Use tools when they improve reliability or speed; avoid unnecessary tool churn.
+    3. Report blockers clearly and offer the next best fallback.
+    4. Preserve user trust: no fabricated results, no false success messages.
+    5. Prefer reusable outputs (templates, scripts, checklists) for recurring workflows.
+    `;
+    }
+
+    function buildSkillScaffold(skillName: string, p: AITunerPreset): string {
+        const triggers = p.domainKeywords.slice(0, 8).map(k => `  - "${k}"`).join('\n');
+        const triggerBlock = triggers || '  - "' + p.primaryUseCase.replace(/"/g, '') + '"';
+
+        return `---
+    name: ${skillName}
+    description: Skill guidance for ${p.primaryUseCase}
+    license: Apache-2.0
+    allowedTools:
+      - web_search
+      - read_file
+      - write_file
+    orcbot:
+      autoActivate: true
+      triggerPatterns:
+    ${triggerBlock}
+    ---
+
+    # ${skillName}
+
+    ## Intent
+
+    This skill is specialized for: ${p.primaryUseCase}
+
+    ## Operating Guidance
+
+    1. Start by identifying user intent and expected deliverable format.
+    2. Use domain language suitable for ${p.audience}.
+    3. Produce actionable outputs with assumptions and constraints made explicit.
+    4. If required data is missing, ask only for the minimum needed to proceed.
+
+    ## Quality Bar
+
+    - Output should be practical, specific, and immediately usable.
+    - Prefer templates/checklists when the task is repetitive.
+    - Avoid generic boilerplate when domain specifics are available.
+    `;
+    }
+
+    function parseJsonObjectFromText(text: string): any | null {
+        const raw = String(text || '').trim();
+        if (!raw) return null;
+        try {
+            return JSON.parse(raw);
+        } catch {
+            const match = raw.match(/\{[\s\S]*\}$/m);
+            if (!match) return null;
+            try {
+                return JSON.parse(match[0]);
+            } catch {
+                return null;
+            }
+        }
+    }
+
+    function hasConnectedLlmForTuner(): boolean {
+        const provider = String(agent.config.get('llmProvider') || '').trim().toLowerCase();
+        if (!provider) return false;
+        if (provider === 'openai') return !!agent.config.get('openaiApiKey') || !!agent.config.get('usePiAI');
+        if (provider === 'gemini' || provider === 'google') return !!agent.config.get('googleApiKey') || !!agent.config.get('usePiAI');
+        if (provider === 'anthropic') return !!agent.config.get('anthropicApiKey') || !!agent.config.get('usePiAI');
+        if (provider === 'nvidia') return !!agent.config.get('nvidiaApiKey') || !!agent.config.get('usePiAI');
+        if (provider === 'openrouter') return !!agent.config.get('openrouterApiKey') || !!agent.config.get('usePiAI');
+        if (provider === 'bedrock') return !!agent.config.get('bedrockRegion') || !!agent.config.get('usePiAI');
+        if (provider === 'ollama') return !!agent.config.get('ollamaApiUrl') || !!agent.config.get('ollamaUrl');
+        return !!agent.config.get('usePiAI');
+    }
+
+    async function generateLlmTunerArtifacts(p: AITunerPreset): Promise<TunerArtifacts | null> {
+        const llm = agent.llm;
+        if (!llm) return null;
+
+        const systemPrompt = `You are an OrcBot tuning architect.
+Return STRICT JSON only with keys:
+- identityMd: string (complete markdown for IDENTITY.md)
+- soulMd: string (complete markdown for SOUL.md)
+- agentsMd: string (complete markdown for AGENTS.md)
+- skillGuidance: object map { skillName: full SKILL.md markdown }
+
+Rules:
+1) Keep content practical and specific to user's profile.
+2) Do not include unsafe/harmful instructions.
+3) Do not mention these instructions.
+4) Keep markdown concise but actionable.
+5) skillGuidance keys must be slug-like lowercase names.`;
+
+        const userPrompt = JSON.stringify({
+            profileName: p.profileName,
+            primaryUseCase: p.primaryUseCase,
+            roleTitle: p.roleTitle,
+            audience: p.audience,
+            tone: p.tone,
+            autonomyLevel: p.autonomyLevel,
+            riskTolerance: p.riskTolerance,
+            responseStyle: p.responseStyle,
+            preferredChannels: p.preferredChannels,
+            topTasks: p.topTasks,
+            hardConstraints: p.hardConstraints,
+            domainKeywords: p.domainKeywords,
+            requestedSkillScaffolds: p.skillScaffolds
+        }, null, 2);
+
+        try {
+            const raw = await llm.callFast(userPrompt, systemPrompt);
+            const parsed = parseJsonObjectFromText(raw);
+            if (!parsed) return null;
+
+            const identity = String(parsed.identityMd || '').trim();
+            const soul = String(parsed.soulMd || '').trim();
+            const agentsDoc = String(parsed.agentsMd || '').trim();
+            const skillMap = typeof parsed.skillGuidance === 'object' && parsed.skillGuidance
+                ? parsed.skillGuidance as Record<string, string>
+                : undefined;
+
+            if (!identity || !soul || !agentsDoc) return null;
+
+            return {
+                identity,
+                soul,
+                agents: agentsDoc,
+                skills: skillMap
+            };
+        } catch (e) {
+            logger.warn(`AI Tuner: LLM-assisted artifact generation failed; using deterministic templates. Error: ${e}`);
+            return null;
+        }
+    }
+
+    function writeTunerSkillScaffolds(
+        p: AITunerPreset,
+        overwrite: boolean,
+        llmSkillDocs?: Record<string, string>
+    ): { created: string[]; skipped: string[] } {
+        const configuredPluginsPath = String(agent.config.get('pluginsPath') || './plugins').trim();
+        const pluginsRoot = path.isAbsolute(configuredPluginsPath)
+            ? configuredPluginsPath
+            : path.resolve(configuredPluginsPath);
+        const skillsRoot = path.join(pluginsRoot, 'skills');
+        fs.mkdirSync(skillsRoot, { recursive: true });
+
+        const created: string[] = [];
+        const skipped: string[] = [];
+
+        for (const rawName of p.skillScaffolds) {
+            const name = tunerSlug(rawName);
+            const dir = path.join(skillsRoot, name);
+            const file = path.join(dir, 'SKILL.md');
+            if (fs.existsSync(file) && !overwrite) {
+                skipped.push(name);
+                continue;
+            }
+            fs.mkdirSync(dir, { recursive: true });
+            const llmDoc = llmSkillDocs && typeof llmSkillDocs[name] === 'string'
+                ? String(llmSkillDocs[name]).trim()
+                : '';
+            fs.writeFileSync(file, llmDoc || buildSkillScaffold(name, p));
+            created.push(name);
+        }
+
+        if (created.length > 0) {
+            agent.skills.discoverAgentSkills();
+        }
+
+        return { created, skipped };
+    }
+
+    function applyTunerPreset(
+        p: AITunerPreset,
+        opts?: { writeSkills?: boolean; overwriteSkills?: boolean; artifacts?: TunerArtifacts }
+    ): { fileResults: Array<{ file: string; ok: boolean }>; skillResults?: { created: string[]; skipped: string[] } } {
+        const fileResults: Array<{ file: string; ok: boolean }> = [];
+
+        const identityDoc = opts?.artifacts?.identity || buildIdentityFromPreset(p);
+        const soulDoc = opts?.artifacts?.soul || buildSoulFromPreset(p);
+        const agentsDoc = opts?.artifacts?.agents || buildAgentsFromPreset(p);
+
+        fileResults.push({ file: 'IDENTITY.md', ok: agent.bootstrap.updateFile('IDENTITY.md', identityDoc) });
+        fileResults.push({ file: 'SOUL.md', ok: agent.bootstrap.updateFile('SOUL.md', soulDoc) });
+        fileResults.push({ file: 'AGENTS.md', ok: agent.bootstrap.updateFile('AGENTS.md', agentsDoc) });
+
+        let skillResults: { created: string[]; skipped: string[] } | undefined;
+        if (opts?.writeSkills && p.createSkillScaffolds && p.skillScaffolds.length > 0) {
+            skillResults = writeTunerSkillScaffolds(p, !!opts.overwriteSkills, opts?.artifacts?.skills);
+        }
+
+        return { fileResults, skillResults };
+    }
+
+    function applyPresetToPeerInstances(p: AITunerPreset, artifacts?: TunerArtifacts): { updated: string[]; failed: string[] } {
+        const updated: string[] = [];
+        const failed: string[] = [];
+
+        const identityDoc = artifacts?.identity || buildIdentityFromPreset(p);
+        const soulDoc = artifacts?.soul || buildSoulFromPreset(p);
+        const agentsDoc = artifacts?.agents || buildAgentsFromPreset(p);
+
+        const peers = agent.orchestrator.listAgents().filter(a => a.id !== 'primary');
+        for (const peer of peers) {
+            try {
+                const peerData = agent.orchestrator.getAgent(peer.id);
+                if (!peerData?.memoryPath) {
+                    failed.push(peer.name || peer.id);
+                    continue;
+                }
+
+                const peerDir = path.dirname(peerData.memoryPath);
+                fs.mkdirSync(peerDir, { recursive: true });
+                fs.writeFileSync(path.join(peerDir, 'IDENTITY.md'), identityDoc);
+                fs.writeFileSync(path.join(peerDir, 'SOUL.md'), soulDoc);
+                fs.writeFileSync(path.join(peerDir, 'AGENTS.md'), agentsDoc);
+                updated.push(peer.name || peer.id);
+            } catch {
+                failed.push(peer.name || peer.id);
+            }
+        }
+
+        return { updated, failed };
+    }
+
+    async function showAiTunerMenu() {
+        console.clear();
+        banner();
+        sectionHeader('🎛️', 'AI Tuner');
+
+        const profilesDir = tunerProfilesDir();
+        if (!fs.existsSync(profilesDir)) fs.mkdirSync(profilesDir, { recursive: true });
+        const profiles = fs.readdirSync(profilesDir).filter(f => f.endsWith('.json'));
+
+        console.log('');
+        box([
+            `${dim('Goal')} Retune OrcBot for a specific person/use-case without manual SOUL.md edits.`,
+            `${dim('Profiles')} ${brightCyan(bold(String(profiles.length)))} saved preset(s)`,
+            `${dim('Writes')} IDENTITY.md, SOUL.md, AGENTS.md ${dim('+ optional SKILL.md scaffolds')}`,
+            `${dim('Smart Mode')} ${hasConnectedLlmForTuner() ? green('LLM available') : yellow('fallback mode only')}`
+        ], { title: 'AI TUNER STATUS', width: 72, color: c.cyan });
+        console.log('');
+
+        const { action } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'action',
+                message: cyan('AI Tuner Options:'),
+                choices: [
+                    { name: `  🧭 ${bold('Run Guided Questionnaire')}`, value: 'guided' },
+                    { name: `  ♻️  ${bold('Apply Saved Profile')}`, value: 'apply_saved' },
+                    { name: `  📚 ${bold('List Saved Profiles')}`, value: 'list' },
+                    { name: dim('  ← Back'), value: 'back' }
+                ]
+            }
+        ]);
+
+        if (action === 'back') return showMainMenu();
+
+        if (action === 'list') {
+            console.log('');
+            if (profiles.length === 0) {
+                console.log(dim('No saved tuner profiles yet.'));
+            } else {
+                for (const file of profiles) {
+                    try {
+                        const full = path.join(profilesDir, file);
+                        const parsed = JSON.parse(fs.readFileSync(full, 'utf-8')) as AITunerPreset;
+                        console.log(`- ${bold(parsed.profileName)} ${dim(`(${file})`)}`);
+                        console.log(`  ${dim('Use case:')} ${parsed.primaryUseCase}`);
+                        console.log(`  ${dim('Role:')} ${parsed.roleTitle} ${dim('| Autonomy:')} ${parsed.autonomyLevel} ${dim('| Risk:')} ${parsed.riskTolerance}`);
+                    } catch {
+                        console.log(`- ${file} ${dim('(unreadable)')}`);
+                    }
+                }
+            }
+            await waitKeyPress();
+            return showAiTunerMenu();
+        }
+
+        if (action === 'apply_saved') {
+            if (profiles.length === 0) {
+                console.log('\nNo saved profiles found. Run Guided Questionnaire first.');
+                await waitKeyPress();
+                return showAiTunerMenu();
+            }
+
+            const { file } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'file',
+                    message: 'Select saved profile:',
+                    choices: profiles.map(f => ({ name: f, value: f }))
+                }
+            ]);
+
+            const preset = JSON.parse(fs.readFileSync(path.join(profilesDir, file), 'utf-8')) as AITunerPreset;
+            const { smartMode, writeSkills, overwriteSkills, applyToPeers } = await inquirer.prompt([
+                { type: 'confirm', name: 'smartMode', message: 'Use connected LLM for smart tuning?', default: true, when: () => hasConnectedLlmForTuner() },
+                { type: 'confirm', name: 'writeSkills', message: 'Apply associated skill scaffolds too?', default: true },
+                { type: 'confirm', name: 'overwriteSkills', message: 'Overwrite existing scaffolded skill files?', default: false, when: (a) => !!a.writeSkills },
+                { type: 'confirm', name: 'applyToPeers', message: 'Also sync this tuning to all spawned peer-agent instances?', default: true }
+            ]);
+
+            const artifacts = smartMode ? await generateLlmTunerArtifacts(preset) : null;
+            const result = applyTunerPreset(preset, { writeSkills, overwriteSkills, artifacts: artifacts || undefined });
+            const peerSync = applyToPeers ? applyPresetToPeerInstances(preset, artifacts || undefined) : { updated: [], failed: [] };
+            const okCount = result.fileResults.filter(r => r.ok).length;
+            console.log(`\n✅ Applied profile ${bold(preset.profileName)} (${okCount}/${result.fileResults.length} bootstrap files updated).`);
+            if (smartMode) {
+                console.log(`   Smart mode: ${artifacts ? green('LLM-guided artifacts used') : yellow('fallback templates used')}`);
+            }
+            if (result.skillResults) {
+                console.log(`   Skills created: ${result.skillResults.created.length}, skipped: ${result.skillResults.skipped.length}`);
+            }
+            if (peerSync.updated.length > 0 || peerSync.failed.length > 0) {
+                console.log(`   Peer sync: ${peerSync.updated.length} updated, ${peerSync.failed.length} failed`);
+            }
+
+            await waitKeyPress();
+            return showAiTunerMenu();
+        }
+
+        const answers = await inquirer.prompt([
+            { type: 'input', name: 'profileName', message: 'Profile name:', default: `profile-${new Date().toISOString().slice(0, 10)}` },
+            { type: 'input', name: 'primaryUseCase', message: 'Primary use case (what should OrcBot optimize for?):', validate: (v: string) => v.trim().length > 0 || 'Required' },
+            { type: 'input', name: 'roleTitle', message: 'Role title for the tuned bot:', default: 'Specialized AI Operations Assistant' },
+            { type: 'input', name: 'audience', message: 'Primary audience/user type:', default: 'technical operators' },
+            {
+                type: 'checkbox',
+                name: 'tone',
+                message: 'Preferred tone:',
+                choices: [
+                    { name: 'direct', value: 'direct' },
+                    { name: 'friendly', value: 'friendly' },
+                    { name: 'formal', value: 'formal' },
+                    { name: 'technical', value: 'technical' },
+                    { name: 'coaching', value: 'coaching' },
+                    { name: 'concise', value: 'concise' }
+                ],
+                validate: (vals: string[]) => vals.length > 0 || 'Pick at least one tone'
+            },
+            {
+                type: 'list',
+                name: 'autonomyLevel',
+                message: 'Autonomy level:',
+                choices: [
+                    { name: 'Low (ask before major actions)', value: 'low' },
+                    { name: 'Balanced', value: 'balanced' },
+                    { name: 'High (execute end-to-end where safe)', value: 'high' }
+                ]
+            },
+            {
+                type: 'list',
+                name: 'riskTolerance',
+                message: 'Risk tolerance:',
+                choices: [
+                    { name: 'Conservative', value: 'conservative' },
+                    { name: 'Moderate', value: 'moderate' },
+                    { name: 'Aggressive', value: 'aggressive' }
+                ]
+            },
+            {
+                type: 'list',
+                name: 'responseStyle',
+                message: 'Response detail level:',
+                choices: [
+                    { name: 'Concise', value: 'concise' },
+                    { name: 'Balanced', value: 'balanced' },
+                    { name: 'Detailed', value: 'detailed' }
+                ]
+            },
+            {
+                type: 'checkbox',
+                name: 'preferredChannels',
+                message: 'Preferred channels:',
+                choices: [
+                    { name: 'Telegram', value: 'telegram' },
+                    { name: 'WhatsApp', value: 'whatsapp' },
+                    { name: 'Discord', value: 'discord' },
+                    { name: 'Slack', value: 'slack' },
+                    { name: 'Gateway Web', value: 'gateway-chat' },
+                    { name: 'Email', value: 'email' }
+                ]
+            },
+            { type: 'input', name: 'topTasksRaw', message: 'Top recurring tasks (comma-separated):' },
+            { type: 'input', name: 'domainKeywordsRaw', message: 'Domain keywords/triggers (comma-separated):' },
+            { type: 'input', name: 'hardConstraints', message: 'Hard constraints (single line, optional):' },
+            { type: 'confirm', name: 'createSkillScaffolds', message: 'Generate starter SKILL.md scaffolds for this profile?', default: true },
+            {
+                type: 'checkbox',
+                name: 'skillScaffolds',
+                message: 'Select skill scaffold packs:',
+                when: (a) => !!a.createSkillScaffolds,
+                choices: [
+                    { name: 'intake-triage', value: 'intake-triage' },
+                    { name: 'domain-research', value: 'domain-research' },
+                    { name: 'workflow-automation', value: 'workflow-automation' },
+                    { name: 'quality-review', value: 'quality-review' },
+                    { name: 'stakeholder-updates', value: 'stakeholder-updates' }
+                ]
+            },
+            { type: 'confirm', name: 'saveProfile', message: 'Save this tuning profile for reuse across instances?', default: true },
+            { type: 'confirm', name: 'overwriteSkills', message: 'Overwrite existing scaffolded skill files if present?', default: false, when: (a) => !!a.createSkillScaffolds },
+            { type: 'confirm', name: 'llmAssisted', message: 'Use connected LLM to smart-generate tuned files?', default: true, when: () => hasConnectedLlmForTuner() },
+            { type: 'confirm', name: 'applyToPeers', message: 'Also sync this tuning to all spawned peer-agent instances?', default: true }
+        ]);
+
+        const preset: AITunerPreset = {
+            profileName: String(answers.profileName || '').trim() || `profile-${new Date().toISOString().slice(0, 10)}`,
+            primaryUseCase: String(answers.primaryUseCase || '').trim(),
+            roleTitle: String(answers.roleTitle || '').trim() || 'Specialized AI Operations Assistant',
+            audience: String(answers.audience || '').trim() || 'technical operators',
+            tone: Array.isArray(answers.tone) ? answers.tone : [],
+            autonomyLevel: answers.autonomyLevel,
+            riskTolerance: answers.riskTolerance,
+            responseStyle: answers.responseStyle,
+            preferredChannels: Array.isArray(answers.preferredChannels) ? answers.preferredChannels : [],
+            topTasks: parseCommaList(answers.topTasksRaw),
+            hardConstraints: String(answers.hardConstraints || '').trim(),
+            domainKeywords: parseCommaList(answers.domainKeywordsRaw),
+            createSkillScaffolds: !!answers.createSkillScaffolds,
+            skillScaffolds: Array.isArray(answers.skillScaffolds) ? answers.skillScaffolds : [],
+            llmAssisted: !!answers.llmAssisted,
+            createdAt: new Date().toISOString()
+        };
+
+        if (answers.saveProfile) {
+            const file = `${tunerSlug(preset.profileName)}.json`;
+            fs.writeFileSync(path.join(profilesDir, file), JSON.stringify(preset, null, 2));
+        }
+
+        const artifacts = preset.llmAssisted ? await generateLlmTunerArtifacts(preset) : null;
+
+        const result = applyTunerPreset(preset, {
+            writeSkills: !!answers.createSkillScaffolds,
+            overwriteSkills: !!answers.overwriteSkills,
+            artifacts: artifacts || undefined
+        });
+        const peerSync = answers.applyToPeers ? applyPresetToPeerInstances(preset, artifacts || undefined) : { updated: [], failed: [] };
+
+        const okCount = result.fileResults.filter(r => r.ok).length;
+        console.log(`\n✅ AI tuning applied for ${bold(preset.profileName)}.`);
+        console.log(`   Bootstrap updates: ${okCount}/${result.fileResults.length}`);
+        if (preset.llmAssisted) {
+            console.log(`   Smart mode: ${artifacts ? green('LLM-guided artifacts used') : yellow('fallback templates used')}`);
+        }
+        if (result.skillResults) {
+            console.log(`   Skill scaffolds created: ${result.skillResults.created.length}, skipped: ${result.skillResults.skipped.length}`);
+        }
+        if (peerSync.updated.length > 0 || peerSync.failed.length > 0) {
+            console.log(`   Peer sync: ${peerSync.updated.length} updated, ${peerSync.failed.length} failed`);
+        }
+
+        await waitKeyPress();
+        return showAiTunerMenu();
+    }
 
 async function showMainMenu() {
     console.clear();
@@ -2430,6 +3035,7 @@ async function showMainMenu() {
             { label: `  ${c.magenta}🧠${c.reset}  Manage AI Models`, value: 'models' },
             { label: `  ${c.brightCyan}🧪${c.reset}  Self-Training`, value: 'self_training' },
             { label: `  ${c.brightBlue}🔌${c.reset}  Manage Connections`, value: 'connections' },
+            { label: `  ${c.brightMagenta}🎛️${c.reset}  AI Tuner ${c.gray}(persona + skills questionnaire)${c.reset}`, value: 'ai_tuner' },
             { label: `  ${c.brightCyan}⚡${c.reset}  Manage Skills  ${c.gray}(${agent.skills.getAgentSkills().length} installed)${c.reset}`, value: 'skills' },
             { label: `  ${c.brightBlue}🌍${c.reset}  World Governance`, value: 'world' },
             { label: `  ${c.brightMagenta}🧰${c.reset}  Manage Tools   ${c.gray}(${agent.tools.listTools().length} installed)${c.reset}`, value: 'tools' },
@@ -2480,6 +3086,9 @@ async function showMainMenu() {
             break;
         case 'connections':
             await showConnectionsMenu();
+            break;
+        case 'ai_tuner':
+            await showAiTunerMenu();
             break;
         case 'models':
             await showModelsMenu();
