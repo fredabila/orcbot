@@ -43,6 +43,27 @@ This file lists the available skills for the agent.
 - **google_latest_otp(from_contains?, subject_contains?)**: [EMAIL/AUTH TOOL] Extract the latest numeric OTP code from recent Gmail messages, optionally filtered by sender or subject.
 - **google_workspace_status()**: [GOOGLE WORKSPACE TOOL] Check whether the Google Workspace CLI (`gws`) is installed and whether its auth context is available.
 - **google_workspace_command(args:array, json?, account?)**: [GOOGLE WORKSPACE TOOL] Run a structured `gws` command without a shell. Use this for broad Workspace access across Gmail, Drive, Docs, Sheets, Calendar, and related services.
+- **github_cli_status()**: [GITHUB TOOL] Check whether the GitHub CLI (`gh`) is installed and whether its auth context is available.
+- **github_cli_command(args:array, json?, cwd?)**: [GITHUB TOOL] Run a structured `gh` command without a shell. Use this for releases, PRs, issues, workflow inspection, and other GitHub operations.
+- **github_branch_list(repo?, limit?, query?, cwd?)**: [GITHUB TOOL] List repository branches through `gh`, with optional repo override and name filtering.
+- **github_label_list(repo?, limit?, search?, cwd?)**: [GITHUB TOOL] List repository labels through `gh`.
+- **github_label_create(name, color, description?, force?, repo?, cwd?)**: [GITHUB TOOL] Create or update a repository label through `gh`.
+- **github_label_delete(name, repo?, cwd?)**: [GITHUB TOOL] Delete a repository label through `gh`.
+- **github_pr_list(state?, limit?, repo?, base?, head?, author?, assignee?, cwd?)**: [GITHUB TOOL] List pull requests through `gh` with optional repo, branch, author, assignee, and state filters.
+- **github_pr_checks(pull_request, repo?, watch?, cwd?)**: [GITHUB TOOL] Inspect GitHub status checks for a pull request through `gh`.
+- **github_pr_review(pull_request, event, body?, repo?, cwd?)**: [GITHUB TOOL] Submit a pull request review through `gh` as an approval, comment, or request for changes.
+- **github_pr_comment(pull_request, body, repo?, cwd?)**: [GITHUB TOOL] Post a plain comment on a pull request through `gh`.
+- **github_pr_merge(pull_request, strategy?, subject?, body?, auto?, admin?, delete_branch?, match_head_commit?, repo?, cwd?)**: [GITHUB TOOL] Merge a pull request through `gh` using merge, squash, or rebase, with optional auto-merge and branch cleanup flags.
+- **github_issue_create(title, body?, repo?, labels?, assignees?, cwd?)**: [GITHUB TOOL] Create a GitHub issue through `gh` with optional labels, assignees, and repo override.
+- **github_issue_comment(issue, body, repo?, cwd?)**: [GITHUB TOOL] Post a plain comment on a GitHub issue through `gh`.
+- **github_release_create(tag, title?, notes?, repo?, target?, draft?, prerelease?, generate_notes?, cwd?)**: [GITHUB TOOL] Create a GitHub release through `gh`, optionally generating notes or targeting a specific commit/branch.
+- **github_release_upload_asset(tag, files, repo?, clobber?, cwd?)**: [GITHUB TOOL] Upload one or more files to an existing GitHub release through `gh`.
+- **github_variable_list(repo?, limit?, cwd?)**: [GITHUB TOOL] List repository variables through `gh`.
+- **github_variable_set(name, value, repo?, visibility?, cwd?)**: [GITHUB TOOL] Create or update a repository variable through `gh`.
+- **github_variable_delete(name, repo?, cwd?)**: [GITHUB TOOL] Delete a repository variable through `gh`.
+- **github_workflow_runs(workflow?, branch?, event?, status?, limit?, repo?, user?, cwd?)**: [GITHUB TOOL] List GitHub Actions workflow runs through `gh` with optional workflow, branch, status, event, and repo filters.
+- **github_workflow_dispatch(workflow, ref?, fields?, repo?, cwd?)**: [GITHUB TOOL] Dispatch a GitHub Actions workflow through `gh`, optionally passing ref and input fields.
+- **github_workflow_rerun(run_id, failed?, repo?, cwd?)**: [GITHUB TOOL] Request a rerun of a GitHub Actions workflow run through `gh`, optionally rerunning only failed jobs.
 - **google_docs_create(title, content?, account?)**: [GOOGLE WORKSPACE TOOL] Create a Google Doc via `gws`, optionally writing initial content right after creation.
 - **google_docs_write(document_id, text, account?)**: [GOOGLE WORKSPACE TOOL] Append plain text to an existing Google Doc via `gws`.
 - **google_drive_list(query?, pageSize?, account?)**: [GOOGLE WORKSPACE TOOL] List Google Drive files with optional Drive query filtering.

@@ -26,6 +26,7 @@ import { KnowledgeStore } from '../memory/KnowledgeStore';
 import { SystemProfiler } from './SystemProfiler';
 import { GoogleIdentityManager } from './GoogleIdentityManager';
 import { GoogleWorkspaceCli } from './GoogleWorkspaceCli';
+import { GitHubCli } from './GitHubCli';
 import { memoryToolsSkills } from '../skills/memoryTools';
 import { pythonToolsSkills } from '../skills/pythonTools';
 import { canvasToolsSkills } from '../skills/canvasTools';
@@ -101,6 +102,7 @@ export class Agent {
     public systemProfiler: SystemProfiler;
     public googleIdentity: GoogleIdentityManager;
     public googleWorkspaceCli: GoogleWorkspaceCli;
+    public githubCli: GitHubCli;
     public telegram: TelegramChannel | undefined;
     public whatsapp: WhatsAppChannel | undefined;
     public discord: DiscordChannel | undefined;
@@ -206,6 +208,7 @@ export class Agent {
         this.systemProfiler = new SystemProfiler(this.config.getDataHome());
         this.googleIdentity = new GoogleIdentityManager(this.config);
         this.googleWorkspaceCli = new GoogleWorkspaceCli(this.config);
+        this.githubCli = new GitHubCli(this.config);
 
         this.tools = new ToolsManager(
             this.config.get('toolsPath') || path.join(this.config.getDataHome(), 'tools')
@@ -2913,6 +2916,643 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                         stdout: result.stdout,
                         stderr: result.stderr,
                     };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_cli_status',
+            description: 'Check whether GitHub CLI (gh) is installed and whether its auth context appears available.',
+            usage: 'github_cli_status()',
+            isElevated: true,
+            handler: async () => {
+                const status = await this.githubCli.getStatus();
+                return {
+                    success: true,
+                    ...status,
+                    note: status.installed
+                        ? 'GitHub CLI is installed. Use github_cli_command for structured GitHub operations.'
+                        : 'GitHub CLI is not installed or not on PATH.'
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_cli_command',
+            description: 'Run a structured GitHub CLI (gh) command without using a shell. Args must be an array of raw CLI tokens, e.g. ["release","list"].',
+            usage: 'github_cli_command(args:array, json?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const commandArgs = Array.isArray(args.args)
+                    ? args.args.map((item: any) => String(item))
+                    : [];
+                if (commandArgs.length === 0) {
+                    return { success: false, error: 'Missing args array. Example: { args: ["release", "list"] }' };
+                }
+
+                const json = args.json === true || args.json === 'true';
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const result = await this.githubCli.run(commandArgs, { json, cwd });
+                return result.success
+                    ? {
+                        success: true,
+                        binary: result.binary,
+                        args: result.args,
+                        data: result.data,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        binary: result.binary,
+                        args: result.args,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_pr_list',
+            description: 'List pull requests through GitHub CLI with optional state, repo, and branch filters.',
+            usage: 'github_pr_list(state?, limit?, repo?, base?, head?, author?, assignee?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const state = String(args.state || '').trim() || undefined;
+                const repo = String(args.repo || '').trim() || undefined;
+                const base = String(args.base || '').trim() || undefined;
+                const head = String(args.head || '').trim() || undefined;
+                const author = String(args.author || '').trim() || undefined;
+                const assignee = String(args.assignee || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const limit = Number.isFinite(Number(args.limit)) ? Number(args.limit) : undefined;
+
+                const result = await this.githubCli.listPullRequests({
+                    state,
+                    repo,
+                    base,
+                    head,
+                    author,
+                    assignee,
+                    cwd,
+                    limit,
+                });
+
+                return result.success
+                    ? {
+                        success: true,
+                        pullRequests: Array.isArray(result.data) ? result.data : [],
+                        count: Array.isArray(result.data) ? result.data.length : 0,
+                        data: result.data,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_issue_create',
+            description: 'Create a GitHub issue through GitHub CLI with optional repo, labels, and assignees.',
+            usage: 'github_issue_create(title, body?, repo?, labels?, assignees?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const title = String(args.title || '').trim();
+                if (!title) {
+                    return { success: false, error: 'Missing title.' };
+                }
+
+                const body = typeof args.body === 'string' ? args.body : (typeof args.description === 'string' ? args.description : undefined);
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const labels = Array.isArray(args.labels)
+                    ? args.labels.map((item: any) => String(item).trim()).filter(Boolean)
+                    : String(args.labels || '').trim() || undefined;
+                const assignees = Array.isArray(args.assignees)
+                    ? args.assignees.map((item: any) => String(item).trim()).filter(Boolean)
+                    : String(args.assignees || '').trim() || undefined;
+
+                const result = await this.githubCli.createIssue({ title, body, repo, labels, assignees, cwd });
+                return result.success
+                    ? {
+                        success: true,
+                        issueUrl: result.data?.url,
+                        output: result.data?.output || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_release_create',
+            description: 'Create a GitHub release through GitHub CLI with optional notes, generated notes, target commit, and repo override.',
+            usage: 'github_release_create(tag, title?, notes?, repo?, target?, draft?, prerelease?, generate_notes?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const tag = String(args.tag || args.version || '').trim();
+                if (!tag) {
+                    return { success: false, error: 'Missing tag.' };
+                }
+
+                const title = String(args.title || '').trim() || undefined;
+                const notes = typeof args.notes === 'string' ? args.notes : undefined;
+                const repo = String(args.repo || '').trim() || undefined;
+                const target = String(args.target || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const draft = args.draft === true || args.draft === 'true';
+                const prerelease = args.prerelease === true || args.prerelease === 'true';
+                const generateNotes = args.generate_notes === false || args.generate_notes === 'false'
+                    ? false
+                    : !!notes ? (args.generate_notes === true || args.generate_notes === 'true') : true;
+
+                const result = await this.githubCli.createRelease({
+                    tag,
+                    title,
+                    notes,
+                    repo,
+                    target,
+                    cwd,
+                    draft,
+                    prerelease,
+                    generateNotes,
+                });
+
+                return result.success
+                    ? {
+                        success: true,
+                        releaseUrl: result.data?.url,
+                        output: result.data?.output || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_workflow_runs',
+            description: 'List GitHub Actions workflow runs through GitHub CLI with optional workflow, branch, event, status, user, and repo filters.',
+            usage: 'github_workflow_runs(workflow?, branch?, event?, status?, limit?, repo?, user?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const workflow = String(args.workflow || args.name || '').trim() || undefined;
+                const branch = String(args.branch || '').trim() || undefined;
+                const event = String(args.event || '').trim() || undefined;
+                const status = String(args.status || '').trim() || undefined;
+                const repo = String(args.repo || '').trim() || undefined;
+                const user = String(args.user || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const limit = Number.isFinite(Number(args.limit)) ? Number(args.limit) : undefined;
+
+                const result = await this.githubCli.listWorkflowRuns({ workflow, branch, event, status, repo, user, cwd, limit });
+                return result.success
+                    ? {
+                        success: true,
+                        runs: Array.isArray(result.data) ? result.data : [],
+                        count: Array.isArray(result.data) ? result.data.length : 0,
+                        data: result.data,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_workflow_rerun',
+            description: 'Rerun a GitHub Actions workflow run through GitHub CLI, optionally rerunning only failed jobs.',
+            usage: 'github_workflow_rerun(run_id, failed?, repo?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const runId = String(args.run_id || args.runId || args.id || '').trim();
+                if (!runId) {
+                    return { success: false, error: 'Missing run_id.' };
+                }
+
+                const failed = args.failed === true || args.failed === 'true';
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const result = await this.githubCli.rerunWorkflowRun({ runId, failed, repo, cwd });
+
+                return result.success
+                    ? {
+                        success: true,
+                        output: result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_pr_checks',
+            description: 'Inspect status checks for a pull request through GitHub CLI.',
+            usage: 'github_pr_checks(pull_request, repo?, watch?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const pullRequest = String(args.pull_request || args.pullRequest || args.number || '').trim();
+                if (!pullRequest) {
+                    return { success: false, error: 'Missing pull_request.' };
+                }
+
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const watch = args.watch === true || args.watch === 'true';
+                const result = await this.githubCli.getPullRequestChecks({ pullRequest, repo, watcher: watch, cwd });
+
+                return result.success
+                    ? {
+                        success: true,
+                        checks: Array.isArray(result.data) ? result.data : [],
+                        count: Array.isArray(result.data) ? result.data.length : 0,
+                        data: result.data,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_pr_review',
+            description: 'Submit a pull request review through GitHub CLI as an approval, comment, or request for changes.',
+            usage: 'github_pr_review(pull_request, event, body?, repo?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const pullRequest = String(args.pull_request || args.pullRequest || args.number || '').trim();
+                if (!pullRequest) {
+                    return { success: false, error: 'Missing pull_request.' };
+                }
+
+                const rawEvent = String(args.event || args.action || '').trim().toUpperCase();
+                const event = rawEvent === 'APPROVE' || rawEvent === 'REQUEST_CHANGES' || rawEvent === 'COMMENT'
+                    ? rawEvent as 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES'
+                    : undefined;
+                if (!event) {
+                    return { success: false, error: 'Missing or invalid event. Use APPROVE, COMMENT, or REQUEST_CHANGES.' };
+                }
+
+                const body = typeof args.body === 'string' ? args.body : undefined;
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const result = await this.githubCli.reviewPullRequest({ pullRequest, event, body, repo, cwd });
+
+                return result.success
+                    ? {
+                        success: true,
+                        output: result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_pr_merge',
+            description: 'Merge a pull request through GitHub CLI using merge, squash, or rebase, with optional auto-merge and branch cleanup flags.',
+            usage: 'github_pr_merge(pull_request, strategy?, subject?, body?, auto?, admin?, delete_branch?, match_head_commit?, repo?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const pullRequest = String(args.pull_request || args.pullRequest || args.number || '').trim();
+                if (!pullRequest) {
+                    return { success: false, error: 'Missing pull_request.' };
+                }
+
+                const strategyRaw = String(args.strategy || '').trim().toLowerCase();
+                const strategy = strategyRaw === 'squash' || strategyRaw === 'rebase' || strategyRaw === 'merge'
+                    ? strategyRaw as 'merge' | 'squash' | 'rebase'
+                    : undefined;
+                const subject = String(args.subject || '').trim() || undefined;
+                const body = typeof args.body === 'string' ? args.body : undefined;
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const matchHeadCommit = String(args.match_head_commit || args.matchHeadCommit || '').trim() || undefined;
+                const auto = args.auto === true || args.auto === 'true';
+                const admin = args.admin === true || args.admin === 'true';
+                const deleteBranch = args.delete_branch === true || args.delete_branch === 'true' || args.deleteBranch === true || args.deleteBranch === 'true';
+
+                const result = await this.githubCli.mergePullRequest({
+                    pullRequest,
+                    strategy,
+                    subject,
+                    body,
+                    auto,
+                    admin,
+                    deleteBranch,
+                    matchHeadCommit,
+                    repo,
+                    cwd,
+                });
+
+                return result.success
+                    ? {
+                        success: true,
+                        output: result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_issue_comment',
+            description: 'Post a comment on a GitHub issue through GitHub CLI.',
+            usage: 'github_issue_comment(issue, body, repo?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const issue = String(args.issue || args.issue_number || args.number || '').trim();
+                const body = String(args.body || args.comment || '').trim();
+                if (!issue) return { success: false, error: 'Missing issue.' };
+                if (!body) return { success: false, error: 'Missing body.' };
+
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const result = await this.githubCli.commentOnIssue({ issue, body, repo, cwd });
+
+                return result.success
+                    ? { success: true, output: result.stdout, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_pr_comment',
+            description: 'Post a comment on a pull request through GitHub CLI.',
+            usage: 'github_pr_comment(pull_request, body, repo?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const pullRequest = String(args.pull_request || args.pullRequest || args.number || '').trim();
+                const body = String(args.body || args.comment || '').trim();
+                if (!pullRequest) return { success: false, error: 'Missing pull_request.' };
+                if (!body) return { success: false, error: 'Missing body.' };
+
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const result = await this.githubCli.commentOnPullRequest({ pullRequest, body, repo, cwd });
+
+                return result.success
+                    ? { success: true, output: result.stdout, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_workflow_dispatch',
+            description: 'Dispatch a GitHub Actions workflow through GitHub CLI with optional ref and input fields.',
+            usage: 'github_workflow_dispatch(workflow, ref?, fields?, repo?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const workflow = String(args.workflow || args.name || '').trim();
+                if (!workflow) return { success: false, error: 'Missing workflow.' };
+
+                const ref = String(args.ref || '').trim() || undefined;
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const fields = typeof args.fields === 'object' && args.fields !== null && !Array.isArray(args.fields)
+                    ? Object.fromEntries(Object.entries(args.fields).map(([key, value]) => [String(key), value as string | number | boolean]))
+                    : undefined;
+                const result = await this.githubCli.dispatchWorkflow({ workflow, ref, repo, cwd, fields });
+
+                return result.success
+                    ? { success: true, output: result.stdout, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_branch_list',
+            description: 'List repository branches through GitHub CLI, with optional repo override and name filtering.',
+            usage: 'github_branch_list(repo?, limit?, query?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const query = String(args.query || args.search || '').trim() || undefined;
+                const limit = Number.isFinite(Number(args.limit)) ? Number(args.limit) : undefined;
+                const result = await this.githubCli.listBranches({ repo, cwd, query, limit });
+
+                return result.success
+                    ? {
+                        success: true,
+                        defaultBranch: result.data?.defaultBranch,
+                        branches: Array.isArray(result.data?.branches) ? result.data.branches : [],
+                        count: Array.isArray(result.data?.branches) ? result.data.branches.length : 0,
+                        data: result.data,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_release_upload_asset',
+            description: 'Upload one or more files to an existing GitHub release through GitHub CLI.',
+            usage: 'github_release_upload_asset(tag, files, repo?, clobber?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const tag = String(args.tag || '').trim();
+                if (!tag) return { success: false, error: 'Missing tag.' };
+
+                const files = Array.isArray(args.files)
+                    ? args.files.map((item: any) => String(item).trim()).filter(Boolean)
+                    : String(args.files || '').split(',').map((item) => item.trim()).filter(Boolean);
+                if (files.length === 0) return { success: false, error: 'Missing files.' };
+
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const clobber = args.clobber === true || args.clobber === 'true';
+                const result = await this.githubCli.uploadReleaseAsset({ tag, files, repo, clobber, cwd });
+
+                return result.success
+                    ? { success: true, output: result.stdout, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_label_list',
+            description: 'List GitHub repository labels through GitHub CLI.',
+            usage: 'github_label_list(repo?, limit?, search?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const search = String(args.search || args.query || '').trim() || undefined;
+                const limit = Number.isFinite(Number(args.limit)) ? Number(args.limit) : undefined;
+                const result = await this.githubCli.listLabels({ repo, cwd, search, limit });
+
+                return result.success
+                    ? { success: true, labels: Array.isArray(result.data) ? result.data : [], count: Array.isArray(result.data) ? result.data.length : 0, data: result.data, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_label_create',
+            description: 'Create or update a GitHub repository label through GitHub CLI.',
+            usage: 'github_label_create(name, color, description?, force?, repo?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const name = String(args.name || '').trim();
+                const color = String(args.color || '').trim();
+                if (!name) return { success: false, error: 'Missing name.' };
+                if (!color) return { success: false, error: 'Missing color.' };
+
+                const description = String(args.description || '').trim() || undefined;
+                const force = args.force === true || args.force === 'true';
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const result = await this.githubCli.createLabel({ name, color, description, force, repo, cwd });
+
+                return result.success
+                    ? { success: true, output: result.stdout, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_label_delete',
+            description: 'Delete a GitHub repository label through GitHub CLI.',
+            usage: 'github_label_delete(name, repo?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const name = String(args.name || '').trim();
+                if (!name) return { success: false, error: 'Missing name.' };
+
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const result = await this.githubCli.deleteLabel({ name, repo, cwd });
+
+                return result.success
+                    ? { success: true, output: result.stdout, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_variable_list',
+            description: 'List GitHub repository variables through GitHub CLI.',
+            usage: 'github_variable_list(repo?, limit?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const limit = Number.isFinite(Number(args.limit)) ? Number(args.limit) : undefined;
+                const result = await this.githubCli.listVariables({ repo, cwd, limit });
+
+                return result.success
+                    ? { success: true, variables: Array.isArray(result.data) ? result.data : [], count: Array.isArray(result.data) ? result.data.length : 0, data: result.data, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_variable_set',
+            description: 'Create or update a GitHub repository variable through GitHub CLI.',
+            usage: 'github_variable_set(name, value, repo?, visibility?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const name = String(args.name || '').trim();
+                const value = String(args.value || '').trim();
+                if (!name) return { success: false, error: 'Missing name.' };
+                if (!value) return { success: false, error: 'Missing value.' };
+
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const visibilityRaw = String(args.visibility || '').trim().toLowerCase();
+                const visibility = visibilityRaw === 'all' || visibilityRaw === 'private' || visibilityRaw === 'selected'
+                    ? visibilityRaw as 'all' | 'private' | 'selected'
+                    : undefined;
+                const result = await this.githubCli.setVariable({ name, value, repo, visibility, cwd });
+
+                return result.success
+                    ? { success: true, output: result.stdout, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_variable_delete',
+            description: 'Delete a GitHub repository variable through GitHub CLI.',
+            usage: 'github_variable_delete(name, repo?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const name = String(args.name || '').trim();
+                if (!name) return { success: false, error: 'Missing name.' };
+
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const result = await this.githubCli.deleteVariable({ name, repo, cwd });
+
+                return result.success
+                    ? { success: true, output: result.stdout, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
             }
         });
 
@@ -9885,6 +10525,21 @@ REFLECTION: <1-2 sentences>`;
     private messageContainsQuestion(message: string): boolean {
         const normalized = message.toLowerCase().trim();
 
+        // Soft follow-up offers are not blocking clarification questions.
+        // They should not pause execution or suppress later explicit clarification tools.
+        const optionalFollowUpPatterns = [
+            /\blet me know if you'd like\b/i,
+            /\blet me know if you want me to\b/i,
+            /\bif you'd like,? i can\b/i,
+            /\bif you want,? i can\b/i,
+            /\bi can also\b/i,
+            /\bwant me to also\b/i,
+            /\bwould you like me to also\b/i,
+        ];
+        if (!normalized.endsWith('?') && optionalFollowUpPatterns.some(pattern => pattern.test(normalized))) {
+            return false;
+        }
+
         // Direct question indicators
         const questionPatterns = [
             /\?$/,  // Ends with question mark
@@ -10643,6 +11298,7 @@ REFLECTION: <1-2 sentences>`;
             clarificationAlreadyAsked: boolean;
             deepToolExecutedSinceLastMessage: boolean;
             messagesSent: number;
+            budgetMessagesSent: number;
             anyUserDeliverySuccess: boolean;
             substantiveDeliveriesSent: number;
             sentMessageCountInStep: number;
@@ -10774,6 +11430,7 @@ REFLECTION: <1-2 sentences>`;
                 if (toolMeta.isSideEffect) {
                     const delivery = this.recordSuccessfulSideEffectDelivery(action, toolCall, resultString, options.successfulSideEffectKeys);
                     state.messagesSent++;
+                    state.budgetMessagesSent++;
                     state.anyUserDeliverySuccess = true;
                     state.sentMessageCountInStep++;
                     state.deepToolExecutedSinceLastMessage = false;
@@ -10850,6 +11507,7 @@ REFLECTION: <1-2 sentences>`;
             clarificationAlreadyAsked: boolean;
             deepToolExecutedSinceLastMessage: boolean;
             messagesSent: number;
+            budgetMessagesSent: number;
             anyUserDeliverySuccess: boolean;
             substantiveDeliveriesSent: number;
             sentMessageCountInStep: number;
@@ -10958,6 +11616,7 @@ REFLECTION: <1-2 sentences>`;
                 if (toolMeta.isSideEffect) {
                     const delivery = this.recordSuccessfulSideEffectDelivery(action, toolCall, resultString, options.successfulSideEffectKeys);
                     state.messagesSent++;
+                    state.budgetMessagesSent++;
                     state.anyUserDeliverySuccess = true;
                     state.deepToolExecutedSinceLastMessage = false;
                     if (delivery.substantiveDelivery) state.substantiveDeliveriesSent++;
@@ -11010,6 +11669,7 @@ REFLECTION: <1-2 sentences>`;
         clarificationAlreadyAsked: boolean;
         deepToolExecutedSinceLastMessage: boolean;
         messagesSent: number;
+        budgetMessagesSent: number;
         anyUserDeliverySuccess: boolean;
         substantiveDeliveriesSent: number;
         lastUserDeliveryAtMs: number;
@@ -11020,6 +11680,7 @@ REFLECTION: <1-2 sentences>`;
         clarificationAlreadyAsked: boolean;
         deepToolExecutedSinceLastMessage: boolean;
         messagesSent: number;
+        budgetMessagesSent: number;
         anyUserDeliverySuccess: boolean;
         substantiveDeliveriesSent: number;
         lastUserDeliveryAtMs: number;
@@ -11031,6 +11692,7 @@ REFLECTION: <1-2 sentences>`;
             clarificationAlreadyAsked: state.clarificationAlreadyAsked,
             deepToolExecutedSinceLastMessage: state.deepToolExecutedSinceLastMessage,
             messagesSent: state.messagesSent,
+            budgetMessagesSent: state.budgetMessagesSent,
             anyUserDeliverySuccess: state.anyUserDeliverySuccess,
             substantiveDeliveriesSent: state.substantiveDeliveriesSent,
             lastUserDeliveryAtMs: state.lastUserDeliveryAtMs,
@@ -15074,6 +15736,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             const MAX_CONSECUTIVE_FAILURES = 3; // Max consecutive failures of same skill before aborting
             let currentStep = 0;
             let messagesSent = 0;
+            let budgetMessagesSent = 0;
             let lastMessageContent = '';
             let lastStepToolSignatures = '';
             let loopCounter = 0;
@@ -15172,13 +15835,13 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     }
                 }
 
-                if (messagesSent >= MAX_MESSAGES) {
-                    logger.warn(`Agent: Message budget reached (${messagesSent}/${MAX_MESSAGES}) for action ${action.id}. Checking if task is truly done...`);
+                if (budgetMessagesSent >= MAX_MESSAGES) {
+                    logger.warn(`Agent: Delivery message budget reached (${budgetMessagesSent}/${MAX_MESSAGES}, visible=${messagesSent}) for action ${action.id}. Checking if task is truly done...`);
 
                     // REVIEW GATE: Don't blindly kill — ask the review layer if task is actually done
                     const budgetReviewResult = await this.reviewForcedTermination(
                         action, 'message_budget', currentStep,
-                        `Message budget reached (${messagesSent}/${MAX_MESSAGES}). Agent has been sending status updates while working.`,
+                        `Delivery message budget reached (${budgetMessagesSent}/${MAX_MESSAGES}) after ${messagesSent} visible messages. Agent may have been sending status updates while working.`,
                         { messagesSent, anyUserDeliverySuccess, substantiveDeliveriesSent }
                     );
 
@@ -15239,6 +15902,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 payload: {
                                     ...action.payload,
                                     messagesSent,
+                                    budgetMessagesSent,
                                     substantiveDeliveriesSent,
                                     messagingLocked: messagesSent > 0,
                                     currentStep,
@@ -15466,6 +16130,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         clarificationAlreadyAsked,
                         deepToolExecutedSinceLastMessage,
                         messagesSent,
+                        budgetMessagesSent,
                         anyUserDeliverySuccess,
                         substantiveDeliveriesSent,
                         sentMessageCountInStep: sentMessageCountInThisStep,
@@ -15504,6 +16169,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 clarificationAlreadyAsked,
                                 deepToolExecutedSinceLastMessage,
                                 messagesSent,
+                                budgetMessagesSent,
                                 anyUserDeliverySuccess,
                                 substantiveDeliveriesSent,
                                 lastUserDeliveryAtMs,
@@ -15550,6 +16216,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 clarificationAlreadyAsked,
                                 deepToolExecutedSinceLastMessage,
                                 messagesSent,
+                                budgetMessagesSent,
                                 anyUserDeliverySuccess,
                                 substantiveDeliveriesSent,
                                 lastUserDeliveryAtMs,
@@ -15626,6 +16293,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     noToolsRetryCount = noToolOutcome.noToolsRetryCount;
                     if (noToolOutcome.forcedDeliverySent) {
                         messagesSent++;
+                        budgetMessagesSent++;
                         anyUserDeliverySuccess = true;
                         substantiveDeliveriesSent++;
                         lastUserDeliveryAtMs = Date.now();
@@ -15719,6 +16387,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                     payload: {
                                         ...action.payload,
                                         messagesSent,
+                                        budgetMessagesSent,
                                         messagingLocked: true,
                                         currentStep,
                                         executionPlan,
@@ -15762,6 +16431,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 clarificationAlreadyAsked,
                                 deepToolExecutedSinceLastMessage,
                                 messagesSent,
+                                budgetMessagesSent,
                                 anyUserDeliverySuccess,
                                 substantiveDeliveriesSent,
                                 sentMessageCountInStep: bonusMsgSentThisStep ? 1 : 0,
@@ -15797,6 +16467,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 clarificationAlreadyAsked,
                                 deepToolExecutedSinceLastMessage,
                                 messagesSent,
+                                budgetMessagesSent,
                                 anyUserDeliverySuccess,
                                 substantiveDeliveriesSent,
                                 lastUserDeliveryAtMs,

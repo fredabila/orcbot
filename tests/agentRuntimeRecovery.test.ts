@@ -756,4 +756,60 @@ describe('Agent runtime recovery supervision', () => {
         expect(executedToolNames).toEqual(['send_voice_note']);
         expect(action.status).toBe('completed');
     });
+
+    it('does not count automatic progress updates against the delivery message budget', async () => {
+        const action = createAction('progress-budget-action');
+        action.payload = {
+            ...action.payload,
+            source: 'telegram',
+            sourceId: 'chat-1',
+            description: 'Investigate a long-running issue and send the final answer when complete.'
+        };
+
+        const decisions = [
+            ...Array.from({ length: 13 }, (_, index) => ({
+                reasoning: `Continue deep work step ${index + 1}.`,
+                verification: { goals_met: false, analysis: 'Still working through the task.' },
+                tools: [{ name: `deep_work_${index + 1}`, metadata: { query: `step-${index + 1}` } }]
+            })),
+            {
+                reasoning: 'Deliver the final answer now that the work is complete.',
+                verification: { goals_met: true, analysis: 'Final answer is ready.' },
+                tools: [{ name: 'send_reply', metadata: { message: 'The issue is fixed. I found the bad config and corrected it.', chatId: 'chat-1' } }]
+            }
+        ];
+
+        const harness = createAgentHarness({
+            action,
+            decisions,
+            taskComplexity: 'standard',
+            configOverrides: {
+                progressFeedbackForceInitial: true,
+                progressFeedbackStepInterval: 2,
+                maxToolRepeats: 50,
+            },
+            getSkill: (name: string) => name === 'send_reply'
+                ? { isSideEffect: true, isSend: true }
+                : { isSideEffect: false, isSend: false, isDeep: true },
+            executeSkill: async (_name: string, metadata: any) => ({ success: true, delivered: metadata?.message || 'ok' })
+        });
+        harness.agent.sendProgressFeedback = vi.fn(async () => true);
+
+        await (harness.agent as any).processNextAction();
+
+        const budgetReviewCalls = harness.agent.reviewForcedTermination.mock.calls
+            .filter((call: any[]) => call[1] === 'message_budget');
+        expect(budgetReviewCalls).toHaveLength(0);
+        expect(harness.agent.sendProgressFeedback).toHaveBeenCalled();
+        expect(harness.executeSkillMock.mock.calls.at(-1)?.[0]).toBe('send_reply');
+        expect(action.status).toBe('completed');
+    });
+
+    it('does not treat optional follow-up offers as blocking clarification questions', () => {
+        const agent = Object.create(Agent.prototype) as any;
+
+        expect(agent.messageContainsQuestion('I found the issue and fixed it. Let me know if you want me to package the patch too.')).toBe(false);
+        expect(agent.messageContainsQuestion('The service is back up. If you would like, I can also add a regression test.')).toBe(false);
+        expect(agent.messageContainsQuestion('I can continue, but what is your store URL?')).toBe(true);
+    });
 });

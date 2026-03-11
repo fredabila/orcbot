@@ -3368,6 +3368,11 @@ async function showToolingMenu() {
     const googleWorkspaceLabel = hasGoogleWorkspace
         ? googleWorkspaceStatus.configuredAccount || googleWorkspaceStatus.binary || 'Installed'
         : 'Not installed';
+    const githubCliStatus = await agent.githubCli.getStatus();
+    const hasGitHubCli = githubCliStatus.installed;
+    const githubCliLabel = hasGitHubCli
+        ? githubCliStatus.binary || 'Installed'
+        : 'Not installed';
 
     console.log('');
     const toolLines = [
@@ -3379,6 +3384,7 @@ async function showToolingMenu() {
         `${statusDot(hasImageGen, '')} ${bold('Image Gen')}    ${hasImageGen ? green(imageGenLabel) : gray('Not set')}`,
         `${statusDot(hasGoogleIdentity, '')} ${bold('Google Identity')} ${hasGoogleIdentity ? green(googleIdentityStatus.email || 'Connected') : gray('Not connected')}`,
         `${statusDot(hasGoogleWorkspace, '')} ${bold('Google Workspace')} ${hasGoogleWorkspace ? green(googleWorkspaceLabel) : gray(googleWorkspaceLabel)}`,
+        `${statusDot(hasGitHubCli, '')} ${bold('GitHub CLI')}   ${hasGitHubCli ? green(githubCliLabel) : gray(githubCliLabel)}`,
     ];
     box(toolLines, { title: '🛠️  TOOL STATUS', width: 52, color: c.yellow });
     console.log('');
@@ -3400,6 +3406,7 @@ async function showToolingMenu() {
                 { name: `  ${statusDot(hasImageGen, '')} 🎨 ${bold('Image Generation')} ${dim(`(${imageGenLabel})`)}`, value: 'imagegen' },
                 { name: `  ${statusDot(hasGoogleIdentity, '')} 🔐 ${bold('Google Identity')} ${dim('(OAuth + Gmail OTP)')}`, value: 'google_identity' },
                 { name: `  ${statusDot(hasGoogleWorkspace, '')} 🏢 ${bold('Google Workspace CLI')} ${dim(`(${googleWorkspaceLabel})`)}`, value: 'google_workspace' },
+                { name: `  ${statusDot(hasGitHubCli, '')} 🐙 ${bold('GitHub CLI')} ${dim(`(${githubCliLabel})`)}`, value: 'github_cli' },
                 new inquirer.Separator(gradient('  ──────────────────────────────────', [c.yellow, c.gray])),
                 { name: dim('  ← Back'), value: 'back' }
             ]
@@ -3549,6 +3556,9 @@ async function showToolingMenu() {
         return;
     } else if (tool === 'google_workspace') {
         await showGoogleWorkspaceCliMenu();
+        return;
+    } else if (tool === 'github_cli') {
+        await showGitHubCliMenu();
         return;
     }
 
@@ -3836,6 +3846,645 @@ async function showGoogleWorkspaceCliMenu() {
 
     await waitKeyPress();
     return showGoogleWorkspaceCliMenu();
+}
+
+async function showGitHubCliMenu() {
+    console.clear();
+    banner();
+    sectionHeader('🐙', 'GitHub CLI (gh)');
+
+    const status = await agent.githubCli.getStatus();
+    const configuredPath = String(agent.config.get('githubCliPath') || '').trim();
+    const defaultCwd = process.cwd();
+    const binarySource = configuredPath ? 'config override' : 'PATH auto-detect';
+
+    console.log('');
+    box([
+        `${dim('Installed')}      ${status.installed ? green('● yes') : gray('○ no')}`,
+        `${dim('Binary')}         ${status.binary ? cyan(status.binary) : gray(configuredPath || '(not found)')}`,
+        `${dim('Binary Source')}  ${status.binary ? green(binarySource) : gray(binarySource)}`,
+        `${dim('Config Path')}    ${configuredPath ? cyan(configuredPath) : gray('(none, using auto-detect)')}`,
+        `${dim('Auth')}           ${status.authError ? yellow('check needed') : status.authStatus ? green('looks ready') : gray('(unknown)')}`,
+        `${dim('Workspace')}      ${cyan(defaultCwd)}`,
+    ], { title: 'GITHUB CLI STATUS', width: 68, color: status.installed ? c.green : c.yellow });
+    console.log('');
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: cyan('GitHub CLI Options:'),
+            choices: [
+                { name: `  ⚙️ ${bold('Set Binary Path Override')}`, value: 'configure' },
+                { name: `  🧭 ${bold('Use Auto-Detect From PATH')}`, value: 'auto_detect' },
+                { name: `  🔑 ${bold('Run gh auth login')}`, value: 'auth_login' },
+                { name: `  📋 ${bold('Show Auth Status Details')}`, value: 'auth_status' },
+                { name: `  🌿 ${bold('List Pull Requests')}`, value: 'pr_list' },
+                { name: `  🌱 ${bold('List Branches')}`, value: 'branch_list' },
+                { name: `  🏷️ ${bold('List Labels')}`, value: 'label_list' },
+                { name: `  ➕ ${bold('Create Label')}`, value: 'label_create' },
+                { name: `  🗑️ ${bold('Delete Label')}`, value: 'label_delete' },
+                { name: `  ✅ ${bold('Show PR Checks')}`, value: 'pr_checks' },
+                { name: `  📝 ${bold('Review Pull Request')}`, value: 'pr_review' },
+                { name: `  💬 ${bold('Comment On Pull Request')}`, value: 'pr_comment' },
+                { name: `  🔀 ${bold('Merge Pull Request')}`, value: 'pr_merge' },
+                { name: `  🏷️ ${bold('List Releases')}`, value: 'release_list' },
+                { name: `  📦 ${bold('Upload Release Asset')}`, value: 'release_upload_asset' },
+                { name: `  📋 ${bold('List Variables')}`, value: 'variable_list' },
+                { name: `  ✏️ ${bold('Set Variable')}`, value: 'variable_set' },
+                { name: `  ❌ ${bold('Delete Variable')}`, value: 'variable_delete' },
+                { name: `  🧪 ${bold('List Workflow Runs')}`, value: 'workflow_runs' },
+                { name: `  ▶️ ${bold('Dispatch Workflow')}`, value: 'workflow_dispatch' },
+                { name: `  🔁 ${bold('Rerun Workflow Run')}`, value: 'workflow_rerun' },
+                { name: `  🐞 ${bold('Create Issue')}`, value: 'issue_create' },
+                { name: `  💭 ${bold('Comment On Issue')}`, value: 'issue_comment' },
+                { name: `  🚀 ${bold('Create Release')}`, value: 'release_create' },
+                { name: `  ℹ️ ${bold('Show Setup Help')}`, value: 'help' },
+                { name: dim('  ← Back'), value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showToolingMenu();
+
+    const runInteractiveGh = (args: string[], cwd?: string) => {
+        const binary = agent.githubCli.findBinary() || configuredPath;
+        if (!binary) {
+            console.log('\n❌ GitHub CLI is not installed or not configured yet.');
+            return;
+        }
+
+        const result = spawnSync(binary, args, { stdio: 'inherit', cwd: cwd || defaultCwd });
+        if (result.error) {
+            console.log(`\n❌ ${result.error.message}`);
+            return;
+        }
+        if (typeof result.status === 'number' && result.status !== 0) {
+            console.log(`\n⚠️ Command exited with status ${result.status}.`);
+        }
+    };
+
+    if (action === 'configure') {
+        const ans = await inquirer.prompt([
+            {
+                type: 'input',
+                name: 'binaryPath',
+                message: 'gh binary path override or command (leave blank to keep current override):',
+                default: configuredPath
+            }
+        ]);
+
+        const binaryPath = String(ans.binaryPath || '').trim();
+        agent.config.set('githubCliPath' as any, binaryPath || undefined);
+        agent.githubCli.invalidateBinaryCache();
+        console.log(`\n✅ GitHub CLI override ${binaryPath ? 'updated' : 'cleared; auto-detect will be used'}.`);
+    } else if (action === 'auto_detect') {
+        agent.config.set('githubCliPath' as any, undefined);
+        agent.githubCli.invalidateBinaryCache();
+        const refreshed = await agent.githubCli.getStatus();
+        console.log(`\n✅ Auto-detect enabled.${refreshed.binary ? ` Found: ${refreshed.binary}` : ' gh was not found on PATH.'}`);
+    } else if (action === 'auth_login') {
+        runInteractiveGh(['auth', 'login']);
+    } else if (action === 'auth_status') {
+        const latestStatus = await agent.githubCli.getStatus();
+        console.log('');
+        console.log(dim('Installed:'), latestStatus.installed ? green('yes') : red('no'));
+        if (latestStatus.binary) console.log(dim('Binary:'), latestStatus.binary);
+        if (latestStatus.authError) {
+            console.log(dim('Auth error:'), yellow(String(latestStatus.authError)));
+        } else if (latestStatus.authStatus) {
+            console.log(dim('Auth status:'));
+            console.log(typeof latestStatus.authStatus === 'string'
+                ? latestStatus.authStatus
+                : JSON.stringify(latestStatus.authStatus, null, 2));
+        } else {
+            console.log(dim('Auth status:'), gray('No auth information returned.'));
+        }
+    } else if (action === 'pr_list') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'list', name: 'state', message: 'PR state:', choices: ['open', 'closed', 'merged', 'all'], default: 'open' },
+            { type: 'number', name: 'limit', message: 'Limit:', default: 10 }
+        ]);
+
+        const result = await agent.githubCli.listPullRequests({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            state: String(ans.state || 'open'),
+            limit: Number(ans.limit) || 10,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            const pullRequests = Array.isArray(result.data) ? result.data : [];
+            console.log(`\n✅ Found ${pullRequests.length} pull request(s).`);
+            for (const pr of pullRequests) {
+                console.log(`${pr.number}. ${pr.title} ${dim(`| ${pr.state}${pr.isDraft ? ', draft' : ''}`)}`);
+                console.log(`   ${dim(`${pr.headRefName} → ${pr.baseRefName}`)}`);
+                if (pr.url) console.log(`   ${cyan(pr.url)}`);
+            }
+        }
+    } else if (action === 'branch_list') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'query', message: 'Branch name contains (optional):', default: '' },
+            { type: 'number', name: 'limit', message: 'Limit:', default: 20 }
+        ]);
+
+        const result = await agent.githubCli.listBranches({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            query: String(ans.query || '').trim() || undefined,
+            limit: Number(ans.limit) || 20,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            const branches = Array.isArray(result.data?.branches) ? result.data.branches : [];
+            const defaultBranch = result.data?.defaultBranch;
+            console.log(`\n✅ Found ${branches.length} branch(es).`);
+            if (defaultBranch) console.log(`${dim('Default branch:')} ${cyan(defaultBranch)}`);
+            for (const branch of branches) {
+                const isDefault = defaultBranch && branch?.name === defaultBranch;
+                console.log(`${branch.name}${isDefault ? ` ${dim('(default)')}` : ''}`);
+            }
+        }
+    } else if (action === 'label_list') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'search', message: 'Label name contains (optional):', default: '' },
+            { type: 'number', name: 'limit', message: 'Limit:', default: 20 }
+        ]);
+
+        const result = await agent.githubCli.listLabels({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            search: String(ans.search || '').trim() || undefined,
+            limit: Number(ans.limit) || 20,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            const labels = Array.isArray(result.data) ? result.data : [];
+            console.log(`\n✅ Found ${labels.length} label(s).`);
+            for (const label of labels) {
+                console.log(`${label.name} ${dim(`#${label.color || 'unknown'}`)}`);
+                if (label.description) console.log(`   ${dim(label.description)}`);
+            }
+        }
+    } else if (action === 'label_create') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'name', message: 'Label name:' },
+            { type: 'input', name: 'color', message: 'Hex color without # (example: ff0000):' },
+            { type: 'input', name: 'description', message: 'Description (optional):', default: '' },
+            { type: 'confirm', name: 'force', message: 'Update if label already exists?', default: true },
+        ]);
+
+        const result = await agent.githubCli.createLabel({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            name: String(ans.name || '').trim(),
+            color: String(ans.color || '').trim(),
+            description: String(ans.description || '').trim() || undefined,
+            force: !!ans.force,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Label command submitted.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'label_delete') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'name', message: 'Label name to delete:' },
+        ]);
+
+        const result = await agent.githubCli.deleteLabel({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            name: String(ans.name || '').trim(),
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Label delete command submitted.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'pr_checks') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'pullRequest', message: 'Pull request number or branch:' },
+        ]);
+
+        const result = await agent.githubCli.getPullRequestChecks({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            pullRequest: String(ans.pullRequest || '').trim(),
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            const checks = Array.isArray(result.data) ? result.data : [];
+            console.log(`\n✅ Found ${checks.length} check(s).`);
+            for (const check of checks) {
+                console.log(`${check.name} ${dim(`| ${check.state}${check.bucket ? `, ${check.bucket}` : ''}`)}`);
+                if (check.description) console.log(`   ${dim(check.description)}`);
+                if (check.link) console.log(`   ${cyan(check.link)}`);
+            }
+        }
+    } else if (action === 'pr_review') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'pullRequest', message: 'Pull request number or branch:' },
+            { type: 'list', name: 'event', message: 'Review action:', choices: ['APPROVE', 'COMMENT', 'REQUEST_CHANGES'], default: 'APPROVE' },
+            { type: 'editor', name: 'body', message: 'Review body (optional):' },
+        ]);
+
+        const result = await agent.githubCli.reviewPullRequest({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            pullRequest: String(ans.pullRequest || '').trim(),
+            event: String(ans.event || 'APPROVE') as 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES',
+            body: String(ans.body || '').trim() || undefined,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Pull request review submitted.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'pr_comment') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'pullRequest', message: 'Pull request number or branch:' },
+            { type: 'editor', name: 'body', message: 'Comment body:' },
+        ]);
+
+        const result = await agent.githubCli.commentOnPullRequest({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            pullRequest: String(ans.pullRequest || '').trim(),
+            body: String(ans.body || '').trim(),
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Pull request comment submitted.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'pr_merge') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'pullRequest', message: 'Pull request number or branch:' },
+            { type: 'list', name: 'strategy', message: 'Merge strategy:', choices: ['merge', 'squash', 'rebase'], default: 'merge' },
+            { type: 'input', name: 'subject', message: 'Commit subject (optional):', default: '' },
+            { type: 'editor', name: 'body', message: 'Commit body / merge body (optional):' },
+            { type: 'confirm', name: 'auto', message: 'Enable auto-merge?', default: false },
+            { type: 'confirm', name: 'admin', message: 'Use admin override?', default: false },
+            { type: 'confirm', name: 'deleteBranch', message: 'Delete branch after merge?', default: true },
+            { type: 'input', name: 'matchHeadCommit', message: 'Match head commit SHA (optional):', default: '' },
+        ]);
+
+        const result = await agent.githubCli.mergePullRequest({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            pullRequest: String(ans.pullRequest || '').trim(),
+            strategy: String(ans.strategy || 'merge') as 'merge' | 'squash' | 'rebase',
+            subject: String(ans.subject || '').trim() || undefined,
+            body: String(ans.body || '').trim() || undefined,
+            auto: !!ans.auto,
+            admin: !!ans.admin,
+            deleteBranch: !!ans.deleteBranch,
+            matchHeadCommit: String(ans.matchHeadCommit || '').trim() || undefined,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Pull request merge command submitted.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'release_list') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'number', name: 'limit', message: 'Limit:', default: 10 }
+        ]);
+
+        const result = await agent.githubCli.listReleases({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            limit: Number(ans.limit) || 10,
+        });
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            const releases = Array.isArray(result.data) ? result.data : [];
+            console.log(`\n✅ Found ${releases.length} release(s).`);
+            for (const release of releases) {
+                const title = release.name || release.tagName;
+                const status = release.isDraft ? 'draft' : release.isPrerelease ? 'prerelease' : 'published';
+                const flags = release.isLatest ? ', latest' : release.isImmutable ? ', immutable' : '';
+                console.log(`${title} ${dim(`| ${status}${flags}`)}`);
+                if (release.tagName) console.log(`   ${dim(`tag: ${release.tagName}`)}`);
+                if (release.publishedAt || release.createdAt) console.log(`   ${dim(`time: ${release.publishedAt || release.createdAt}`)}`);
+            }
+        }
+    } else if (action === 'release_upload_asset') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'tag', message: 'Release tag:' },
+            { type: 'input', name: 'files', message: 'Files to upload (comma-separated paths):' },
+            { type: 'confirm', name: 'clobber', message: 'Overwrite asset if it already exists?', default: false },
+        ]);
+
+        const result = await agent.githubCli.uploadReleaseAsset({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            tag: String(ans.tag || '').trim(),
+            files: String(ans.files || '').split(',').map((item) => item.trim()).filter(Boolean),
+            clobber: !!ans.clobber,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Release asset upload requested.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'variable_list') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'number', name: 'limit', message: 'Limit:', default: 20 }
+        ]);
+
+        const result = await agent.githubCli.listVariables({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            limit: Number(ans.limit) || 20,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            const variables = Array.isArray(result.data) ? result.data : [];
+            console.log(`\n✅ Found ${variables.length} variable(s).`);
+            for (const variable of variables) {
+                console.log(`${variable.name} ${dim(`| ${variable.visibility || 'repo'}`)}`);
+                if (variable.value) console.log(`   ${dim(variable.value)}`);
+            }
+        }
+    } else if (action === 'variable_set') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'name', message: 'Variable name:' },
+            { type: 'editor', name: 'value', message: 'Variable value:' },
+            { type: 'list', name: 'visibility', message: 'Visibility (optional):', choices: ['', 'all', 'private', 'selected'], default: '' },
+        ]);
+
+        const result = await agent.githubCli.setVariable({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            name: String(ans.name || '').trim(),
+            value: String(ans.value || '').trim(),
+            visibility: ((): 'all' | 'private' | 'selected' | undefined => {
+                const value = String(ans.visibility || '').trim();
+                return value === 'all' || value === 'private' || value === 'selected'
+                    ? value
+                    : undefined;
+            })(),
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Variable set command submitted.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'variable_delete') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'name', message: 'Variable name to delete:' },
+        ]);
+
+        const result = await agent.githubCli.deleteVariable({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            name: String(ans.name || '').trim(),
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Variable delete command submitted.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'workflow_runs') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'workflow', message: 'Workflow name/file (optional):', default: '' },
+            { type: 'input', name: 'branch', message: 'Branch (optional):', default: '' },
+            { type: 'list', name: 'status', message: 'Status filter:', choices: ['', 'queued', 'completed', 'in_progress', 'requested', 'waiting', 'pending', 'action_required', 'cancelled', 'failure', 'neutral', 'skipped', 'stale', 'startup_failure', 'success', 'timed_out'], default: '' },
+            { type: 'number', name: 'limit', message: 'Limit:', default: 10 },
+        ]);
+
+        const result = await agent.githubCli.listWorkflowRuns({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            workflow: String(ans.workflow || '').trim() || undefined,
+            branch: String(ans.branch || '').trim() || undefined,
+            status: String(ans.status || '').trim() || undefined,
+            limit: Number(ans.limit) || 10,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            const runs = Array.isArray(result.data) ? result.data : [];
+            console.log(`\n✅ Found ${runs.length} workflow run(s).`);
+            for (const run of runs) {
+                const name = run.workflowName || run.name || 'Workflow';
+                console.log(`${run.databaseId}. ${name} ${dim(`| ${run.status}${run.conclusion ? `, ${run.conclusion}` : ''}`)}`);
+                console.log(`   ${dim(`${run.headBranch || 'unknown branch'} • ${run.displayTitle || 'no title'}`)}`);
+                if (run.url) console.log(`   ${cyan(run.url)}`);
+            }
+        }
+    } else if (action === 'workflow_dispatch') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'workflow', message: 'Workflow name or file:' },
+            { type: 'input', name: 'ref', message: 'Git ref (optional):', default: '' },
+            { type: 'editor', name: 'fields', message: 'Workflow fields as JSON object (optional):' },
+        ]);
+
+        let fields: Record<string, string | number | boolean> | undefined;
+        const rawFields = String(ans.fields || '').trim();
+        if (rawFields) {
+            try {
+                const parsed = JSON.parse(rawFields);
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    fields = parsed as Record<string, string | number | boolean>;
+                } else {
+                    console.log('\n❌ Fields JSON must be an object.');
+                    await waitKeyPress();
+                    return showGitHubCliMenu();
+                }
+            } catch (e: any) {
+                console.log(`\n❌ Invalid fields JSON: ${e.message}`);
+                await waitKeyPress();
+                return showGitHubCliMenu();
+            }
+        }
+
+        const result = await agent.githubCli.dispatchWorkflow({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            workflow: String(ans.workflow || '').trim(),
+            ref: String(ans.ref || '').trim() || undefined,
+            fields,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Workflow dispatch requested.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'workflow_rerun') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'runId', message: 'Workflow run ID:' },
+            { type: 'confirm', name: 'failed', message: 'Rerun failed jobs only?', default: false },
+        ]);
+
+        const result = await agent.githubCli.rerunWorkflowRun({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            runId: String(ans.runId || '').trim(),
+            failed: !!ans.failed,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Workflow rerun requested.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'issue_create') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'title', message: 'Issue title:' },
+            { type: 'editor', name: 'body', message: 'Issue body:' },
+            { type: 'input', name: 'labels', message: 'Labels (comma-separated, optional):', default: '' },
+            { type: 'input', name: 'assignees', message: 'Assignees (comma-separated, optional):', default: '' },
+        ]);
+
+        const result = await agent.githubCli.createIssue({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            title: String(ans.title || '').trim(),
+            body: String(ans.body || ''),
+            labels: String(ans.labels || '').split(',').map((value) => value.trim()).filter(Boolean),
+            assignees: String(ans.assignees || '').split(',').map((value) => value.trim()).filter(Boolean),
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ GitHub issue created.');
+            if (result.data?.url) console.log(cyan(result.data.url));
+        }
+    } else if (action === 'issue_comment') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'issue', message: 'Issue number:' },
+            { type: 'editor', name: 'body', message: 'Comment body:' },
+        ]);
+
+        const result = await agent.githubCli.commentOnIssue({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            issue: String(ans.issue || '').trim(),
+            body: String(ans.body || '').trim(),
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ GitHub issue comment submitted.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'release_create') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'tag', message: 'Release tag (example: v1.0.8):' },
+            { type: 'input', name: 'title', message: 'Release title (optional):', default: '' },
+            { type: 'editor', name: 'notes', message: 'Release notes (leave blank to use generated notes):' },
+            { type: 'input', name: 'target', message: 'Target branch/commit (optional):', default: '' },
+            { type: 'confirm', name: 'draft', message: 'Create as draft?', default: false },
+            { type: 'confirm', name: 'prerelease', message: 'Mark as prerelease?', default: false },
+        ]);
+
+        const notes = String(ans.notes || '');
+        const result = await agent.githubCli.createRelease({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            tag: String(ans.tag || '').trim(),
+            title: String(ans.title || '').trim() || undefined,
+            notes: notes.trim() || undefined,
+            target: String(ans.target || '').trim() || undefined,
+            draft: !!ans.draft,
+            prerelease: !!ans.prerelease,
+            generateNotes: !notes.trim(),
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ GitHub release created.');
+            if (result.data?.url) console.log(cyan(result.data.url));
+        }
+    } else if (action === 'help') {
+        console.log('');
+        console.log(`${bold('Install:')} https://cli.github.com/`);
+        console.log(`${bold('Auto-detect:')} if ${cyan('gh')} is already on your PATH, OrcBot will use it automatically.`);
+        console.log(`${bold('Binary path override:')} only set this when you want OrcBot to use a specific gh executable.`);
+        console.log(`${bold('Auth:')} run ${cyan('gh auth login')} and choose the account you want OrcBot to use.`);
+        console.log(`${bold('Repo context:')} by default, commands run in the current workspace. Use repo override when targeting another repository.`);
+        console.log(`${bold('Agent skills:')} github_branch_list, github_label_list, github_label_create, github_label_delete, github_pr_list, github_pr_checks, github_pr_review, github_pr_comment, github_pr_merge, github_issue_create, github_issue_comment, github_release_create, github_release_upload_asset, github_variable_list, github_variable_set, github_variable_delete, github_workflow_runs, github_workflow_dispatch, github_workflow_rerun, plus github_cli_command for raw structured access.`);
+    }
+
+    await waitKeyPress();
+    return showGitHubCliMenu();
 }
 
 async function showGatewayMenu() {

@@ -51,6 +51,13 @@ export class ConfigPolicy {
             reason: 'Non-sensitive local tool path configuration',
             validation: (value: any) => typeof value === 'string' && value.length > 0
         }],
+        ['githubCliPath', {
+            key: 'githubCliPath',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Path to the GitHub CLI binary',
+            reason: 'Non-sensitive local tool path configuration',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
         ['googleWorkspaceCliAccount', {
             key: 'googleWorkspaceCliAccount',
             level: ConfigChangeLevel.SAFE,

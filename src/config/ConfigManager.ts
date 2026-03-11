@@ -125,6 +125,7 @@ export class ConfigManager {
             googleOAuthClientId: process.env.GOOGLE_OAUTH_CLIENT_ID,
             googleOAuthClientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET,
             googleOAuthRedirectUri: process.env.GOOGLE_OAUTH_REDIRECT_URI,
+            githubCliPath: process.env.GITHUB_CLI_PATH,
             googleWorkspaceCliPath: process.env.GOOGLE_WORKSPACE_CLI_PATH,
             googleWorkspaceCliAccount: process.env.GOOGLE_WORKSPACE_CLI_ACCOUNT,
             nvidiaApiKey: process.env.NVIDIA_API_KEY,

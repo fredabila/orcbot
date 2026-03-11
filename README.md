@@ -585,6 +585,7 @@ Key settings (excerpt):
 - `openrouterApiKey`: API key for OpenRouter (access 200+ models)
 - `googleOAuthClientId`, `googleOAuthClientSecret`, `googleOAuthRedirectUri`: Google identity service settings for Gmail-backed auth workflows
 - `googleWorkspaceCliPath`, `googleWorkspaceCliAccount`: Optional Google Workspace CLI binary path and default account selector
+- `githubCliPath`: Optional GitHub CLI binary path if `gh` is not already on PATH
 - `telegramToken` / `whatsappEnabled`
 - `maxStepsPerAction`, `maxMessagesPerAction`, `messageDedupWindow`
 - `autonomyEnabled`, `autonomyInterval`, `autonomyBacklogLimit`
