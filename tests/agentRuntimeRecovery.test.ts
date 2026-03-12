@@ -382,6 +382,11 @@ describe('Agent runtime recovery supervision', () => {
                 ]
             },
             {
+                reasoning: 'Try a recovery path after the failure.',
+                verification: { goals_met: false, analysis: 'Need one real recovery step' },
+                tools: [{ name: 'recover_alpha', metadata: { command: 'fallback-op' } }]
+            },
+            {
                 reasoning: 'Recovered after failure.',
                 verification: { goals_met: true, analysis: 'Done after replanning' },
                 tools: []
@@ -399,9 +404,10 @@ describe('Agent runtime recovery supervision', () => {
 
         await (harness.agent as any).processNextAction();
 
-        expect(harness.decisionMock).toHaveBeenCalledTimes(2);
+        expect(harness.decisionMock).toHaveBeenCalledTimes(3);
         const executedToolNames = harness.executeSkillMock.mock.calls.map(call => call[0]);
         expect(executedToolNames[0]).toBe('alpha');
+        expect(executedToolNames).toContain('recover_alpha');
         expect(executedToolNames).not.toContain('beta');
 
         const workflowSignal = harness.savedMemories.find(entry => entry.content.includes('WORKFLOW_SIGNAL'));
@@ -805,11 +811,257 @@ describe('Agent runtime recovery supervision', () => {
         expect(action.status).toBe('completed');
     });
 
-    it('does not treat optional follow-up offers as blocking clarification questions', () => {
+    it('does not treat optional follow-up offers as blocking clarification questions', async () => {
         const agent = Object.create(Agent.prototype) as any;
 
         expect(agent.messageContainsQuestion('I found the issue and fixed it. Let me know if you want me to package the patch too.')).toBe(false);
         expect(agent.messageContainsQuestion('The service is back up. If you would like, I can also add a regression test.')).toBe(false);
+        expect(await agent.isBlockingClarificationQuestion('I fixed the issue. Want me to also add a regression test?')).toBe(false);
         expect(agent.messageContainsQuestion('I can continue, but what is your store URL?')).toBe(true);
+        expect(await agent.isBlockingClarificationQuestion('I can continue, but what is your store URL?')).toBe(true);
+    });
+
+    it('uses the fast model to classify ambiguous clarification prompts before falling back to heuristics', async () => {
+        const agent = Object.create(Agent.prototype) as any;
+        agent.llm = {
+            callFast: vi.fn(async (prompt: string) => {
+                if (prompt.includes('Want me to also add a regression test?')) {
+                    return '{"label":"non_blocking","confidence":0.96}';
+                }
+                return '{"label":"blocking","confidence":0.94}';
+            })
+        };
+
+        expect(await agent.isBlockingClarificationQuestion('I fixed the bug. Want me to also add a regression test?')).toBe(false);
+        expect(await agent.isBlockingClarificationQuestion('Before I continue, which environment should I use?')).toBe(true);
+        expect(agent.llm.callFast).toHaveBeenCalledTimes(2);
+    });
+
+    it('uses the fast model to classify acknowledgement vs substantive delivery messages', async () => {
+        const agent = Object.create(Agent.prototype) as any;
+        agent.llm = {
+            callFast: vi.fn(async (prompt: string) => {
+                if (prompt.includes('Still working on it')) {
+                    return '{"label":"acknowledgement","confidence":0.95}';
+                }
+                return '{"label":"substantive","confidence":0.93}';
+            })
+        };
+
+        expect(await agent.classifyDeliveryMessageQuality('Still working on it while I check the logs.')).toBe('acknowledgement');
+        expect(agent.isLikelyAcknowledgementMessage('Still working on it while I check the logs.')).toBe(true);
+
+        expect(await agent.classifyDeliveryMessageQuality('I fixed the config issue and restarted the service successfully.')).toBe('substantive');
+        expect(agent.isSubstantiveDeliveryMessage('I fixed the config issue and restarted the service successfully.')).toBe(true);
+        expect(agent.llm.callFast).toHaveBeenCalledTimes(2);
+    });
+
+    it('primes acknowledgement classification for automatic progress updates', async () => {
+        const agent = Object.create(Agent.prototype) as any;
+        agent.config = {
+            get: (key: string) => {
+                if (key === 'progressFeedbackEnabled') return true;
+                if (key === 'progressFeedbackTypingOnly') return false;
+                return undefined;
+            }
+        };
+        agent.memory = { saveMemory: vi.fn() };
+        agent.telegram = { sendMessage: vi.fn(async () => true) };
+        agent.llm = {
+            callFast: vi.fn(async () => '{"label":"acknowledgement","confidence":0.97}')
+        };
+
+        const sent = await agent.sendProgressFeedback({
+            id: 'progress-prime-action',
+            type: 'task',
+            priority: 1,
+            lane: 'user',
+            status: 'pending',
+            timestamp: new Date().toISOString(),
+            payload: { source: 'telegram', sourceId: 'chat-1', chatId: 'chat-1' }
+        }, 'working', 'Still working on your request (step 3)...');
+
+        expect(sent).toBe(true);
+        expect(agent.isLikelyAcknowledgementMessage('⚙️ Still working on your request (step 3)...')).toBe(true);
+        expect(agent.llm.callFast).toHaveBeenCalledTimes(1);
+    });
+
+    it('uses the fast model to reject ambiguous final-state reconciliation', async () => {
+        const agent = Object.create(Agent.prototype) as any;
+        agent.llm = {
+            callFast: vi.fn(async () => '{"reconcile":"no","confidence":0.94,"reason":"The user only received an interim finding and still lacks a final completion answer."}')
+        };
+
+        const decision = await agent.reviewDeliveryReconciliation(createAction('reconcile-review'), {
+            deliveryAudit: {
+                delivered: true,
+                reason: 'Substantive delivery was sent',
+                summary: 'Deep work: 1 (1 ok, 0 failed)\nUser messages: 1 (1 delivered)',
+                unresolvedFailures: false,
+                onlySentStatusMessages: false,
+            },
+            messagesSent: 1,
+            substantiveDeliveriesSent: 1,
+            sentMessagesInAction: ['I found the issue in the logs.'],
+            stepLedger: {
+                summarize: () => 'Deep work succeeded, but the message delivered only an intermediate finding.',
+            }
+        });
+
+        expect(decision.shouldReconcile).toBe(false);
+        expect(decision.usedLlm).toBe(true);
+        expect(decision.reason).toContain('interim finding');
+    });
+
+    it('uses the fast model to clear ambiguous completion-audit issues when the user already has the result', async () => {
+        const agent = Object.create(Agent.prototype) as any;
+        agent.llm = {
+            callFast: vi.fn(async () => '{"block":"no","confidence":0.92,"reason":"The user already received the concrete final result, so the audit warning is misleading."}')
+        };
+
+        const review = await agent.reviewCompletionAuditIssues(createAction('completion-audit-review'), {
+            issues: ['Only acknowledgement/status-style messages were sent before completion.'],
+            messagesSent: 1,
+            substantiveDeliveriesSent: 1,
+            sentMessagesInAction: ['Done. I fixed the config issue and restarted the service successfully.'],
+            taskComplexity: 'complex',
+        });
+
+        expect(review.shouldBlock).toBe(false);
+        expect(review.usedLlm).toBe(true);
+    });
+
+    it('keeps silent termination as a hard completion-audit block without asking the model', async () => {
+        const agent = Object.create(Agent.prototype) as any;
+        agent.llm = {
+            callFast: vi.fn(async () => '{"block":"no","confidence":0.99,"reason":"Should not be called."}')
+        };
+
+        const review = await agent.reviewCompletionAuditIssues(createAction('completion-audit-silent'), {
+            issues: ['No user-visible message was sent for this channel task.'],
+            messagesSent: 0,
+            substantiveDeliveriesSent: 0,
+            sentMessagesInAction: [],
+            taskComplexity: 'complex',
+        });
+
+        expect(review.shouldBlock).toBe(true);
+        expect(review.usedLlm).toBe(false);
+        expect(agent.llm.callFast).not.toHaveBeenCalled();
+    });
+
+    it('does not auto-complete an ambiguous channel action when reconciliation review says no', async () => {
+        const action = createAction('ambiguous-reconcile-action');
+        action.payload = {
+            ...action.payload,
+            description: 'Investigate a runtime issue and give the user the actual resolution.',
+            source: 'telegram',
+            sourceId: 'chat-1',
+            chatId: 'chat-1'
+        };
+
+        const harness = createAgentHarness({
+            action,
+            decisions: [
+                {
+                    reasoning: 'Send the interim finding first.',
+                    verification: { goals_met: false, analysis: 'User has an update but not the final fix yet.' },
+                    tools: [{ name: 'send_reply', metadata: { message: 'I found the issue in the logs.', chatId: 'chat-1' } }]
+                },
+                {
+                    reasoning: 'No more tools to run.',
+                    verification: { goals_met: false, analysis: 'Stopping here for now.' },
+                    tools: []
+                },
+                {
+                    reasoning: 'Still no final result.',
+                    verification: { goals_met: false, analysis: 'Stopping here for now.' },
+                    tools: []
+                },
+                {
+                    reasoning: 'Still no final result.',
+                    verification: { goals_met: false, analysis: 'Stopping here for now.' },
+                    tools: []
+                }
+            ],
+            getSkill: (name: string) => name === 'send_reply'
+                ? { isSideEffect: true, isSend: true }
+                : { isSideEffect: false, isSend: false },
+            executeSkill: async (_name: string, metadata: any) => ({ success: true, delivered: metadata?.message })
+        });
+        harness.agent.llm = {
+            callFast: vi.fn(async (prompt: string) => {
+                if (prompt.includes('Classify this message for delivery auditing.')) {
+                    return '{"label":"substantive","confidence":0.93}';
+                }
+                return '{"reconcile":"no","confidence":0.95,"reason":"The user only got an interim finding, not the actual resolution."}';
+            })
+        };
+        harness.agent.isSubstantiveDeliveryMessage = vi.fn((message: string) => message.includes('found the issue'));
+
+        await (harness.agent as any).processNextAction();
+
+        expect(harness.agent.pushTask).toHaveBeenCalled();
+        expect(harness.updateStatusMock).toHaveBeenCalledWith(action.id, 'completed');
+        expect(harness.savedMemories.some(entry => entry.id === `${action.id}-delivery-reconciled`)).toBe(false);
+        expect(harness.savedMemories.some(entry => entry.id === `${action.id}-bounded-recovery-handoff`)).toBe(true);
+    });
+
+    it('queues a bounded recovery handoff for unfinished user-facing actions', async () => {
+        const action = createAction('bounded-recovery-action');
+        action.payload = {
+            ...action.payload,
+            description: 'Investigate the runtime issue and fully fix it for the user.',
+            source: 'telegram',
+            sourceId: 'chat-1',
+            chatId: 'chat-1'
+        };
+
+        const harness = createAgentHarness({
+            action,
+            decisions: [
+                {
+                    reasoning: 'Send a partial update first.',
+                    verification: { goals_met: false, analysis: 'Still investigating.' },
+                    tools: [{ name: 'send_reply', metadata: { message: 'I found part of the issue, still checking the rest.', chatId: 'chat-1' } }]
+                },
+                {
+                    reasoning: 'No more progress in this run.',
+                    verification: { goals_met: false, analysis: 'Stopping here for now.' },
+                    tools: []
+                },
+                {
+                    reasoning: 'No more progress in this run.',
+                    verification: { goals_met: false, analysis: 'Stopping here for now.' },
+                    tools: []
+                },
+                {
+                    reasoning: 'No more progress in this run.',
+                    verification: { goals_met: false, analysis: 'Stopping here for now.' },
+                    tools: []
+                }
+            ],
+            getSkill: (name: string) => name === 'send_reply'
+                ? { isSideEffect: true, isSend: true }
+                : { isSideEffect: false, isSend: false },
+            executeSkill: async (_name: string, metadata: any) => ({ success: true, delivered: metadata?.message })
+        });
+        harness.agent.llm = {
+            callFast: vi.fn(async (prompt: string) => {
+                if (prompt.includes('Classify this message for delivery auditing.')) {
+                    return '{"label":"substantive","confidence":0.91}';
+                }
+                if (prompt.includes('Should the original action be reconciled as COMPLETE right now?')) {
+                    return '{"reconcile":"no","confidence":0.96,"reason":"The user only got a partial update, not the final fix."}';
+                }
+                return '{"block":"yes","confidence":0.94,"reason":"The task is still incomplete and should continue via recovery."}';
+            })
+        };
+
+        await (harness.agent as any).processNextAction();
+
+        expect(harness.agent.pushTask).toHaveBeenCalled();
+        expect(harness.updateStatusMock).toHaveBeenCalledWith(action.id, 'completed');
+        expect(harness.savedMemories.some(entry => entry.id === `${action.id}-bounded-recovery-handoff`)).toBe(true);
     });
 });

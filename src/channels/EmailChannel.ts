@@ -269,7 +269,8 @@ export class EmailChannel implements IChannel {
             return '';
         }
 
-        return fetchOutput.slice(start, start + byteCount).trim();
+        const rawBody = fetchOutput.slice(start, start + byteCount).trim();
+        return rawBody.replace(/\r?\n\)$/, '').trim();
     }
 
     private createSmtpTransporter(): nodemailer.Transporter {

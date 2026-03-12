@@ -25,7 +25,7 @@ describe('Agent channel tool policy', () => {
         agent.discord = { sendMessage: async () => undefined };
 
         const result = agent.evaluateChannelToolPolicy(
-            { payload: { source: 'telegram' }, lane: 'user' },
+            { payload: { source: 'telegram', isAdmin: false }, lane: 'user' },
             'send_discord'
         );
 

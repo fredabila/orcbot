@@ -59,7 +59,7 @@ import { ChannelRegistry } from '../channels/ChannelRegistry';
 import { BlockReviewer, ReviewResult, BlockVerdict } from './BlockReviewer';
 import { parseBrowserPerformActions } from './BrowserPerformParser';
 import { resolveBrowserScratchpadTarget } from './BrowserScratchpad';
-import { collectCompletionAuditIssues, StepLedger, auditDelivery } from './CompletionAudit';
+import { collectCompletionAuditIssues, StepLedger, auditDelivery, type DeliveryAuditResult } from './CompletionAudit';
 import { buildDelegatedTaskFollowupAction } from './DelegatedTaskFollowup';
 import { resolveInboundRoute } from './InboundRouting';
 import { resolveDataHomePath } from '../utils/dataHome';
@@ -138,6 +138,8 @@ export class Agent {
     private worldEventsRefreshRunning: boolean = false;
     private lastWorldEventsSummary: string = '';
     private _blankPageCount: number = 0;
+    private clarificationClassifierCache?: Map<string, { blocking: boolean; expiresAt: number }>;
+    private deliveryMessageClassifierCache?: Map<string, { label: 'acknowledgement' | 'substantive' | 'neutral'; expiresAt: number }>;
     private agentConfigFile: string;
     private selfTraining: SelfTrainingManager;
     private agentIdentity: string = '';
@@ -9764,6 +9766,8 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 return false;
             }
 
+            await this.primeDeliveryMessageClassification(message);
+
             // Save progress messages to memory so the LLM can see them in thread context
             // and knows what status updates it already sent the user.
             const chatId = action.payload?.chatId || sourceId;
@@ -9905,18 +9909,22 @@ The plugin handles all logic internally. See the plugin source for implementatio
         try {
             if (source === 'telegram' && this.telegram) {
                 await this.telegram.sendMessage(sourceId, message);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'whatsapp' && this.whatsapp) {
                 await this.whatsapp.sendMessage(sourceId, message);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'discord' && this.discord) {
                 await this.discord.sendMessage(sourceId, message);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'slack' && this.slack) {
                 await this.slack.sendMessage(sourceId, message);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'email') {
@@ -9924,6 +9932,7 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 if (!emailChannel) return false;
                 const subject = action.payload?.subject ? `Re: ${action.payload.subject}` : 'OrcBot: request update';
                 await emailChannel.sendEmail(sourceId, subject, message, action.payload?.inReplyTo, action.payload?.references);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'gateway-chat') {
@@ -9934,6 +9943,7 @@ The plugin handles all logic internally. See the plugin source for implementatio
                     timestamp: new Date().toISOString(),
                     messageId: `fallback-${Date.now()}`
                 });
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
         } catch (e) {
@@ -10247,11 +10257,157 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 isLikelyAcknowledgementMessage: (message: string) => this.isLikelyAcknowledgementMessage(message)
             });
 
+            if (issues.length > 0) {
+                const completionReview = await this.reviewCompletionAuditIssues(action, {
+                    issues,
+                    messagesSent: context.messagesSent,
+                    substantiveDeliveriesSent: context.substantiveDeliveriesSent,
+                    sentMessagesInAction: context.sentMessagesInAction,
+                    taskComplexity: context.taskComplexity,
+                });
+
+                if (!completionReview.shouldBlock) {
+                    return { ok: true, issues: [] };
+                }
+            }
+
             return { ok: issues.length === 0, issues };
         } catch (e) {
             logger.debug(`Agent: Completion log audit failed (non-blocking): ${e}`);
             return { ok: true, issues: [] };
         }
+    }
+
+    private async reviewCompletionAuditIssues(
+        action: Action,
+        params: {
+            issues: string[];
+            messagesSent: number;
+            substantiveDeliveriesSent: number;
+            sentMessagesInAction: string[];
+            taskComplexity?: string;
+        }
+    ): Promise<{ shouldBlock: boolean; reason: string; usedLlm: boolean }> {
+        const fallback = {
+            shouldBlock: true,
+            reason: params.issues.join(' | '),
+            usedLlm: false,
+        };
+
+        if (params.issues.length === 0) {
+            return { shouldBlock: false, reason: 'No completion audit issues.', usedLlm: false };
+        }
+
+        // Silent termination remains a hard block; there is nothing ambiguous to review.
+        if (params.issues.some(issue => issue.includes('No user-visible message was sent'))) {
+            return fallback;
+        }
+
+        const llm = this.llm;
+        if (!llm?.callFast) {
+            return fallback;
+        }
+
+        try {
+            const taskDescription = typeof action.payload === 'string'
+                ? action.payload
+                : (action.payload?.description || 'Unknown task');
+            const systemPrompt = 'You review whether completion-audit issues should still block an action from being marked complete. Return strict compact JSON only: {"block":"yes|no","confidence":0-1,"reason":"..."}. Choose yes when the user is still missing a real final result. Choose no only when the flagged issues are misleading and the user already received a concrete enough answer, artifact, or resolved outcome.';
+            const userPrompt = `Task: """${taskDescription.slice(0, 500)}"""\nTask complexity: ${String(params.taskComplexity || 'standard')}\nMessages sent: ${params.messagesSent}\nSubstantive deliveries counted: ${params.substantiveDeliveriesSent}\n\nFlagged completion-audit issues:\n${params.issues.map((issue, index) => `${index + 1}. ${issue}`).join('\n')}\n\nRecent user-facing messages:\n${params.sentMessagesInAction.slice(-3).map((message, index) => `${index + 1}. ${message}`).join('\n') || 'NONE'}\n\nShould these issues still BLOCK completion right now?`;
+            const response = await llm.callFast(userPrompt, systemPrompt);
+            const jsonMatch = String(response || '').match(/\{[\s\S]*\}/);
+            const parsed = JSON.parse((jsonMatch ? jsonMatch[0] : response).trim());
+            const block = String(parsed?.block || '').toLowerCase();
+            const confidence = Number(parsed?.confidence ?? 0);
+            const reason = String(parsed?.reason || '').trim();
+
+            if ((block === 'yes' || block === 'no') && Number.isFinite(confidence) && confidence >= 0.6) {
+                return {
+                    shouldBlock: block === 'yes',
+                    reason: reason || fallback.reason,
+                    usedLlm: true,
+                };
+            }
+        } catch (e) {
+            logger.debug(`Agent: Completion audit review failed, using deterministic fallback: ${e}`);
+        }
+
+        return fallback;
+    }
+
+    private shouldReviewDeliveryReconciliation(params: {
+        isUserFacingAction: boolean;
+        goalsMet: boolean;
+        substantiveDeliveriesSent: number;
+        messagesSent: number;
+        sentMessagesInAction: string[];
+        deliveryAudit: DeliveryAuditResult;
+    }): boolean {
+        const {
+            isUserFacingAction,
+            goalsMet,
+            substantiveDeliveriesSent,
+            messagesSent,
+            sentMessagesInAction,
+            deliveryAudit,
+        } = params;
+
+        if (!isUserFacingAction || goalsMet) return false;
+        if (substantiveDeliveriesSent <= 0) return false;
+        if (messagesSent <= 0) return false;
+
+        return true;
+    }
+
+    private async reviewDeliveryReconciliation(
+        action: Action,
+        params: {
+            deliveryAudit: DeliveryAuditResult;
+            messagesSent: number;
+            substantiveDeliveriesSent: number;
+            sentMessagesInAction: string[];
+            stepLedger: StepLedger;
+        }
+    ): Promise<{ shouldReconcile: boolean; reason: string; usedLlm: boolean }> {
+        const fallback = {
+            shouldReconcile: params.deliveryAudit.delivered,
+            reason: params.deliveryAudit.reason,
+            usedLlm: false,
+        };
+
+        const llm = this.llm;
+        if (!llm?.callFast) {
+            return fallback;
+        }
+
+        try {
+            const taskDescription = typeof action.payload === 'string'
+                ? action.payload
+                : (action.payload?.description || 'Unknown task');
+            const recentMessages = params.sentMessagesInAction.slice(-3).map((message, index) => `${index + 1}. ${message}`).join('\n');
+            const systemPrompt = 'You review whether an action should be reconciled as completed after guardrails stopped it. Return strict compact JSON only: {"reconcile":"yes|no","confidence":0-1,"reason":"..."}. Choose yes only if the user already received a concrete enough result, artifact, or answer to consider the task complete. Choose no when the user mainly received status/progress chatter, when the final answer is still missing, or when failures mean follow-up work is still required.';
+            const userPrompt = `Task: """${taskDescription.slice(0, 500)}"""\nMessages sent: ${params.messagesSent}\nSubstantive deliveries counted: ${params.substantiveDeliveriesSent}\nDelivery audit delivered=${params.deliveryAudit.delivered ? 'yes' : 'no'}\nDelivery audit unresolvedFailures=${params.deliveryAudit.unresolvedFailures ? 'yes' : 'no'}\nDelivery audit onlyStatus=${params.deliveryAudit.onlySentStatusMessages ? 'yes' : 'no'}\nDelivery audit reason: ${params.deliveryAudit.reason}\n\nRecent user-facing messages:\n${recentMessages || 'NONE'}\n\nExecution summary:\n${params.stepLedger.summarize().slice(0, 1200)}\n\nShould the original action be reconciled as COMPLETE right now?`;
+            const response = await llm.callFast(userPrompt, systemPrompt);
+            const jsonMatch = String(response || '').match(/\{[\s\S]*\}/);
+            const parsed = JSON.parse((jsonMatch ? jsonMatch[0] : response).trim());
+            const reconcile = String(parsed?.reconcile || '').toLowerCase();
+            const confidence = Number(parsed?.confidence ?? 0);
+            const reason = String(parsed?.reason || '').trim();
+
+            if ((reconcile === 'yes' || reconcile === 'no') && Number.isFinite(confidence)) {
+                if (confidence >= 0.6) {
+                    return {
+                        shouldReconcile: reconcile === 'yes',
+                        reason: reason || params.deliveryAudit.reason,
+                        usedLlm: true,
+                    };
+                }
+            }
+        } catch (e) {
+            logger.debug(`Agent: Delivery reconciliation review failed, using deterministic fallback: ${e}`);
+        }
+
+        return fallback;
     }
 
     // ─── Post-Action Reflection & Learning ───────────────────────────
@@ -10570,6 +10726,97 @@ REFLECTION: <1-2 sentences>`;
             return true;
         }
 
+        return false;
+    }
+
+    private getClarificationClassifierCache(): Map<string, { blocking: boolean; expiresAt: number }> {
+        if (!this.clarificationClassifierCache) {
+            this.clarificationClassifierCache = new Map();
+        }
+        return this.clarificationClassifierCache;
+    }
+
+    private getDeliveryMessageClassifierCache(): Map<string, { label: 'acknowledgement' | 'substantive' | 'neutral'; expiresAt: number }> {
+        if (!this.deliveryMessageClassifierCache) {
+            this.deliveryMessageClassifierCache = new Map();
+        }
+        return this.deliveryMessageClassifierCache;
+    }
+
+    private isBlockingClarificationQuestionHeuristic(message: string): boolean {
+        const normalized = (message || '').toLowerCase().trim();
+        if (!normalized) return false;
+        if (!this.messageContainsQuestion(normalized)) return false;
+
+        const blockingPatterns = [
+            /\b(can|could) you (tell|provide|give|confirm|clarify|share|specify)\b/i,
+            /\bplease (confirm|clarify|specify|tell|share|provide)\b/i,
+            /\blet me know (which|what|whether|if)\b/i,
+            /\bi need (your|the)\b/i,
+            /\bbefore i can\b/i,
+            /\bto continue\b/i,
+            /\bwhat is your\b/i,
+            /\bwhich (one|option|environment|repo|branch|file|path)\b/i,
+            /\bwhat (is|are|should|would|do)\b/i,
+            /\bwhere (is|are|should)\b/i,
+            /\bdo you (want|need|prefer)\b/i,
+            /\bwould you (like|prefer|want)\b/i,
+            /\bshould i\b/i,
+            /\bis that (ok|okay|fine|correct|right)\b/i,
+        ];
+
+        return blockingPatterns.some(pattern => pattern.test(normalized));
+    }
+
+    private async isBlockingClarificationQuestion(message: string): Promise<boolean> {
+        const normalized = (message || '').trim();
+        if (!normalized) return false;
+        if (!this.messageContainsQuestion(normalized)) return false;
+
+        const heuristicVerdict = this.isBlockingClarificationQuestionHeuristic(normalized);
+        const llm = this.llm;
+        if (!llm?.callFast) {
+            return heuristicVerdict;
+        }
+
+        const cacheKey = normalized.toLowerCase();
+        const cache = this.getClarificationClassifierCache();
+        const now = Date.now();
+        const cached = cache.get(cacheKey);
+        if (cached && cached.expiresAt > now) {
+            return cached.blocking;
+        }
+
+        try {
+            const systemPrompt = 'You classify whether an assistant message is asking a blocking clarification question. Return strict compact JSON only: {"label":"blocking|non_blocking","confidence":0-1}. Choose blocking only when the assistant genuinely needs user input before it can continue the current task. Optional follow-up offers, upsells, and post-completion choices are non_blocking.';
+            const userPrompt = `Assistant message:\n"""${normalized.slice(0, 500)}"""\n\nClassify whether this message REQUIRES the user to answer before the assistant can continue the current task.\n\nExamples:\n- blocking: "What is your store URL?"\n- blocking: "Before I continue, which environment should I use?"\n- non_blocking: "I fixed it. Want me to also add tests?"\n- non_blocking: "Let me know if you want me to package the patch too."`;
+            const response = await llm.callFast(userPrompt, systemPrompt);
+            const jsonMatch = String(response || '').match(/\{[\s\S]*\}/);
+            const parsed = JSON.parse((jsonMatch ? jsonMatch[0] : response).trim());
+            const label = String(parsed?.label || '').toLowerCase();
+            const confidence = Number(parsed?.confidence ?? 0);
+
+            if ((label === 'blocking' || label === 'non_blocking') && Number.isFinite(confidence)) {
+                const blocking = confidence >= 0.6
+                    ? label === 'blocking'
+                    : heuristicVerdict;
+                cache.set(cacheKey, { blocking, expiresAt: now + 10 * 60 * 1000 });
+                return blocking;
+            }
+        } catch (e) {
+            logger.debug(`Agent: Clarification classifier failed, using heuristic fallback: ${e}`);
+        }
+
+        cache.set(cacheKey, { blocking: heuristicVerdict, expiresAt: now + 2 * 60 * 1000 });
+        return heuristicVerdict;
+    }
+
+    private async hasBlockingClarificationMessage(messages: string[]): Promise<boolean> {
+        for (const message of messages) {
+            if (await this.isBlockingClarificationQuestion(message)) {
+                return true;
+            }
+        }
         return false;
     }
 
@@ -10896,12 +11143,12 @@ REFLECTION: <1-2 sentences>`;
         });
     }
 
-    private recordSuccessfulSideEffectDelivery(
+    private async recordSuccessfulSideEffectDelivery(
         action: Action,
         toolCall: { name: string; metadata?: any },
         resultString: string,
         successfulSideEffectKeys: Set<string>
-    ): { substantiveDelivery: boolean; outboundMessage: string } {
+    ): Promise<{ substantiveDelivery: boolean; outboundMessage: string }> {
         const toolMetadata = toolCall.metadata || {};
         const sideEffectKey = this.buildSideEffectKey(toolCall.name, toolMetadata);
         successfulSideEffectKeys.add(sideEffectKey);
@@ -10933,8 +11180,19 @@ REFLECTION: <1-2 sentences>`;
             this.lastHeartbeatMessageSentAt = Date.now();
         }
 
+        const deliveryCandidate = outboundMessage || resultString;
+        let deliveryLabel: 'acknowledgement' | 'substantive' | 'neutral' = 'neutral';
+        if (deliveryCandidate) {
+            deliveryLabel = await this.classifyDeliveryMessageQuality(deliveryCandidate);
+            if (outboundMessage && resultString && outboundMessage !== resultString) {
+                // Prime the cache for the tool result string as well, since later audits and
+                // side-effect bookkeeping may inspect either form depending on the tool.
+                await this.classifyDeliveryMessageQuality(resultString);
+            }
+        }
+
         return {
-            substantiveDelivery: this.isSubstantiveDeliveryMessage(resultString),
+            substantiveDelivery: deliveryLabel === 'substantive' || this.isSubstantiveDeliveryMessage(deliveryCandidate),
             outboundMessage
         };
     }
@@ -11163,7 +11421,7 @@ REFLECTION: <1-2 sentences>`;
         };
     }
 
-    private getToolExecutionBlockReason(params: {
+    private async getToolExecutionBlockReason(params: {
         action: Action;
         toolCall: { name: string; metadata?: any };
         toolMeta: { isSend?: boolean; isSideEffect?: boolean };
@@ -11176,7 +11434,7 @@ REFLECTION: <1-2 sentences>`;
         clarificationAlreadyAsked?: boolean;
         applyTurnCooldown?: boolean;
         contextLabel: 'main' | 'bonus';
-    }): string | null {
+    }): Promise<string | null> {
         const {
             action,
             toolCall,
@@ -11220,10 +11478,12 @@ REFLECTION: <1-2 sentences>`;
             return `Blocked redundant tool '${toolCall.name}' due to turn cooldown (action ${action.id})`;
         }
 
+        const priorBlockingClarificationAsked = clarificationAlreadyAsked || await this.hasBlockingClarificationMessage(sentMessagesInAction);
+
         if (
             contextLabel === 'main' &&
             toolCall.name === 'request_supporting_data' &&
-            (clarificationAlreadyAsked || sentMessagesInAction.some(message => this.messageContainsQuestion(message)))
+            priorBlockingClarificationAsked
         ) {
             return `Blocked duplicate clarification request after a prior user-facing question in action ${action.id}`;
         }
@@ -11331,7 +11591,7 @@ REFLECTION: <1-2 sentences>`;
             const isSendTool = options.contextLabel === 'bonus' ? toolMeta.isSideEffect : toolMeta.isSend;
             const remainingQueuedTools = Math.max(0, (options.remainingQueuedToolsOffset || 0) + toolCalls.length - toolIndex - 1);
 
-            const blockReason = this.getToolExecutionBlockReason({
+            const blockReason = await this.getToolExecutionBlockReason({
                 action,
                 toolCall,
                 toolMeta,
@@ -11350,7 +11610,7 @@ REFLECTION: <1-2 sentences>`;
                 if (
                     options.contextLabel === 'main' &&
                     toolCall.name === 'request_supporting_data' &&
-                    (state.clarificationAlreadyAsked || sentMessagesInAction.some(message => this.messageContainsQuestion(message)))
+                    (state.clarificationAlreadyAsked || await this.hasBlockingClarificationMessage(sentMessagesInAction))
                 ) {
                     logger.info(`Agent: ${blockReason}. Reusing the earlier user-facing question and pausing for clarification.`);
                     this.memory.saveMemory({
@@ -11428,7 +11688,7 @@ REFLECTION: <1-2 sentences>`;
                 }
 
                 if (toolMeta.isSideEffect) {
-                    const delivery = this.recordSuccessfulSideEffectDelivery(action, toolCall, resultString, options.successfulSideEffectKeys);
+                    const delivery = await this.recordSuccessfulSideEffectDelivery(action, toolCall, resultString, options.successfulSideEffectKeys);
                     state.messagesSent++;
                     state.budgetMessagesSent++;
                     state.anyUserDeliverySuccess = true;
@@ -11438,7 +11698,7 @@ REFLECTION: <1-2 sentences>`;
                     if (delivery.outboundMessage && !sentMessagesInAction.includes(delivery.outboundMessage)) {
                         sentMessagesInAction.push(delivery.outboundMessage);
                     }
-                    if (delivery.outboundMessage && this.messageContainsQuestion(delivery.outboundMessage)) {
+                    if (delivery.outboundMessage && await this.isBlockingClarificationQuestion(delivery.outboundMessage)) {
                         state.clarificationAlreadyAsked = true;
                     }
 
@@ -11614,13 +11874,13 @@ REFLECTION: <1-2 sentences>`;
                 }
 
                 if (toolMeta.isSideEffect) {
-                    const delivery = this.recordSuccessfulSideEffectDelivery(action, toolCall, resultString, options.successfulSideEffectKeys);
+                    const delivery = await this.recordSuccessfulSideEffectDelivery(action, toolCall, resultString, options.successfulSideEffectKeys);
                     state.messagesSent++;
                     state.budgetMessagesSent++;
                     state.anyUserDeliverySuccess = true;
                     state.deepToolExecutedSinceLastMessage = false;
                     if (delivery.substantiveDelivery) state.substantiveDeliveriesSent++;
-                    if (delivery.outboundMessage && this.messageContainsQuestion(delivery.outboundMessage)) {
+                    if (delivery.outboundMessage && await this.isBlockingClarificationQuestion(delivery.outboundMessage)) {
                         state.clarificationAlreadyAsked = true;
                     }
                 }
@@ -12047,24 +12307,29 @@ REFLECTION: <1-2 sentences>`;
         try {
             if (source === 'telegram' && this.telegram) {
                 await this.telegram.sendMessage(sourceId, message);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'whatsapp' && this.whatsapp) {
                 await this.whatsapp.sendMessage(sourceId, message);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'discord' && this.discord) {
                 await this.discord.sendMessage(sourceId, message);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'slack' && this.slack) {
                 await this.slack.sendMessage(sourceId, message);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'email') {
                 const emailChannel = this.getOrCreateEmailChannel();
                 if (!emailChannel) return false;
                 await emailChannel.sendEmail(sourceId, action.payload?.subject ? `Re: ${action.payload.subject}` : 'OrcBot response', message, action.payload?.inReplyTo, action.payload?.references);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'gateway-chat') {
@@ -12075,6 +12340,7 @@ REFLECTION: <1-2 sentences>`;
                     timestamp: new Date().toISOString(),
                     messageId: `checklist-${Date.now()}`
                 });
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
         } catch (e) {
@@ -12166,7 +12432,7 @@ REFLECTION: <1-2 sentences>`;
     }
 
     private getGuidanceRegexList(configKey: string, fallbackPatterns: string[]): RegExp[] {
-        const raw = this.config.get(configKey);
+        const raw = this.config?.get ? this.config.get(configKey) : undefined;
         const patterns = Array.isArray(raw) && raw.length > 0 ? raw : fallbackPatterns;
         const compiled: RegExp[] = [];
         for (const pattern of patterns) {
@@ -12180,7 +12446,7 @@ REFLECTION: <1-2 sentences>`;
     }
 
     private getGuidanceStopWords(): Set<string> {
-        const raw = this.config.get('guidanceQuestionStopWords');
+        const raw = this.config?.get ? this.config.get('guidanceQuestionStopWords') : undefined;
         const defaults = [
             'the', 'a', 'an', 'and', 'or', 'to', 'for', 'of', 'in', 'on', 'at', 'is', 'are', 'was', 'were',
             'be', 'been', 'being', 'do', 'does', 'did', 'can', 'could', 'would', 'should', 'will', 'please',
@@ -12265,8 +12531,8 @@ REFLECTION: <1-2 sentences>`;
         return false;
     }
 
-    private isRepeatedClarificationQuestion(currentMessage: string, priorMessages: string[]): boolean {
-        if (!this.messageContainsQuestion(currentMessage)) return false;
+    private async isRepeatedClarificationQuestion(currentMessage: string, priorMessages: string[]): Promise<boolean> {
+        if (!await this.isBlockingClarificationQuestion(currentMessage)) return false;
 
         const mode = this.getGuidanceMode();
         const configuredThreshold = Number(this.config.get('guidanceRepeatQuestionThreshold') ?? 0.65);
@@ -12279,7 +12545,7 @@ REFLECTION: <1-2 sentences>`;
 
         const current = (currentMessage || '').trim();
         for (const prior of priorMessages.slice(-6)) {
-            if (!this.messageContainsQuestion(prior)) continue;
+            if (!await this.isBlockingClarificationQuestion(prior)) continue;
             const score = this.questionSimilarity(current, prior);
             if (score >= similarityThreshold) {
                 return true;
@@ -12288,7 +12554,7 @@ REFLECTION: <1-2 sentences>`;
         return false;
     }
 
-    private isLikelyAcknowledgementMessage(message: string): boolean {
+    private isLikelyAcknowledgementMessageHeuristic(message: string): boolean {
         const normalized = (message || '').toLowerCase().trim();
         if (!normalized) return false;
 
@@ -12331,7 +12597,7 @@ REFLECTION: <1-2 sentences>`;
      * Detect whether a sent message is a substantive delivery (not a short status/reassurance).
      * Used by completion gate to avoid terminating after only "working on it"-style replies.
      */
-    private isSubstantiveDeliveryMessage(message: string): boolean {
+    private isSubstantiveDeliveryMessageHeuristic(message: string): boolean {
         const normalized = (message || '').toLowerCase().trim();
         if (!normalized) return false;
 
@@ -12378,6 +12644,85 @@ REFLECTION: <1-2 sentences>`;
         if (/^first part of the execution plan\b/i.test(normalized)) return false;
 
         return true;
+    }
+
+    private getCachedDeliveryMessageLabel(message: string): 'acknowledgement' | 'substantive' | 'neutral' | null {
+        const normalized = (message || '').trim().toLowerCase();
+        if (!normalized) return null;
+        const cache = this.getDeliveryMessageClassifierCache();
+        const cached = cache.get(normalized);
+        if (!cached) return null;
+        if (cached.expiresAt <= Date.now()) {
+            cache.delete(normalized);
+            return null;
+        }
+        return cached.label;
+    }
+
+    private async classifyDeliveryMessageQuality(message: string): Promise<'acknowledgement' | 'substantive' | 'neutral'> {
+        const normalized = (message || '').trim();
+        if (!normalized) return 'neutral';
+
+        const cacheKey = normalized.toLowerCase();
+        const cache = this.getDeliveryMessageClassifierCache();
+        const cached = this.getCachedDeliveryMessageLabel(normalized);
+        if (cached) return cached;
+
+        const heuristicLabel: 'acknowledgement' | 'substantive' | 'neutral' = this.isLikelyAcknowledgementMessageHeuristic(normalized)
+            ? 'acknowledgement'
+            : this.isSubstantiveDeliveryMessageHeuristic(normalized)
+                ? 'substantive'
+                : 'neutral';
+
+        const llm = this.llm;
+        if (!llm?.callFast) {
+            cache.set(cacheKey, { label: heuristicLabel, expiresAt: Date.now() + 2 * 60 * 1000 });
+            return heuristicLabel;
+        }
+
+        try {
+            const systemPrompt = 'You classify assistant delivery messages. Return strict compact JSON only: {"label":"acknowledgement|substantive|neutral","confidence":0-1}. acknowledgement = status update, stall message, promise, or lightweight acknowledgement without concrete deliverable. substantive = concrete answer, completed result, verified finding, delivered artifact, or useful final/partial result. neutral = neither clearly acknowledgement nor clearly substantive.';
+            const userPrompt = `Assistant message:\n"""${normalized.slice(0, 600)}"""\n\nClassify this message for delivery auditing.\n\nExamples:\n- acknowledgement: "I am still working on it."\n- acknowledgement: "Hang tight, checking now."\n- substantive: "I fixed the config issue and restarted the service."\n- substantive: "Here is the branch list: main, dev, release."\n- substantive: "Voice note sent via Telegram to 8077489121"\n- neutral: "Okay."`;
+            const response = await llm.callFast(userPrompt, systemPrompt);
+            const jsonMatch = String(response || '').match(/\{[\s\S]*\}/);
+            const parsed = JSON.parse((jsonMatch ? jsonMatch[0] : response).trim());
+            const label = String(parsed?.label || '').toLowerCase();
+            const confidence = Number(parsed?.confidence ?? 0);
+
+            if ((label === 'acknowledgement' || label === 'substantive' || label === 'neutral') && Number.isFinite(confidence)) {
+                const resolvedLabel = confidence >= 0.6
+                    ? (label as 'acknowledgement' | 'substantive' | 'neutral')
+                    : heuristicLabel;
+                cache.set(cacheKey, { label: resolvedLabel, expiresAt: Date.now() + 10 * 60 * 1000 });
+                return resolvedLabel;
+            }
+        } catch (e) {
+            logger.debug(`Agent: Delivery message classifier failed, using heuristic fallback: ${e}`);
+        }
+
+        cache.set(cacheKey, { label: heuristicLabel, expiresAt: Date.now() + 2 * 60 * 1000 });
+        return heuristicLabel;
+    }
+
+    private async primeDeliveryMessageClassification(message: string): Promise<void> {
+        if (!message) return;
+        try {
+            await this.classifyDeliveryMessageQuality(message);
+        } catch (e) {
+            logger.debug(`Agent: Failed to prime delivery message classification: ${e}`);
+        }
+    }
+
+    private isLikelyAcknowledgementMessage(message: string): boolean {
+        const cached = this.getCachedDeliveryMessageLabel(message);
+        if (cached) return cached === 'acknowledgement';
+        return this.isLikelyAcknowledgementMessageHeuristic(message);
+    }
+
+    private isSubstantiveDeliveryMessage(message: string): boolean {
+        const cached = this.getCachedDeliveryMessageLabel(message);
+        if (cached) return cached === 'substantive';
+        return this.isSubstantiveDeliveryMessageHeuristic(message);
     }
 
     private currentThinkingMessageId: string | null = null;
@@ -16555,17 +16900,44 @@ Respond with a single actionable task description (one sentence). Be specific ab
             }
 
             if (!goalsMet && isUserFacingAction && substantiveDeliveriesSent > 0) {
-                // Use the ledger audit to decide whether reconciliation is appropriate.
-                // Don't reconcile if the audit says work wasn't actually delivered.
-                if (!deliveryAudit.delivered) {
-                    logger.warn(`Agent: Skipping delivery reconciliation for ${action.id} — delivery audit says task not completed: ${deliveryAudit.reason}`);
+                const needsReconciliationReview = this.shouldReviewDeliveryReconciliation({
+                    isUserFacingAction,
+                    goalsMet,
+                    substantiveDeliveriesSent,
+                    messagesSent,
+                    sentMessagesInAction,
+                    deliveryAudit,
+                });
+                const reconciliationDecision = needsReconciliationReview
+                    ? await this.reviewDeliveryReconciliation(action, {
+                        deliveryAudit,
+                        messagesSent,
+                        substantiveDeliveriesSent,
+                        sentMessagesInAction,
+                        stepLedger,
+                    })
+                    : {
+                        shouldReconcile: deliveryAudit.delivered,
+                        reason: deliveryAudit.reason,
+                        usedLlm: false,
+                    };
+
+                if (!reconciliationDecision.shouldReconcile) {
+                    logger.warn(`Agent: Skipping delivery reconciliation for ${action.id} — ${reconciliationDecision.usedLlm ? 'review' : 'delivery audit'} says task not completed: ${reconciliationDecision.reason}`);
                 } else {
-                    logger.warn(`Agent: Reconciled final status to completed for ${action.id} because delivery audit confirmed: ${deliveryAudit.reason}`);
+                    logger.warn(`Agent: Reconciled final status to completed for ${action.id} because ${reconciliationDecision.usedLlm ? 'lightweight review' : 'delivery audit'} confirmed: ${reconciliationDecision.reason}`);
                     this.memory.saveMemory({
                         id: `${action.id}-delivery-reconciled`,
                         type: 'short',
-                        content: `[SYSTEM: Final-state reconciliation: a substantive delivery/message was sent in this action. Marking task completed to avoid false failure due to guardrail exhaustion.]`,
-                        metadata: { actionId: action.id, deliveryReconciled: true, messagesSent, substantiveDeliveriesSent }
+                        content: `[SYSTEM: Final-state reconciliation: a substantive delivery/message was sent in this action. Marking task completed to avoid false failure due to guardrail exhaustion. Basis: ${reconciliationDecision.reason}]`,
+                        metadata: {
+                            actionId: action.id,
+                            deliveryReconciled: true,
+                            reconciliationReason: reconciliationDecision.reason,
+                            reconciliationReviewed: reconciliationDecision.usedLlm,
+                            messagesSent,
+                            substantiveDeliveriesSent
+                        }
                     });
                     goalsMet = true;
                 }
@@ -16649,6 +17021,52 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     }
 
                     goalsMet = false;
+                }
+            }
+
+            if (
+                !goalsMet &&
+                !handedOffToRecovery &&
+                isUserFacingAction &&
+                !waitingForClarification &&
+                action.payload?.trigger !== 'completion_audit_recovery' &&
+                action.payload?.trigger !== 'empty_promise_recovery' &&
+                (messagesSent > 0 || anyUserDeliverySuccess || stepLedger.size > 0)
+            ) {
+                if (this.hasExistingRecoveryTask(
+                    'completion_audit_recovery',
+                    action.id,
+                    action.payload?.source,
+                    action.payload?.sourceId
+                )) {
+                    logger.info(`Agent: Skipping duplicate bounded recovery handoff for ${action.id}; recovery already exists or was recently completed.`);
+                    handedOffToRecovery = true;
+                } else {
+                    const originalDesc = (action.payload?.description || 'unknown task').slice(0, 300);
+                    const lastMessages = sentMessagesInAction.slice(-2).join(' | ');
+                    const recoveryDesc = `RECOVERY for action ${action.id}: The previous attempt at "${originalDesc}" stopped before the task was actually complete. Continue from the recorded execution state, finish the underlying task, and send the concrete final answer to the user. Recent user-facing messages: ${lastMessages || 'NONE'}. Step ledger summary: ${stepLedger.summarize().replace(/\n/g, '; ').slice(0, 800)}`;
+                    await this.pushTask(
+                        recoveryDesc,
+                        9,
+                        {
+                            source: action.payload?.source,
+                            sourceId: action.payload?.sourceId,
+                            chatId: action.payload?.chatId,
+                            userId: action.payload?.userId,
+                            senderName: action.payload?.senderName,
+                            sessionScopeId: action.payload?.sessionScopeId,
+                            trigger: 'completion_audit_recovery',
+                            originalActionId: action.id
+                        },
+                        action.lane === 'autonomy' ? 'autonomy' : 'user'
+                    );
+                    this.memory.saveMemory({
+                        id: `${action.id}-bounded-recovery-handoff`,
+                        type: 'short',
+                        content: `[SYSTEM: BOUNDED RECOVERY HANDOFF] This user-facing action stopped before the task was complete. A bounded recovery task has been queued to continue from the latest execution state and deliver the final answer.]`,
+                        metadata: { actionId: action.id, boundedRecovery: true }
+                    });
+                    handedOffToRecovery = true;
                 }
             }
 

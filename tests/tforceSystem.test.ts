@@ -17,13 +17,15 @@ describe('TForceSystem', () => {
             description: 'Debug a failing build pipeline',
             step: 4,
             noToolSteps: 3,
-            recentTools: ['run_command', 'run_command', 'run_command'],
-            lastError: 'Timeout while executing command'
+            recentTools: ['run_command', 'run_command', 'run_command', 'run_command'],
+            lastError: 'Timeout while executing command',
+            consecutiveFailures: 2
         });
 
         expect(snapshot.memoryHighlights.length).toBeGreaterThan(0);
         expect(snapshot.conscienceGuidance.toLowerCase()).toContain('circling');
-        expect(snapshot.recoveryPlan.join(' ').toLowerCase()).toContain('retry');
+        expect(snapshot.recoveryPlan.join(' ').toLowerCase()).toContain('network recovery');
+        expect(snapshot.recoveryPlan.join(' ').toLowerCase()).toContain('timeout');
         expect(snapshot.shouldEscalate).toBe(true);
     });
 });
