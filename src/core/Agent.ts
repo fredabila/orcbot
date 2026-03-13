@@ -14374,6 +14374,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             let noToolSteps = 0; // Track steps without tool execution
             let lastError: string | undefined;
             const MAX_NO_TOOL_STEPS = 3; // Fail if 3 consecutive steps produce no tools
+            const recentTools: string[] = [];
 
             while (currentStep < MAX_STEPS) {
                 currentStep++;
@@ -14394,7 +14395,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         description: action.payload.description || '',
                         step: currentStep,
                         noToolSteps,
-                        recentTools: [],
+                        recentTools,
                         lastError,
                         totalDurationMs: this.currentActionStartAt ? Date.now() - this.currentActionStartAt : 0,
                         messagesSent: action.payload?.messagesSent || 0
@@ -14424,7 +14425,26 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     if (decision.tools && decision.tools.length > 0) {
                         for (const tool of decision.tools) {
                             logger.info(`runOnce: Final tool execution: ${tool.name}`);
-                            await this.skills.executeSkill(tool.name, tool.metadata || {});
+                            try {
+                                await this.skills.executeSkill(tool.name, tool.metadata || {});
+                                recentTools.push(tool.name);
+                                if (recentTools.length > 8) {
+                                    recentTools.splice(0, recentTools.length - 8);
+                                }
+                            } catch (e) {
+                                lastError = String(e);
+                                if (this.config.get('tforceEnabled') !== false) {
+                                    this.tforce.recordIncident({
+                                        actionId: action.id,
+                                        step: currentStep,
+                                        source: 'tool',
+                                        summary: `Tool failed: ${tool.name}`,
+                                        error: lastError,
+                                        timestamp: new Date().toISOString()
+                                    });
+                                }
+                                throw e;
+                            }
                         }
                     }
                     break;
@@ -14434,7 +14454,26 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     noToolSteps = 0; // Reset counter
                     for (const tool of decision.tools) {
                         logger.info(`runOnce: Executing tool: ${tool.name}`);
-                        await this.skills.executeSkill(tool.name, tool.metadata || {});
+                        try {
+                            await this.skills.executeSkill(tool.name, tool.metadata || {});
+                            recentTools.push(tool.name);
+                            if (recentTools.length > 8) {
+                                recentTools.splice(0, recentTools.length - 8);
+                            }
+                        } catch (e) {
+                            lastError = String(e);
+                            if (this.config.get('tforceEnabled') !== false) {
+                                this.tforce.recordIncident({
+                                    actionId: action.id,
+                                    step: currentStep,
+                                    source: 'tool',
+                                    summary: `Tool failed: ${tool.name}`,
+                                    error: lastError,
+                                    timestamp: new Date().toISOString()
+                                });
+                            }
+                            throw e;
+                        }
                     }
                 } else {
                     noToolSteps++;
@@ -14535,6 +14574,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             let noToolSteps = 0;
             let lastError: string | undefined;
             const MAX_NO_TOOL_STEPS = 3;
+            const recentTools: string[] = [];
 
             // Initialize or reset tracking in the payload
             if (typeof action.payload.messagesSent !== 'number') {
@@ -14560,7 +14600,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         description: action.payload.description || '',
                         step: currentStep,
                         noToolSteps,
-                        recentTools: [],
+                        recentTools,
                         lastError,
                         totalDurationMs: this.currentActionStartAt ? Date.now() - this.currentActionStartAt : 0,
                         messagesSent: action.payload.messagesSent
@@ -14588,11 +14628,26 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             const toolMeta = this.getSkillMeta(tool.name);
                             try {
                                 const toolResult = await this.skills.executeSkill(tool.name, tool.metadata || {});
+                                recentTools.push(tool.name);
+                                if (recentTools.length > 8) {
+                                    recentTools.splice(0, recentTools.length - 8);
+                                }
                                 if (toolMeta.isSideEffect) {
                                     action.payload.messagesSent++;
                                 }
                             } catch (e) {
                                 logger.error(`Error executing skill ${tool.name}: ${e}`);
+                                lastError = String(e);
+                                if (this.config.get('tforceEnabled') !== false) {
+                                    this.tforce.recordIncident({
+                                        actionId: action.id,
+                                        step: currentStep,
+                                        source: 'tool',
+                                        summary: `Tool failed in lane ${lane}: ${tool.name}`,
+                                        error: lastError,
+                                        timestamp: new Date().toISOString()
+                                    });
+                                }
                             }
                         }
                     }
@@ -14620,12 +14675,26 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         const toolMeta = this.getSkillMeta(tool.name);
                         try {
                             const toolResult = await this.skills.executeSkill(tool.name, tool.metadata || {});
+                            recentTools.push(tool.name);
+                            if (recentTools.length > 8) {
+                                recentTools.splice(0, recentTools.length - 8);
+                            }
                             if (toolMeta.isSideEffect) {
                                 action.payload.messagesSent++;
                             }
                         } catch (e) {
                             logger.error(`Error executing skill ${tool.name}: ${e}`);
                             lastError = String(e);
+                            if (this.config.get('tforceEnabled') !== false) {
+                                this.tforce.recordIncident({
+                                    actionId: action.id,
+                                    step: currentStep,
+                                    source: 'tool',
+                                    summary: `Tool failed in lane ${lane}: ${tool.name}`,
+                                    error: lastError,
+                                    timestamp: new Date().toISOString()
+                                });
+                            }
                         }
                     }
                 }

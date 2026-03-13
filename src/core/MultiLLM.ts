@@ -122,6 +122,7 @@ export class MultiLLM {
         this.preferredProvider = config?.llmProvider;
         this.fallbackModelNames = config?.fallbackModelNames || {};
         this.usePiAI = config?.usePiAI ?? false;
+        this.maybePreferPiAiOAuthOverPlaceholderOpenAiKey();
 
         if (this.usePiAI) logger.info('MultiLLM: pi-ai backend enabled');
         logger.info(`MultiLLM: Initialized with model ${this.modelName}`);
@@ -172,8 +173,37 @@ export class MultiLLM {
         if (config.googleLocation !== undefined) this.googleLocation = config.googleLocation;
         if (config.fallbackModelNames !== undefined) this.fallbackModelNames = config.fallbackModelNames;
         if (config.fastModelName !== undefined) this.fastModelName = config.fastModelName;
+        this.maybePreferPiAiOAuthOverPlaceholderOpenAiKey();
 
         logger.info(`MultiLLM: Configuration updated (active model: ${this.modelName}, provider: ${this.preferredProvider || 'auto'})`);
+    }
+
+    private isLikelyPlaceholderOpenAiKey(key: string | undefined): boolean {
+        const normalized = String(key || '').trim().toLowerCase();
+        if (!normalized) return false;
+
+        const placeholderPatterns = [
+            'your_openai',
+            'openai_key_here',
+            'api_key_here',
+            'replace_me',
+            'placeholder',
+            'changeme',
+            'dummy',
+            'example'
+        ];
+
+        return placeholderPatterns.some(pattern => normalized.includes(pattern));
+    }
+
+    private maybePreferPiAiOAuthOverPlaceholderOpenAiKey(): void {
+        if (!this.usePiAI) return;
+        if (!this.openaiKey) return;
+        if (!this.isLikelyPlaceholderOpenAiKey(this.openaiKey)) return;
+        if (!isPiAiLinked('openai-codex')) return;
+
+        logger.warn('MultiLLM: Detected placeholder openaiApiKey while pi-ai openai-codex OAuth is linked. Ignoring placeholder key and using OAuth linkage.');
+        this.openaiKey = undefined;
     }
 
     // ── Fast model for internal reasoning (reviews, reflections, classification) ──
