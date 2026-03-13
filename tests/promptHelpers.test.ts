@@ -223,6 +223,13 @@ describe('ToolingHelper - Enhanced', () => {
         expect(prompt).toContain('Dependency management');
         expect(prompt).toContain('package manager');
     });
+
+    it('should include filesystem grounding guidance', () => {
+        const prompt = helper.getPrompt(makeContext());
+        expect(prompt).toContain('FILESYSTEM GROUNDING RULE');
+        expect(prompt).toContain('Do NOT invent absolute paths or drive letters');
+        expect(prompt).toContain('list_directory()` with no path first');
+    });
 });
 
 describe('BrowserHelper - Enhanced', () => {

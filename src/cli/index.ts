@@ -1078,6 +1078,7 @@ program
         console.log(`Checked: ${report.checkedAt}`);
         console.log(`Data home: ${report.facts.dataHome}`);
         console.log(`Gateway: ${report.facts.gatewayHost}:${report.facts.gatewayPort} ${report.facts.gatewayAuthEnabled ? '(auth enabled)' : '(no auth)'}`);
+        console.log(`MCP HTTP: ${report.facts.mcpHost}:${report.facts.mcpPort}${report.facts.mcpPath} ${report.facts.mcpAuthEnabled ? `(auth enabled via ${report.facts.mcpAuthSource})` : '(no auth)'}`);
         console.log(`Channels: ${report.facts.channelsConfigured.length > 0 ? report.facts.channelsConfigured.join(', ') : 'none'}`);
         console.log(`Providers: ${report.facts.providersConfigured.length > 0 ? report.facts.providersConfigured.join(', ') : 'none'}`);
         console.log('');
@@ -1152,7 +1153,7 @@ securityCommand
     .option('--json', 'Print the report as JSON')
     .action((opts) => {
         const report = collectDoctorReport(agent.config, { deep: !!opts.deep });
-        const securityFindings = report.findings.filter(f => f.area === 'security' || f.area === 'gateway' || f.area === 'channels');
+        const securityFindings = report.findings.filter(f => f.area === 'security' || f.area === 'gateway' || f.area === 'mcp' || f.area === 'channels');
         const filtered = {
             ...report,
             summary: {
@@ -1330,6 +1331,7 @@ program
     .option('-k, --api-key <string>', 'API key for authentication')
     .option('-s, --static <path>', 'Path to static files for dashboard')
     .option('--with-agent', 'Also start the agent loop')
+    .option('--with-mcp', 'Also start the MCP HTTP server on the configured MCP port')
     .option('-b, --background', 'Run gateway in background')
     .option('--background-child', 'Internal: run as background child', false)
     .action(async (options) => {
@@ -1351,6 +1353,7 @@ program
             if (options.apiKey) args.push('-k', options.apiKey);
             if (options.static) args.push('-s', options.static);
             if (options.withAgent) args.push('--with-agent');
+            if (options.withMcp) args.push('--with-mcp');
 
             const child = spawn(nodePath, args, {
                 detached: true,
@@ -1405,10 +1408,83 @@ program
             console.log('💡 Tip: Add --with-agent to also run the agent loop\n');
         }
 
+        if (options.withMcp) {
+            const { OrcBotMcpServer, resolveMcpHttpOptions } = require('../mcp/OrcBotMcpServer');
+            const resolved = resolveMcpHttpOptions(agent.config);
+            const mcp = new OrcBotMcpServer(agent, {
+                serverName: 'orcbot',
+                serverVersion: '1.0.7',
+                chatTimeoutMs: 90000,
+                chatIdleMs: 4000,
+                startAgentLoop: false // agent loop managed by gateway
+            });
+            await mcp.startHttp(resolved);
+            console.log(`🔌 MCP HTTP server running at http://${resolved.host}:${resolved.port}${resolved.path}`);
+            console.log(`   Health check: http://${resolved.host === '0.0.0.0' ? 'localhost' : resolved.host}:${resolved.port}/health`);
+            process.on('SIGINT', async () => { await mcp.close(); });
+        }
+
         // Keep process running
         process.on('SIGINT', () => {
             console.log('\nShutting down gateway...');
             gateway.stop();
+            process.exit(0);
+        });
+    });
+
+program
+    .command('mcp')
+    .description('Start OrcBot as an MCP server over stdio')
+    .option('--http', 'Serve OrcBot over stateless Streamable HTTP instead of stdio')
+    .option('--no-agent-loop', 'Do not start the OrcBot agent loop automatically')
+    .option('--chat-timeout-ms <number>', 'Maximum time to wait for an OrcBot reply', '90000')
+    .option('--chat-idle-ms <number>', 'Idle window used to collect the final OrcBot reply', '4000')
+    .option('-p, --port <number>', 'Port to listen on for MCP HTTP mode')
+    .option('-H, --host <string>', 'Host to bind for MCP HTTP mode')
+    .option('--path <string>', 'Path to serve MCP HTTP mode on')
+    .option('-k, --api-key <string>', 'API key required for MCP HTTP mode')
+    .option('--server-name <string>', 'Advertised MCP server name', 'orcbot')
+    .action(async (options) => {
+        if (!options.http) {
+            for (const transport of logger.transports) {
+                if ((transport as any).name === 'console') {
+                    (transport as any).silent = true;
+                }
+            }
+        }
+
+        const { OrcBotMcpServer, resolveMcpHttpOptions } = require('../mcp/OrcBotMcpServer');
+        const mcp = new OrcBotMcpServer(agent, {
+            serverName: options.serverName,
+            serverVersion: '1.0.7',
+            chatTimeoutMs: Number.parseInt(options.chatTimeoutMs, 10) || 90000,
+            chatIdleMs: Number.parseInt(options.chatIdleMs, 10) || 4000,
+            startAgentLoop: options.agentLoop !== false
+        });
+
+        if (options.http) {
+            const resolved = resolveMcpHttpOptions(agent.config, {
+                host: options.host,
+                port: options.port ? Number.parseInt(options.port, 10) : undefined,
+                path: options.path,
+                apiKey: options.apiKey
+            });
+
+            process.stderr.write(`Starting OrcBot MCP HTTP server at http://${resolved.host}:${resolved.port}${resolved.path}\n`);
+            process.stderr.write(`Agent loop: ${options.agentLoop !== false ? 'enabled' : 'disabled'}\n`);
+            process.stderr.write(`Auth: ${resolved.apiKey ? 'API key required' : 'open'}\n`);
+            await mcp.startHttp(resolved);
+        } else {
+            process.stderr.write('Starting OrcBot MCP server on stdio\n');
+            process.stderr.write(`Agent loop: ${options.agentLoop !== false ? 'enabled' : 'disabled'}\n`);
+            await mcp.startStdio();
+        }
+
+        process.on('SIGINT', async () => {
+            await mcp.close();
+            if (options.agentLoop !== false && agent.isRunning) {
+                await agent.stop();
+            }
             process.exit(0);
         });
     });
@@ -4493,6 +4569,10 @@ async function showGatewayMenu() {
     const currentPort = agent.config.get('gatewayPort') || 3100;
     const currentHost = agent.config.get('gatewayHost') || '0.0.0.0';
     const apiKey = agent.config.get('gatewayApiKey');
+    const currentMcpPort = agent.config.get('mcpPort') || 3190;
+    const currentMcpHost = agent.config.get('mcpHost') || '0.0.0.0';
+    const currentMcpPath = agent.config.get('mcpPath') || '/mcp';
+    const mcpApiKey = agent.config.get('mcpApiKey') || apiKey;
     const autonomyAllowed = isAutonomyEnabledForChannel('gateway-chat');
 
     sectionHeader('🌐', 'Web Gateway');
@@ -4506,6 +4586,14 @@ async function showGatewayMenu() {
         `${dim('Autonomy')}   ${autonomyAllowed ? green(bold('● ENABLED')) : gray('○ DISABLED')}`,
     ];
     box(gatewayLines, { title: '📡 GATEWAY CONFIG', width: 52, color: c.cyan });
+    const mcpLines = [
+        `${dim('Host')}       ${bold(String(currentMcpHost))}`,
+        `${dim('Port')}       ${brightCyan(bold(String(currentMcpPort)))}`,
+        `${dim('Path')}       ${cyan(String(currentMcpPath))}`,
+        `${dim('Endpoint')}   ${cyan(`http://${currentMcpHost}:${currentMcpPort}${currentMcpPath}`)}`,
+        `${dim('Auth')}       ${mcpApiKey ? green('● API Key set') : yellow('○ No authentication')}`,
+    ];
+    box(mcpLines, { title: '🔌 MCP HTTP CONFIG', width: 52, color: c.brightMagenta });
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -4516,12 +4604,20 @@ async function showGatewayMenu() {
             choices: [
                 { name: `  🚀 ${bold('Start Gateway Server')}`, value: 'start' },
                 { name: `  🚀 ${bold('Start Gateway + Agent')}`, value: 'start_with_agent' },
+                { name: `  🚀 ${bold('Start Gateway + Agent + MCP HTTP')}`, value: 'start_with_agent_mcp' },
+                { name: `  🔌 ${bold('Start MCP HTTP Only')}`, value: 'start_mcp_http' },
+                { name: `  🧾 ${bold('Show MCP Client Config (Local/Tailnet)')}`, value: 'mcp_info' },
                 new inquirer.Separator(gradient('  ─── Settings ─────────────────────', [c.cyan, c.gray])),
                 { name: `  📌 Set Port ${dim(`(current: ${currentPort})`)}`, value: 'port' },
                 { name: `  🏠 Set Host ${dim(`(current: ${currentHost})`)}`, value: 'host' },
                 { name: `  🔑 ${apiKey ? 'Update' : 'Set'} API Key`, value: 'apikey' },
+                { name: `  📌 Set MCP Port ${dim(`(current: ${currentMcpPort})`)}`, value: 'mcp_port' },
+                { name: `  🏠 Set MCP Host ${dim(`(current: ${currentMcpHost})`)}`, value: 'mcp_host' },
+                { name: `  🛣️  Set MCP Path ${dim(`(current: ${currentMcpPath})`)}`, value: 'mcp_path' },
+                { name: `  🔑 ${mcpApiKey ? 'Update' : 'Set'} MCP API Key`, value: 'mcp_apikey' },
                 { name: `  🤖 ${autonomyAllowed ? 'Disable' : 'Enable'} Autonomous Messaging`, value: 'toggle_autonomy' },
                 { name: `  🔐 ${bold('Tailscale Setup & Status Guide')}`, value: 'tailscale' },
+                { name: `  🌍 ${bold('Public Tunnel Setup (Cloudflare/Ngrok)')}`, value: 'public_tunnel' },
                 new inquirer.Separator(gradient('  ──────────────────────────────────', [c.cyan, c.gray])),
                 { name: dim('  ← Back'), value: 'back' }
             ]
@@ -4535,7 +4631,7 @@ async function showGatewayMenu() {
         return showGatewayMenu();
     }
 
-    if (action === 'start' || action === 'start_with_agent') {
+    if (action === 'start' || action === 'start_with_agent' || action === 'start_with_agent_mcp') {
         // Ask for optional static dashboard directory before starting the gateway
         const defaultStatic = agent.config.get('gatewayStaticDir') || path.join(process.cwd(), 'apps', 'dashboard');
         const { staticDirInput } = await inquirer.prompt([
@@ -4587,13 +4683,81 @@ async function showGatewayMenu() {
         if (staticDir) console.log(`   Static files served from: ${staticDir}`);
         console.log('\n   Press Ctrl+C to stop\n');
 
-        if (action === 'start_with_agent') {
+        if (action === 'start_with_agent' || action === 'start_with_agent_mcp') {
             console.log('🤖 Also starting agent loop...\n');
             agent.start().catch(err => logger.error(`Agent error: ${err}`));
         }
 
+        if (action === 'start_with_agent_mcp') {
+            const { OrcBotMcpServer, resolveMcpHttpOptions } = require('../mcp/OrcBotMcpServer');
+            const resolved = resolveMcpHttpOptions(agent.config);
+            const mcp = new OrcBotMcpServer(agent, {
+                serverName: 'orcbot',
+                serverVersion: '1.0.7',
+                chatTimeoutMs: 90000,
+                chatIdleMs: 4000,
+                startAgentLoop: false
+            });
+            await mcp.startHttp(resolved);
+            const connectHost = resolved.host === '0.0.0.0' ? 'localhost' : resolved.host;
+            console.log(`🔌 MCP HTTP server running at http://${connectHost}:${resolved.port}${resolved.path}`);
+            console.log(`   Health check: http://${connectHost}:${resolved.port}/health`);
+            process.on('SIGINT', async () => { await mcp.close(); });
+        }
+
         // Keep running - don't return to menu
         await new Promise(() => { }); // Wait forever until Ctrl+C
+    } else if (action === 'start_mcp_http') {
+        const { OrcBotMcpServer, resolveMcpHttpOptions } = require('../mcp/OrcBotMcpServer');
+        const resolved = resolveMcpHttpOptions(agent.config);
+        const mcp = new OrcBotMcpServer(agent, {
+            serverName: 'orcbot',
+            serverVersion: '1.0.7',
+            chatTimeoutMs: 90000,
+            chatIdleMs: 4000,
+            startAgentLoop: true
+        });
+        await mcp.startHttp(resolved);
+        const connectHost = resolved.host === '0.0.0.0' ? 'localhost' : resolved.host;
+        console.log('\n🔌 MCP HTTP server is ready!');
+        console.log(`   Endpoint: http://${connectHost}:${resolved.port}${resolved.path}`);
+        console.log(`   Health:   http://${connectHost}:${resolved.port}/health`);
+        console.log('   Press Ctrl+C to stop\n');
+        await new Promise(() => { });
+    } else if (action === 'mcp_info') {
+        const tsInfo = getTailscaleInfo();
+        const connectHost = currentMcpHost === '0.0.0.0' ? 'localhost' : currentMcpHost;
+        const localUrl = `http://${connectHost}:${currentMcpPort}${currentMcpPath}`;
+        const remoteHost = tsInfo.dnsName || tsInfo.ipv4 || '';
+        const remoteUrl = remoteHost ? `http://${remoteHost}:${currentMcpPort}${currentMcpPath}` : '(tailscale endpoint unavailable)';
+        const localConfig = mcpApiKey
+            ? JSON.stringify({ mcpServers: { orcbot: { url: localUrl, headers: { 'X-Api-Key': '<your-mcpApiKey>' } } } }, null, 2)
+            : JSON.stringify({ mcpServers: { orcbot: { url: localUrl } } }, null, 2);
+        const remoteConfig = mcpApiKey
+            ? JSON.stringify({ mcpServers: { orcbot: { url: remoteUrl, headers: { 'X-Api-Key': '<your-mcpApiKey>' } } } }, null, 2)
+            : JSON.stringify({ mcpServers: { orcbot: { url: remoteUrl } } }, null, 2);
+
+        console.log('');
+        box([
+            `${dim('Local MCP URL')}   ${cyan(localUrl)}`,
+            `${dim('Tailnet MCP URL')} ${remoteHost ? cyan(remoteUrl) : yellow('not available (run tailscale up)')}`,
+            `${dim('Backend State')}   ${tsInfo.backendState ? (tsInfo.connected ? green(tsInfo.backendState) : yellow(tsInfo.backendState)) : gray('unknown')}`,
+            `${dim('Tailnet DNS')}     ${tsInfo.dnsName ? brightCyan(tsInfo.dnsName) : gray('n/a')}`,
+            `${dim('Tailnet IPv4')}    ${tsInfo.ipv4 ? brightCyan(tsInfo.ipv4) : gray('n/a')}`,
+            `${dim('Tailnet State')}   ${tsInfo.connected ? green('connected') : yellow('not connected')}`,
+            `${dim('Auth')}            ${mcpApiKey ? green('API key required') : yellow('no auth')}`,
+        ], { title: '🔌 MCP CLIENT CONNECTION INFO', width: 76, color: c.brightMagenta });
+        if (tsInfo.health) {
+            console.log(yellow(`Health: ${tsInfo.health}`));
+            console.log('');
+        }
+        console.log('');
+        console.log(bold('Local client JSON:'));
+        console.log(localConfig);
+        console.log('');
+        console.log(bold('Tailnet client JSON:'));
+        console.log(remoteConfig);
+        console.log('');
     } else if (action === 'port') {
         const { val } = await inquirer.prompt([
             { type: 'number', name: 'val', message: 'Enter gateway port:', default: currentPort }
@@ -4610,74 +4774,60 @@ async function showGatewayMenu() {
         ]);
         agent.config.set('gatewayApiKey', val || undefined);
         console.log(val ? 'API key set!' : 'Authentication disabled.');
+    } else if (action === 'mcp_port') {
+        const { val } = await inquirer.prompt([
+            { type: 'number', name: 'val', message: 'Enter MCP port:', default: currentMcpPort }
+        ]);
+        if (val) agent.config.set('mcpPort', val);
+    } else if (action === 'mcp_host') {
+        const { val } = await inquirer.prompt([
+            { type: 'input', name: 'val', message: 'Enter MCP host (0.0.0.0 for all interfaces):', default: currentMcpHost }
+        ]);
+        if (val) agent.config.set('mcpHost', val);
+    } else if (action === 'mcp_path') {
+        const { val } = await inquirer.prompt([
+            { type: 'input', name: 'val', message: 'Enter MCP path:', default: currentMcpPath }
+        ]);
+        if (val) {
+            const normalizedPath = String(val).trim().startsWith('/') ? String(val).trim() : `/${String(val).trim()}`;
+            agent.config.set('mcpPath', normalizedPath || '/mcp');
+        }
+    } else if (action === 'mcp_apikey') {
+        const { val } = await inquirer.prompt([
+            { type: 'input', name: 'val', message: 'Enter MCP API key (leave empty to disable):' }
+        ]);
+        agent.config.set('mcpApiKey', val || undefined);
+        console.log(val ? 'MCP API key set!' : 'MCP authentication disabled.');
     } else if (action === 'tailscale') {
         console.log('');
-        const { execSync } = require('child_process');
-        let tailscaleInstalled = false;
-        let statusLine = yellow('not installed');
-        let tailscaleIp = dim('n/a');
-
-        // Robust detection: try which/where, then version, then status/ip
-        try {
-            const platform = process.platform;
-            try {
-                if (platform === 'win32') execSync('where tailscale', { stdio: ['ignore', 'pipe', 'pipe'] });
-                else execSync('which tailscale', { stdio: ['ignore', 'pipe', 'pipe'] });
-            } catch {
-                // which/where may fail even if tailscale CLI available (path issues);
-                // continue to try version/status commands.
-            }
-
-            // Try version first (non-interactive)
-            try {
-                const ver = String(execSync('tailscale version', { stdio: ['ignore', 'pipe', 'pipe'] })).split('\n')[0].trim();
-                tailscaleInstalled = true;
-                statusLine = green(`installed (${ver})`);
-            } catch {
-                // Try a status probe
-                try {
-                    const st = String(execSync('tailscale status --json', { stdio: ['ignore', 'pipe', 'pipe'] }));
-                    if (st && st.trim()) {
-                        tailscaleInstalled = true;
-                        statusLine = green('installed (status)');
-                    }
-                } catch {
-                    tailscaleInstalled = false;
-                }
-            }
-
-            // Try to get IPv4 address
-            if (tailscaleInstalled) {
-                try {
-                    const ipOut = String(execSync('tailscale ip -4', { stdio: ['ignore', 'pipe', 'pipe'] })).split('\n').find((l: string) => l.trim()) || '';
-                    if (ipOut.trim()) tailscaleIp = brightCyan(ipOut.trim());
-                } catch {
-                    // as fallback, try parsing status --json for self IP
-                    try {
-                        const statusJson = String(execSync('tailscale status --json', { stdio: ['ignore', 'pipe', 'pipe'] }));
-                        const parsed = JSON.parse(statusJson || '{}');
-                        if (parsed && parsed.Self && parsed.Self.TailSegments) {
-                            // Not all versions include TailSegments; try Addresses
-                        }
-                        if (parsed && parsed.Self && parsed.Self.Addresses && Array.isArray(parsed.Self.Addresses)) {
-                            const v4 = parsed.Self.Addresses.find((a: string) => a.includes('.') );
-                            if (v4) tailscaleIp = brightCyan(String(v4).split('/')[0]);
-                        }
-                    } catch {}
-                }
-            }
-        } catch (e) {
-            // fallthrough, keep as not installed
-            tailscaleInstalled = tailscaleInstalled || false;
-        }
+        const tsInfo = getTailscaleInfo();
+        const tailscaleInstalled = tsInfo.cliAvailable;
+        const statusLine = !tailscaleInstalled
+            ? yellow('not installed / cli not found')
+            : tsInfo.connected
+                ? green(`connected${tsInfo.version ? ` (${tsInfo.version})` : ''}`)
+                : yellow(`installed but not connected${tsInfo.version ? ` (${tsInfo.version})` : ''}`);
+        const tailscaleIp = tsInfo.ipv4 ? brightCyan(tsInfo.ipv4) : dim('n/a');
+        const tailscaleDns = tsInfo.dnsName ? brightCyan(tsInfo.dnsName) : dim('n/a');
 
         const tailscaleLines = [
             `${dim('Tailscale')}   ${statusLine}`,
+            `${dim('Backend')}     ${tsInfo.backendState ? (tsInfo.connected ? green(tsInfo.backendState) : yellow(tsInfo.backendState)) : dim('unknown')}`,
             `${dim('Tailnet IP')}  ${tailscaleIp}`,
+            `${dim('Tailnet DNS')} ${tailscaleDns}`,
             `${dim('Gateway')}     ${bold(String(currentHost))}:${brightCyan(bold(String(currentPort)))}`,
             `${dim('Auth Key')}    ${apiKey ? green('set') : yellow('not set (recommended)')}`,
+            `${dim('CLI Path')}    ${tsInfo.command ? dim(tsInfo.command) : dim('n/a')}`,
         ];
         box(tailscaleLines, { title: '🔐 PRIVATE REMOTE ACCESS', width: 60, color: c.brightCyan });
+        if (tsInfo.health) {
+            console.log(yellow(`Health: ${tsInfo.health}`));
+            console.log('');
+        }
+        if (tsInfo.error) {
+            console.log(yellow(`Note: ${tsInfo.error}`));
+            console.log('');
+        }
 
         console.log('');
         console.log(bold('Recommended setup (official pattern):'));
@@ -4687,7 +4837,7 @@ async function showGatewayMenu() {
         console.log(`  4) ${dim('Use ACLs')} allow only your ops group to reach port ${currentPort}.`);
         console.log('');
         console.log(dim('Quick commands:'));
-        console.log(`  ${cyan('tailscale status')}`);
+        console.log(`  ${cyan('tailscale status --json')}`);
         console.log(`  ${cyan('tailscale ip -4')}`);
         console.log(`  ${cyan('orcbot gateway --with-agent -p ' + currentPort)}`);
         console.log(`  ${dim('Then browse:')} ${cyan('http://<tailnet-ip>:' + currentPort)}`);
@@ -4751,7 +4901,7 @@ async function showGatewayMenu() {
             // Quick commands already displayed above — repeat with emphasis
             console.log('');
             console.log(cyan('Quick commands:'));
-            console.log(`  ${cyan('tailscale status')}`);
+            console.log(`  ${cyan('tailscale status --json')}`);
             console.log(`  ${cyan('tailscale ip -4')}`);
             console.log(`  ${cyan('orcbot gateway --with-agent -p ' + currentPort)}`);
             console.log(`  ${dim('Then browse:')} ${cyan('http://<tailnet-ip>:' + currentPort)}`);
@@ -4760,10 +4910,221 @@ async function showGatewayMenu() {
         if (!tailscaleInstalled && tsAction !== 'install') {
             console.log(yellow('Tip: Install tailscale first, then rerun this check to confirm status/IP.'));
         }
+    } else if (action === 'public_tunnel') {
+        console.log('');
+        const tunnelInfo = getPublicTunnelInfo();
+        const localConnectHost = currentMcpHost === '0.0.0.0' ? 'localhost' : currentMcpHost;
+        const localMcpUrl = `http://${localConnectHost}:${currentMcpPort}${currentMcpPath}`;
+
+        const tunnelLines = [
+            `${dim('MCP Local')}     ${cyan(localMcpUrl)}`,
+            `${dim('cloudflared')}   ${tunnelInfo.cloudflared.available ? green(`installed${tunnelInfo.cloudflared.version ? ` (${tunnelInfo.cloudflared.version})` : ''}`) : yellow('not found')}`,
+            `${dim('ngrok')}        ${tunnelInfo.ngrok.available ? green(`installed${tunnelInfo.ngrok.version ? ` (${tunnelInfo.ngrok.version})` : ''}`) : yellow('not found')}`,
+            `${dim('Auth')}         ${mcpApiKey ? green('MCP API key set') : yellow('no mcpApiKey set (strongly recommended)')}`,
+        ];
+        box(tunnelLines, { title: '🌍 PUBLIC MCP TUNNEL', width: 80, color: c.brightYellow });
+
+        console.log('');
+        console.log(bold('Public MCP notes:'));
+        console.log(`  • Use ${bold('HTTPS')} tunnel URLs only.`);
+        console.log(`  • Browser GET on ${cyan('/mcp')} returns 405 by design; use MCP client POSTs.`);
+        console.log(`  • Keep ${cyan('mcpApiKey')} enabled when exposing publicly.`);
+        console.log('');
+
+        const publicConfigTemplate = mcpApiKey
+            ? JSON.stringify({ mcpServers: { orcbot: { url: 'https://<public-tunnel-url>/mcp', headers: { 'X-Api-Key': '<your-mcpApiKey>' } } } }, null, 2)
+            : JSON.stringify({ mcpServers: { orcbot: { url: 'https://<public-tunnel-url>/mcp' } } }, null, 2);
+        console.log(bold('Public client JSON template:'));
+        console.log(publicConfigTemplate);
+        console.log('');
+
+        const tunnelChoices: any[] = [];
+        if (tunnelInfo.cloudflared.available) tunnelChoices.push({ name: `  ☁️  ${bold('Start Cloudflare Quick Tunnel now')}`, value: 'run_cloudflared' });
+        if (tunnelInfo.ngrok.available) tunnelChoices.push({ name: `  🕳️  ${bold('Start ngrok tunnel now')}`, value: 'run_ngrok' });
+        tunnelChoices.push({ name: `  📋 ${bold('Show quick commands')}`, value: 'quick' });
+        tunnelChoices.push(new inquirer.Separator(gradient('  ──────────────────────────────────', [c.yellow, c.gray])));
+        tunnelChoices.push({ name: dim('  ← Back'), value: 'back' });
+
+        const { tunnelAction } = await inquirer.prompt([
+            { type: 'list', name: 'tunnelAction', message: cyan('Public tunnel actions:'), choices: tunnelChoices }
+        ]);
+
+        if (tunnelAction === 'run_cloudflared') {
+            const cmd = tunnelInfo.cloudflared.command || 'cloudflared';
+            console.log(`\nStarting Cloudflare quick tunnel to ${localMcpUrl} ...\n`);
+            console.log(dim('Press Ctrl+C to stop the tunnel.'));
+            const result = spawnSync(cmd, ['tunnel', '--url', `http://${localConnectHost}:${currentMcpPort}`], { stdio: 'inherit', shell: true });
+            if (result.error) console.error(red(`Failed to start cloudflared: ${String(result.error.message || result.error)}`));
+        } else if (tunnelAction === 'run_ngrok') {
+            const cmd = tunnelInfo.ngrok.command || 'ngrok';
+            console.log(`\nStarting ngrok tunnel to http://${localConnectHost}:${currentMcpPort} ...\n`);
+            console.log(dim('Press Ctrl+C to stop the tunnel.'));
+            const result = spawnSync(cmd, ['http', String(currentMcpPort)], { stdio: 'inherit', shell: true });
+            if (result.error) console.error(red(`Failed to start ngrok: ${String(result.error.message || result.error)}`));
+        } else if (tunnelAction === 'quick') {
+            console.log('');
+            console.log(cyan('Quick commands:'));
+            console.log(`  ${cyan(`cloudflared tunnel --url http://${localConnectHost}:${currentMcpPort}`)}`);
+            console.log(`  ${cyan(`ngrok http ${currentMcpPort}`)}`);
+            console.log(`  ${dim('Then use in client JSON:')} ${cyan('https://<public-tunnel-url>/mcp')}`);
+            console.log('');
+        }
     }
 
     await waitKeyPress();
     return showGatewayMenu();
+}
+
+type TailscaleInfo = {
+    cliAvailable: boolean;
+    connected: boolean;
+    backendState?: string;
+    health?: string;
+    ipv4?: string;
+    dnsName?: string;
+    version?: string;
+    command?: string;
+    error?: string;
+};
+
+type CliToolInfo = {
+    available: boolean;
+    command?: string;
+    version?: string;
+    error?: string;
+};
+
+type PublicTunnelInfo = {
+    cloudflared: CliToolInfo;
+    ngrok: CliToolInfo;
+};
+
+function runCli(cmd: string, args: string[]): { ok: boolean; stdout: string; stderr: string } {
+    const result = spawnSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return {
+        ok: result.status === 0,
+        stdout: String(result.stdout || '').trim(),
+        stderr: String(result.stderr || '').trim(),
+    };
+}
+
+function probeCliTool(candidates: string[], versionArgs: string[] = ['--version']): CliToolInfo {
+    for (const cmd of candidates) {
+        const probe = runCli(cmd, versionArgs);
+        if (probe.ok || probe.stdout || !/not recognized|ENOENT|not found|cannot find/i.test(probe.stderr || '')) {
+            return {
+                available: true,
+                command: cmd,
+                version: (probe.stdout || probe.stderr || '').split(/\r?\n/)[0]?.trim() || undefined,
+            };
+        }
+    }
+    return { available: false, error: 'command not found' };
+}
+
+function getPublicTunnelInfo(): PublicTunnelInfo {
+    const cloudflaredCandidates = process.platform === 'win32'
+        ? ['cloudflared.exe', 'cloudflared', 'C:\\Program Files\\Cloudflare\\Cloudflare Tunnel\\cloudflared.exe']
+        : ['cloudflared'];
+    const ngrokCandidates = process.platform === 'win32'
+        ? ['ngrok.exe', 'ngrok']
+        : ['ngrok'];
+
+    return {
+        cloudflared: probeCliTool(cloudflaredCandidates),
+        ngrok: probeCliTool(ngrokCandidates, ['version'])
+    };
+}
+
+function getTailscaleCommandCandidates(): string[] {
+    if (process.platform === 'win32') {
+        return [
+            'tailscale.exe',
+            'tailscale',
+            'C:\\Program Files\\Tailscale\\tailscale.exe',
+            'C:\\Program Files (x86)\\Tailscale\\tailscale.exe'
+        ];
+    }
+    return ['tailscale'];
+}
+
+function parseFirstIPv4(text: string): string | undefined {
+    const lines = String(text || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    for (const line of lines) {
+        const candidate = line.split('/')[0].trim();
+        if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(candidate)) return candidate;
+    }
+    return undefined;
+}
+
+function getTailscaleInfo(): TailscaleInfo {
+    const candidates = getTailscaleCommandCandidates();
+    let selected: string | undefined;
+    let version: string | undefined;
+
+    for (const cmd of candidates) {
+        const probe = runCli(cmd, ['version']);
+        if (probe.ok || probe.stdout || !/not recognized|ENOENT|not found/i.test(probe.stderr || '')) {
+            selected = cmd;
+            version = (probe.stdout || '').split(/\r?\n/)[0]?.trim() || undefined;
+            break;
+        }
+    }
+
+    if (!selected) {
+        return {
+            cliAvailable: false,
+            connected: false,
+            error: 'tailscale CLI was not found on PATH or standard install locations.'
+        };
+    }
+
+    const statusRun = runCli(selected, ['status', '--json']);
+    let connected = false;
+    let backendState: string | undefined;
+    let health: string | undefined;
+    let ipv4: string | undefined;
+    let dnsName: string | undefined;
+
+    if (statusRun.ok && statusRun.stdout) {
+        try {
+            const parsed = JSON.parse(statusRun.stdout);
+            const backend = String(parsed?.BackendState || '').toLowerCase();
+            connected = backend === 'running';
+            backendState = String(parsed?.BackendState || '').trim() || undefined;
+            if (Array.isArray(parsed?.Health) && parsed.Health.length > 0) {
+                health = String(parsed.Health[0] || '').trim() || undefined;
+            }
+
+            const self = parsed?.Self || {};
+            dnsName = String(self?.DNSName || self?.HostName || '').trim() || undefined;
+
+            const fromAddresses = Array.isArray(self?.Addresses) ? self.Addresses : [];
+            const fromTailscaleIps = Array.isArray(self?.TailscaleIPs) ? self.TailscaleIPs : [];
+            ipv4 = parseFirstIPv4([...fromAddresses, ...fromTailscaleIps].join('\n'));
+        } catch {
+            // ignore JSON parse errors and continue fallbacks
+        }
+    }
+
+    if (!ipv4) {
+        const ipRun = runCli(selected, ['ip', '-4']);
+        if (ipRun.ok) {
+            ipv4 = parseFirstIPv4(ipRun.stdout);
+        }
+    }
+
+    return {
+        cliAvailable: true,
+        connected,
+        backendState,
+        health,
+        ipv4,
+        dnsName,
+        version,
+        command: selected,
+        error: statusRun.ok ? undefined : (statusRun.stderr || undefined)
+    };
 }
 
 async function showModelsMenu() {

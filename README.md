@@ -565,6 +565,43 @@ gatewayApiKey: your-secret-key
 **Recommended for remote access: Tailscale (private mesh network)**
 - Keep the gateway private to your Tailnet instead of exposing port 3100 publicly.
 - Still set `gatewayApiKey` for defense-in-depth.
+
+### MCP Server
+
+OrcBot can also run as an MCP server, either over stdio for local spawned clients or over stateless Streamable HTTP for remote MCP clients.
+
+```bash
+# Start OrcBot as an MCP server and run the agent loop
+orcbot mcp
+
+# Start MCP without auto-starting the agent loop
+orcbot mcp --no-agent-loop
+
+# Start a remote MCP endpoint over Streamable HTTP
+orcbot mcp --http -p 3190 -k my-mcp-token
+```
+
+You can also configure HTTP mode in `orcbot.config.yaml` or via environment variables instead of passing flags every time:
+
+```yaml
+mcpHost: 0.0.0.0
+mcpPort: 3190
+mcpPath: /mcp
+mcpApiKey: your-mcp-token
+```
+
+Supported environment variables are `MCP_HOST`, `MCP_PORT`, `MCP_PATH`, and `MCP_API_KEY`.
+
+The MCP server currently exposes agent-mediated tools for:
+
+- `orcbot_chat`: send a prompt through OrcBot's normal gateway-chat path and wait for a reply
+- `orcbot_queue_task`: enqueue work asynchronously
+- `orcbot_status`: inspect runtime state and queue counts
+- `orcbot_list_skills`: inspect the currently registered skill catalog
+
+For HTTP mode, OrcBot serves MCP at the configured `mcpPath` and a lightweight health check at `/health`. CLI flags override config values. If `mcpApiKey` is unset, OrcBot falls back to `gatewayApiKey` for compatibility. Clients must send the token through `X-Api-Key` or `Authorization: Bearer ...`.
+
+Use stderr for local diagnostics only in stdio mode. Stdout is reserved for the MCP protocol stream.
 - Restrict access with Tailnet ACLs to trusted operators/devices only.
 
 ---

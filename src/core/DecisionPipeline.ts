@@ -2,6 +2,7 @@ import { ConfigManager } from '../config/ConfigManager';
 import { logger } from '../utils/logger';
 import { StandardResponse, ToolCall } from './ParserLayer';
 import { MemoryEntry } from '../memory/MemoryManager';
+import { parseExecutionPlan } from './SimulationEngine';
 
 export interface PipelineContext {
     actionId: string;
@@ -274,11 +275,7 @@ export class DecisionPipeline {
     }
 
     private extractStepBudget(executionPlan?: string): number | null {
-        if (!executionPlan) return null;
-        const budgetMatch = executionPlan.match(/STEP BUDGET:\s*(\d+)/i);
-        if (!budgetMatch) return null;
-        const parsed = Number.parseInt(budgetMatch[1], 10);
-        return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+        return executionPlan ? parseExecutionPlan(executionPlan).stepBudget : null;
     }
 
     private buildRecoveryHint(dropped: string[], notes: string[]): string {

@@ -2,6 +2,66 @@
 import { MultiLLM } from './MultiLLM';
 import { logger } from '../utils/logger';
 
+export interface ParsedExecutionPlan {
+   stepBudget: number | null;
+   checklistItems: string[];
+}
+
+export function parseExecutionPlan(plan: string, maxItems = Number.POSITIVE_INFINITY): ParsedExecutionPlan {
+   if (!plan || typeof plan !== 'string') {
+      return { stepBudget: null, checklistItems: [] };
+   }
+
+   const lines = plan
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean);
+
+   let stepBudget: number | null = null;
+   const checklistItems: string[] = [];
+
+   for (const line of lines) {
+      if (/^execution\s*plan\s*:?$/i.test(line)) {
+         continue;
+      }
+
+      const budgetMatch = line.match(/^step budget\s*:\s*(\d+)/i);
+      if (budgetMatch) {
+         const parsed = Number.parseInt(budgetMatch[1], 10);
+         stepBudget = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+         continue;
+      }
+
+      const numbered = line.match(/^\d+[\.)]\s+(.+)$/);
+      const bullet = line.match(/^[\-*•]\s+(.+)$/);
+      const checked = line.match(/^\[[ xX]\]\s+(.+)$/);
+      const fallback = line.match(/^(?:↳|->|=>)\s*(.+)$/);
+      const continuation = line.match(/^(?:fallback|contingency|if that fails)\s*:\s*(.+)$/i);
+      const value = (numbered?.[1] || bullet?.[1] || checked?.[1] || '').trim();
+
+      if (value) {
+         checklistItems.push(value.replace(/\s+/g, ' ').trim());
+      } else if ((fallback?.[1] || continuation?.[1]) && checklistItems.length > 0) {
+         const suffix = (fallback?.[1] || continuation?.[1] || '')
+            .replace(/^(?:fallback|contingency|if that fails)\s*:\s*/i, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+         if (suffix) {
+            checklistItems[checklistItems.length - 1] = `${checklistItems[checklistItems.length - 1]} (Fallback: ${suffix})`;
+         }
+      }
+
+      if (checklistItems.length >= maxItems) {
+         break;
+      }
+   }
+
+   return {
+      stepBudget,
+      checklistItems: checklistItems.slice(0, maxItems)
+   };
+}
+
 export class SimulationEngine {
     constructor(private llm: MultiLLM) { }
 

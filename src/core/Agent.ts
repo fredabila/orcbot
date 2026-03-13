@@ -3,7 +3,7 @@ import { TokenTracker } from './TokenTracker';
 import { MultiLLM } from './MultiLLM';
 import { SkillsManager } from './SkillsManager';
 import { DecisionEngine } from './DecisionEngine';
-import { SimulationEngine } from './SimulationEngine';
+import { SimulationEngine, parseExecutionPlan } from './SimulationEngine';
 import { ActionQueue, Action } from '../memory/ActionQueue';
 import { Scheduler } from './Scheduler';
 import { PollingManager } from './PollingManager';
@@ -1116,6 +1116,28 @@ export class Agent {
         return resolved;
     }
 
+    private getProjectRootPath(): string | null {
+        const configured = String(this.config.get('projectRoot') || '').trim();
+        if (!configured) return null;
+        return path.resolve(configured);
+    }
+
+    private getPreferredAgentRoot(): string {
+        const projectRoot = this.getProjectRootPath();
+        if (projectRoot && fs.existsSync(projectRoot) && fs.statSync(projectRoot).isDirectory()) {
+            return projectRoot;
+        }
+        return this.getBuildWorkspacePath();
+    }
+
+    private getKnownAgentRoots(): string[] {
+        return Array.from(new Set([
+            this.getPreferredAgentRoot(),
+            this.getBuildWorkspacePath(),
+            path.resolve(this.config.getDataHome())
+        ]));
+    }
+
     private isPathRestricted(targetPath: string): boolean {
         const normalized = path.normalize(targetPath).toLowerCase();
         // Block access to node_modules and .git to prevent accidental modification
@@ -1129,11 +1151,32 @@ export class Agent {
         const raw = String(targetPath || '').trim();
         let resolved: string;
         if (!raw) {
-            resolved = this.getBuildWorkspacePath();
+            resolved = this.getPreferredAgentRoot();
         } else if (path.isAbsolute(raw)) {
             resolved = path.resolve(raw);
+            if (process.platform === 'win32') {
+                const root = path.parse(resolved).root;
+                if (root && /^[a-zA-Z]:\\$/.test(root) && !fs.existsSync(root)) {
+                    const knownRoots = this.getKnownAgentRoots().join(', ');
+                    throw new Error(`Unknown or inaccessible drive for path "${resolved}". Use one of the known OrcBot roots instead: ${knownRoots}`);
+                }
+            }
         } else {
-            resolved = path.resolve(this.getBuildWorkspacePath(), raw);
+            const projectRoot = this.getProjectRootPath();
+            const buildWorkspace = this.getBuildWorkspacePath();
+            const projectCandidate = projectRoot ? path.resolve(projectRoot, raw) : null;
+            const projectRelativeHints = [
+                'src', 'tests', 'apps', 'docs', 'assets', 'saas', '.github',
+                'package.json', 'tsconfig.json', 'README.md', 'AGENTS.md', 'SKILLS.md'
+            ];
+            const shouldPreferProjectRoot = !!projectCandidate && (
+                fs.existsSync(projectCandidate) ||
+                projectRelativeHints.some(prefix => raw === prefix || raw.startsWith(`${prefix}${path.sep}`) || raw.startsWith(`${prefix}/`) || raw.startsWith(`${prefix}\\`))
+            );
+
+            resolved = shouldPreferProjectRoot && projectCandidate
+                ? projectCandidate
+                : path.resolve(buildWorkspace, raw);
         }
 
         if (this.isPathRestricted(resolved)) {
@@ -1823,6 +1866,8 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                 usage: 'send_gateway_chat(message)',
                 handler: async (args: any) => {
                     const message = args.message || args.content || args.text;
+                    const currentAction = this.currentActionId ? this.actionQueue.get(this.currentActionId) : undefined;
+                    const sourceId = args.sourceId || args.jid || args.clientId || currentAction?.payload?.sourceId || 'gateway-web';
 
                     if (!message) return 'Error: Missing message content.';
 
@@ -1833,7 +1878,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                         type: 'short',
                         content: message,
                         timestamp: new Date().toISOString(),
-                        metadata: { source: 'gateway-chat', role: 'assistant' }
+                        metadata: { source: 'gateway-chat', sourceId, role: 'assistant' }
                     });
 
                     // Broadcast via event bus so GatewayServer can forward to WebSocket clients
@@ -1842,6 +1887,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                         role: 'assistant',
                         content: message,
                         format: hasMarkdown(message) ? 'markdown' : 'text',
+                        sourceId,
                         timestamp: new Date().toISOString(),
                         messageId
                     });
@@ -2410,12 +2456,12 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
         // Skill: List Directory
         this.skills.registerSkill({
             name: 'list_directory',
-            description: 'List files and subdirectories in a directory. Use this to explore the project structure and find relevant source code or configuration. Defaults to the project root. NOTE: Access to node_modules and .git is blocked.',
+            description: 'List files and subdirectories in a directory. Use this to explore the project structure and find relevant source code or configuration. Defaults to the detected project root, then falls back to OrcBot\'s build workspace. NOTE: Access to node_modules and .git is blocked.',
             usage: 'list_directory(path)',
             isDeep: true,
             isParallelSafe: true,
             handler: async (args: any) => {
-                const dirPath = args.path || args.dir || args.directory || this.getBuildWorkspacePath();
+                const dirPath = args.path || args.dir || args.directory || this.getPreferredAgentRoot();
 
                 try {
                     const resolvedPath = this.resolveAgentWorkspacePath(String(dirPath));
@@ -9940,6 +9986,7 @@ The plugin handles all logic internally. See the plugin source for implementatio
                     type: 'chat:message',
                     role: 'assistant',
                     content: message,
+                    sourceId,
                     timestamp: new Date().toISOString(),
                     messageId: `fallback-${Date.now()}`
                 });
@@ -10191,7 +10238,8 @@ The plugin handles all logic internally. See the plugin source for implementatio
             // Build a description for the continuation task
             const contextHint = taskContextMemories.map(m => m.content?.slice(0, 100)).join(' | ');
 
-            const continuationDesc = `CONTINUATION: Resume the incomplete task that the user asked about. The user asked "${action.payload?.description?.slice(0, 100)}" and I acknowledged the work is not done. I MUST now actually complete it. ${contextHint ? `Previous progress context: ${contextHint}` : 'Check episodic memory for the original task details.'}. Compile all available results and deliver a comprehensive response to the user.`;
+            const continuationThreadContext = String(action.payload?.continuationThreadContext || action.payload?.replyToAgentText || '').trim();
+            const continuationDesc = `CONTINUATION: Resume the incomplete task that the user asked about. The user asked "${action.payload?.description?.slice(0, 100)}" and I acknowledged the work is not done. I MUST now actually complete it. ${continuationThreadContext ? `Recent assistant thread context: ${continuationThreadContext.slice(0, 500)}. ` : ''}${contextHint ? `Previous progress context: ${contextHint}` : 'Check episodic memory for the original task details.'}. Recover the intended deliverable before doing generic directory or memory exploration. Compile all available results and deliver a comprehensive response to the user.`;
 
             if (this.hasExistingRecoveryTask(
                 'empty_promise_recovery',
@@ -11965,6 +12013,7 @@ REFLECTION: <1-2 sentences>`;
         decision: any;
         isChannelTask: boolean;
         messagesSent: number;
+        substantiveDeliveriesSent: number;
         maxSteps: number;
         maxNoToolsRetries: number;
         noToolsRetryCount: number;
@@ -11979,6 +12028,7 @@ REFLECTION: <1-2 sentences>`;
             decision,
             isChannelTask,
             messagesSent,
+            substantiveDeliveriesSent,
             maxSteps,
             maxNoToolsRetries,
             noToolsRetryCount,
@@ -11992,7 +12042,7 @@ REFLECTION: <1-2 sentences>`;
             const groundedLoopAnalysis = String(decision?.verification?.analysis || '').toLowerCase();
             const isContinuationTask = String(action.payload?.continuationIntent || '').toLowerCase() === 'resume_prior_commitment' ||
                 String(action.payload?.description || '').toLowerCase().startsWith('continuation:');
-            const groundedMessageAvailable = isChannelTask && messagesSent === 0 && !!this.buildGroundedNoResponseMessage(action, 'loop-exhausted');
+            const groundedMessageAvailable = isChannelTask && substantiveDeliveriesSent === 0 && !!this.buildGroundedNoResponseMessage(action, 'loop-exhausted');
             const shouldForceGroundedDelivery = groundedMessageAvailable && (
                 nextRetryCount >= maxNoToolsRetries ||
                 (isContinuationTask && nextRetryCount >= 2 && groundedLoopAnalysis.includes('loop detected'))
@@ -12260,41 +12310,21 @@ REFLECTION: <1-2 sentences>`;
         return !!this.config.get('reasoningExposeChecklist');
     }
 
-    private extractChecklistItemsFromPlan(plan: string, maxItems: number): string[] {
-        if (!plan || typeof plan !== 'string') return [];
-        const lines = plan
-            .split('\n')
-            .map(line => line.trim())
-            .filter(Boolean)
-            .filter(line => !/^execution\s*plan\s*:?$/i.test(line));
-
-        const items: string[] = [];
-        for (const line of lines) {
-            const numbered = line.match(/^\d+[\.)]\s+(.+)$/);
-            const bullet = line.match(/^[\-*•]\s+(.+)$/);
-            const checked = line.match(/^\[[ xX]\]\s+(.+)$/);
-            const value = (numbered?.[1] || bullet?.[1] || checked?.[1] || '').trim();
-            if (!value) continue;
-            items.push(value.replace(/\s+/g, ' '));
-            if (items.length >= maxItems) break;
-        }
-
-        return items;
-    }
-
     private buildChecklistPreviewMessage(executionPlan: string): string {
         const configured = Number(this.config.get('reasoningChecklistMaxItems') ?? 5);
         const maxItems = Number.isFinite(configured)
             ? Math.min(8, Math.max(3, Math.floor(configured)))
             : 5;
-        const items = this.extractChecklistItemsFromPlan(executionPlan, maxItems);
+        const parsedPlan = parseExecutionPlan(executionPlan, maxItems);
+        const items = parsedPlan.checklistItems;
         if (items.length === 0) {
             return '';
         }
 
         const body = items.map((item, index) => `${index + 1}. ${item}`).join('\n');
+        const budgetLine = parsedPlan.stepBudget ? `STEP BUDGET: ${parsedPlan.stepBudget} steps\n` : '';
         const robustTag = this.isRobustReasoningEnabled() ? '\n\nMode: robust reasoning (strict completion checks enabled).' : '';
-        return `🧭 Task checklist\n${body}${robustTag}`;
+        return `🧭 Task checklist\n${budgetLine}${body}${robustTag}`;
     }
 
     private async sendChecklistPreview(action: Action, message: string): Promise<boolean> {
@@ -12337,6 +12367,7 @@ REFLECTION: <1-2 sentences>`;
                     type: 'chat:message',
                     role: 'assistant',
                     content: message,
+                    sourceId,
                     timestamp: new Date().toISOString(),
                     messageId: `checklist-${Date.now()}`
                 });
@@ -13024,6 +13055,7 @@ REFLECTION: <1-2 sentences>`;
                         content: notification,
                         format: 'markdown',
                         agenticUser: true,
+                        sourceId,
                         timestamp: new Date().toISOString()
                     });
                     logger.info(`Agent: Sent AgenticUser notification to Gateway`);
@@ -15122,6 +15154,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     type: 'chat:message',
                     role: 'assistant',
                     content: msg,
+                    sourceId: metadata?.sourceId,
                     timestamp: new Date().toISOString(),
                     messageId: `onboarding-ack-${Date.now()}`
                 });
@@ -15241,6 +15274,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     type: 'chat:message',
                     role: 'assistant',
                     content: msg,
+                    sourceId: metadata?.sourceId,
                     timestamp: new Date().toISOString(),
                     messageId: `onboarding-${Date.now()}`
                 });
@@ -15402,6 +15436,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     type: 'chat:message',
                     role: 'assistant',
                     content: msg,
+                    sourceId: metadata?.sourceId,
                     timestamp: new Date().toISOString(),
                     messageId: `reconnect-${Date.now()}`
                 });
@@ -15971,11 +16006,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 );
 
             // Extract initial step budget from plan if available
-            let lastEstimatedRemaining = 0;
-            const budgetMatch = executionPlan.match(/STEP BUDGET:\s*(\d+)/i);
-            if (budgetMatch) {
-                lastEstimatedRemaining = parseInt(budgetMatch[1], 10);
-            }
+            let lastEstimatedRemaining = parseExecutionPlan(executionPlan).stepBudget ?? 0;
 
             const robustReasoningMode = this.isRobustReasoningEnabled();
             const exposeChecklistPreview = this.shouldExposeChecklistPreview();
@@ -16631,6 +16662,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         decision,
                         isChannelTask,
                         messagesSent,
+                        substantiveDeliveriesSent,
                         maxSteps: MAX_STEPS,
                         maxNoToolsRetries: MAX_NO_TOOLS_RETRIES,
                         noToolsRetryCount,
@@ -17000,7 +17032,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             // Include the original task description so the recovery agent has clear
                             // context and doesn't confuse it with unrelated older tasks in memory.
                             const originalDesc = (action.payload?.description || 'unknown task').slice(0, 300);
-                            const recoveryDesc = `RECOVERY for action ${action.id}: The previous attempt at "${originalDesc}" gathered results but did not deliver a concrete final answer to the user. Review ONLY the step logs for action ${action.id} and send a specific answer now. Do not rehash or resend content from unrelated prior tasks.`;
+                            const continuationThreadContext = String(action.payload?.continuationThreadContext || action.payload?.replyToAgentText || '').trim();
+                            const recoveryDesc = `RECOVERY for action ${action.id}: The previous attempt at "${originalDesc}" gathered results but did not deliver a concrete final answer to the user. ${continuationThreadContext ? `Recent assistant thread context: ${continuationThreadContext.slice(0, 500)}. ` : ''}Review ONLY the step logs for action ${action.id} and recover the intended deliverable before doing generic directory or memory exploration. Send a specific answer now. Do not rehash or resend content from unrelated prior tasks.`;
                             await this.pushTask(
                                 recoveryDesc,
                                 9,
@@ -17044,7 +17077,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 } else {
                     const originalDesc = (action.payload?.description || 'unknown task').slice(0, 300);
                     const lastMessages = sentMessagesInAction.slice(-2).join(' | ');
-                    const recoveryDesc = `RECOVERY for action ${action.id}: The previous attempt at "${originalDesc}" stopped before the task was actually complete. Continue from the recorded execution state, finish the underlying task, and send the concrete final answer to the user. Recent user-facing messages: ${lastMessages || 'NONE'}. Step ledger summary: ${stepLedger.summarize().replace(/\n/g, '; ').slice(0, 800)}`;
+                    const continuationThreadContext = String(action.payload?.continuationThreadContext || action.payload?.replyToAgentText || '').trim();
+                    const recoveryDesc = `RECOVERY for action ${action.id}: The previous attempt at "${originalDesc}" stopped before the task was actually complete. ${continuationThreadContext ? `Recent assistant thread context: ${continuationThreadContext.slice(0, 500)}. ` : ''}Continue from the recorded execution state, finish the underlying task, and send the concrete final answer to the user. Recover the intended deliverable before doing generic directory or memory exploration. Recent user-facing messages: ${lastMessages || 'NONE'}. Step ledger summary: ${stepLedger.summarize().replace(/\n/g, '; ').slice(0, 800)}`;
                     await this.pushTask(
                         recoveryDesc,
                         9,

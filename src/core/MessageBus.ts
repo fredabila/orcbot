@@ -184,6 +184,73 @@ export class MessageBus {
         };
     }
 
+    private getRecentAssistantThreadContext(
+        source: string,
+        sourceId: string,
+        sessionScopeId: string,
+        userId?: string,
+        limit = 3
+    ): string | undefined {
+        const searchMemory = this.agent.memory?.searchMemory;
+        const shortAll = typeof searchMemory === 'function' ? searchMemory.call(this.agent.memory, 'short') : [];
+        const normalizedSource = String(source || '').toLowerCase();
+        const telegramChatId = normalizedSource === 'telegram' ? sourceId : undefined;
+        const telegramUserId = normalizedSource === 'telegram' ? userId : undefined;
+
+        const snippets = shortAll
+            .filter(memory => {
+                const md: any = memory.metadata || {};
+                if (String(md.role || '').toLowerCase() !== 'assistant') return false;
+                if (String(md.source || '').toLowerCase() !== normalizedSource) return false;
+
+                if (md.sessionScopeId?.toString() === sessionScopeId.toString()) return true;
+
+                if (normalizedSource === 'telegram') {
+                    return telegramChatId != null && md.chatId?.toString() === telegramChatId.toString();
+                }
+
+                if (normalizedSource === 'whatsapp') {
+                    return sourceId != null && (
+                        md.senderId?.toString() === sourceId.toString() ||
+                        md.sourceId?.toString() === sourceId.toString() ||
+                        md.chatId?.toString() === sourceId.toString()
+                    );
+                }
+
+                if (normalizedSource === 'discord' || normalizedSource === 'slack') {
+                    return sourceId != null && (
+                        md.channelId?.toString() === sourceId.toString() ||
+                        md.sourceId?.toString() === sourceId.toString()
+                    );
+                }
+
+                if (normalizedSource === 'gateway-chat') {
+                    return sourceId != null && (
+                        md.chatId?.toString() === sourceId.toString() ||
+                        md.sourceId?.toString() === sourceId.toString()
+                    );
+                }
+
+                if (telegramUserId != null && md.userId?.toString() === telegramUserId.toString()) {
+                    return true;
+                }
+
+                return false;
+            })
+            .sort((a, b) => {
+                const ta = a.timestamp ? Date.parse(a.timestamp) || 0 : 0;
+                const tb = b.timestamp ? Date.parse(b.timestamp) || 0 : 0;
+                return ta - tb;
+            })
+            .slice(-limit)
+            .map(memory => String(memory.content || '').replace(/^Assistant sent [^:]+:\s*/i, '').trim())
+            .filter(Boolean)
+            .map(text => text.replace(/\s+/g, ' ').slice(0, 220));
+
+        if (snippets.length === 0) return undefined;
+        return snippets.join(' | ');
+    }
+
     private parseReplyContext(replyContext?: string): { repliedUser?: string; repliedText?: string } {
         if (!replyContext) return {};
 
@@ -353,6 +420,9 @@ export class MessageBus {
         });
         const continuationReply = { shouldContinue: followUpIntent.shouldContinue && followUpIntent.subtype !== 'status_check' };
         const continuationInquiry = { shouldContinue: followUpIntent.shouldContinue && followUpIntent.subtype === 'status_check' };
+        const continuationThreadContext = continuationReply.shouldContinue || continuationInquiry.shouldContinue
+            ? this.getRecentAssistantThreadContext(msg.source, msg.sourceId, sessionScopeId, msg.userId)
+            : undefined;
         const substantiveInboundTask = this.isLikelySubstantiveInboundTask(msg, continuationReply, continuationInquiry);
         const autoReplyEnabled = this.agent.config.get(`${msg.source}AutoReplyEnabled`) ?? true;
         const replyTemporarilySuppressed = msg.metadata?.suppressReply === true;
@@ -406,10 +476,10 @@ The reply will appear as a proper status reply inside their status thread, not a
 Goal: Decide if you should respond based on our history and my persona. If yes, use 'send_${msg.source}'.${whatsappReactionHint}`;
         } else if (continuationReply.shouldContinue) {
             priority = 12;
-            taskDescription = `CONTINUATION: The user replied on ${msg.source} with "${baseContent}" to my earlier message${followUpIntent.repliedText ? ` "${followUpIntent.repliedText}"` : ''}. Treat this as permission to continue the previously promised substantive work. Resume the same objective, make the default choice if needed, do the actual work, and deliver real results to the user. Do not stop after a mere acknowledgment.${whatsappReactionHint}`;
+            taskDescription = `CONTINUATION: The user replied on ${msg.source} with "${baseContent}" to my earlier message${followUpIntent.repliedText ? ` "${followUpIntent.repliedText}"` : ''}. Treat this as permission to continue the previously promised substantive work. Resume the same objective, make the default choice if needed, do the actual work, and deliver real results to the user. ${continuationThreadContext ? `Recent assistant thread context: ${continuationThreadContext}. ` : ''}Recover the intended deliverable before doing generic exploration. Do not stop after a mere acknowledgment.${whatsappReactionHint}`;
         } else if (continuationInquiry.shouldContinue) {
             priority = 12;
-            taskDescription = `CONTINUATION: The user asked on ${msg.source} "${baseContent}" about my earlier in-progress commitment${followUpIntent.repliedText ? ` "${followUpIntent.repliedText}"` : ''}. Treat this as a follow-up on previously promised substantive work. Verify the real state from actual work already done. If the work has not truly started or has not materially advanced, resume it now instead of just claiming progress. Then send a grounded status update or concrete result. Do not send a status-only reassurance without real progress.${whatsappReactionHint}`;
+            taskDescription = `CONTINUATION: The user asked on ${msg.source} "${baseContent}" about my earlier in-progress commitment${followUpIntent.repliedText ? ` "${followUpIntent.repliedText}"` : ''}. Treat this as a follow-up on previously promised substantive work. Verify the real state from actual work already done. ${continuationThreadContext ? `Recent assistant thread context: ${continuationThreadContext}. ` : ''}If the work has not truly started or has not materially advanced, resume it now instead of just claiming progress. Then send a grounded status update or concrete result. Recover the intended deliverable before doing generic exploration. Do not send a status-only reassurance without real progress.${whatsappReactionHint}`;
         } else {
             taskDescription = `Respond to ${msg.source} message from ${sender}${channelStr}: "${baseContent}"${msg.mediaAnalysis ? ` [Media analysis: ${msg.mediaAnalysis}]` : ''}${msg.replyContext ? ' ' + msg.replyContext : ''}${whatsappReactionHint}`;
         }
@@ -440,6 +510,7 @@ Goal: Decide if you should respond based on our history and my persona. If yes, 
                 followUpIntent: continuationInquiry.shouldContinue ? 'status_check_on_pending_work' : undefined,
                 replyToAgentMessage: continuationReply.shouldContinue || continuationInquiry.shouldContinue || undefined,
                 replyToAgentText: followUpIntent.repliedText,
+                continuationThreadContext,
                 suppressProgressFeedback: replyTemporarilySuppressed && substantiveInboundTask ? true : undefined,
                 quietMode: replyTemporarilySuppressed && substantiveInboundTask ? true : undefined,
                 isExternal: msg.isExternal,

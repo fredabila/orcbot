@@ -44,6 +44,10 @@ function makeConfig(overrides: Record<string, any> = {}) {
         gatewayPort: 3100,
         gatewayApiKey: undefined,
         gatewayCorsOrigins: ['*'],
+        mcpHost: '0.0.0.0',
+        mcpPort: 3190,
+        mcpPath: '/mcp',
+        mcpApiKey: undefined,
         safeMode: false,
         sudoMode: false,
         autoExecuteCommands: false,
@@ -75,6 +79,43 @@ describe('collectDoctorReport', () => {
 
         const report = collectDoctorReport(makeConfig());
         expect(report.findings.some(f => f.id === 'gateway.bind_no_auth' && f.severity === 'critical')).toBe(true);
+    });
+
+    it('flags non-loopback MCP HTTP without auth as critical', () => {
+        vi.spyOn(fs, 'existsSync').mockImplementation((target: fs.PathLike) => String(target).includes('D:/orcbot-test'));
+        vi.spyOn(fs, 'readdirSync').mockReturnValue([] as any);
+
+        const report = collectDoctorReport(makeConfig({ gatewayApiKey: undefined, mcpApiKey: undefined }));
+        expect(report.findings.some(f => f.id === 'mcp.bind_no_auth' && f.severity === 'critical')).toBe(true);
+        expect(report.facts.mcpAuthEnabled).toBe(false);
+    });
+
+    it('uses dedicated MCP auth in doctor facts and warnings', () => {
+        vi.spyOn(fs, 'existsSync').mockImplementation((target: fs.PathLike) => String(target).includes('D:/orcbot-test'));
+        vi.spyOn(fs, 'readdirSync').mockReturnValue([] as any);
+
+        const report = collectDoctorReport(makeConfig({
+            gatewayApiKey: undefined,
+            mcpApiKey: 'short-token'
+        }));
+
+        expect(report.facts.mcpAuthEnabled).toBe(true);
+        expect(report.facts.mcpAuthSource).toBe('mcpApiKey');
+        expect(report.findings.some(f => f.id === 'mcp.auth_weak_token' && f.severity === 'warn')).toBe(true);
+    });
+
+    it('falls back to gateway auth for MCP doctor facts when needed', () => {
+        vi.spyOn(fs, 'existsSync').mockImplementation((target: fs.PathLike) => String(target).includes('D:/orcbot-test'));
+        vi.spyOn(fs, 'readdirSync').mockReturnValue([] as any);
+
+        const report = collectDoctorReport(makeConfig({
+            gatewayApiKey: '1234567890123456',
+            mcpHost: '127.0.0.1'
+        }));
+
+        expect(report.facts.mcpAuthEnabled).toBe(true);
+        expect(report.facts.mcpAuthSource).toBe('gatewayApiKey');
+        expect(report.findings.some(f => f.id === 'mcp.bind_no_auth')).toBe(false);
     });
 
     it('flags sudo mode and auto execute as critical', () => {

@@ -443,11 +443,27 @@ export class GatewayServer {
     }
 
     private getSecuritySummary() {
+        const gatewayApiKey = this.gatewayConfig.apiKey || this.config.get('gatewayApiKey');
+        const mcpApiKey = this.config.get('mcpApiKey');
+        const effectiveMcpApiKey = mcpApiKey || gatewayApiKey;
+
         return {
             safeMode: this.config.get('safeMode') || false,
             autoExecuteCommands: this.config.get('autoExecuteCommands') || false,
             pluginAllowList: this.config.get('pluginAllowList') || [],
-            pluginDenyList: this.config.get('pluginDenyList') || []
+            pluginDenyList: this.config.get('pluginDenyList') || [],
+            gateway: {
+                host: this.gatewayConfig.host || this.config.get('gatewayHost') || '0.0.0.0',
+                port: this.gatewayConfig.port || this.config.get('gatewayPort') || 3100,
+                authEnabled: !!gatewayApiKey
+            },
+            mcp: {
+                host: this.config.get('mcpHost') || '0.0.0.0',
+                port: this.config.get('mcpPort') || 3190,
+                path: this.config.get('mcpPath') || '/mcp',
+                authEnabled: !!effectiveMcpApiKey,
+                authSource: mcpApiKey ? 'mcpApiKey' : gatewayApiKey ? 'gatewayApiKey' : 'none'
+            }
         };
     }
 
@@ -785,7 +801,7 @@ export class GatewayServer {
                 status: ['GET /api/status', 'GET /api/health', 'GET /api/doctor', 'GET /api/gateway/capabilities', 'GET /api/system/info'],
                 dashboard: ['GET /api/dashboard/overview', 'GET /api/services', 'GET /api/services/:id'],
                 dataHome: ['GET /api/data-home/summary', 'GET /api/data-home/tree', 'GET /api/data-home/file', 'GET /api/data-home/asset', 'PUT /api/data-home/file', 'POST /api/data-home/directory', 'POST /api/data-home/rename', 'DELETE /api/data-home/entry'],
-                security: ['GET /api/security', 'GET /api/security/audit', 'PUT /api/security', 'GET /api/gateway/token/status', 'POST /api/gateway/token/rotate'],
+                security: ['GET /api/security', 'GET /api/security/audit', 'PUT /api/security', 'GET /api/gateway/token/status', 'POST /api/gateway/token/rotate', 'POST /api/mcp/key/rotate'],
                 tasks: ['POST /api/tasks', 'GET /api/tasks', 'GET /api/tasks/:id', 'POST /api/tasks/:id/cancel', 'POST /api/tasks/clear', 'GET /api/queue/stats'],
                 chat: ['POST /api/chat/send', 'GET /api/chat/history', 'GET /api/chat/export', 'POST /api/chat/clear'],
                 memory: ['GET /api/memory', 'GET /api/memory/stats', 'GET /api/memory/search'],
@@ -1066,6 +1082,23 @@ export class GatewayServer {
                 res.json({
                     success: true,
                     message: 'Token rotated. Copy it now — it will not be shown again in full.',
+                    token: newToken,
+                    tokenPartial: partial
+                });
+            } catch (error: any) {
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        router.post('/mcp/key/rotate', (_req: Request, res: Response) => {
+            try {
+                const newToken = crypto.randomBytes(32).toString('hex');
+                this.config.set('mcpApiKey', newToken);
+                const partial = `${newToken.slice(0, 4)}${'*'.repeat(newToken.length - 8)}${newToken.slice(-4)}`;
+                logger.info('Gateway: MCP API key rotated via /mcp/key/rotate');
+                res.json({
+                    success: true,
+                    message: 'MCP API key rotated. Copy it now — it will not be shown again in full.',
                     token: newToken,
                     tokenPartial: partial
                 });
@@ -1431,7 +1464,7 @@ export class GatewayServer {
         router.get('/security/audit', (req: Request, res: Response) => {
             const deep = String(req.query.deep || '').toLowerCase() === 'true';
             const report = collectDoctorReport(this.config, { deep });
-            const findings = report.findings.filter(f => f.area === 'security' || f.area === 'gateway' || f.area === 'channels');
+            const findings = report.findings.filter(f => f.area === 'security' || f.area === 'gateway' || f.area === 'mcp' || f.area === 'channels');
 
             res.json({
                 ...report,

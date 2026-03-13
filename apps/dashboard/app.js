@@ -82,7 +82,7 @@
             'refreshBtn', 'newTaskBtn', 'quickTaskSend', 'canvasCompactBtn', 'canvasResetBtn',
             'canvasEventClear', 'chatSendBtn', 'clearChatBtn', 'taskComposerSubmit', 'refreshTasksBtn',
             'memorySearchBtn', 'refreshMemoryBtn', 'refreshLogsBtn', 'runApiBtn', 'loadCapabilitiesBtn',
-            'refreshConfigBtn', 'refreshSecurityBtn', 'rotateGatewayTokenBtn', 'clearEventsBtn', 'refreshDataHomeBtn', 'dataHomeUpBtn', 'dataHomeRootBtn', 'dataHomeBrowseBtn',
+            'refreshConfigBtn', 'refreshSecurityBtn', 'rotateGatewayTokenBtn', 'rotateMcpKeyBtn', 'clearEventsBtn', 'refreshDataHomeBtn', 'dataHomeUpBtn', 'dataHomeRootBtn', 'dataHomeBrowseBtn',
             'dataHomeCreateDirBtn', 'dataHomeNewFileBtn', 'dataHomeRenameBtn', 'dataHomeDeleteBtn',
             'dataHomeSaveBtn', 'dataHomeInspectBtn'
         ].forEach((id) => {
@@ -129,6 +129,16 @@
         elements.refreshConfigBtn?.addEventListener('click', loadConfig);
         elements.refreshSecurityBtn?.addEventListener('click', loadSecurity);
         elements.rotateGatewayTokenBtn?.addEventListener('click', rotateGatewayToken);
+        elements.rotateMcpKeyBtn?.addEventListener('click', rotateMcpToken);
+
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest('.copy-btn');
+            if (!btn) return;
+            const value = btn.dataset.copy || '';
+            navigator.clipboard.writeText(value)
+                .then(() => toast('Copied to clipboard'))
+                .catch(() => toast('Copy failed — try selecting the text manually'));
+        });
         elements.clearEventsBtn?.addEventListener('click', clearEvents);
         elements.canvasEventClear?.addEventListener('click', clearEvents);
         elements.canvasCompactBtn?.addEventListener('click', toggleCanvasCompact);
@@ -364,12 +374,16 @@
     }
 
     async function loadSecurity() {
-        const [security, tokenStatus] = await Promise.all([
+        const [security, tokenStatus, audit] = await Promise.all([
             apiFetch('/security'),
-            apiFetch('/gateway/token/status')
+            apiFetch('/gateway/token/status'),
+            apiFetch('/security/audit')
         ]);
-        state.security = { ...security, token: tokenStatus };
+        state.security = { ...security, token: tokenStatus, audit };
         renderSecurity();
+        if (state.overview) {
+            renderOverview();
+        }
         return state.security;
     }
 
@@ -385,6 +399,11 @@
             { label: 'Messages', value: overview.chat?.messageCount ?? 0, sub: overview.chat?.lastMessageAt ? formatTimestamp(overview.chat.lastMessageAt) : 'no chat yet' },
             { label: 'Memories', value: overview.memory?.totalMemories ?? 0, sub: formatBytes(overview.memory?.fileSize ?? 0) },
             { label: 'Skills', value: overview.status?.skillCount ?? 0, sub: `provider ${overview.models?.provider || '-'}` },
+            {
+                label: 'Security Risk',
+                value: state.security?.audit?.summary?.critical ?? 0,
+                sub: `${state.security?.audit?.summary?.warn ?? 0} warnings across gateway, MCP, and runtime controls`
+            },
             { label: 'WS Clients', value: overview.health?.wsClients ?? 0, sub: `${Math.floor((overview.health?.uptimeSeconds || 0) / 60)}m uptime` }
         ];
 
@@ -878,9 +897,32 @@
             return;
         }
 
+        const mcpBindHost = security.mcp?.host || '0.0.0.0';
+        const mcpPort = security.mcp?.port || 3190;
+        const mcpPath = security.mcp?.path || '/mcp';
+        // 0.0.0.0 is a bind address — clients connect to the real hostname
+        const mcpConnectHost = (mcpBindHost === '0.0.0.0') ? (window.location.hostname || 'localhost') : mcpBindHost;
+        const mcpUrl = `http://${mcpBindHost}:${mcpPort}${mcpPath}`;
+        const mcpConnectUrl = `http://${mcpConnectHost}:${mcpPort}${mcpPath}`;
+
+        const stdioJson = JSON.stringify({
+            mcpServers: { orcbot: { command: 'orcbot', args: ['mcp'] } }
+        }, null, 2);
+
+        const httpClientJson = JSON.stringify(
+            security.mcp?.authEnabled
+                ? { mcpServers: { orcbot: { url: mcpConnectUrl, headers: { 'X-Api-Key': '<your-mcpApiKey>' } } } }
+                : { mcpServers: { orcbot: { url: mcpConnectUrl } } }
+        , null, 2);
+
         const blocks = [
             { label: 'Gateway auth', value: security.token?.authEnabled ? 'enabled' : 'disabled' },
             { label: 'Token hint', value: security.token?.tokenPartial || security.token?.hint || 'not set' },
+            { label: 'MCP bind address', value: mcpUrl },
+            { label: 'MCP connect URL', value: mcpConnectUrl, copyable: true, mono: true },
+            { label: 'MCP auth', value: security.mcp?.authEnabled ? `enabled via ${security.mcp?.authSource || 'unknown'}` : 'disabled' },
+            { label: 'Claude Desktop config', value: stdioJson, copyable: true, mono: true },
+            { label: 'HTTP client config (Cursor etc.)', value: httpClientJson, copyable: true, mono: true },
             { label: 'Safe mode', value: String(security.safeMode) },
             { label: 'Auto execute commands', value: String(security.autoExecuteCommands) },
             { label: 'Plugin allow list', value: Array.isArray(security.pluginAllowList) && security.pluginAllowList.length ? security.pluginAllowList.join(', ') : 'empty' },
@@ -895,6 +937,8 @@
         })));
 
         const securityEndpoints = state.capabilities?.api?.security || [];
+        const audit = security.audit || { summary: {}, findings: [] };
+        const topFindings = Array.isArray(audit.findings) ? audit.findings.slice(0, 3) : [];
         const hardeningCards = [
             {
                 label: 'Gateway token',
@@ -905,6 +949,22 @@
             {
                 label: 'Execution policy',
                 body: `Safe mode is ${security.safeMode ? 'enabled' : 'disabled'} and auto-execute commands is ${security.autoExecuteCommands ? 'enabled' : 'disabled'}. Review these before exposing the gateway beyond trusted networks.`
+            },
+            {
+                label: 'MCP exposure',
+                body: security.mcp?.authEnabled
+                    ? `MCP HTTP is configured at ${mcpUrl} with auth via ${security.mcp?.authSource || 'unknown'}.`
+                    : `MCP HTTP is configured at ${mcpUrl} without auth. Keep it loopback-only or add mcpApiKey before remote exposure.`
+            },
+            {
+                label: 'How to start MCP HTTP',
+                body: `To run the gateway dashboard AND MCP together in one command:\n\n  orcbot gateway --with-agent --with-mcp\n\nOr MCP HTTP only:\n\n  orcbot mcp --http\n\nWithout --http, orcbot mcp uses stdio — no HTTP port is opened.\n\nTo test in a browser, open the /health URL (MCP itself only accepts POST):\n  http://${mcpConnectHost}:${mcpPort}/health\n\nMCP clients (Cursor, Claude etc.) connect to:\n  ${mcpConnectUrl}`
+            },
+            {
+                label: 'Audit findings',
+                body: topFindings.length
+                    ? topFindings.map((finding) => `[${String(finding.severity || 'info').toUpperCase()}] ${finding.title}: ${finding.message}`).join('\n')
+                    : `No gateway, MCP, channel, or security findings. Critical ${audit.summary?.critical || 0}, warn ${audit.summary?.warn || 0}, info ${audit.summary?.info || 0}.`
             },
             {
                 label: 'Security endpoints',
@@ -939,6 +999,23 @@
         await loadSecurity();
         await loadCapabilities();
         toast('Gateway token rotated and dashboard credentials updated');
+    }
+
+    async function rotateMcpToken() {
+        const confirmed = window.confirm('Rotate the MCP API key? Any MCP clients using the old key will need to be updated.');
+        if (!confirmed) return;
+
+        const response = await apiFetch('/mcp/key/rotate', {
+            method: 'POST',
+            body: JSON.stringify({})
+        });
+
+        if (response?.success && response?.token) {
+            await loadSecurity();
+            toast(`MCP API key rotated — starts with ${response.token.slice(0, 4)}... Update your MCP client config.`);
+        } else {
+            toast('MCP key rotation failed. Check the console for details.');
+        }
     }
 
     function renderEvents() {
@@ -1715,7 +1792,11 @@
                     <div class="mini-label">${escapeHtml(row.label)}</div>
                     <div class="eyebrow">${escapeHtml(row.hint || 'runtime field')}</div>
                 </div>
-                <div class="kv-value ${row.mono ? 'mono' : ''}">${formatMultiline(row.value || '-')}</div>
+                <div class="kv-value ${row.mono ? 'mono' : ''} ${row.copyable ? 'kv-copyable' : ''}">${
+                    row.copyable
+                        ? `<span class="kv-text">${formatMultiline(row.value || '-')}</span><button class="copy-btn" data-copy="${escapeAttribute(row.value || '')}" title="Copy to clipboard"><i class="fas fa-copy"></i></button>`
+                        : formatMultiline(row.value || '-')
+                }</div>
             </article>
         `).join('');
     }
@@ -1741,6 +1822,12 @@
         const normalized = String(label || '').toLowerCase();
         if (normalized.includes('auth')) return 'gateway access';
         if (normalized.includes('token')) return 'authentication status';
+        if (normalized.includes('mcp bind')) return 'bind address (all interfaces)';
+        if (normalized.includes('mcp connect')) return 'paste this into your MCP client';
+        if (normalized.includes('claude desktop')) return 'paste into claude_desktop_config.json';
+        if (normalized.includes('http client')) return 'paste into Cursor / HTTP-based MCP client';
+        if (normalized.includes('mcp endpoint')) return 'remote MCP bind target';
+        if (normalized.includes('mcp')) return 'MCP transport exposure';
         if (normalized.includes('safe mode')) return 'execution safety';
         if (normalized.includes('auto execute')) return 'command policy';
         if (normalized.includes('allow')) return 'explicit allow policy';

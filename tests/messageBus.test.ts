@@ -88,6 +88,17 @@ describe('MessageBus continuation routing', () => {
         const agent = createMockAgent();
         agent.memory.searchMemory = vi.fn(() => [
             {
+                id: 'tg-out-0',
+                type: 'short',
+                content: 'Assistant sent Telegram message to chat-1: First I will wire the product catalog, then I will configure checkout.',
+                timestamp: new Date(Date.now() - 60_000).toISOString(),
+                metadata: {
+                    source: 'telegram',
+                    role: 'assistant',
+                    chatId: 'chat-1'
+                }
+            },
+            {
                 id: 'tg-out-1',
                 type: 'short',
                 content: 'Assistant sent Telegram message to chat-1: I\'ll default to Shopify and proceed with the build.',
@@ -114,9 +125,12 @@ describe('MessageBus continuation routing', () => {
         expect(agent.pushTask).toHaveBeenCalledTimes(1);
         const [description, priority, metadata] = agent.pushTask.mock.calls[0];
         expect(description).toContain('CONTINUATION:');
+        expect(description).toContain('Recent assistant thread context:');
+        expect(description).toContain('configure checkout');
         expect(priority).toBe(12);
         expect(metadata.continuationIntent).toBe('resume_prior_commitment');
         expect(metadata.replyToAgentText).toContain('default to Shopify');
+        expect(metadata.continuationThreadContext).toContain('configure checkout');
     });
 
     it('queues quiet-mode continuation work even when reply suppression is requested', async () => {

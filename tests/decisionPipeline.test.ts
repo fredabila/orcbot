@@ -339,7 +339,7 @@ describe('DecisionPipeline', () => {
       actionId: 'a7',
       messagesSent: 0,
       currentStep: 11,
-      executionPlan: `STEP BUDGET: 12 steps\n1. do work`,
+      executionPlan: `STEP BUDGET: 12 steps\n1. do work\n↳ FALLBACK: switch to the cached result if the command fails`,
     });
 
     expect(evaluated.tools?.length).toBe(1);

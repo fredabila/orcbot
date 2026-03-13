@@ -79,18 +79,21 @@ describe('GatewayServer', () => {
             }
         };
 
+        const configValues: Record<string, any> = {
+            gatewayHost: '127.0.0.1',
+            gatewayPort: 3100,
+            mcpHost: '127.0.0.1',
+            mcpPort: 3190,
+            mcpPath: '/mcp',
+            modelName: 'test-model',
+            llmProvider: 'openai',
+            safeMode: false,
+            whatsappEnabled: false
+        };
+
         const config = {
-            get: (key: string) => {
-                const values: Record<string, any> = {
-                    gatewayHost: '127.0.0.1',
-                    gatewayPort: 3100,
-                    modelName: 'test-model',
-                    llmProvider: 'openai',
-                    safeMode: false,
-                    whatsappEnabled: false
-                };
-                return values[key];
-            },
+            get: (key: string) => configValues[key],
+            set: (key: string, value: any) => { configValues[key] = value; },
             getDataHome: () => dataHome
         };
 
@@ -150,8 +153,16 @@ describe('GatewayServer', () => {
         const securityResponse = await fetch(`http://127.0.0.1:${port}/api/security/audit`);
         expect(securityResponse.ok).toBe(true);
         const security = await securityResponse.json();
-        expect(security.findings.every((finding: any) => ['security', 'gateway', 'channels'].includes(finding.area))).toBe(true);
+        expect(security.findings.every((finding: any) => ['security', 'gateway', 'mcp', 'channels'].includes(finding.area))).toBe(true);
         expect(security.findings.some((finding: any) => finding.id === 'gateway.loopback_no_auth')).toBe(true);
+        expect(security.findings.some((finding: any) => finding.id === 'mcp.loopback_no_auth')).toBe(true);
+
+        const securitySummaryResponse = await fetch(`http://127.0.0.1:${port}/api/security`);
+        expect(securitySummaryResponse.ok).toBe(true);
+        const securitySummary = await securitySummaryResponse.json();
+        expect(securitySummary.mcp.path).toBe('/mcp');
+        expect(securitySummary.mcp.authEnabled).toBe(false);
+        expect(securitySummary.mcp.authSource).toBe('none');
     });
 
     it('serves enriched orchestrator worker status over the API', async () => {
@@ -162,5 +173,29 @@ describe('GatewayServer', () => {
         expect(payload.agents).toHaveLength(1);
         expect(payload.agents[0].capabilityProfile.capabilities).toEqual(['execute', 'browse', 'web_search']);
         expect(payload.agents[0].lastCapabilityBlock.skillName).toBe('run_command');
+    });
+
+    it('rotates the MCP API key and reflects auth state in /api/security', async () => {
+        // Before rotation: no MCP auth
+        const before = await fetch(`http://127.0.0.1:${port}/api/security`);
+        expect(before.ok).toBe(true);
+        const beforeBody = await before.json();
+        expect(beforeBody.mcp.authEnabled).toBe(false);
+
+        // Rotate
+        const rotateResponse = await fetch(`http://127.0.0.1:${port}/api/mcp/key/rotate`, { method: 'POST' });
+        expect(rotateResponse.ok).toBe(true);
+        const rotateBody = await rotateResponse.json();
+        expect(rotateBody.success).toBe(true);
+        expect(typeof rotateBody.token).toBe('string');
+        expect(rotateBody.token.length).toBe(64);
+        expect(rotateBody.tokenPartial).toMatch(/^.{4}\*+.{4}$/);
+
+        // After rotation: MCP auth enabled, source is mcpApiKey
+        const after = await fetch(`http://127.0.0.1:${port}/api/security`);
+        expect(after.ok).toBe(true);
+        const afterBody = await after.json();
+        expect(afterBody.mcp.authEnabled).toBe(true);
+        expect(afterBody.mcp.authSource).toBe('mcpApiKey');
     });
 });

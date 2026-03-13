@@ -851,6 +851,37 @@ pre {
     font-size: 13px;
 }
 
+.kv-copyable {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.kv-copyable .kv-text {
+    flex: 1;
+    min-width: 0;
+    word-break: break-all;
+}
+
+.copy-btn {
+    flex-shrink: 0;
+    background: none;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 4px 8px;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1;
+    transition: 180ms ease;
+}
+
+.copy-btn:hover {
+    background: rgba(255, 255, 255, 0.72);
+    color: var(--text);
+    transform: translateY(-1px);
+}
+
 .timeline-item,
 .queue-card,
 .detail-card,

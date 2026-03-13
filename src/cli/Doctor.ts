@@ -12,7 +12,7 @@ export interface DoctorFinding {
     title: string;
     message: string;
     recommendation?: string;
-    area: 'gateway' | 'security' | 'channels' | 'providers' | 'storage' | 'runtime';
+    area: 'gateway' | 'mcp' | 'security' | 'channels' | 'providers' | 'storage' | 'runtime';
 }
 
 export interface DoctorReport {
@@ -29,6 +29,11 @@ export interface DoctorReport {
         gatewayHost: string;
         gatewayPort: number;
         gatewayAuthEnabled: boolean;
+        mcpHost: string;
+        mcpPort: number;
+        mcpPath: string;
+        mcpAuthEnabled: boolean;
+        mcpAuthSource: 'mcpApiKey' | 'gatewayApiKey' | 'none';
         channelsConfigured: string[];
         providersConfigured: string[];
         runtime: {
@@ -180,6 +185,16 @@ export function collectDoctorReport(config: ConfigManager, options?: { deep?: bo
     const gatewayPort = Number(config.get('gatewayPort') || 3100);
     const gatewayApiKey = String(config.get('gatewayApiKey') || '');
     const gatewayCorsOrigins = Array.isArray(config.get('gatewayCorsOrigins')) ? (config.get('gatewayCorsOrigins') as string[]) : ['*'];
+    const mcpHost = String(config.get('mcpHost') || '0.0.0.0');
+    const mcpPort = Number(config.get('mcpPort') || 3190);
+    const mcpPath = String(config.get('mcpPath') || '/mcp');
+    const mcpApiKey = String(config.get('mcpApiKey') || '');
+    const effectiveMcpApiKey = mcpApiKey || gatewayApiKey;
+    const mcpAuthSource: 'mcpApiKey' | 'gatewayApiKey' | 'none' = mcpApiKey
+        ? 'mcpApiKey'
+        : gatewayApiKey
+            ? 'gatewayApiKey'
+            : 'none';
     const configuredChannels = getConfiguredChannels(config);
     const configuredProviders = getConfiguredProviders(config);
     const modelName = String(config.get('modelName') || '');
@@ -296,6 +311,39 @@ export function collectDoctorReport(config: ConfigManager, options?: { deep?: bo
             message: 'gatewayCorsOrigins includes "*" while the gateway is configured for non-loopback access.',
             recommendation: 'Restrict gatewayCorsOrigins to explicit trusted origins for remote dashboard/API use.',
             area: 'gateway'
+        });
+    }
+
+    if (!effectiveMcpApiKey && !isLoopbackHost(mcpHost)) {
+        addFinding(findings, {
+            id: 'mcp.bind_no_auth',
+            severity: 'critical',
+            title: 'MCP HTTP endpoint is exposed without auth',
+            message: `MCP HTTP is configured for ${mcpHost}:${mcpPort}${mcpPath} with no mcpApiKey or gatewayApiKey available for auth fallback.`,
+            recommendation: 'Set mcpApiKey before binding MCP HTTP to non-loopback interfaces.',
+            area: 'mcp'
+        });
+    }
+
+    if (effectiveMcpApiKey && effectiveMcpApiKey.length < 16) {
+        addFinding(findings, {
+            id: 'mcp.auth_weak_token',
+            severity: 'warn',
+            title: 'MCP API key looks short',
+            message: `${mcpAuthSource} is configured for MCP auth but appears shorter than 16 characters.`,
+            recommendation: 'Rotate to a long random token before exposing MCP HTTP remotely.',
+            area: 'mcp'
+        });
+    }
+
+    if (!effectiveMcpApiKey && isLoopbackHost(mcpHost)) {
+        addFinding(findings, {
+            id: 'mcp.loopback_no_auth',
+            severity: 'info',
+            title: 'MCP HTTP is local-only without auth',
+            message: 'Loopback-only MCP HTTP without auth can be acceptable for single-machine development.',
+            recommendation: 'Add mcpApiKey before reverse proxying, tunneling, or binding MCP HTTP to a non-loopback interface.',
+            area: 'mcp'
         });
     }
 
@@ -437,6 +485,11 @@ export function collectDoctorReport(config: ConfigManager, options?: { deep?: bo
             gatewayHost,
             gatewayPort,
             gatewayAuthEnabled: !!gatewayApiKey,
+            mcpHost,
+            mcpPort,
+            mcpPath,
+            mcpAuthEnabled: !!effectiveMcpApiKey,
+            mcpAuthSource,
             channelsConfigured: configuredChannels,
             providersConfigured: configuredProviders,
             runtime: {

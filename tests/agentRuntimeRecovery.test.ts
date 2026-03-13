@@ -289,6 +289,49 @@ describe('Agent runtime recovery supervision', () => {
             },
             isChannelTask: true,
             messagesSent: 0,
+            substantiveDeliveriesSent: 0,
+            maxSteps: 15,
+            maxNoToolsRetries: 3,
+            noToolsRetryCount: 1,
+        });
+
+        expect(harness.agent.sendNoResponseFallback).toHaveBeenCalledWith(action, 'loop-exhausted');
+        expect(outcome.forcedDeliverySent).toBe(true);
+        expect(outcome.outcome).toBe('break');
+    });
+
+    it('forces grounded delivery for looping continuation actions after status-only messages', async () => {
+        const action = createAction('continuation-loop-status-only');
+        action.payload = {
+            ...action.payload,
+            source: 'telegram',
+            sourceId: '8077489121',
+            description: 'CONTINUATION: The user asked on telegram "any new updates" about the earlier task.',
+            continuationIntent: 'resume_prior_commitment'
+        };
+
+        const harness = createAgentHarness({
+            action,
+            decisions: [],
+            executeSkill: async () => ({ success: true })
+        });
+
+        harness.agent.buildGroundedNoResponseMessage = vi.fn(() => 'Quick grounded update: not done yet. I checked the real work state and I still only have environment progress, not the deliverable.');
+        harness.agent.sendNoResponseFallback = vi.fn(async () => true);
+
+        const outcome = await (harness.agent as any).handleNoToolDecision({
+            action,
+            currentStep: 5,
+            decision: {
+                verification: {
+                    goals_met: false,
+                    analysis: 'Loop detected (4x repeated response). Only status messages sent — agent must deliver a substantive answer or explain what went wrong.'
+                },
+                tools: []
+            },
+            isChannelTask: true,
+            messagesSent: 1,
+            substantiveDeliveriesSent: 0,
             maxSteps: 15,
             maxNoToolsRetries: 3,
             noToolsRetryCount: 1,
