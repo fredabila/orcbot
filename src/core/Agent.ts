@@ -14343,6 +14343,196 @@ Respond with a single actionable task description (one sentence). Be specific ab
         };
     }
 
+    private normalizeToolMetadata(toolName: string, rawMetadata: any): Record<string, any> {
+        const isRecord = (v: any): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+        let normalized: Record<string, any>;
+        if (isRecord(rawMetadata)) {
+            normalized = { ...rawMetadata };
+        } else if (typeof rawMetadata === 'string') {
+            const trimmed = rawMetadata.trim();
+            if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+                try {
+                    const parsed = JSON.parse(trimmed);
+                    normalized = isRecord(parsed) ? parsed : { input: rawMetadata };
+                } catch {
+                    normalized = { input: rawMetadata };
+                }
+            } else {
+                normalized = { input: rawMetadata };
+            }
+        } else if (rawMetadata == null) {
+            normalized = {};
+        } else {
+            normalized = { input: rawMetadata };
+        }
+
+        if (!normalized.query && typeof normalized.q === 'string') {
+            normalized.query = normalized.q;
+        }
+        if (!normalized.url && typeof normalized.link === 'string') {
+            normalized.url = normalized.link;
+        }
+        if (!normalized.message && typeof normalized.text === 'string') {
+            normalized.message = normalized.text;
+        }
+        if (!normalized.chatId && typeof normalized.chat_id === 'string') {
+            normalized.chatId = normalized.chat_id;
+        }
+        if (!normalized.channelId && typeof normalized.channel_id === 'string') {
+            normalized.channelId = normalized.channel_id;
+        }
+
+        if (!Object.keys(normalized).length && typeof rawMetadata === 'string' && rawMetadata.trim()) {
+            const text = rawMetadata.trim();
+            if (toolName.includes('search') || toolName.includes('fetch') || toolName.includes('browse')) {
+                normalized.query = text;
+            } else if (toolName.startsWith('send_') || toolName.includes('message')) {
+                normalized.message = text;
+            } else {
+                normalized.input = text;
+            }
+        }
+
+        return normalized;
+    }
+
+    private prepareToolCallForExecution(options: {
+        actionId: string;
+        step: number;
+        toolName: string;
+        metadata: any;
+        lane?: 'user' | 'autonomy';
+    }): { executable: boolean; reason?: string; toolName: string; metadata: Record<string, any> } {
+        const { actionId, step, toolName, metadata, lane } = options;
+        const knownSkill = this.skills.getSkill(toolName);
+        const normalizedMetadata = this.normalizeToolMetadata(toolName, metadata);
+
+        if (!knownSkill) {
+            const laneText = lane ? ` in lane ${lane}` : '';
+            const reason = `Unknown/hallucinated tool${laneText}: ${toolName}`;
+            logger.warn(`Agent: ${reason}`);
+            if (this.config.get('tforceEnabled') !== false) {
+                this.tforce.recordIncident({
+                    actionId,
+                    step,
+                    source: 'guardrail',
+                    summary: reason,
+                    error: `Tool not registered in SkillsManager`,
+                    metadata: { proposedTool: toolName },
+                    timestamp: new Date().toISOString()
+                });
+            }
+            return { executable: false, reason, toolName, metadata: normalizedMetadata };
+        }
+
+        return { executable: true, toolName, metadata: normalizedMetadata };
+    }
+
+    private isTransientToolError(errorText?: string): boolean {
+        const normalized = String(errorText || '').toLowerCase();
+        if (!normalized) return false;
+
+        return (
+            normalized.includes('timeout') ||
+            normalized.includes('timed out') ||
+            normalized.includes('etimedout') ||
+            normalized.includes('econnreset') ||
+            normalized.includes('econnrefused') ||
+            normalized.includes('network') ||
+            normalized.includes('fetch failed') ||
+            normalized.includes('429') ||
+            normalized.includes('rate limit') ||
+            normalized.includes('too many requests') ||
+            normalized.includes('temporar')
+        );
+    }
+
+    private async executeToolWithResilience(options: {
+        actionId: string;
+        step: number;
+        toolName: string;
+        metadata: any;
+        failureCounts: Record<string, number>;
+        lane?: 'user' | 'autonomy';
+    }): Promise<{ success: boolean; result?: any; error?: string; skippedByCircuit?: boolean }> {
+        const {
+            actionId,
+            step,
+            toolName,
+            metadata,
+            failureCounts,
+            lane
+        } = options;
+
+        const CIRCUIT_THRESHOLD = 3;
+        const currentFailures = failureCounts[toolName] || 0;
+        if (currentFailures >= CIRCUIT_THRESHOLD) {
+            const laneText = lane ? ` in lane ${lane}` : '';
+            const error = `Circuit open for ${toolName}${laneText} after ${currentFailures} failures`;
+            if (this.config.get('tforceEnabled') !== false) {
+                this.tforce.recordIncident({
+                    actionId,
+                    step,
+                    source: 'guardrail',
+                    summary: `Circuit breaker blocked tool${laneText}: ${toolName}`,
+                    error,
+                    timestamp: new Date().toISOString()
+                });
+            }
+            return { success: false, error, skippedByCircuit: true };
+        }
+
+        let attempt = 0;
+        let lastError = '';
+
+        while (true) {
+            attempt++;
+            try {
+                const result = await this.skills.executeSkill(toolName, metadata || {});
+                failureCounts[toolName] = 0;
+                return { success: true, result };
+            } catch (e) {
+                lastError = String(e);
+                const isSideEffect = this.getSkillMeta(toolName).isSideEffect;
+                const allowRetry = !isSideEffect && this.isTransientToolError(lastError);
+                const maxAttempts = allowRetry ? 2 : 1;
+
+                if (attempt < maxAttempts) {
+                    logger.warn(`Tool ${toolName} transient failure on attempt ${attempt}; retrying once`);
+                    await new Promise(resolve => setTimeout(resolve, 400));
+                    continue;
+                }
+
+                failureCounts[toolName] = (failureCounts[toolName] || 0) + 1;
+                const laneText = lane ? ` in lane ${lane}` : '';
+                if (this.config.get('tforceEnabled') !== false) {
+                    this.tforce.recordIncident({
+                        actionId,
+                        step,
+                        source: 'tool',
+                        summary: `Tool failed${laneText}: ${toolName}`,
+                        error: lastError,
+                        timestamp: new Date().toISOString()
+                    });
+
+                    if ((failureCounts[toolName] || 0) >= CIRCUIT_THRESHOLD) {
+                        this.tforce.recordIncident({
+                            actionId,
+                            step,
+                            source: 'guardrail',
+                            summary: `Circuit breaker opened${laneText}: ${toolName}`,
+                            error: `Reached ${failureCounts[toolName]} consecutive failures`,
+                            timestamp: new Date().toISOString()
+                        });
+                    }
+                }
+
+                return { success: false, error: lastError };
+            }
+        }
+    }
+
     /**
      * Run a single decision cycle (used by worker processes)
      * Processes the next action in the queue and returns the result
@@ -14375,6 +14565,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             let lastError: string | undefined;
             const MAX_NO_TOOL_STEPS = 3; // Fail if 3 consecutive steps produce no tools
             const recentTools: string[] = [];
+            const toolFailureCounts: Record<string, number> = {};
 
             while (currentStep < MAX_STEPS) {
                 currentStep++;
@@ -14425,25 +14616,32 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     if (decision.tools && decision.tools.length > 0) {
                         for (const tool of decision.tools) {
                             logger.info(`runOnce: Final tool execution: ${tool.name}`);
-                            try {
-                                await this.skills.executeSkill(tool.name, tool.metadata || {});
+                            const prepared = this.prepareToolCallForExecution({
+                                actionId: action.id,
+                                step: currentStep,
+                                toolName: tool.name,
+                                metadata: tool.metadata
+                            });
+                            if (!prepared.executable) {
+                                lastError = prepared.reason;
+                                continue;
+                            }
+
+                            const executeResult = await this.executeToolWithResilience({
+                                actionId: action.id,
+                                step: currentStep,
+                                toolName: prepared.toolName,
+                                metadata: prepared.metadata,
+                                failureCounts: toolFailureCounts
+                            });
+
+                            if (executeResult.success) {
                                 recentTools.push(tool.name);
                                 if (recentTools.length > 8) {
                                     recentTools.splice(0, recentTools.length - 8);
                                 }
-                            } catch (e) {
-                                lastError = String(e);
-                                if (this.config.get('tforceEnabled') !== false) {
-                                    this.tforce.recordIncident({
-                                        actionId: action.id,
-                                        step: currentStep,
-                                        source: 'tool',
-                                        summary: `Tool failed: ${tool.name}`,
-                                        error: lastError,
-                                        timestamp: new Date().toISOString()
-                                    });
-                                }
-                                throw e;
+                            } else {
+                                lastError = executeResult.error;
                             }
                         }
                     }
@@ -14454,25 +14652,32 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     noToolSteps = 0; // Reset counter
                     for (const tool of decision.tools) {
                         logger.info(`runOnce: Executing tool: ${tool.name}`);
-                        try {
-                            await this.skills.executeSkill(tool.name, tool.metadata || {});
+                        const prepared = this.prepareToolCallForExecution({
+                            actionId: action.id,
+                            step: currentStep,
+                            toolName: tool.name,
+                            metadata: tool.metadata
+                        });
+                        if (!prepared.executable) {
+                            lastError = prepared.reason;
+                            continue;
+                        }
+
+                        const executeResult = await this.executeToolWithResilience({
+                            actionId: action.id,
+                            step: currentStep,
+                            toolName: prepared.toolName,
+                            metadata: prepared.metadata,
+                            failureCounts: toolFailureCounts
+                        });
+
+                        if (executeResult.success) {
                             recentTools.push(tool.name);
                             if (recentTools.length > 8) {
                                 recentTools.splice(0, recentTools.length - 8);
                             }
-                        } catch (e) {
-                            lastError = String(e);
-                            if (this.config.get('tforceEnabled') !== false) {
-                                this.tforce.recordIncident({
-                                    actionId: action.id,
-                                    step: currentStep,
-                                    source: 'tool',
-                                    summary: `Tool failed: ${tool.name}`,
-                                    error: lastError,
-                                    timestamp: new Date().toISOString()
-                                });
-                            }
-                            throw e;
+                        } else {
+                            lastError = executeResult.error;
                         }
                     }
                 } else {
@@ -14575,6 +14780,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             let lastError: string | undefined;
             const MAX_NO_TOOL_STEPS = 3;
             const recentTools: string[] = [];
+            const toolFailureCounts: Record<string, number> = {};
 
             // Initialize or reset tracking in the payload
             if (typeof action.payload.messagesSent !== 'number') {
@@ -14625,9 +14831,29 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     result = decision.content || 'Task completed';
                     if (decision.tools && decision.tools.length > 0) {
                         for (const tool of decision.tools) {
+                            const prepared = this.prepareToolCallForExecution({
+                                actionId: action.id,
+                                step: currentStep,
+                                toolName: tool.name,
+                                metadata: tool.metadata,
+                                lane
+                            });
+                            if (!prepared.executable) {
+                                lastError = prepared.reason;
+                                continue;
+                            }
+
                             const toolMeta = this.getSkillMeta(tool.name);
-                            try {
-                                const toolResult = await this.skills.executeSkill(tool.name, tool.metadata || {});
+                            const executeResult = await this.executeToolWithResilience({
+                                actionId: action.id,
+                                step: currentStep,
+                                toolName: prepared.toolName,
+                                metadata: prepared.metadata,
+                                failureCounts: toolFailureCounts,
+                                lane
+                            });
+
+                            if (executeResult.success) {
                                 recentTools.push(tool.name);
                                 if (recentTools.length > 8) {
                                     recentTools.splice(0, recentTools.length - 8);
@@ -14635,19 +14861,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 if (toolMeta.isSideEffect) {
                                     action.payload.messagesSent++;
                                 }
-                            } catch (e) {
-                                logger.error(`Error executing skill ${tool.name}: ${e}`);
-                                lastError = String(e);
-                                if (this.config.get('tforceEnabled') !== false) {
-                                    this.tforce.recordIncident({
-                                        actionId: action.id,
-                                        step: currentStep,
-                                        source: 'tool',
-                                        summary: `Tool failed in lane ${lane}: ${tool.name}`,
-                                        error: lastError,
-                                        timestamp: new Date().toISOString()
-                                    });
-                                }
+                            } else {
+                                logger.error(`Error executing skill ${tool.name}: ${executeResult.error}`);
+                                lastError = executeResult.error;
                             }
                         }
                     }
@@ -14672,9 +14888,29 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 } else {
                     noToolSteps = 0;
                     for (const tool of decision.tools) {
+                        const prepared = this.prepareToolCallForExecution({
+                            actionId: action.id,
+                            step: currentStep,
+                            toolName: tool.name,
+                            metadata: tool.metadata,
+                            lane
+                        });
+                        if (!prepared.executable) {
+                            lastError = prepared.reason;
+                            continue;
+                        }
+
                         const toolMeta = this.getSkillMeta(tool.name);
-                        try {
-                            const toolResult = await this.skills.executeSkill(tool.name, tool.metadata || {});
+                        const executeResult = await this.executeToolWithResilience({
+                            actionId: action.id,
+                            step: currentStep,
+                            toolName: prepared.toolName,
+                            metadata: prepared.metadata,
+                            failureCounts: toolFailureCounts,
+                            lane
+                        });
+
+                        if (executeResult.success) {
                             recentTools.push(tool.name);
                             if (recentTools.length > 8) {
                                 recentTools.splice(0, recentTools.length - 8);
@@ -14682,19 +14918,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             if (toolMeta.isSideEffect) {
                                 action.payload.messagesSent++;
                             }
-                        } catch (e) {
-                            logger.error(`Error executing skill ${tool.name}: ${e}`);
-                            lastError = String(e);
-                            if (this.config.get('tforceEnabled') !== false) {
-                                this.tforce.recordIncident({
-                                    actionId: action.id,
-                                    step: currentStep,
-                                    source: 'tool',
-                                    summary: `Tool failed in lane ${lane}: ${tool.name}`,
-                                    error: lastError,
-                                    timestamp: new Date().toISOString()
-                                });
-                            }
+                        } else {
+                            logger.error(`Error executing skill ${tool.name}: ${executeResult.error}`);
+                            lastError = executeResult.error;
                         }
                     }
                 }

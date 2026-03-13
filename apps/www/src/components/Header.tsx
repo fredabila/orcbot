@@ -8,6 +8,7 @@ interface HeaderProps {
 const Header: React.FC<HeaderProps> = ({ scrolled: initialScrolled = false }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(initialScrolled);
+  const [openDropdown, setOpenDropdown] = useState<string | null>(null);
 
   useEffect(() => {
     if (initialScrolled) return;
@@ -16,14 +17,19 @@ const Header: React.FC<HeaderProps> = ({ scrolled: initialScrolled = false }) =>
     return () => window.removeEventListener('scroll', onScroll);
   }, [initialScrolled]);
 
+  const handleNavClick = () => {
+    setMobileMenuOpen(false);
+    setOpenDropdown(null);
+  };
+
+  const toggleDropdown = (id: string) => {
+    setOpenDropdown(prev => (prev === id ? null : id));
+  };
+
   return (
     <nav className={`nav ${scrolled ? 'nav-scrolled' : ''}`}>
       <Link to="/" className="logo" onClick={() => setMobileMenuOpen(false)}>
-        <svg className="logo-mark" width="28" height="28" viewBox="0 0 28 28" fill="none">
-          <rect width="28" height="28" rx="7" fill="#5cffb3" fillOpacity="0.15" />
-          <path d="M8 14l4 4 8-8" stroke="#5cffb3" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
-          <circle cx="21" cy="7" r="2.5" fill="#5cffb3" />
-        </svg>
+        <img className="logo-mark logo-img" src="/orcbot.jpeg" alt="OrcBot logo" />
         <span className="logo-text">OrcBot</span>
       </Link>
 
@@ -32,14 +38,39 @@ const Header: React.FC<HeaderProps> = ({ scrolled: initialScrolled = false }) =>
       </button>
 
       <div className={`nav-center ${mobileMenuOpen ? 'open' : ''}`}>
-        <Link to="/" onClick={() => setMobileMenuOpen(false)}>Home</Link>
-        <Link to="/skills" onClick={() => setMobileMenuOpen(false)}>Skills</Link>
-        <Link to="/self-training" onClick={() => setMobileMenuOpen(false)}>Self-Training</Link>
-        <Link to="/robotics" onClick={() => setMobileMenuOpen(false)}>Robotics</Link>
-        <Link to="/engineering" onClick={() => setMobileMenuOpen(false)}>Engineering</Link>
-        <Link to="/saas" onClick={() => setMobileMenuOpen(false)}>SaaS Farm</Link>
-        <Link to="/deploy" onClick={() => setMobileMenuOpen(false)}>Deploy</Link>
-        <a href="https://docs.orcbot.buzzchat.site/" target="_blank" rel="noopener noreferrer" onClick={() => setMobileMenuOpen(false)}>Docs</a>
+        <div className={`nav-dropdown ${openDropdown === 'product' ? 'open' : ''}`}>
+          <button
+            className="nav-dropdown-toggle"
+            onClick={() => toggleDropdown('product')}
+            aria-haspopup="true"
+            aria-expanded={openDropdown === 'product'}
+          >
+            Product <span className="nav-caret">▾</span>
+          </button>
+          <div className="nav-dropdown-menu" onMouseLeave={() => setOpenDropdown(null)}>
+            <Link to="/" onClick={handleNavClick}>Home</Link>
+            <Link to="/skills" onClick={handleNavClick}>Skills</Link>
+            <Link to="/self-training" onClick={handleNavClick}>Self-Training</Link>
+          </div>
+        </div>
+
+        <div className={`nav-dropdown ${openDropdown === 'labs' ? 'open' : ''}`}>
+          <button
+            className="nav-dropdown-toggle"
+            onClick={() => toggleDropdown('labs')}
+            aria-haspopup="true"
+            aria-expanded={openDropdown === 'labs'}
+          >
+            Labs <span className="nav-caret">▾</span>
+          </button>
+          <div className="nav-dropdown-menu" onMouseLeave={() => setOpenDropdown(null)}>
+            <Link to="/robotics" onClick={handleNavClick}>Robotics</Link>
+            <Link to="/engineering" onClick={handleNavClick}>Engineering</Link>
+            <Link to="/saas" onClick={handleNavClick}>SaaS Farm</Link>
+          </div>
+        </div>
+
+        <Link to="/deploy" onClick={handleNavClick}>Deploy</Link>
       </div>
 
       <div className="nav-end">

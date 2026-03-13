@@ -6,7 +6,7 @@ import './Skills.css';
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 
-type Tag = 'messaging' | 'browser' | 'system' | 'memory' | 'ai' | 'orchestration' | 'scheduling' | 'rag' | 'computer' | 'tuning' | 'email';
+type Tag = 'messaging' | 'browser' | 'system' | 'memory' | 'ai' | 'orchestration' | 'scheduling' | 'rag' | 'computer' | 'tuning' | 'email' | 'dev';
 
 interface Skill {
   name: string;
@@ -20,6 +20,7 @@ const CATEGORIES: { id: Tag | 'all'; label: string; icon: string }[] = [
   { id: 'messaging',    label: 'Messaging & Media',    icon: '💬' },
   { id: 'browser',      label: 'Browser & Web',        icon: '🌐' },
   { id: 'system',       label: 'System & Config',      icon: '⚙️' },
+  { id: 'dev',          label: 'Developer Tools',      icon: '🧰' },
   { id: 'memory',       label: 'Memory & Learning',    icon: '🧠' },
   { id: 'rag',          label: 'RAG Knowledge',        icon: '📚' },
   { id: 'ai',           label: 'AI & Analysis',        icon: '🤖' },
@@ -327,6 +328,7 @@ const TAG_COLORS: Record<Tag, string> = {
   computer:     '#ff9f1c',
   tuning:       '#e0c3fc',
   email:        '#ff7eb3',
+  dev:          '#89b4ff',
 };
 
 // ─── Plugin steps ─────────────────────────────────────────────────────────────
@@ -612,6 +614,10 @@ function Skills() {
 
       <footer className="site-footer">
         <div className="footer-bottom" style={{ maxWidth: '1400px' }}>
+          <Link to="/" className="logo footer-logo">
+            <img className="logo-mark logo-img" src="/orcbot.jpeg" alt="OrcBot logo" />
+            <span>OrcBot</span>
+          </Link>
           <p>&copy; {new Date().getFullYear()} OrcBot Project. Built for the autonomous era.</p>
           <div className="footer-bottom-links">
             <Link to="/">Home</Link>

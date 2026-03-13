@@ -340,11 +340,7 @@ function App() {
         <div className="footer-top">
           <div className="footer-brand">
             <Link to="/" className="logo footer-logo">
-              <svg className="logo-mark" width="26" height="26" viewBox="0 0 28 28" fill="none">
-                <rect width="28" height="28" rx="7" fill="#5cffb3" fillOpacity="0.15" />
-                <path d="M8 14l4 4 8-8" stroke="#5cffb3" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
-                <circle cx="21" cy="7" r="2.5" fill="#5cffb3" />
-              </svg>
+              <img className="logo-mark logo-img" src="/orcbot.jpeg" alt="OrcBot logo" />
               <span>OrcBot</span>
             </Link>
             <p className="footer-brand-desc">An autonomous AI operating system for operators. Local-first, memory-aware, and always on your hardware.</p>
