@@ -1475,6 +1475,7 @@ ${coreInstructions}
 ${historyNotes}
 
 EXECUTION STATE:
+- MISSION ANCHOR (Original Task): "${taskDescription}"
 - Action ID: ${actionId}
 - messagesSent: ${metadata.messagesSent || 0}
 - Sequence Step: ${metadata.currentStep || '1'} of ${metadata.maxSteps || 'N/A'}

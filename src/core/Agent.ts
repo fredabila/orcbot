@@ -55,6 +55,7 @@ import { BookLogManager } from '../memory/BookLogManager';
 import { registerBookLogSkills } from '../skills/bookLogTools';
 import { registerChannelManagementSkills } from '../skills/channelManagement';
 import { registerFileTools } from '../skills/fileTools';
+import { registerApiTools } from '../skills/apiTools';
 import { ChannelRegistry } from '../channels/ChannelRegistry';
 import { BlockReviewer, ReviewResult, BlockVerdict } from './BlockReviewer';
 import { parseBrowserPerformActions } from './BrowserPerformParser';
@@ -1249,6 +1250,7 @@ export class Agent {
                 registerBookLogSkills(this);
                 registerChannelManagementSkills(this);
                 registerFileTools(this);
+                registerApiTools(this);
 
                 this.skills.registerSkill({
                     name: 'create_time_capsule',

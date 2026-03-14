@@ -111,10 +111,16 @@ This file lists the available skills for the agent.
 - **switch_browser_engine(engine, endpoint?)**: [BROWSER/WEB AUTOMATION] Switch between Puppeteer and Lightpanda browser engines.
 - **create_time_capsule(goal, duration_minutes)**: [ADMIN] Start a high-intensity, time-bounded task. Standard step limits and hard breaks are relaxed to allow the agent to go "all-in" on a complex goal within a specific time window. (Admin only).
 - **extract_article(url?)**: [HIGH-LEVEL PREFERRED] Extract clean article text from a URL or the current page.
-- **http_fetch(url, method?, headers?, body?, timeout?)**: [HIGH-LEVEL PREFERRED] Lightweight HTTP request (no browser). Supports GET/POST/PUT/PATCH/DELETE. Returns status + body. Ideal for APIs and simple pages. USE THIS BEFORE RESORTING TO FULL BROWSER.
-- **youtube_trending(region?, category?)**: [HIGH-LEVEL PREFERRED] Fetch YouTube trending videos via API fallbacks.
+## API & Integration
+- **api_request({ url, method?, headers?, body?, params?, auth?, timeout? })**: [HIGH-LEVEL PREFERRED] Perform a structured REST API request. Supports automatic JSON handling, query parameters, and authentication (Bearer/Basic). Returns a structured object with status, headers, and data. Much more robust than http_fetch for complex API integrations.
+- **api_get({ url, params?, auth?, headers? })**: [API TOOL] Perform a GET request to an API endpoint with optional query parameters and auth.
+- **api_post({ url, body, auth?, headers? })**: [API TOOL] Perform a POST request to an API endpoint with a JSON body.
+- **api_put({ url, body, auth?, headers? })**: [API TOOL] Perform a PUT request to an API endpoint.
+- **api_delete({ url, params?, auth?, headers? })**: [API TOOL] Perform a DELETE request to an API endpoint.
+- **api_graphql({ url, query, variables?, auth?, headers? })**: [API TOOL] Perform a GraphQL query or mutation.
+- **http_fetch(url, method?, headers?, body?, timeout?)**: [HIGH-LEVEL] Lightweight HTTP request (no browser). Supports GET/POST/PUT/PATCH/DELETE. Returns status + body. Ideal for simple pages or when a structured API response is not needed.
 
-## Computer Use (Vision + System)
+## System & Configuration
 - **computer_screenshot(context?)**: [VISION/COMPUTER CONTROL] Capture a screenshot (browser or system) with optional vision description.
 - **computer_click(x?, y?, description?, button?, context?)**: [VISION/COMPUTER CONTROL] Click by coordinates or vision-locate a described element.
 - **computer_vision_click(description, button?, context?)**: [VISION/COMPUTER CONTROL] Vision-guided click by description.
