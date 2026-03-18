@@ -528,11 +528,17 @@ export class MultiLLM {
         const messages: LLMMessage[] = [];
         if (systemMessage) messages.push({ role: 'system', content: systemMessage });
         messages.push({ role: 'user', content: prompt });
+        // OpenAI enforces a 128-tool limit; NVIDIA has the same constraint via its OpenAI-compatible API.
+        const MAX_TOOLS = 128;
+        const cappedTools = tools.length > MAX_TOOLS ? tools.slice(0, MAX_TOOLS) : tools;
+        if (tools.length > MAX_TOOLS) {
+            logger.warn(`MultiLLM ${provider}: trimmed tools from ${tools.length} to ${MAX_TOOLS} (API limit)`);
+        }
         const body: any = {
             model: resolvedModel,
             messages,
             temperature: 0.7,
-            tools,
+            tools: cappedTools,
         };
         if (provider === 'nvidia') body.max_tokens = 16384;
 

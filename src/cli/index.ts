@@ -5174,8 +5174,7 @@ async function showModelsMenu() {
             name: 'provider',
             message: cyan('Select provider to configure:'),
             choices: [
-                { name: `  ⭐ ${bold('Set Primary Provider')} ${dim(`(current: ${currentProvider})`)}`, value: 'set_primary' },
-                { name: `  🔄 ${bold('pi-ai Model Browser')} ${dim(`(${piAiEnabled ? 'active · 15+ providers' : 'disabled'})`)}`, value: 'pi_ai' },
+                { name: `  ⭐ ${bold('Model & Provider Setup')} ${dim(`(current: ${currentProvider} · 15+ providers)`)}`, value: 'pi_ai' },
                 new inquirer.Separator(gradient('  ─── Per-Provider Config ──────────', [c.green, c.gray])),
                 { name: `  ${statusDot(hasOpenAI, '')} OpenAI ${dim('(GPT-4, etc.)')}`, value: 'openai' },
                 { name: `  ${statusDot(hasOpenRouter, '')} OpenRouter ${dim('(multi-model gateway)')}`, value: 'openrouter' },
@@ -5192,9 +5191,7 @@ async function showModelsMenu() {
 
     if (provider === 'back') return showMainMenu();
 
-    if (provider === 'set_primary') {
-        await showSetPrimaryProvider();
-    } else if (provider === 'pi_ai') {
+    if (provider === 'pi_ai') {
         await showPiAIConfig();
     } else if (provider === 'openai') {
         await showOpenAIConfig();
@@ -5595,7 +5592,7 @@ async function showSelfTrainingMenu() {
 async function showPiAIConfig() {
     console.clear();
     banner();
-    sectionHeader('🔄', 'pi-ai Model Browser');
+    sectionHeader('⭐', 'Model & Provider Setup');
 
     const catalogue = await agent.llm.getPiAICatalogue();
 
@@ -5648,9 +5645,11 @@ async function showPiAIConfig() {
     ], { title: '🔄 pi-ai STATUS', width: 58, color: piAiEnabled ? c.green : c.yellow });
     console.log('');
 
+    const currentProvider = agent.config.get('llmProvider');
     const topChoices: any[] = [
         { name: `  ${piAiEnabled ? '✅ Disable pi-ai' : '🔄 Enable pi-ai'} ${dim('(toggle)')}`, value: 'toggle' },
         { name: `  📦 ${bold('Check for Catalog Updates')} ${dim('(npm update)')}`, value: 'update_catalog' },
+        { name: `  🔀 ${bold('Auto-detect provider')} ${dim(`(infer from model name)${!currentProvider ? ' ✓ active' : ''}`)}`, value: 'auto_provider' },
         new inquirer.Separator(gradient('  ─── Browse & Select Model ────────────', [c.brightCyan, c.gray])),
         ...Object.entries(catalogue).map(([key, cat]: [string, any]) => {
             const hasKey = !!(piKeyMap[key] ? piKeyMap[key]() : undefined);
@@ -5684,6 +5683,13 @@ async function showPiAIConfig() {
         return showPiAIConfig();
     }
 
+    if (choice === 'auto_provider') {
+        agent.config.set('llmProvider', undefined);
+        console.log(green('Provider set to AUTO — will be inferred from model name.'));
+        await waitKeyPress();
+        return showPiAIConfig();
+    }
+
     if ((choice as string).startsWith('cat:')) {
         const catKey = (choice as string).slice(4);
         const cat = catalogue[catKey];
@@ -5694,9 +5700,12 @@ async function showPiAIConfig() {
             value: m.id,
         }));
         modelChoices.push({ name: dim('  ✏️  Enter custom model ID...'), value: '__custom__' } as any);
-        if (!hasKey) {
-            modelChoices.push({ name: yellow(`  🔑 Set ${cat.label} API key first`), value: '__setkey__' } as any);
-        }
+        modelChoices.push({
+            name: hasKey
+                ? yellow(`  🔑 Change / re-authenticate ${cat.label} key`)
+                : yellow(`  🔑 Set ${cat.label} API key first`),
+            value: '__setkey__',
+        } as any);
         modelChoices.push({ name: dim('  ← Back'), value: '__back__' } as any);
 
         const { selectedModel } = await inquirer.prompt([{
