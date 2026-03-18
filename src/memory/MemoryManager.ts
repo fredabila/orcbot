@@ -186,7 +186,7 @@ export class MemoryManager {
         const memories = this.storage.get('memories') || [];
         const ts = new Date().toISOString();
         const maxContentLength = this.memoryContentMaxLength;
-        const rawContent = (entry.content || '').toString();
+        const rawContent = this.redactSecrets((entry.content || '').toString());
         const content = rawContent.length > maxContentLength
             ? `${rawContent.slice(0, maxContentLength)}...[truncated]`
             : rawContent;
@@ -222,6 +222,20 @@ export class MemoryManager {
             const category = normalizedEntry.metadata?.category || 'Important';
             this.dailyMemory.appendToDaily(normalizedEntry.content, category);
         }
+    }
+
+    /**
+     * Redacts obvious secrets (API keys, tokens) to prevent infostealer risks.
+     * This mimics OpenClaw's security enhancements.
+     */
+    private redactSecrets(content: string): string {
+        if (!content || typeof content !== 'string') return content;
+        return content
+            .replace(/sk-[a-zA-Z0-9]{20,}/g, '[REDACTED_SECRET]')
+            .replace(/ghp_[a-zA-Z0-9]{36}/g, '[REDACTED_SECRET]')
+            .replace(/Bearer\s+[a-zA-Z0-9\-\._~+\/]{20,}/gi, 'Bearer [REDACTED_SECRET]')
+            .replace(/xox[baprs]-[a-zA-Z0-9]{10,}/g, '[REDACTED_SECRET]')
+            .replace(/ya29\.[a-zA-Z0-9_-]{20,}/g, '[REDACTED_SECRET]');
     }
 
     private isDuplicateMemory(entry: MemoryEntry, existingMemories: MemoryEntry[]): boolean {
@@ -306,8 +320,19 @@ export class MemoryManager {
 Context platform=${platform}, contact=${contactId}, reason=${reason}.
 Events:\n${JSON.stringify(structuredContext, null, 2)}`;
         let llmSummary = 'No summary available.';
+        let extractedPreferences: string[] = [];
         try {
-            llmSummary = await llm.call(prompt, 'You consolidate social conversations into durable memory. Keep summary brief and factual.');
+            const rawResponse = await llm.call(prompt, 'You consolidate social conversations into durable memory. Keep summary brief and factual.');
+            try {
+                // Try parsing the structured JSON to extract OpenClaw-style adaptive preferences
+                const parsed = JSON.parse(rawResponse.replace(/```json\n?|\n?```/g, '').trim());
+                llmSummary = parsed.summary || rawResponse;
+                if (parsed.preferences) {
+                    extractedPreferences = Array.isArray(parsed.preferences) ? parsed.preferences : [parsed.preferences];
+                }
+            } catch {
+                llmSummary = rawResponse;
+            }
         } catch (e) {
             logger.warn(`MemoryManager: interaction consolidation fallback for ${key}: ${e}`);
             llmSummary = structuredContext.map(s => `${s.role}: ${s.content}`).join(' | ').slice(0, 600);
@@ -322,6 +347,7 @@ Events:\n${JSON.stringify(structuredContext, null, 2)}`;
                 reason,
                 interactionCount: entries.length,
                 structured: true,
+                extractedPreferences: extractedPreferences.length > 0 ? extractedPreferences : undefined,
                 messageTypes: [...new Set(entries.map(e => (e.metadata?.messageType || e.metadata?.type || 'text').toString()))],
                 timeRange: {
                     from: entries[0]?.timestamp,
@@ -621,6 +647,17 @@ ${toSummarize.map(m => `[${m.timestamp}] ${m.content}`).join('\n')}
             profile.crossPlatformHints.push({ hint: md.crossPlatformHint, timestamp: entry.timestamp });
             profile.crossPlatformHints = profile.crossPlatformHints.slice(-20);
         }
+
+        // Adaptive Persona: Persist explicitly extracted user preferences across sessions
+        if (md.extractedPreferences && Array.isArray(md.extractedPreferences)) {
+            profile.preferences = Array.isArray(profile.preferences) ? profile.preferences : [];
+            for (const pref of md.extractedPreferences) {
+                if (typeof pref === 'string' && !profile.preferences.includes(pref)) {
+                    profile.preferences.push(pref);
+                }
+            }
+        }
+
         this.saveContactProfile(profileKey, JSON.stringify(profile));
     }
 

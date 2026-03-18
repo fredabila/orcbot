@@ -2354,6 +2354,19 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                     const resolvedPath = this.resolveAgentWorkspacePath(String(filePath));
                     const dir = path.dirname(resolvedPath);
 
+                    // Pre-Execution Sandboxing: Prevent saving structurally broken code (OpenClaw loop fix)
+                    if (resolvedPath.endsWith('.js') || resolvedPath.endsWith('.ts')) {
+                        let fullContentToCheck = content;
+                        if (append && fs.existsSync(resolvedPath)) {
+                            fullContentToCheck = fs.readFileSync(resolvedPath, 'utf8') + content;
+                        }
+                        const isTS = resolvedPath.endsWith('.ts');
+                        const validation = SyntaxChecker.verify(fullContentToCheck, isTS);
+                        if (!validation.valid) {
+                            return `Error: Syntax Check Failed. The code has a syntax error and was NOT saved. You must fix the code before writing it.\nSyntax Error details:\n${validation.error}`;
+                        }
+                    }
+
                     // Create parent directories if needed
                     if (!fs.existsSync(dir)) {
                         fs.mkdirSync(dir, { recursive: true });
@@ -8466,6 +8479,98 @@ Be thorough and academic.`;
                     }
 
                     return `Task "${task.id}" created with priority ${priority}. Use distribute_tasks() to auto-assign or assign manually.`;
+                }
+            });
+
+            // Skill: Await Subtask — polls until a delegated task finishes, returns its conclusion.
+            this.skills.registerSkill({
+                name: 'await_subtask',
+                description: 'Wait for a previously delegated task to finish and return its result. Polls every 3 seconds up to timeoutSeconds (default 120). Use after delegate_task() when you need the result before continuing.',
+                usage: 'await_subtask(task_id, timeoutSeconds?)',
+                isDeep: true,
+                handler: async (args: any) => {
+                    const taskId = args.task_id || args.id || args.taskId;
+                    const timeout = Math.min(parseInt(args.timeoutSeconds || args.timeout || '120'), 300);
+                    if (!taskId) return 'Error: Missing task_id.';
+
+                    const pollMs = 3000;
+                    const deadline = Date.now() + timeout * 1000;
+
+                    while (Date.now() < deadline) {
+                        const action = this.actionQueue.getAction(taskId);
+                        if (!action) return `Error: Task "${taskId}" not found.`;
+
+                        if (action.status === 'completed' || action.status === 'failed') {
+                            // Retrieve the conclusion from episodic memory
+                            const conclusionId = `${taskId}-conclusion`;
+                            const conclusion = this.memory.getMemory(conclusionId);
+                            const resultText = conclusion?.content || `Task ${action.status} (no conclusion stored).`;
+                            return `Subtask "${taskId}" ${action.status}. Result: ${resultText}`;
+                        }
+
+                        await new Promise(resolve => setTimeout(resolve, pollMs));
+                    }
+                    return `Subtask "${taskId}" did not complete within ${timeout}s (still ${this.actionQueue.getAction(taskId)?.status || 'unknown'}).`;
+                }
+            });
+
+            // Skill: Run Subtask — create + await in one call (inline synchronous subtask pattern).
+            this.skills.registerSkill({
+                name: 'run_subtask',
+                description: 'Create a subtask, wait for it to complete, and return its result — all in one step. Ideal for parallel research, file processing, or breaking a complex task into focused sub-problems. timeoutSeconds defaults to 120, max 300.',
+                usage: 'run_subtask(description, timeoutSeconds?, priority?)',
+                isDeep: true,
+                handler: async (args: any) => {
+                    const description = args.description || args.task;
+                    const timeout = Math.min(parseInt(args.timeoutSeconds || args.timeout || '120'), 300);
+                    const priority = parseInt(args.priority || '5');
+                    if (!description) return 'Error: Missing task description.';
+
+                    // Enforce max spawn depth (workers cannot spawn further sub-tasks)
+                    const depth = (args._spawnDepth || 0) as number;
+                    const MAX_DEPTH = 2;
+                    if (depth >= MAX_DEPTH) {
+                        return `Error: Spawn depth limit (${MAX_DEPTH}) reached. Execute this work directly instead of delegating further.`;
+                    }
+
+                    try {
+                        const subtaskId = `subtask-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+                        this.actionQueue.push({
+                            id: subtaskId,
+                            type: 'message',
+                            status: 'pending',
+                            priority,
+                            payload: {
+                                description,
+                                isSubtask: true,
+                                parentActionId: args._parentActionId,
+                                spawnDepth: depth + 1,
+                            },
+                            timestamp: new Date().toISOString(),
+                            updatedAt: new Date().toISOString(),
+                        });
+
+                        const pollMs = 3000;
+                        const deadline = Date.now() + timeout * 1000;
+
+                        while (Date.now() < deadline) {
+                            const action = this.actionQueue.getAction(subtaskId);
+                            if (!action) return `Error: Subtask "${subtaskId}" disappeared from queue.`;
+
+                            if (action.status === 'completed' || action.status === 'failed') {
+                                const conclusionId = `${subtaskId}-conclusion`;
+                                const conclusion = this.memory.getMemory(conclusionId);
+                                const resultText = conclusion?.content || `Subtask ${action.status} (no conclusion stored).`;
+                                return `[Subtask result] ${resultText}`;
+                            }
+
+                            await new Promise(resolve => setTimeout(resolve, pollMs));
+                        }
+
+                        return `Subtask "${subtaskId}" did not complete within ${timeout}s — it will continue running in background. Check await_subtask("${subtaskId}") later.`;
+                    } catch (e) {
+                        return `Error creating subtask: ${e}`;
+                    }
                 }
             });
 
