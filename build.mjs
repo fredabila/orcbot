@@ -1,5 +1,5 @@
 import * as esbuild from 'esbuild';
-import { readdirSync, statSync } from 'fs';
+import { readdirSync, statSync, mkdirSync, copyFileSync } from 'fs';
 import { join } from 'path';
 
 // Recursively find all .ts files in src/
@@ -31,5 +31,9 @@ await esbuild.build({
     // Preserve directory structure
     outbase: 'src',
 });
+
+// Also copy cdp.mjs
+mkdirSync('dist/skills/chrome-cdp', { recursive: true });
+copyFileSync('src/skills/chrome-cdp/cdp.mjs', 'dist/skills/chrome-cdp/cdp.mjs');
 
 console.log(`✓ Build completed in ${Date.now() - start}ms`);

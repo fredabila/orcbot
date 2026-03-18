@@ -31,7 +31,7 @@
     "LEARNING.md"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node -e \"require('fs').mkdirSync('dist/skills/chrome-cdp', {recursive:true}); require('fs').copyFileSync('src/skills/chrome-cdp/cdp.mjs', 'dist/skills/chrome-cdp/cdp.mjs')\"",
     "build:fast": "node build.mjs",
     "release:github": "node scripts/create-github-release.mjs",
     "prepublishOnly": "npm run build",

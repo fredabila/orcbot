@@ -111,6 +111,20 @@ This file lists the available skills for the agent.
 - **switch_browser_engine(engine, endpoint?)**: [BROWSER/WEB AUTOMATION] Switch between Puppeteer and Lightpanda browser engines.
 - **create_time_capsule(goal, duration_minutes)**: [ADMIN] Start a high-intensity, time-bounded task. Standard step limits and hard breaks are relaxed to allow the agent to go "all-in" on a complex goal within a specific time window. (Admin only).
 - **extract_article(url?)**: [HIGH-LEVEL PREFERRED] Extract clean article text from a URL or the current page.
+
+### Live Browser Interaction (Chrome CDP)
+Use these tools when you specifically need to interact with the user's **live, active** local Chrome browser (e.g., to access logged-in accounts, read an actively viewed page). **Do not** use these for generic headless scraping; use standard `browser_*` tools instead.
+- **chrome_cdp_list()**: [LIVE BROWSER] List open tabs in the user's local Chrome.
+- **chrome_cdp_shot(target, outputPath?)**: [LIVE BROWSER] Capture a screenshot of a specific tab.
+- **chrome_cdp_snap(target)**: [LIVE BROWSER] Get an accessibility tree snapshot (compact structure) of a page.
+- **chrome_cdp_eval(target, expression)**: [LIVE BROWSER] Evaluate JavaScript in the specified tab.
+- **chrome_cdp_html(target, selector?)**: [LIVE BROWSER] Get HTML of the page or a specific element.
+- **chrome_cdp_nav(target, url)**: [LIVE BROWSER] Navigate the specified tab to a new URL.
+- **chrome_cdp_click(target, selector)**: [LIVE BROWSER] Click a visible element using a CSS selector.
+- **chrome_cdp_type(target, text)**: [LIVE BROWSER] Type text into the currently focused element.
+- **chrome_cdp_raw(target, method, params?)**: [LIVE BROWSER] Execute a raw Chrome DevTools Protocol command.
+- **chrome_cdp_help()**: [LIVE BROWSER] Get instructions on how to enable Remote Debugging in Chrome so OrcBot can interact with it.
+
 ## API & Integration
 - **api_request({ url, method?, headers?, body?, params?, auth?, timeout? })**: [HIGH-LEVEL PREFERRED] Perform a structured REST API request. Supports automatic JSON handling, query parameters, and authentication (Bearer/Basic). Returns a structured object with status, headers, and data. Much more robust than http_fetch for complex API integrations.
 - **api_get({ url, params?, auth?, headers? })**: [API TOOL] Perform a GET request to an API endpoint with optional query parameters and auth.

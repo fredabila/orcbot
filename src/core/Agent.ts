@@ -56,6 +56,7 @@ import { registerBookLogSkills } from '../skills/bookLogTools';
 import { registerChannelManagementSkills } from '../skills/channelManagement';
 import { registerFileTools } from '../skills/fileTools';
 import { registerApiTools } from '../skills/apiTools';
+import { registerChromeCdpTools } from '../skills/chromeCdpTools';
 import { ChannelRegistry } from '../channels/ChannelRegistry';
 import { BlockReviewer, ReviewResult, BlockVerdict } from './BlockReviewer';
 import { parseBrowserPerformActions } from './BrowserPerformParser';
@@ -1251,6 +1252,7 @@ export class Agent {
                 registerChannelManagementSkills(this);
                 registerFileTools(this);
                 registerApiTools(this);
+                registerChromeCdpTools(this);
 
                 this.skills.registerSkill({
                     name: 'create_time_capsule',
@@ -9864,81 +9866,83 @@ The plugin handles all logic internally. See the plugin source for implementatio
         const isContinuationTask = loweredDescription.startsWith('continuation:') ||
             String(action.payload?.continuationIntent || '').toLowerCase() === 'resume_prior_commitment';
 
-        const findings = new Set<string>();
-        const blockers = new Set<string>();
+        const toolsAttempted = new Set<string>();
+        const errorSnippets: string[] = [];
+        const resultSnippets: string[] = [];
+        let lastBlocker = '';
 
-        for (const memoryEntry of memories.slice(-20)) {
-            const content = String(memoryEntry.content || '');
+        for (const mem of memories.slice(-30)) {
+            const content = String(mem.content || '');
             const lowered = content.toLowerCase();
-            const tool = String(memoryEntry.metadata?.tool || '').toLowerCase();
+            const tool = String(mem.metadata?.tool || mem.metadata?.skill || '');
 
-            if (tool === 'search_chat_history') {
-                findings.add('I re-checked the Telegram thread before continuing.');
+            // Track all tools attempted (skip SYSTEM pseudo-entries)
+            if (tool && !tool.startsWith('[') && tool !== 'system' && tool.length < 60) {
+                toolsAttempted.add(tool);
             }
 
-            if (tool === 'search_memory_logs' || tool === 'recall_memory') {
-                findings.add('I checked saved memory/logs for existing Shopify progress and draft-link evidence.');
-            }
-
-            if (tool === 'browser_navigate' && lowered.includes('admin.shopify.com')) {
-                if (lowered.includes('log in')) {
-                    findings.add('I resumed the Shopify work and reached the Shopify admin login page.');
-                    blockers.add('The store is not yet in a completed state I can verify from this runtime because Shopify still requires a real login/session to continue.');
-                } else {
-                    findings.add('I resumed the Shopify admin flow in the browser.');
+            // Extract blockers from SYSTEM error injections: [SYSTEM: ... error ...]
+            const sysErrMatch = content.match(/\[SYSTEM[^\]]*?(?:ERROR|error|failed|Failed)[^\]]*?:\s*([^\]]{10,160})/);
+            if (sysErrMatch) {
+                const snippet = sysErrMatch[1].replace(/\s+/g, ' ').trim();
+                if (snippet && !errorSnippets.includes(snippet)) {
+                    errorSnippets.push(snippet);
+                    lastBlocker = snippet;
                 }
             }
 
-            if (tool === 'browser_find_element') {
-                findings.add('I started probing the Shopify admin UI to continue the theme/pages setup.');
+            // Generic error pattern outside SYSTEM blocks
+            if (!lowered.includes('[system:')) {
+                const errMatch = content.match(/(?:Error|Exception|failed|timed out)[:\s]+([^\n]{10,120})/i);
+                if (errMatch) {
+                    const snippet = errMatch[1].trim();
+                    if (snippet && !errorSnippets.includes(snippet)) {
+                        errorSnippets.push(snippet);
+                        if (!lastBlocker) lastBlocker = snippet;
+                    }
+                }
             }
 
-            if (lowered.includes('openai api key not configured')) {
-                blockers.add('The browser-vision fallback is unavailable in this runtime because the OpenAI API key is not configured.');
-            }
-
-            if (lowered.includes('2fa') || lowered.includes('two-factor')) {
-                blockers.add('The next step likely requires Shopify login approval or 2FA confirmation.');
-            }
-
-            if (lowered.includes('no draft link') || lowered.includes('no preview link')) {
-                blockers.add('I do not have a real draft/preview link yet.');
+            // Capture partial result observations (non-SYSTEM, non-error, non-empty)
+            if (!lowered.includes('[system:') && !lowered.includes('error') && content.length > 20) {
+                const cleaned = content.replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim();
+                if (cleaned.length > 15 && resultSnippets.length < 2) {
+                    resultSnippets.push(cleaned.slice(0, 100));
+                }
             }
         }
 
-        const packet = this.buildContinuationPacket(action.id);
-        if (packet.artifactPaths.some(pathItem => /shopify|myshopify|admin\.shopify/i.test(pathItem))) {
-            findings.add('I found Shopify-related workspace/session context while resuming the task.');
-        }
-
-        if (findings.size === 0 && blockers.size === 0) return null;
-
+        // Always produce a message — never leave the user with total silence
         const lines: string[] = [];
-        if (isContinuationTask) {
-            lines.push('Quick grounded update: not done yet.');
-        } else {
-            lines.push('Quick grounded update: I hit a blocker before I could send a normal reply.');
-        }
 
-        if (findings.size > 0) {
-            lines.push('What I did:');
-            for (const finding of Array.from(findings).slice(0, 3)) {
-                lines.push(`- ${finding}`);
-            }
-        }
-
-        if (blockers.size > 0) {
-            lines.push('Current blocker:');
-            for (const blocker of Array.from(blockers).slice(0, 2)) {
-                lines.push(`- ${blocker}`);
-            }
-        }
-
-        if (isContinuationTask && /shopify/.test(loweredDescription)) {
-            lines.push('To continue immediately, send the Shopify admin login email / approve the login if prompted, or add staff access for the store.');
+        if (reason === 'loop-exhausted') {
+            lines.push(isContinuationTask
+                ? "⚠️ I got stuck in a loop trying to resume that task."
+                : "⚠️ I got stuck in a loop and couldn't complete your request.");
         } else if (reason === 'action-failed') {
-            lines.push('I can continue once the blocker above is cleared.');
+            lines.push(isContinuationTask
+                ? "⚠️ I ran into a persistent error resuming the task."
+                : "⚠️ I ran into an error and couldn't complete your request.");
+        } else {
+            lines.push(isContinuationTask
+                ? "⚠️ I wasn't able to finish resuming the task."
+                : "⚠️ I wasn't able to finish your request.");
         }
+
+        if (toolsAttempted.size > 0) {
+            lines.push(`What I tried: ${Array.from(toolsAttempted).slice(0, 5).join(', ')}`);
+        }
+
+        const blocker = lastBlocker || errorSnippets[0] || '';
+        if (blocker) {
+            lines.push(`Blocker: ${blocker.slice(0, 150)}`);
+        } else if (resultSnippets.length > 0) {
+            lines.push(`Last observation: ${resultSnippets[0]}`);
+        }
+
+        lines.push(reason === 'action-failed'
+            ? 'Please try again or provide any missing info (credentials, permissions, etc.).'
+            : 'Please try again or rephrase your request.');
 
         return lines.join('\n');
     }
@@ -16772,7 +16776,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             });
                             skillCallCounts[skillName] = 0;
                         } else {
-                            await this.sendProgressFeedback(action, 'recovering', `Got stuck repeating '${skillName}'. Wrapping up with what I have...`);
+                            const skillOveruseFeedback = await this.sendProgressFeedback(action, 'recovering', `Got stuck repeating '${skillName}'. Wrapping up with what I have...`);
+                            if (skillOveruseFeedback) messagesSent++;
                             forceBreak = true;
                             break;
                         }
@@ -16787,6 +16792,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             const sigPattern2 = `${last6Sigs[0]}|${last6Sigs[1]}`;
                             if (`${last6Sigs[2]}|${last6Sigs[3]}` === sigPattern2 && `${last6Sigs[4]}|${last6Sigs[5]}` === sigPattern2) {
                                 logger.warn(`Agent: Detected repeating pattern x3 in action ${action.id}. Breaking loop.`);
+                                const patternFeedback = await this.sendProgressFeedback(action, 'recovering', `Detected a repeated tool pattern — wrapping up with what I've found so far.`);
+                                if (patternFeedback) messagesSent++;
+                                forceBreak = true;
                                 break;
                             }
                         }
@@ -17347,6 +17355,12 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 action.lane === 'autonomy' ? 'autonomy' : 'user'
                             );
                             handedOffToRecovery = true;
+                            // Tell the user immediately so they're not left in silence
+                            // while the recovery task queues up.
+                            if (isUserFacingAction && messagesSent === 0) {
+                                const recoveryNotified = await this.sendProgressFeedback(action, 'recovering', `I gathered results but hit an issue delivering them. Retrying automatically now...`);
+                                if (recoveryNotified) messagesSent++;
+                            }
                         }
                     }
 
@@ -17398,6 +17412,13 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         metadata: { actionId: action.id, boundedRecovery: true }
                     });
                     handedOffToRecovery = true;
+                    // Tell the user immediately so they're not left hanging while
+                    // the recovery task queues. Only needed when no other message
+                    // was sent — if messagesSent > 0 they already heard from us.
+                    if (isUserFacingAction && messagesSent === 0) {
+                        const boundedRecoveryNotified = await this.sendProgressFeedback(action, 'recovering', `I ran into a problem completing that. Retrying automatically right now...`);
+                        if (boundedRecoveryNotified) messagesSent++;
+                    }
                 }
             }
 
