@@ -184,7 +184,7 @@ export class WebBrowser {
                 this._page = pages.length > 0 ? pages[0] : await (this.browser as PuppeteerBrowser).newPage();
                 
                 await (this._page as PuppeteerPage).setViewport({ width: 1280, height: 720 });
-                await (this._page as PuppeteerPage).setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
+                await (this._page as PuppeteerPage).setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36');
             }
             return;
         }
@@ -226,7 +226,7 @@ export class WebBrowser {
             const viewport = isMobile ? { width: 375, height: 812 } : { width: 1280, height: 720 };
             const userAgent = isMobile 
                 ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
-                : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+                : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36';
 
             // Launch with retry — if first attempt fails due to lock race, clean up and retry once
             const launchOptions = {
@@ -481,7 +481,7 @@ export class WebBrowser {
             // Create fresh context and page
             this.context = await this.browser.newContext({
                 viewport: { width: 1280, height: 720 },
-                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36'
             });
             this._page = await this.context.newPage();
             await this.ensureTracing();
@@ -848,7 +848,7 @@ export class WebBrowser {
             this._consoleLogs = []; // Clear logs for new navigation
             
             // Use 'load' + stable wait instead of 'domcontentloaded' which is too early for modern SPAs
-            await this._page.goto(targetUrl, { waitUntil: 'load', timeout: 60000 });
+            await this._page.goto(targetUrl, { waitUntil: 'load', timeout: 30000 });
             await this.waitForStablePage(15000);
             this.lastNavigateTimestamp = Date.now();
 
@@ -865,13 +865,20 @@ export class WebBrowser {
             }
             
             if (bodyTextLength < 50) {
-                // Give modern sites extra time to hydrate if they're truly empty
-                await this._page.waitForTimeout(3000);
-            if (this.browserEngine === 'puppeteer') {
-                await (this._page as PuppeteerPage).waitForNetworkIdle({ timeout: 8000 }).catch(() => {});
-            } else {
-                await (this._page as Page).waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
-            }
+                // Poll for SPA hydration instead of a fixed sleep — exits as soon as content appears.
+                // Max 6 × 500 ms = 3 s total; also runs a brief networkidle check at the halfway point.
+                for (let attempt = 0; attempt < 6; attempt++) {
+                    await this._page.waitForTimeout(500);
+                    const freshLen = await this._page.evaluate(() => document.body?.innerText?.trim().length ?? 0).catch(() => 0);
+                    if (freshLen >= 50) break;
+                    if (attempt === 3) {
+                        if (this.browserEngine === 'puppeteer') {
+                            await (this._page as PuppeteerPage).waitForNetworkIdle({ timeout: 3000 }).catch(() => {});
+                        } else {
+                            await (this._page as Page).waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+                        }
+                    }
+                }
             }
 
             const effectiveWaitSelectors = [...waitSelectors];
@@ -1015,7 +1022,7 @@ export class WebBrowser {
             });
 
             const context = await tempBrowser.newContext({
-                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
                 viewport: { width: 1280, height: 720 },
                 deviceScaleFactor: 1,
             });
@@ -1133,8 +1140,8 @@ export class WebBrowser {
             logger.info('Browser: Cloudflare challenge detected, waiting for auto-resolution...');
             
             // Cloudflare Turnstile often resolves automatically in a real browser.
-            // Wait up to 15s for the challenge page to redirect.
-            for (let i = 0; i < 15; i++) {
+            // Wait up to 8s — most challenges resolve in 2–4s; anything longer usually means blocked.
+            for (let i = 0; i < 8; i++) {
                 await this._page.waitForTimeout(1000);
                 const currentContent = await this._page.content().catch(() => '');
                 const stillChallenge = currentContent.includes('cf-turnstile') || 
@@ -1593,19 +1600,19 @@ export class WebBrowser {
         await this.ensureBrowser();
         if (!this._page) return null;
 
-        // Recovery for blank pages (common in SPAs or after crashes)
-        let url = this._page.url();
+        const refSelector = `[data-orcbot-ref="${selector}"]`;
+
+        // Fast path: try ref lookup first — cheaper than a reload and works even after SPA updates
+        const exists = await this.page!.$(refSelector).catch(() => null);
+        if (exists) return refSelector;
+
+        // Recovery for blank pages (common in SPAs or after crashes) — only if fast path missed
+        const url = this._page.url();
         if ((!url || url === 'about:blank') && this.lastNavigatedUrl) {
             logger.warn(`Browser: resolveSelector detected blank page, reloading ${this.lastNavigatedUrl}`);
             await this._page.goto(this.lastNavigatedUrl, { waitUntil: 'load', timeout: 20000 }).catch(() => {});
             await this.waitForStablePage(5000);
         }
-
-        const refSelector = `[data-orcbot-ref="${selector}"]`;
-
-        // Fast path: ref attribute still present
-        const exists = await this.page!.$(refSelector).catch(() => null);
-        if (exists) return refSelector;
 
         // Slow path: SPA re-rendered and cleared data-orcbot-ref attributes.
         // We'll try to re-attach refs based on the same discovery logic used in getSemanticSnapshot.
@@ -3113,8 +3120,8 @@ export class WebBrowser {
             searchCtx = await this.createSearchPage();
             const searchPage = searchCtx.page;
             
-            await searchPage.goto(url, { waitUntil: 'load', timeout: 45000 });
-            await searchPage.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => { });
+            await searchPage.goto(url, { waitUntil: 'load', timeout: 20000 });
+            await searchPage.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => { });
 
             const content = await searchPage.content();
             if (content.includes('recaptcha') || content.includes('unusual traffic')) {
@@ -3177,8 +3184,8 @@ export class WebBrowser {
             searchCtx = await this.createSearchPage();
             const searchPage = searchCtx.page;
             
-            await searchPage.goto(url, { waitUntil: 'load', timeout: 45000 });
-            await searchPage.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => { });
+            await searchPage.goto(url, { waitUntil: 'load', timeout: 20000 });
+            await searchPage.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => { });
 
             const results = await searchPage.evaluate(() => {
                 // Strategy 1: Standard Bing selectors

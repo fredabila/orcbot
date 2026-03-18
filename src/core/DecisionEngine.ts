@@ -829,28 +829,33 @@ ${lastTurnInvolvedMessage
         const journalLimit  = Number(this.config?.get('journalContextLimit')  ?? 1500);
         const learningLimit = Number(this.config?.get('learningContextLimit') ?? 1500);
         
-        // TOKEN OPTIMIZATION: Omit journal/learning tail if we are deep into an action.
-        // It was likely already included in Step 1 and is now in the model's KV cache
-        // or short-term memory. Including it every step wastes tokens.
-        const omitRedundantContext = (metadata.currentStep || 1) > 2;
-        
+        // TOKEN OPTIMIZATION: Full journal/learning on steps 1-2; compact excerpt on steps 3+.
+        // LLM API calls are stateless — the model has NO memory of prior steps unless it's in the prompt.
+        // Dropping knowledge entirely causes the agent to "forget" learned facts mid-task.
+        const currentStep = metadata.currentStep || 1;
+        const isDeepStep = currentStep > 2;
+        // On deep steps, keep a small excerpt (most-recent 400 chars) so critical facts survive
+        const deepStepLimit = 400;
+
         let journalContent = '';
         let learningContent = '';
         let worldContent = '';
-        if (!isHeartbeat && !omitRedundantContext) {
+        if (!isHeartbeat) {
             try {
                 if (fs.existsSync(this.journalPath)) {
                     const full = fs.readFileSync(this.journalPath, 'utf-8');
-                    journalContent = full.length > journalLimit ? full.slice(-journalLimit) : full;
+                    const limit = isDeepStep ? deepStepLimit : journalLimit;
+                    journalContent = full.length > limit ? full.slice(-limit) : full;
                 }
                 if (fs.existsSync(this.learningPath)) {
                     const full = fs.readFileSync(this.learningPath, 'utf-8');
-                    learningContent = full.length > learningLimit ? full.slice(-learningLimit) : full;
+                    const limit = isDeepStep ? deepStepLimit : learningLimit;
+                    learningContent = full.length > limit ? full.slice(-limit) : full;
                 }
                 if (fs.existsSync(this.worldPath)) {
                     const full = fs.readFileSync(this.worldPath, 'utf-8');
-                    // Use learningLimit for worldContent as well, or a custom config
-                    worldContent = full.length > learningLimit ? full.slice(-learningLimit) : full;
+                    const limit = isDeepStep ? deepStepLimit : learningLimit;
+                    worldContent = full.length > limit ? full.slice(-limit) : full;
                 }
             } catch (e) { }
         }
@@ -1165,15 +1170,19 @@ ${lastTurnInvolvedMessage
 
                 stepHistoryString = `${firstStr}\n  --- [expanded continuity context: ${expandedLines.length}/${middle.length} middle steps shown] ---\n${expandedLines.join('\n')}${omittedCount > 0 ? `\n  ... [${omittedCount} older middle steps omitted to stay within context budget]` : ''}\n  --- [recent steps below] ---\n${lastStr}`;
             } else {
-                // Compress middle: group by tool, count successes/failures
+                // Compress middle: group by tool, count successes/failures, preserve error reason
                 const middleSummary: string[] = [];
                 let currentTool = '';
                 let toolCount = 0;
                 let toolSuccesses = 0;
                 let toolFailures = 0;
+                let lastErrorSnippet = '';  // Preserve the most recent failure reason
                 const flushGroup = () => {
                     if (currentTool && toolCount > 0) {
-                        middleSummary.push(`  ... ${currentTool} x${toolCount} (${toolSuccesses} ok, ${toolFailures} err)`);
+                        const errorHint = (toolFailures > 0 && lastErrorSnippet)
+                            ? ` — last failure: "${lastErrorSnippet}"`
+                            : '';
+                        middleSummary.push(`  ... ${currentTool} x${toolCount} (${toolSuccesses} ok, ${toolFailures} err)${errorHint}`);
                     }
                 };
                 for (const m of middle) {
@@ -1187,10 +1196,16 @@ ${lastTurnInvolvedMessage
                         toolCount = 0;
                         toolSuccesses = 0;
                         toolFailures = 0;
+                        lastErrorSnippet = '';
                     }
                     toolCount++;
                     if (content.includes('succeeded') || content.includes('returned')) toolSuccesses++;
-                    if (content.includes('FAILED') || content.includes('ERROR')) toolFailures++;
+                    if (content.includes('FAILED') || content.includes('ERROR')) {
+                        toolFailures++;
+                        // Extract a short error reason so the agent knows WHY it failed
+                        const errMatch = content.match(/(?:FAILED|ERROR|error)[:\s]+([^\n]{8,100})/i);
+                        if (errMatch) lastErrorSnippet = errMatch[1].trim().slice(0, 90);
+                    }
                 }
                 flushGroup();
 
@@ -1427,7 +1442,14 @@ Respond conversationally. If the user asks you to do something that requires ele
         // PromptRouter + helper assembly + bootstrap loading.
         let coreInstructions: string;
         if (this._cachedCoreActionId === actionId && !isFirstStep && this._cachedCoreInstructions) {
+            // Step 1 cached instructions only include the keyword-relevant subset of skills.
+            // On step 2+, append a compact reference to ALL available tools so the agent can
+            // pivot to any skill without being blind to tools outside the step-1 narrow list.
             coreInstructions = this._cachedCoreInstructions;
+            const compactAll = this.skills.getCompactSkillsPrompt();
+            if (compactAll && !coreInstructions.includes('All Available Skills (full reference)')) {
+                coreInstructions += `\n\nAll Available Skills (full reference — use any of these even if not in the detailed list above):\n${compactAll}`;
+            }
         } else {
             coreInstructions = await this.buildHelperPrompt(
                 availableSkills,
