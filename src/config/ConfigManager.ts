@@ -5,9 +5,9 @@ import os from 'os';
 import chokidar from 'chokidar';
 import { logger } from '../utils/logger';
 import { eventBus } from '../core/EventBus';
-import { AgentConfig, AgentConfigSchema } from '../types/AgentConfig';
+import { type AgentConfig, AgentConfigSchema } from '../types/AgentConfig';
 
-export { AgentConfig };
+export type { AgentConfig };
 
 import { isDeepEqual } from '../utils/ObjectUtils';
 

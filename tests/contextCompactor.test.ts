@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ContextCompactor } from '../src/core/ContextCompactor';
+import { estimateTokens } from '../src/utils/tokenEstimate';
 
 describe('ContextCompactor', () => {
     describe('truncateCompaction', () => {
@@ -79,17 +80,20 @@ Recent entry 3`;
     });
 
     describe('utility methods', () => {
-        it('should estimate tokens correctly', () => {
-            const text = 'a'.repeat(400); // 400 chars
+        it('should estimate tokens with the shared tokenizer', () => {
+            const text = 'The quick brown fox jumps over the lazy dog.';
             const tokens = ContextCompactor.estimateTokens(text);
-            
-            expect(tokens).toBe(100); // 400 / 4 = 100 tokens
+
+            expect(tokens).toBe(estimateTokens(text));
+            expect(tokens).toBeGreaterThan(0);
+            expect(tokens).toBeLessThan(text.length);
+            expect(ContextCompactor.estimateTokens('')).toBe(0);
         });
 
         it('should detect when compaction is needed', () => {
-            const smallText = 'a'.repeat(1000); // 250 tokens
-            const largeText = 'a'.repeat(400000); // 100k tokens
-            
+            const smallText = 'a'.repeat(1000);
+            const largeText = 'lorem ipsum dolor sit amet '.repeat(30000);
+
             expect(ContextCompactor.needsCompaction(smallText, 100000)).toBe(false);
             expect(ContextCompactor.needsCompaction(largeText, 100000)).toBe(true);
         });

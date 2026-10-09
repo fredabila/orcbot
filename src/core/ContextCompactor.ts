@@ -1,5 +1,6 @@
 import { logger } from '../utils/logger';
 import { MultiLLM } from './MultiLLM';
+import { estimateTokens as estimateTextTokens } from '../utils/tokenEstimate';
 
 export interface CompactionOptions {
     targetLength: number;
@@ -199,11 +200,14 @@ Summary:`;
     }
 
     /**
-     * Estimate token count (rough approximation)
+     * Estimate token count with the shared tokenizer.
+     *
+     * This used to be a `text.length / 4` guess, which under-counted code/JSON and
+     * over-counted non-Latin text — both common in OrcBot's prompts. The compaction
+     * threshold below is driven by this number, so the error was load-bearing.
      */
     public static estimateTokens(text: string): number {
-        // Rough approximation: 1 token ≈ 4 characters
-        return Math.ceil(text.length / 4);
+        return estimateTextTokens(text);
     }
 
     /**

@@ -11,6 +11,8 @@ export interface TokenUsageEntry {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
+    /** Prompt tokens the provider served from its prompt cache (a cache hit). */
+    cachedTokens?: number;
     metadata?: Record<string, any>;
 }
 
@@ -18,6 +20,8 @@ export interface TokenBucket {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
+    /** Prompt tokens served from the provider's prompt cache. */
+    cachedTokens?: number;
 }
 
 export interface AccuracyBucket extends TokenBucket {
@@ -187,17 +191,20 @@ export class TokenTracker {
     private applyToSummary(summary: TokenUsageSummary, entry: TokenUsageEntry) {
         const { provider, model, promptTokens, completionTokens, totalTokens } = entry;
         const isEstimated = entry.metadata?.estimated === true;
+        const cachedTokens = entry.cachedTokens || 0;
 
         // --- Grand totals ---
         summary.totals.promptTokens += promptTokens;
         summary.totals.completionTokens += completionTokens;
         summary.totals.totalTokens += totalTokens;
+        summary.totals.cachedTokens = (summary.totals.cachedTokens || 0) + cachedTokens;
 
         // --- Real vs estimated totals ---
         const accuracyTarget = isEstimated ? summary.estimatedTotals : summary.realTotals;
         accuracyTarget.promptTokens += promptTokens;
         accuracyTarget.completionTokens += completionTokens;
         accuracyTarget.totalTokens += totalTokens;
+        accuracyTarget.cachedTokens = (accuracyTarget.cachedTokens || 0) + cachedTokens;
         accuracyTarget.callCount++;
 
         // --- By provider ---
@@ -208,10 +215,12 @@ export class TokenTracker {
         summary.byProvider[provider].promptTokens += promptTokens;
         summary.byProvider[provider].completionTokens += completionTokens;
         summary.byProvider[provider].totalTokens += totalTokens;
+        summary.byProvider[provider].cachedTokens = (summary.byProvider[provider].cachedTokens || 0) + cachedTokens;
         const provAccuracy = isEstimated ? summary.byProvider[provider].estimated : summary.byProvider[provider].real;
         provAccuracy.promptTokens += promptTokens;
         provAccuracy.completionTokens += completionTokens;
         provAccuracy.totalTokens += totalTokens;
+        provAccuracy.cachedTokens = (provAccuracy.cachedTokens || 0) + cachedTokens;
         provAccuracy.callCount++;
 
         // --- By model ---
@@ -222,10 +231,12 @@ export class TokenTracker {
         summary.byModel[model].promptTokens += promptTokens;
         summary.byModel[model].completionTokens += completionTokens;
         summary.byModel[model].totalTokens += totalTokens;
+        summary.byModel[model].cachedTokens = (summary.byModel[model].cachedTokens || 0) + cachedTokens;
         const modelAccuracy = isEstimated ? summary.byModel[model].estimated : summary.byModel[model].real;
         modelAccuracy.promptTokens += promptTokens;
         modelAccuracy.completionTokens += completionTokens;
         modelAccuracy.totalTokens += totalTokens;
+        modelAccuracy.cachedTokens = (modelAccuracy.cachedTokens || 0) + cachedTokens;
         modelAccuracy.callCount++;
 
         // --- Daily ---
@@ -237,10 +248,39 @@ export class TokenTracker {
         summary.daily[day].promptTokens += promptTokens;
         summary.daily[day].completionTokens += completionTokens;
         summary.daily[day].totalTokens += totalTokens;
+        summary.daily[day].cachedTokens = (summary.daily[day].cachedTokens || 0) + cachedTokens;
         const dayAccuracy = isEstimated ? summary.daily[day].estimated : summary.daily[day].real;
         dayAccuracy.promptTokens += promptTokens;
         dayAccuracy.completionTokens += completionTokens;
         dayAccuracy.totalTokens += totalTokens;
+        dayAccuracy.cachedTokens = (dayAccuracy.cachedTokens || 0) + cachedTokens;
         dayAccuracy.callCount++;
+    }
+
+    /**
+     * How much of the tracked prompt traffic was served from a provider prompt cache.
+     * Worth surfacing because OpenAI and Gemini cache automatically and silently: without
+     * this the operator cannot tell whether the cache is actually being hit.
+     *
+     * The rate is computed against API-reported prompt tokens only. A cache hit can only be
+     * observed on a call that returned a usage block, so estimated calls - which report zero
+     * cache hits by construction - would drag the rate down and make caching look worse than it is.
+     */
+    public getCacheReport(): { cachedTokens: number; promptTokens: number; reportedPromptTokens: number; hitRatePct: number; byProvider: Record<string, number> } {
+        const summary = this.loadSummary();
+        const promptTokens = summary.totals?.promptTokens || 0;
+        const cachedTokens = summary.totals?.cachedTokens || 0;
+        const reportedPromptTokens = summary.realTotals?.promptTokens || 0;
+        const byProvider: Record<string, number> = {};
+        for (const [provider, bucket] of Object.entries(summary.byProvider || {})) {
+            if (bucket.cachedTokens) byProvider[provider] = bucket.cachedTokens;
+        }
+        return {
+            cachedTokens,
+            promptTokens,
+            reportedPromptTokens,
+            hitRatePct: reportedPromptTokens > 0 ? Math.round((cachedTokens / reportedPromptTokens) * 100) : 0,
+            byProvider
+        };
     }
 }

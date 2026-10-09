@@ -16,19 +16,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # setup-node is kept solely for the registry auth it writes into .npmrc, which
+      # `npm publish` below depends on. Its `cache: npm` key was removed: it hashes a
+      # package-lock.json that no longer exists, so it would fail the job.
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
           registry-url: https://npm.pkg.github.com
           scope: '@fredabila'
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
       - name: Install
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Build
-        run: npm run build
+        run: bun run build
 
       - name: Publish to GitHub Packages
         run: npm publish
@@ -49,14 +56,18 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
           registry-url: https://registry.npmjs.org
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
       - name: Install
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Build
-        run: npm run build
+        run: bun run build
 
       - name: Rewrite package name for npmjs
         run: npm pkg set name=orcbot

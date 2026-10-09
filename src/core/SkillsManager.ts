@@ -53,6 +53,18 @@ export interface Skill {
     handler: (args: any, context: SkillContext) => Promise<any>;
     pluginPath?: string; // Track source file for uninstallation
     sourceUrl?: string;  // Original URL if generated from a spec
+
+    /**
+     * Optional explicit JSON Schema for this skill's arguments, used verbatim for native
+     * tool calling instead of the schema derived from `usage`. This is how a skill declares
+     * per-parameter descriptions, enums or nesting that the usage-string DSL cannot express.
+     */
+    parameters?: {
+        type: 'object';
+        properties: Record<string, any>;
+        required?: string[];
+        additionalProperties?: boolean;
+    };
     
     // Metadata flags for orchestration (fluidity)
     isResearch?: boolean;    // Higher repetition budget (e.g. search/browsing)
@@ -1708,19 +1720,32 @@ main().catch(console.error);
         const skills = excludeSkills
             ? this.getAllSkills().filter(s => !excludeSkills.has(s.name))
             : this.getAllSkills();
+
         return skills.map(skill => {
-            const { properties, required } = SkillsManager.parseUsageToSchema(skill.usage);
+            let parameters: LLMToolDefinition['function']['parameters'];
+
+            if (skill.parameters) {
+                // An author-declared schema wins: it can carry descriptions, enums and
+                // nesting that the usage-string DSL has no way to express.
+                parameters = { additionalProperties: false, ...skill.parameters };
+            } else {
+                const { properties, required } = SkillsManager.parseUsageToSchema(skill.usage);
+                parameters = {
+                    type: 'object',
+                    properties,
+                    ...(required.length > 0 ? { required } : {}),
+                    // Tools are a closed set, so declaring that no additional properties are
+                    // accepted measurably improves argument fidelity over a permissive schema.
+                    additionalProperties: false,
+                };
+            }
 
             return {
                 type: 'function' as const,
                 function: {
                     name: skill.name,
                     description: skill.description,
-                    parameters: {
-                        type: 'object' as const,
-                        properties,
-                        ...(required.length > 0 ? { required } : {}),
-                    },
+                    parameters,
                 },
             };
         });
@@ -1736,7 +1761,10 @@ main().catch(console.error);
         properties: Record<string, { type: string; description?: string }>;
         required: string[];
     } {
-        const properties: Record<string, { type: string; description?: string }> = {};
+        // Null-prototype so a parameter named `__proto__` or `constructor` coming from an
+        // untrusted plugin usage string becomes an own key instead of mutating the prototype
+        // (and silently vanishing from the emitted schema).
+        const properties: Record<string, { type: string; description?: string }> = Object.create(null);
         const required: string[] = [];
 
         // Extract contents of first set of parentheses
@@ -1764,6 +1792,7 @@ main().catch(console.error);
                     if (hint === 'array') type = 'array';
                     else if (hint === 'object') type = 'object';
                     else if (hint === 'number') type = 'number';
+                    else if (hint === 'integer') type = 'integer';
                     else if (hint === 'boolean') type = 'boolean';
                 }
 
@@ -1792,6 +1821,7 @@ main().catch(console.error);
                 if (hint === 'array') type = 'array';
                 else if (hint === 'object') type = 'object';
                 else if (hint === 'number') type = 'number';
+                else if (hint === 'integer') type = 'integer';
                 else if (hint === 'boolean') type = 'boolean';
             }
 

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DEFAULT_MODEL_IDS } from '../config/modelDefaults';
 
 /**
  * Helper to coerce strings to booleans or numbers, useful for Env vars and YAML.
@@ -46,7 +47,7 @@ export const AgentConfigSchema = z.object({
     searchProviderOrder: z.array(z.string()).default(['serper', 'brave', 'searxng', 'google', 'bing', 'duckduckgo']),
     serperApiKey: z.string().optional(),
     captchaApiKey: z.string().optional(),
-    modelName: z.string().default('gpt-4o'),
+    modelName: z.string().default(DEFAULT_MODEL_IDS.openaiMain),
     bedrockRegion: z.string().optional(),
     bedrockAccessKeyId: z.string().optional(),
     bedrockSecretAccessKey: z.string().optional(),
@@ -129,7 +130,7 @@ export const AgentConfigSchema = z.object({
     browserTraceScreenshots: coerceBool.default(true),
     browserTraceSnapshots: coerceBool.default(true),
     googleComputerUseEnabled: coerceBool.default(false),
-    googleComputerUseModel: z.string().default('gemini-2.5-computer-use-preview-10-2025'),
+    googleComputerUseModel: z.string().default(DEFAULT_MODEL_IDS.googleComputerUse),
     tokenUsagePath: z.string().optional(),
     tokenLogPath: z.string().optional(),
     discordToken: z.string().optional(),

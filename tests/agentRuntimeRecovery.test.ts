@@ -252,10 +252,19 @@ describe('Agent runtime recovery supervision', () => {
 
         const message = (harness.agent as any).buildGroundedNoResponseMessage(action, 'action-failed');
 
-        expect(message).toContain('Quick grounded update: not done yet.');
-        expect(message).toContain('Shopify admin login page');
-        expect(message).toContain('OpenAI API key is not configured');
-        expect(message).toContain('Shopify admin login email');
+        // The fallback must be grounded in the action's real evidence rather than a generic
+        // apology: it names the tools that actually ran, reports where the work got to, and
+        // surfaces the real blocker.
+        expect(message).toBeTruthy();
+        expect(message).toContain('⚠️ I ran into a persistent error resuming the task.');
+        expect(message).toContain('What I tried:');
+        expect(message).toContain('browser_navigate');
+        expect(message).toContain('browser_vision');
+        expect(message).toContain('Earlier observation:');
+        expect(message).toContain('admin.shopify.com');
+        expect(message).toContain('Blocker:');
+        expect(message).toContain('OpenAI API key not configured');
+        expect(message).toContain('Please try again');
     });
 
     it('forces grounded delivery early for looping continuation actions with no tools', async () => {

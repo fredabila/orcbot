@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { logger } from '../utils/logger';
 import { MemoryManager } from '../memory/MemoryManager';
+import { DEFAULT_MODEL_IDS } from '../config/modelDefaults';
 
 /**
  * Profiles the system the agent is running on and caches knowledge
@@ -197,7 +198,7 @@ export class SystemProfiler {
             enabledChannels,
             configuredLLMProviders: Array.from(configuredProviders).sort(),
             defaultLLMProvider: config?.get?.('llmProvider') || 'openai',
-            defaultModel: config?.get?.('modelName') || 'gpt-4o-mini',
+            defaultModel: config?.get?.('modelName') || DEFAULT_MODEL_IDS.openaiFast,
             coreSkillCount,
             pluginSkillCount,
             pluginNames,

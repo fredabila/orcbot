@@ -429,7 +429,18 @@ ${this.repoContext}`,
         const state = this.executionStateManager.getState(actionId);
 
         try {
-            const response = await this.llm.call(prompt, systemPrompt);
+            // Every caller of this method parses the reply as the JSON decision contract via
+            // ParserLayer.normalize, so ask the provider for native JSON where it supports it.
+            // MultiLLM degrades to plain text if the provider rejects the hint, and the parser
+            // tiers stay in place regardless: this only removes the need to scrape JSON out of
+            // prose. Set `structuredOutputEnabled: false` to opt out.
+            const response = await this.llm.call(
+                prompt,
+                systemPrompt,
+                undefined,
+                undefined,
+                this.config?.get('structuredOutputEnabled') === false ? undefined : { jsonMode: true }
+            );
             state.recordAttempt({
                 response: { success: true, content: response },
                 contextSize: systemPrompt.length + prompt.length
@@ -1475,7 +1486,10 @@ Respond conversationally. If the user asks you to do something that requires ele
             ? userContextStr.slice(0, userContextLimit) + '...[truncated]'
             : userContextStr));
 
-        // Compact one-line runtime orientation — gives the LLM immediate context without burying it
+        // Compact one-line runtime orientation. Deliberately placed after the stable prefix
+        // rather than at the top of the prompt: it carries per-step values (step=N/M, mem=N),
+        // and putting volatile text first defects the whole prefix — breaking the automatic
+        // prompt cache that OpenAI and Gemini key off the longest common prefix.
         const runtimeLine = `RUNTIME: host_os=${process.platform} | channel=${source || 'internal'} | step=${metadata.currentStep || 1}/${this.config?.get('maxSteps') || 30} | mem=${recentContext.length} | model=${this.config?.get('modelName') || 'auto'} | isGroup=${!!(metadata as any).isGroupChat}`;
 
         // Quick user profile — first 4 significant lines of USER.md as a single-line orientator
@@ -1488,13 +1502,14 @@ Respond conversationally. If the user asks you to do something that requires ele
 
         // Full prompt for all steps - don't risk losing context
         const systemPrompt = `
-${runtimeLine}
 ${quickUserProfile ? `USER: ${quickUserProfile}` : ''}
 ${systemProfileSummary ? `\n${systemProfileSummary}` : ''}
 
 ${coreInstructions}
 
 ${historyNotes}
+
+${runtimeLine}
 
 EXECUTION STATE:
 - MISSION ANCHOR (Original Task): "${taskDescription}"

@@ -8,6 +8,7 @@ import { ActionQueue, Action } from '../memory/ActionQueue';
 import { Scheduler } from './Scheduler';
 import { PollingManager } from './PollingManager';
 import { ConfigManager } from '../config/ConfigManager';
+import { DEFAULT_MODEL_IDS } from '../config/modelDefaults';
 import { TelegramChannel } from '../channels/TelegramChannel';
 import { WhatsAppChannel } from '../channels/WhatsAppChannel';
 import { DiscordChannel } from '../channels/DiscordChannel';
@@ -618,7 +619,7 @@ export class Agent {
     }
 
     private getGoogleComputerUseModel(): string {
-        return this.config.get('googleComputerUseModel') || 'gemini-2.5-computer-use-preview-10-2025';
+        return this.config.get('googleComputerUseModel') || DEFAULT_MODEL_IDS.googleComputerUse;
     }
 
     public async setupChannels() {
@@ -9508,8 +9509,11 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 }
             }
 
-            // Generic error pattern outside SYSTEM blocks
-            if (!lowered.includes('[system:')) {
+            // Generic error pattern. Unlike the result-snippet capture below, this must also
+            // scan SYSTEM-tagged lines: the tag closes at ']' and the diagnostic text follows
+            // it, e.g. "[SYSTEM: WORKFLOW_SIGNAL] browser_vision failed: Error: ...", which the
+            // bracketed pattern above cannot reach.
+            {
                 const errMatch = content.match(/(?:Error|Exception|failed|timed out)[:\s]+([^\n]{10,120})/i);
                 if (errMatch) {
                     const snippet = errMatch[1].trim();
@@ -9550,11 +9554,17 @@ The plugin handles all logic internally. See the plugin source for implementatio
             lines.push(`What I tried: ${Array.from(toolsAttempted).slice(0, 5).join(', ')}`);
         }
 
+        // Report where the work actually got to before failing, then what stopped it. Showing
+        // only the blocker discards the grounded progress the user needs in order to unblock.
+        // Labelled "Earlier" because resultSnippets holds the earliest observation captured
+        // from this action's memory window, not the most recent one.
+        if (resultSnippets.length > 0) {
+            lines.push(`Earlier observation: ${resultSnippets[0]}`);
+        }
+
         const blocker = lastBlocker || errorSnippets[0] || '';
         if (blocker) {
             lines.push(`Blocker: ${blocker.slice(0, 150)}`);
-        } else if (resultSnippets.length > 0) {
-            lines.push(`Last observation: ${resultSnippets[0]}`);
         }
 
         lines.push(reason === 'action-failed'
@@ -11305,6 +11315,12 @@ REFLECTION: <1-2 sentences>`;
             let toolResult;
             let executionError;
             const activeToolToken = this.beginActiveToolExecution(action.id, toolCall.name);
+            eventBus.emit('tool:call' as any, {
+                actionId: action.id,
+                toolName: toolCall.name,
+                parameters: toolCall.metadata,
+                step: currentStep,
+            });
             try {
                 toolResult = await this.skills.executeSkill(toolCall.name, toolCall.metadata || {});
             } catch (e) {
@@ -11323,6 +11339,14 @@ REFLECTION: <1-2 sentences>`;
             }
 
             const toolDurationMs = Date.now() - toolStartedAt;
+            eventBus.emit('tool:result' as any, {
+                actionId: action.id,
+                toolName: toolCall.name,
+                success: !executionError,
+                durationMs: toolDurationMs,
+                result: typeof toolResult === 'string' ? toolResult : undefined,
+                error: executionError ? String(executionError) : undefined,
+            });
             const isInternalTool = ['update_journal', 'update_user_profile', 'update_learning', 'book_log_add', 'update_world'].includes(toolCall.name);
             const assessed = await this.assessToolExecutionOutcome({
                 action,
@@ -16107,6 +16131,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 currentStep++;
                 stepsSinceLastMessage++;
                 logger.info(`Agent: Step ${currentStep} for action ${action.id}`);
+                eventBus.emit('task:step:start' as any, {
+                    step: currentStep,
+                    maxSteps: limits.steps,
+                    actionId: action.id,
+                });
 
                 if (this.cancelledActions.has(action.id)) {
                     logger.warn(`Agent: Action ${action.id} cancelled by user`);
@@ -16234,6 +16263,10 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                 if (decision.reasoning) {
                     logger.info(`Agent Reasoning: ${decision.reasoning}`);
+                    eventBus.emit('llm:thought' as any, {
+                        thought: decision.reasoning,
+                        actionId: action.id,
+                    });
                 }
 
                 const pipelineNotes = decision.metadata?.pipelineNotes;
@@ -16633,8 +16666,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 }
             }
 
-            // If we exhausted all steps without completing, review before giving up
-            if (currentStep >= MAX_STEPS && !goalsMet) {
+            // If we exhausted all steps without completing, review before giving up.
+            // Skipped while waiting on the user: the action is paused for clarification, not
+            // short of steps, and granting bonus steps would burn decisions on a task that is
+            // blocked on input rather than on effort.
+            if (currentStep >= MAX_STEPS && !goalsMet && !waitingForClarification) {
                 logger.warn(`Agent: Reached max steps (${MAX_STEPS}) for action ${action.id}. Reviewing if task is truly done...`);
 
                 const maxStepsReview = await this.reviewForcedTermination(
@@ -16658,6 +16694,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         content: `[SYSTEM: You have used all ${MAX_STEPS} steps. You are getting a FEW BONUS STEPS to wrap up. IMMEDIATELY compile everything you have gathered and send a FINAL comprehensive message to the user. Do NOT start new research — deliver what you have NOW.]`,
                         metadata: { actionId: action.id, step: currentStep }
                     });
+                    // The main loop can exit with forceBreak already set by the pattern-loop or
+                    // skill-overuse guard. That guard has served its purpose, and leaving the flag
+                    // set makes the first bonus batch abort the mini-loop before the replan path
+                    // runs, silently skipping the wrap-up budget the review layer just granted.
+                    forceBreak = false;
                     // Adaptive bonus steps for wrapping up
                     const bonusSteps = Math.min(adaptiveBonus, Math.max(3, MAX_STEPS));
                     let bonusMessageSent = false;
@@ -17097,6 +17138,12 @@ Respond with a single actionable task description (one sentence). Be specific ab
             });
 
             this.actionQueue.updateStatus(action.id, actionStatus);
+            eventBus.emit('task:complete' as any, {
+                actionId: action.id,
+                summary: action.payload?.description || 'Task finished',
+                steps: currentStep,
+                status: actionStatus,
+            });
 
             try {
                 const capture = this.selfTraining.captureCompletedAction({

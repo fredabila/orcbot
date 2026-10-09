@@ -11,12 +11,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: 20
-          cache: npm
+          bun-version: 1.4.2
       - name: Install
-        run: npm install
-      - name: Audit (prod deps)
-        run: npm audit --omit=dev
+        run: bun install --frozen-lockfile
+      # Scope note: the previous `npm audit --omit=dev` covered production dependencies
+      # only. bun audit has no prod-only switch, so this now also reports dev-dependency
+      # advisories. That is a superset of the old check, not a narrower one.
+      - name: Audit (all dependencies)
+        run: bun audit

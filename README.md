@@ -1,9 +1,9 @@
 <div align="center">
 <img src="https://raw.githubusercontent.com/fredabila/orcbot/main/assets/orcbot.jpeg" width="420" alt="OrcBot Hero Banner">
 
-# OrcBot v2.1
-### The Production-Ready Strategic AI Agent
-#### High-Power Intelligence with Web, Shell, Multi-Channel Delivery, and Strategic Simulation
+# OrcBot
+### An autonomous agent for multi-channel workflows
+#### Plan tasks, use tools, and deliver results through supported channels.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
@@ -11,76 +11,58 @@
 [![ReAct](https://img.shields.io/badge/Reasoning-ReAct-purple.svg)]()
 [![Open Source Helpers](https://www.codetriage.com/fredabila/orcbot/badges/users.svg)](https://www.codetriage.com/fredabila/orcbot)
 
-**Autonomous. Strategic. Multi-Modal. Self-Healing.**
+**Plan. Execute. Review. Deliver.**
 
-[Features](#features) • [Installation](#installation) • [Quickstart](#quickstart) • [Usage](#-usage) • [Configuration](#configuration) • [Self-Training](#self-training-sidecar) • [Autonomy](#autonomy--heartbeat) • [Skills](#-high-power-skills) • [Plugins](#-dynamic-plugin-system) • [Hardware](#hardware--robotics) • [Security](#security--privacy) • [Blog](docs/blog/robotics.md) • [Docs](https://fredabila.github.io/orcbot/docs/)
+[Features](#features) • [Installation](#installation) • [Quickstart](#quickstart) • [Usage](#usage) • [Configuration](#configuration) • [Self-Training](#self-training-sidecar) • [Autonomy](#autonomy--heartbeat) • [Skills](#skills) • [Plugins](#dynamic-plugin-system) • [Hardware](#hardware--robotics) • [Security](#security--privacy) • [Blog](docs/blog/robotics.md) • [Docs](https://fredabila.github.io/orcbot/docs/)
 
 </div>
 
 ---
 
-## 🚀 Why OrcBot v2.1?
+## What OrcBot does
 
-OrcBot is a next-generation **autonomous reasoning agent**. Beyond the v2.0 Strategic Simulation Architecture, v2.1 now includes a substantially hardened supervisor loop: blocked-plan repair before execution, runtime re-planning after tool failures, shared execution coordinators for serial/parallel/bonus flows, richer Telegram interactions, a RAG knowledge store, and battle-tested multi-channel delivery.
+OrcBot plans multi-step tasks, runs registered tools, and delivers results through supported channels. The current implementation includes pre-execution plan repair, runtime replanning after tool failures, shared execution coordinators, Telegram interactions, and a retrieval-augmented knowledge store.
 
 ### Key Capabilities
 
-*   🧠 **Strategic Simulation Layer**: Pre-task planning that anticipates errors (like CAPTCHAs or search failures) before they happen.
-*   🛡️ **Autonomous Immune System**: Automatically detects broken plugin code and uses its `self_repair_skill` to fix itself.
-*   ⚙️ **Agent-Driven Config Management**: Intelligent configuration system where agents can safely optimize settings for different tasks while security-critical configs remain protected.
-*   📸 **Multi-Modal Intelligence**: Native capability to analyze images, audio, and documents via Telegram, WhatsApp, and Discord.
-*   🌐 **Context-Aware Browsing**: Strategic web navigation with stealth anti-bot parity across all browser modes, blank-page guards, and search URL save/restore.
-*   🐚 **Shell Execution**: Full system access to run commands, manage files, and install dependencies — with reliable Windows process-tree kill and stdout capping.
-*   💓 **Smart Heartbeat**: Context-aware autonomy with exponential backoff, productivity tracking, and action-oriented tasks.
-*   🤖 **Multi-Agent Orchestration**: Spawn worker processes to handle parallel tasks with real-time coordination.
-*   🔄 **Termination Review**: Built-in safety layer that reviews proposed actions to prevent premature task termination.
-*   🧯 **Runtime Supervisor Loop**: Failed batches trigger immediate re-planning instead of blindly continuing, and repeated failed tool signatures are suppressed before they can loop.
-*   🧭 **LLM Task Complexity**: Dynamic step/message budgets based on model-classified task complexity.
-*   🎯 **Smart Skill Routing**: Intent-based skill selection using configurable routing rules for better tool matching.
-*   🧩 **Admin Permissions + Known Users**: Elevated skills protected by admin gates with persistent user tracking.
-*   🛤️ **Decision Pipeline**: Guardrails system with deduplication, recovery hints, safety checks, and autopilot mode.
-*   🔍 **Resilient Web Search**: Smart fallback from API providers to browser-based search when keys aren't configured.
-*   🖥️ **Interactive TUI & Dashboard**: Comprehensive terminal interface with worker process management.
-*   🔌 **Dynamic Plugin System**: Hot-loadable TypeScript plugins for limitless extensibility.
-*   🔄 **Circuit Breaker Pattern**: Intelligent loop prevention in browser operations to avoid getting stuck.
-*   📚 **Self-Updating Identity**: Agent can evolve its personality, values, and operating instructions through bootstrap files.
-*   ⏱️ **Event-Driven Polling**: Efficient condition monitoring without busy-waiting loops.
-*   🎨 **Image Generation**: Built-in skill for generating and delivering images across WhatsApp, Telegram, and Discord.
-*   🦙 **Ollama / Local Models**: Full TUI management for local LLMs, including auto-starting servers, pulling models, and OpenAI-compatible native tool calling.
-*   🗃️ **RAG Knowledge Store**: Ingest documents, URLs, and files into a semantic vector search index for durable recall.
-*   💬 **Rich Telegram UX**: Inline buttons, polls, message editing, emoji reactions (with reply fallback), and message pinning.
-*   🔁 **Clarification Delivery**: `request_supporting_data` now actively sends questions through the active channel before pausing.
-*   ✅ **Shared Execution Semantics**: Main-step, parallel, and bonus-step execution now run through shared helpers so cooldowns, duplicate side-effect blocking, and failure handling stay aligned.
-*   🧪 **Self-Training Sidecar**: Captures accepted trajectories, exports offline datasets, evaluates candidates, and promotes stronger models under admin control.
+*   **Task simulation**: Builds a plan before execution and can account for likely tool failures.
+*   **Plugin recovery**: Detects plugin failures and can call `self_repair_skill` to attempt a repair.
+*   **Policy-based configuration**: Applies configured permissions and approval requirements to agent-requested changes.
+*   **Media input**: Processes images, audio, and documents received through supported messaging channels.
+*   **Browser tools**: Navigates pages, detects blank-page results, and falls back between search providers.
+*   **Command and file tools**: Runs configured commands and manages files, subject to the configured safety controls.
+*   **Heartbeat scheduling**: Runs follow-ups and maintenance tasks on a schedule, with backoff when cycles are unproductive.
+*   **Worker processes**: Runs delegated tasks in separate processes and collects their results.
+*   **Completion review**: Checks whether an action has delivered a substantive result before it is marked complete.
+*   **Runtime recovery**: Replans after failed batches and suppresses repeated tool calls.
+*   **Task complexity limits**: Uses task classification to set step and message budgets.
+*   **Skill routing**: Selects skills using task intent and configurable routing rules.
+*   **Admin controls**: Restricts elevated skills to configured administrators and tracks known users.
+*   **Decision pipeline**: Applies deduplication, recovery hints, and safety checks to tool calls.
+*   **Search fallbacks**: Uses browser-based search when configured search providers are unavailable.
+*   **Terminal interface**: Provides a TUI for configuration and worker-process management.
+*   **Plugin loading**: Loads TypeScript and JavaScript skills from the plugin directory.
+*   **Browser loop detection**: Detects repeated browser operations.
+*   **Identity files**: Sets the agent's identity and operating instructions through bootstrap files.
+*   **Event-driven scheduling**: Reacts to scheduler events instead of relying on busy-wait loops.
+*   **Image generation**: Generates and delivers images through supported messaging channels.
+*   **Local models**: Manages Ollama models and supports OpenAI-compatible tool calling.
+*   **Knowledge store**: Ingests documents, URLs, and files for semantic search.
+*   **Telegram controls**: Sends inline buttons and polls, edits and pins messages, and adds reactions.
+*   **Clarification delivery**: Sends `request_supporting_data` questions through the active channel before pausing.
+*   **Self-training sidecar**: Exports accepted trajectories, evaluates candidate models, and requires admin approval for promotion.
 
 ---
 
 ## Features
 
-OrcBot is built around **strategic autonomy**: it plans, executes, and repairs itself while staying grounded in your local data and configuration.
-
----
-
-## 📊 Benchmarks & Performance
-
-OrcBot v2.1 is engineered for peak reliability and strategic depth. Our latest benchmark testing shows superior performance across conversational, web, and system tasks.
-
-<div align="center">
-<img src="https://raw.githubusercontent.com/fredabila/orcbot/main/assets/benchmarks_v21.png" width="600" alt="OrcBot v2.1 Benchmarks">
-
-**[View Detailed Benchmark Methodology & Data](docs/reference/BENCHMARKS.md)**
-</div>
-
-*   **Conversational IQ (9.5/10)**: State-of-the-art context management and complex reasoning.
-*   **Task Planning (8.9/10)**: Dynamic simulation that anticipates and bypasses errors.
-*   **Web Autonomy (9.2/10)**: Resilient browsing with multi-provider search fallback.
-*   **System Resilience (9.7/10)**: Background self-repair and daemon stability.
+OrcBot plans and executes tasks using its registered tools, configured channels, and local data.
 
 ---
 
 ## Architecture
 
-The system is designed to run locally while integrating with external channels and providers. This diagram covers the full v2.1 infrastructure — from inbound channels through the decision stack, memory layers, skills, and external providers.
+The system runs locally and connects to external channels and providers. This diagram shows the path from inbound messages through the decision stack, memory, skills, and outbound services.
 
 ```mermaid
 flowchart TB
@@ -201,13 +183,13 @@ The current runtime is designed around a supervisor-style loop rather than a fir
 - **Bonus-step wrap-up mode**: when max-step review grants extra turns, bonus steps are optimized for safe final delivery rather than fresh exploration.
 - **Completion reconciliation**: if a substantive user-facing delivery succeeded, OrcBot can reconcile final status to `completed` even if guardrails later exhaust the step budget.
 
-This is the part of the system that most directly improved OrcBot's autonomy under real workloads: fewer silent terminations, fewer repeated failing calls, and less need for human steering when a tool or plan goes sideways.
+These mechanisms define how OrcBot responds to failed tools, blocked plans, and completion limits.
 
 ---
 
 ## Self-Training Sidecar
 
-OrcBot now supports a production-safe self-training loop. The key design choice is that this is not live online weight mutation inside the action loop. Instead, the agent continuously produces learning data from real work while model rollout remains a separate, reviewable operation.
+OrcBot supports a self-training workflow separate from its action loop. It exports accepted trajectories for offline evaluation, and model promotion requires an administrator.
 
 ### Workflow
 
@@ -262,7 +244,7 @@ selfTrainingLaunchCommand: python trainer.py --manifest {jobManifestPath} --expo
 
 ## Hardware & Robotics
 
-OrcBot is software-first, but its skill system makes it a strong brain for hardware stacks. The recommended pattern is to keep **real-world control in a dedicated hardware bridge** (ROS2, MQTT, REST, or serial gateway), and let OrcBot plan, reason, and issue safe commands through that bridge.
+OrcBot can connect to hardware through skills and a dedicated bridge. Keep **real-world control in the bridge** (ROS2, MQTT, REST, or a serial gateway), and validate commands before they reach actuators.
 
 **Reference architecture:**
 - **OrcBot Core**: planning, memory, autonomy, and decision pipeline.
@@ -363,7 +345,7 @@ Live docs (GitHub Pages): https://fredabila.github.io/orcbot/docs/
 *   🐳 [**Docker Guide**](docs/guides/DOCKER.md) - Container deployment options
 *   📊 [**Testing Guide**](TESTING_GUIDE.md) - Testing strategies and patterns
 *   🔒 [**Security Summary**](docs/notes/SECURITY_SUMMARY.md) - Security features and best practices
-*   🚀 [**Extraordinary Use Cases**](docs/guides/EXTRAORDINARY_USE_CASES.md) - God-mode automation, robotics, and strategic orchestration
+*   🚀 [**Use Cases**](docs/guides/EXTRAORDINARY_USE_CASES.md) - Automation, robotics, and task orchestration
 *   🤖 [**Robotics + OrcBot**](docs/blog/robotics.md) - Hardware integration approach and safety patterns
 *   🧪 [**Self-Training Sidecar Page**](https://orcbot.vercel.app/self-training) - Capture, evaluation, launch, and promotion workflow
 
@@ -393,9 +375,9 @@ orcbot push "Summarize today’s AI news and save to my journal" -p 10
 
 ---
 
-## 🕹️ High-Power Skills
+## Skills
 
-OrcBot comes out of the box with "God Mode" capabilities:
+OrcBot includes core tools for commands, browsing, file operations, messaging, and task scheduling:
 
 | Skill | Description | Usage Example |
 |-------|-------------|---------------|
@@ -437,7 +419,7 @@ OrcBot comes out of the box with "God Mode" capabilities:
 
 ---
 
-## 🎮 Usage
+## Usage
 
 ### TUI Mode (Recommended)
 Launch the visual dashboard:
@@ -625,6 +607,7 @@ Key settings (excerpt):
 - `githubCliPath`: Optional GitHub CLI binary path if `gh` is not already on PATH
 - `telegramToken` / `whatsappEnabled`
 - `maxStepsPerAction`, `maxMessagesPerAction`, `messageDedupWindow`
+- `structuredOutputEnabled`: Set to `false` to stop asking providers for a native JSON response on the decision path. Default on; providers that reject the request are retried without it automatically.
 - `autonomyEnabled`, `autonomyInterval`, `autonomyBacklogLimit`
 - `autonomyAllowedChannels`: List of channels the agent can message proactively (e.g., `["telegram"]`).
 - `skillRoutingRules`: Intent-based skill selection rules
@@ -648,7 +631,7 @@ autonomyAllowedChannels:
 
 ### Agent-Driven Config Management
 
-OrcBot v2.0 introduces **intelligent configuration management** where agents can automatically optimize settings based on task requirements:
+OrcBot uses configuration policies to govern agent-requested settings changes:
 
 #### Policy-Based Security
 - **SAFE configs** (e.g., `modelName`, `memoryContextLimit`): Agents can modify autonomously
@@ -656,7 +639,7 @@ OrcBot v2.0 introduces **intelligent configuration management** where agents can
 - **LOCKED configs** (e.g., `safeMode`, security settings): Agents cannot modify
 
 #### Autonomous Optimization
-Agents intelligently adjust configuration when:
+Agent-requested configuration changes can be useful when:
 - Code tasks need more capable models (auto-switch to GPT-4)
 - Complex tasks require more memory context
 - Multi-step workflows need higher step budgets
@@ -740,11 +723,11 @@ Full setup and usage guidance: [docs/GOOGLE_WORKSPACE_CLI.md](docs/GOOGLE_WORKSP
 
 ---
 
-## Autonomy & Smart Heartbeat
+## Autonomy & Heartbeat
 
-OrcBot uses a **smart heartbeat** system that's context-aware and action-oriented:
+The heartbeat schedules follow-ups and maintenance tasks based on recent activity:
 
-### Intelligent Scheduling
+### Scheduling
 - **Exponential Backoff**: When unproductive, heartbeat intervals automatically increase (2x, 4x, 8x) to save resources
 - **Productivity Tracking**: Measures actual work done vs. idle cycles to optimize timing
 - **Context-Aware Actions**: Analyzes recent conversations to determine relevant follow-ups
@@ -785,23 +768,23 @@ orcbot ui  # → Workers menu shows active processes
 
 ---
 
-## 🧠 The Reasoning Loop (ReAct)
+## The Reasoning Loop (ReAct)
 
-OrcBot doesn't just give one answer. It works iteratively:
+OrcBot can run several tool-and-observation steps before replying:
 1.  **THOUGHT**: "I need to find news first."
 2.  **ACTION**: Calls `web_search`.
 3.  **OBSERVATION**: Receives news results.
-4.  **RE-REASON**: "Now I should update the user's profile and then reply."
+4.  **RE-REASON**: Uses the results to decide whether another step is needed.
 5.  **FINALIZE**: Completes background tasks and then messages the user.
 
 ---
 
-## 🛡️ Decision Pipeline & Safety
+## Decision Pipeline & Safety
 
-OrcBot v2.0 includes a sophisticated decision pipeline that ensures reliable task execution:
+OrcBot includes a decision pipeline that applies checks to tool calls and task completion:
 
 ### Termination Review Layer
-Every proposed action is reviewed before execution to prevent premature task termination. The system favors completing work over asking clarifying questions.
+When an action is ready to finish, a second review checks whether the task has been completed.
 
 ### Task Complexity Classifier
 OrcBot uses an LLM-based classifier to label tasks as trivial, simple, standard, or complex. This drives step and message budgets dynamically instead of brittle regex rules.
@@ -827,27 +810,27 @@ Enable `autopilotNoQuestions: true` to suppress clarification requests and keep 
 
 ---
 
-## 🔌 Dynamic Plugin System
+## Dynamic Plugin System
 
-OrcBot supports hot-loadable skills via TypeScript or JavaScript plugins in `~/.orcbot/plugins` (or `./plugins`).
+OrcBot loads TypeScript or JavaScript plugins from `~/.orcbot/plugins` (or `./plugins`) at runtime.
 
-- **Self-Repair**: If a plugin fails, OrcBot will attempt `self_repair_skill` automatically.
-- **Zero restarts**: Plugins are hot-loaded at runtime.
+- **Repair attempt**: If a plugin fails, OrcBot can call `self_repair_skill`.
+- **Runtime loading**: Newly available plugins can be loaded without restarting OrcBot.
 
 ---
 
 ## Security & Privacy
 
-- **Local-first**: memory, logs, and profiles stay on your machine
-- **No hidden uploads**: network calls only happen when a skill requires them
-- **Config isolation**: secrets are loaded from your config and environment variables
+- **Local data**: memory, logs, and profiles are stored in the configured data directory.
+- **External requests**: channels, model providers, browser search, and skills make network requests when used.
+- **Secret configuration**: API keys and other credentials are loaded through configuration and environment variables.
 - **Safe Mode**: disable command execution and skill creation via `safeMode: true`
 - **Plugin allow/deny**: control which plugins can load with `pluginAllowList` and `pluginDenyList`
 - **Admin-only Skills**: elevated capabilities are gated to configured admins
 
 ---
 
-## What's New in v2.1
+## Recent Changes
 
 ### Skill Infrastructure Hardening
 - **`download_file`**: 60 s timeout, 50 MB streaming cap, MIME → file extension inference, uses `dataHome` directory.
@@ -879,7 +862,7 @@ OrcBot supports hot-loadable skills via TypeScript or JavaScript plugins in `~/.
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 OrcBot is built for extensibility. Contributors can add:
 - **Skills**: New tools in `src/core/Agent.ts`.
@@ -888,8 +871,12 @@ OrcBot is built for extensibility. Contributors can add:
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
+### AI-assisted changes
+
+The anti-slop core guidance is in [`antislop.md`](antislop.md). For Copilot coding sessions, [`.github/copilot-instructions.md`](.github/copilot-instructions.md) routes UI and copy changes to that file. This repository currently installs the core guidance only; optional anti-slop skill bundles are not included.
+
 ---
 
 <div align="center">
-Built with ❤️ for the Autonomous Era
+OrcBot is open source under the MIT License.
 </div>

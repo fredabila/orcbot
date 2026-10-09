@@ -6,6 +6,7 @@ import yaml from 'yaml';
 import os from 'os';
 import { logger } from '../utils/logger';
 import { getOrcBotDataHome } from '../utils/dataHome';
+import { DEFAULT_MODEL_IDS } from '../config/modelDefaults';
 
 function checkCancel(val: any) {
     if (p.isCancel(val)) {
@@ -75,7 +76,7 @@ export async function runSetup() {
 
     const modelName = checkCancel(await p.text({
         message: 'Default Model Name:',
-        initialValue: currentConfig.modelName || 'gpt-4o'
+        initialValue: currentConfig.modelName || DEFAULT_MODEL_IDS.openaiMain
     }));
 
     // ── Section 2: API Keys ──

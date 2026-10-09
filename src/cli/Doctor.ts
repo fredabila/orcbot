@@ -3,6 +3,7 @@ import path from 'path';
 import { ConfigManager } from '../config/ConfigManager';
 import { MultiLLM, type LLMProvider, type LLMToolDefinition } from '../core/MultiLLM';
 import { __test__ as piAiAdapterTestHooks, isPiAiLinked } from '../core/PiAIAdapter';
+import { DEFAULT_MODEL_IDS } from '../config/modelDefaults';
 
 export type DoctorSeverity = 'info' | 'warn' | 'critical';
 
@@ -592,14 +593,14 @@ function getProbeModelForProvider(config: ConfigManager, provider: string, activ
     if (providerModelNames[provider]) return providerModelNames[provider];
 
     switch (provider) {
-        case 'openai': return getUsePiAI(config) && isPiAiLinked('openai-codex') ? 'gpt-5.1' : 'gpt-4o-mini';
-        case 'google': return 'gemini-flash-lite-latest';
-        case 'anthropic': return 'claude-3-5-haiku-latest';
-        case 'openrouter': return 'google/gemini-2.0-flash-exp:free';
-        case 'nvidia': return 'nvidia:moonshotai/kimi-k2.5';
-        case 'bedrock': return activeModel || 'bedrock:anthropic.claude-3-5-sonnet';
-        case 'ollama': return 'ollama:llama3';
-        default: return activeModel || 'gpt-4o-mini';
+        case 'openai': return getUsePiAI(config) && isPiAiLinked('openai-codex') ? 'gpt-5.1' : DEFAULT_MODEL_IDS.openaiFast;
+        case 'google': return DEFAULT_MODEL_IDS.googleFast;
+        case 'anthropic': return DEFAULT_MODEL_IDS.anthropicFast;
+        case 'openrouter': return DEFAULT_MODEL_IDS.openRouter;
+        case 'nvidia': return DEFAULT_MODEL_IDS.nvidia;
+        case 'bedrock': return activeModel || DEFAULT_MODEL_IDS.bedrock;
+        case 'ollama': return DEFAULT_MODEL_IDS.ollama;
+        default: return activeModel || DEFAULT_MODEL_IDS.openaiFast;
     }
 }
 
@@ -635,7 +636,7 @@ async function runLiveProbe(llm: MultiLLM, provider: string, model: string): Pro
 export async function collectLLMCompatibilityReport(config: ConfigManager, options?: { live?: boolean }): Promise<DoctorLLMCompatibilityReport> {
     const llm = buildLlm(config);
     const activeModel = String(config.get('modelName') || '');
-    const activeProvider = String(config.get('llmProvider') || llm.inferProvider(activeModel || 'gpt-4o'));
+    const activeProvider = String(config.get('llmProvider') || llm.inferProvider(activeModel || DEFAULT_MODEL_IDS.openaiMain));
     const usePiAI = getUsePiAI(config);
     const schemaContractOk = checkSchemaContract();
 
