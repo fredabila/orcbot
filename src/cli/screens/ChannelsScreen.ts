@@ -248,6 +248,14 @@ export async function showTelegramConfig(context?: CliContext): Promise<void> {
     }
 }
 
+/** Normalize a WhatsApp JID, appending the default user domain when only a number is given. */
+function normalizeWaJid(input: string): string {
+    let id = String(input || '').trim();
+    if (!id) return '';
+    if (!id.includes('@')) id = `${id}@s.whatsapp.net`;
+    return id;
+}
+
 export async function showWhatsAppConfig(context?: CliContext): Promise<void> {
     const ctx = context ?? getCliContext();
     const { agent } = ctx;
@@ -261,6 +269,9 @@ export async function showWhatsAppConfig(context?: CliContext): Promise<void> {
     const contactAccessMode = String(agent.config.get('whatsappContactAccessMode') || 'all');
     const allowedContacts = (agent.config.get('whatsappAllowedContacts') || []) as string[];
     const blockedContacts = (agent.config.get('whatsappBlockedContacts') || []) as string[];
+    const externalPersona = String(agent.config.get('whatsappExternalPersona') || 'assistant');
+    const contactPersonas = (agent.config.get('whatsappContactPersonas') || {}) as Record<string, string>;
+    const notifyOwner = agent.config.get('notifyOwnerEnabled') !== false;
     const groupsEnabled = agent.config.get('whatsappGroupsEnabled');
     const groupPolicy = String(agent.config.get('whatsappGroupPolicy') || 'mention_only');
     const allowedGroups = (agent.config.get('whatsappAllowedGroups') || []) as string[];
@@ -275,6 +286,7 @@ export async function showWhatsAppConfig(context?: CliContext): Promise<void> {
     const statusMediaLabel = statusMediaMode === 'download_and_analyze' ? green('DOWNLOAD + ANALYZE') : statusMediaMode === 'download_only' ? yellow('DOWNLOAD ONLY') : gray('OFF');
     const waLines = [
         `${dim('Status')}            ${enabled ? green(bold('ENABLED')) : red(bold('DISABLED'))}`,
+        `${dim('Connection')}        ${agent.whatsapp?.isConnected() ? green(bold('● CONNECTED')) : gray('○ DISCONNECTED')}`,
         `${dim('Linked Account')}    ${ownerJid === 'Not Linked' ? gray(ownerJid) : cyan(ownerJid)}`,
         `${dim('Autonomy')}          ${autonomyAllowed ? green(bold('● ENABLED')) : gray('○ DISABLED')}`,
         `${dim('Contact Policy')}    ${contactAccessMode === 'allowlist' ? yellow('ALLOWLIST ONLY') : contactAccessMode === 'blocklist' ? yellow('BLOCKLIST') : green('ALL CONTACTS')}`,
@@ -309,6 +321,10 @@ export async function showWhatsAppConfig(context?: CliContext): Promise<void> {
                 { name: autoReact ? 'Disable Auto-React' : 'Enable Auto-React', value: 'toggle_react' },
                 { name: contextProfiling ? 'Disable Context Profiling' : 'Enable Context Profiling', value: 'toggle_profile' },
                 { name: 'Manage Contact Filter Policy', value: 'manage_contact_policy' },
+                { name: `Manage Contact Personas ${dim(`(default: ${externalPersona})`)}`, value: 'manage_personas' },
+                { name: `Default Persona for Others: ${externalPersona}`, value: 'toggle_default_persona' },
+                { name: notifyOwner ? 'Disable Owner Notifications' : 'Enable Owner Notifications', value: 'toggle_notify_owner' },
+                { name: red('Unlink / Revoke WhatsApp'), value: 'unlink' },
                 { name: groupsEnabled ? 'Disable Group Chat Support' : 'Enable Group Chat Support', value: 'toggle_groups' },
                 { name: 'Manage Group Policy', value: 'manage_group_policy' },
                 { name: 'Run Context Profiling (Batch)', value: 'trigger_profiling' },
@@ -356,13 +372,71 @@ export async function showWhatsAppConfig(context?: CliContext): Promise<void> {
         case 'toggle_profile':
             agent.config.set('whatsappContextProfilingEnabled', !contextProfiling);
             break;
+        case 'toggle_default_persona':
+            agent.config.set('whatsappExternalPersona', externalPersona === 'owner' ? 'assistant' : 'owner');
+            break;
+        case 'toggle_notify_owner':
+            agent.config.set('notifyOwnerEnabled', !notifyOwner);
+            break;
+        case 'unlink': {
+            const { confirm } = await inquirer.prompt([
+                { type: 'confirm', name: 'confirm', message: 'Unlink this WhatsApp account? This revokes the linked device on WhatsApp and deletes the local session. You will need to scan a new QR to reconnect.', default: false }
+            ]);
+            if (confirm) {
+                try {
+                    await agent.whatsapp?.logout();
+                    agent.config.set('whatsappEnabled', false);
+                    console.log(green('WhatsApp unlinked. Local session cleared.'));
+                } catch (e: any) {
+                    console.log(red(`Unlink failed: ${e?.message || e}`));
+                }
+            }
+            break;
+        }
+        case 'manage_personas': {
+            const contacts = new Set<string>();
+            for (const c of (agent.whatsapp?.getRecentContacts() || [])) {
+                if (c?.jid) contacts.add(c.jid);
+            }
+            for (const a of allowedContacts) contacts.add(a);
+            for (const k of Object.keys(contactPersonas)) contacts.add(k);
+
+            const choices = [
+                ...Array.from(contacts).map(j => ({
+                    name: `${j}${contactPersonas[j] ? `  ${dim(`[${contactPersonas[j]}]`)}` : ''}`,
+                    value: j
+                })),
+                { name: dim('Enter a JID manually...'), value: '__manual__' },
+                { name: dim('Back'), value: '__back__' }
+            ];
+            const { target } = await inquirer.prompt([
+                { type: 'list', name: 'target', message: 'Choose contact to set persona for:', choices }
+            ]);
+            if (target === '__back__') break;
+            let jid = target as string;
+            if (target === '__manual__') {
+                const { val } = await inquirer.prompt([
+                    { type: 'input', name: 'val', message: 'Enter contact JID (e.g. 233555505284@s.whatsapp.net):' }
+                ]);
+                jid = normalizeWaJid(val);
+                if (!jid) break;
+            }
+            const { mode } = await inquirer.prompt([
+                {
+                    type: 'list', name: 'mode', message: `Persona for ${jid}:`, choices: [
+                        { name: 'Assistant / chatbot (default)', value: 'assistant' },
+                        { name: 'Owner voice (reply as you)', value: 'owner' },
+                        { name: dim('Clear (use default)'), value: '__clear__' }
+                    ]
+                }
+            ]);
+            const updated = { ...contactPersonas };
+            if (mode === '__clear__') delete updated[jid]; else updated[jid] = mode;
+            agent.config.set('whatsappContactPersonas', updated);
+            console.log(green(`Persona for ${jid} set to ${mode === '__clear__' ? 'default' : mode}.`));
+            break;
+        }
         case 'manage_contact_policy': {
-            const normalizeJid = (input: string): string => {
-                let id = String(input || '').trim();
-                if (!id) return '';
-                if (!id.includes('@')) id = `${id}@s.whatsapp.net`;
-                return id;
-            };
 
             const knownContacts = agent.whatsapp?.getRecentContacts() || [];
             const pickContactFromKnown = async (message: string): Promise<string | null> => {
@@ -382,12 +456,12 @@ export async function showWhatsAppConfig(context?: CliContext): Promise<void> {
                 if (pick === '__cancel__') return null;
                 if (pick !== '__manual__') return pick;
                 const { manual } = await inquirer.prompt([{ type: 'input', name: 'manual', message: 'Enter WhatsApp JID or phone number:' }]);
-                return normalizeJid(manual);
+                return normalizeWaJid(manual);
             };
 
             const promptManual = async (message: string): Promise<string | null> => {
                 const { jid } = await inquirer.prompt([{ type: 'input', name: 'jid', message }]);
-                const normalized = normalizeJid(jid);
+                const normalized = normalizeWaJid(jid);
                 return normalized || null;
             };
 

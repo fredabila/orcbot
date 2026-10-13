@@ -112,5 +112,18 @@ describe('LatencyScreen', () => {
             await expect(runLatencyBenchmark({ includeLLM: false, interactive: false, context: mockContext })).resolves.not.toThrow();
             expect(mockAgent.bootstrap.loadBootstrapContext).toHaveBeenCalled();
         });
+
+        it('includes LLM round-trips when requested', async () => {
+            await runLatencyBenchmark({ includeLLM: true, interactive: false, context: mockContext });
+            expect(mockAgent.llm.callFast).toHaveBeenCalled();
+            expect(mockAgent.llm.call).toHaveBeenCalled();
+        });
+
+        it('records LLM ping failures without throwing', async () => {
+            mockAgent.llm.callFast.mockRejectedValueOnce(new Error('provider unreachable'));
+            mockAgent.llm.call.mockRejectedValueOnce(new Error('provider unreachable'));
+
+            await expect(runLatencyBenchmark({ includeLLM: true, interactive: false, context: mockContext })).resolves.not.toThrow();
+        });
     });
 });

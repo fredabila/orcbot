@@ -64,9 +64,7 @@
 }
 
 .deploy-card-kicker {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+  font-size: 0.78rem;
   color: var(--text-soft);
 }
 
@@ -98,10 +96,8 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
   color: var(--accent);
   background: rgba(92, 255, 179, 0.1);
   border: 1px solid rgba(92, 255, 179, 0.25);
@@ -223,9 +219,7 @@
 
 .requirements h4 {
   color: var(--accent);
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+  font-size: 0.85rem;
   margin-bottom: 12px;
 }
 

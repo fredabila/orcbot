@@ -1,6 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import { ConfigManager } from '../config/ConfigManager';
+import {
+    ALL_PROVIDERS,
+    hasConfiguredProvider,
+    getConfiguredProviders,
+} from '../config/providerCredentials';
 import { MultiLLM, type LLMProvider, type LLMToolDefinition } from '../core/MultiLLM';
 import { __test__ as piAiAdapterTestHooks, isPiAiLinked } from '../core/PiAIAdapter';
 import { DEFAULT_MODEL_IDS } from '../config/modelDefaults';
@@ -107,31 +112,7 @@ function isLoopbackHost(host: string): boolean {
     return normalized === '127.0.0.1' || normalized === 'localhost' || normalized === '::1';
 }
 
-function hasConfiguredProvider(config: ConfigManager, provider: string): boolean {
-    switch (provider) {
-        case 'openai':
-            return !!config.get('openaiApiKey');
-        case 'google':
-            return !!config.get('googleApiKey');
-        case 'openrouter':
-            return !!config.get('openrouterApiKey');
-        case 'nvidia':
-            return !!config.get('nvidiaApiKey');
-        case 'anthropic':
-            return !!config.get('anthropicApiKey');
-        case 'bedrock':
-            return !!config.get('bedrockRegion') && !!config.get('bedrockAccessKeyId') && !!config.get('bedrockSecretAccessKey');
-        case 'ollama':
-            return config.get('ollamaEnabled') === true;
-        default:
-            return false;
-    }
-}
 
-function getConfiguredProviders(config: ConfigManager): string[] {
-    const candidates = ['openai', 'google', 'openrouter', 'nvidia', 'anthropic', 'bedrock', 'ollama'];
-    return candidates.filter(provider => hasConfiguredProvider(config, provider));
-}
 
 function getConfiguredChannels(config: ConfigManager): string[] {
     const configured: string[] = [];
@@ -398,7 +379,7 @@ export function collectDoctorReport(config: ConfigManager, options?: { deep?: bo
             severity: 'critical',
             title: 'No LLM providers configured',
             message: 'No provider API keys or local provider flags were detected.',
-            recommendation: 'Configure at least one provider such as OpenAI, Google, OpenRouter, Anthropic, NVIDIA, Bedrock, or Ollama.',
+            recommendation: 'Configure at least one provider such as OpenAI, Google, Anthropic, OpenRouter, NVIDIA, DeepSeek, Groq, Mistral, xAI, Perplexity, Cerebras, Bedrock, a custom OpenAI-compatible endpoint, or Ollama.',
             area: 'providers'
         });
     }
@@ -554,7 +535,11 @@ function hasConfiguredProviderOrOAuth(config: ConfigManager, provider: string): 
                 ? { ready: true, authMode: 'local', notes }
                 : { ready: false, authMode: 'none', notes };
         default:
-            return { ready: false, authMode: 'none', notes };
+            // API-key providers (groq, mistral, deepseek, xai, perplexity, cerebras, custom, ...)
+            // all share one readiness rule: a populated credential/base URL.
+            return hasConfiguredProvider(config, provider)
+                ? { ready: true, authMode: 'api-key', notes }
+                : { ready: false, authMode: 'none', notes };
     }
 }
 
@@ -581,6 +566,14 @@ function buildLlm(config: ConfigManager): MultiLLM {
         xaiApiKey: config.get('xaiApiKey'),
         perplexityApiKey: config.get('perplexityApiKey'),
         deepseekApiKey: config.get('deepseekApiKey'),
+        huggingfaceApiKey: config.get('huggingfaceApiKey'),
+        kimiApiKey: config.get('kimiApiKey'),
+        minimaxApiKey: config.get('minimaxApiKey'),
+        zaiApiKey: config.get('zaiApiKey'),
+        opencodeApiKey: config.get('opencodeApiKey'),
+        customApiKey: config.get('customApiKey'),
+        customBaseUrl: config.get('customBaseUrl'),
+        customModelName: config.get('customModelName'),
         ollamaApiUrl: config.get('ollamaApiUrl'),
         fallbackModelNames: config.get('fallbackModelNames'),
     });
@@ -600,6 +593,13 @@ function getProbeModelForProvider(config: ConfigManager, provider: string, activ
         case 'nvidia': return DEFAULT_MODEL_IDS.nvidia;
         case 'bedrock': return activeModel || DEFAULT_MODEL_IDS.bedrock;
         case 'ollama': return DEFAULT_MODEL_IDS.ollama;
+        case 'deepseek': return 'deepseek-chat';
+        case 'groq': return 'llama-3.3-70b-versatile';
+        case 'mistral': return 'mistral-large-latest';
+        case 'xai': return 'grok-4';
+        case 'perplexity': return 'sonar-pro';
+        case 'cerebras': return 'llama3.1-8b';
+        case 'custom': return String(config.get('customModelName') || activeModel || DEFAULT_MODEL_IDS.openaiFast);
         default: return activeModel || DEFAULT_MODEL_IDS.openaiFast;
     }
 }
@@ -640,7 +640,7 @@ export async function collectLLMCompatibilityReport(config: ConfigManager, optio
     const usePiAI = getUsePiAI(config);
     const schemaContractOk = checkSchemaContract();
 
-    const providerCandidates = ['openai', 'google', 'anthropic', 'openrouter', 'nvidia', 'bedrock', 'ollama'];
+    const providerCandidates = [...ALL_PROVIDERS];
     const providersToCheck = providerCandidates.filter(provider => {
         if (provider === activeProvider) return true;
         const status = hasConfiguredProviderOrOAuth(config, provider);

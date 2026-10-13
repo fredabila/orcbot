@@ -20,6 +20,164 @@ import {
     brightGreen,
 } from '../ui/Widgets';
 import { getCliContext, CliContext } from '../context';
+import {
+    listConfiguredModels,
+    findModelEntry,
+    switchToModel,
+    saveCurrentModel,
+    removeSavedModel,
+    readSavedModels,
+    type ModelEntry,
+} from '../../config/ModelRegistry';
+
+/** Short provenance tag shown against each switch-list row. */
+function sourceBadge(entry: ModelEntry): string {
+    if (entry.sources.includes('saved')) return green('saved');
+    if (entry.sources.includes('provider-memory')) return dim('recent');
+    return dim('fallback');
+}
+
+/** One row of the switch list: marker, label/model, provider, provenance, credential state. */
+function formatModelRow(entry: ModelEntry): string {
+    const marker = entry.isActive ? brightGreen('●') : gray('○');
+    const title = entry.label ? `${bold(entry.label)} ${dim(entry.model)}` : bold(entry.model);
+    const provider = entry.provider
+        ? entry.effectiveProvider
+        : `${entry.effectiveProvider}${dim(' auto')}`;
+    const creds = entry.hasCredentials ? '' : `  ${yellow('no key')}`;
+    return `${marker} ${title}  ${dim('via')} ${provider}  ${sourceBadge(entry)}${creds}`;
+}
+
+/**
+ * Switch between models the user has already configured.
+ *
+ * Merges the curated `savedModels` shortlist with the auto-remembered `providerModelNames` and
+ * `fallbackModelNames` maps, so previously used models show up without any setup while the
+ * curated list still allows several models per provider.
+ */
+export async function showSwitchModelMenu(context?: CliContext): Promise<void> {
+    const ctx = context ?? getCliContext();
+    const { agent } = ctx;
+
+    renderScreenHeader('Switch Model');
+
+    const entries = listConfiguredModels(agent.config, {
+        isLinked: (id: string) => {
+            try {
+                return !!agent.llm?.isPiAiLinked?.(id);
+            } catch {
+                return false;
+            }
+        },
+    });
+    const active = entries.find(e => e.isActive);
+    const savedCount = readSavedModels(agent.config).length;
+
+    console.log('');
+    box([
+        `${dim('Active')}  ${brightCyan(bold(active?.model || agent.config.get('modelName') || '(none)'))}`,
+        `${dim('Via')}     ${active?.effectiveProvider || 'auto'}`,
+        `${dim('Known')}   ${cyan(String(entries.length))} configured ${dim(`(${savedCount} saved)`)}`,
+    ], { title: 'ACTIVE MODEL', width: 58 });
+    console.log('');
+
+    if (entries.length <= 1) {
+        console.log(yellow('  Only the active model is configured so far.'));
+        console.log(dim('  Save it below, or add more via "Model & Provider Setup".'));
+        console.log('');
+    }
+
+    const choices: any[] = [
+        ...entries.map(entry => ({
+            name: `  ${formatModelRow(entry)}`,
+            value: `use:${entry.effectiveProvider}::${entry.model}`,
+            disabled: entry.isActive ? dim('active') : false,
+        })),
+        new inquirer.Separator(dim('  ─── Manage shortlist ─────────────────')),
+        { name: `  ${bold('Save active model to shortlist')}`, value: 'save' },
+        {
+            name: `  ${bold('Remove a saved model')}`,
+            value: 'remove',
+            disabled: savedCount === 0 ? dim('nothing saved') : false,
+        },
+        { name: `  ${bold('Model & Provider Setup')} ${dim('(browse full catalogue)')}`, value: 'browse' },
+        new inquirer.Separator(dim('  ────────────────────────────────────')),
+        { name: dim('  ← Back'), value: 'back' },
+    ];
+
+    const { choice } = await inquirer.prompt([{
+        type: 'list',
+        name: 'choice',
+        message: cyan('Select a model to activate:'),
+        choices,
+        pageSize: 20,
+    }]);
+
+    if (choice === 'back') return showModelsMenu(ctx);
+    if (choice === 'browse') return showPiAIConfig(ctx);
+
+    if (choice === 'save') {
+        const { label } = await inquirer.prompt([{
+            type: 'input',
+            name: 'label',
+            message: 'Optional label (blank to use the model id):',
+        }]);
+        const saved = saveCurrentModel(agent.config, label);
+        console.log(green(`\n  Saved ${saved.label ? `${saved.label} (${saved.model})` : saved.model} to the shortlist.`));
+        await waitKeyPress();
+        return showSwitchModelMenu(ctx);
+    }
+
+    if (choice === 'remove') {
+        const saved = readSavedModels(agent.config);
+        const { target } = await inquirer.prompt([{
+            type: 'list',
+            name: 'target',
+            message: 'Remove which saved model?',
+            choices: [
+                ...saved.map(e => ({
+                    name: e.label ? `${e.label} ${dim(e.model)}` : e.model,
+                    value: e.label || e.model,
+                })),
+                { name: dim('← Cancel'), value: '__cancel__' },
+            ],
+        }]);
+
+        if (target !== '__cancel__') {
+            const removed = removeSavedModel(agent.config, target);
+            console.log(removed
+                ? yellow(`\n  Removed ${removed.model} from the shortlist.`)
+                : red('\n  That entry was no longer present.'));
+            await waitKeyPress();
+        }
+        return showSwitchModelMenu(ctx);
+    }
+
+    if (typeof choice === 'string' && choice.startsWith('use:')) {
+        // Re-resolve against the list rather than trusting the encoded value.
+        const model = choice.slice(choice.indexOf('::') + 2);
+        const match = findModelEntry(entries, model);
+        const entry = match.entry;
+
+        if (!entry) {
+            console.log(red(`\n  Could not resolve "${model}".`));
+            await waitKeyPress();
+            return showSwitchModelMenu(ctx);
+        }
+
+        const applied = switchToModel(agent.config, { model: entry.model, provider: entry.provider });
+        console.log(green(`\n  Active model is now ${bold(applied.model)} via ${applied.provider || `${entry.effectiveProvider} (inferred)`}.`));
+
+        if (!entry.hasCredentials) {
+            console.log(yellow(`  Warning: no credentials are configured for ${entry.effectiveProvider}; calls will fail until you add a key.`));
+        }
+
+        await waitKeyPress();
+        return showSwitchModelMenu(ctx);
+    }
+
+    return showModelsMenu(ctx);
+}
 
 /**
  * Root AI Models & Providers screen controller.
@@ -38,10 +196,18 @@ export async function showModelsMenu(context?: CliContext): Promise<void> {
     const hasNvidia = !!agent.config.get('nvidiaApiKey');
     const hasAnthropic = !!agent.config.get('anthropicApiKey');
     const hasBedrock = !!agent.config.get('bedrockAccessKeyId');
+    const hasDeepseek = !!agent.config.get('deepseekApiKey');
+    const hasGroq = !!agent.config.get('groqApiKey');
+    const hasMistral = !!agent.config.get('mistralApiKey');
+    const hasXai = !!agent.config.get('xaiApiKey');
+    const hasPerplexity = !!agent.config.get('perplexityApiKey');
+    const hasCerebras = !!agent.config.get('cerebrasApiKey');
+    const hasCustom = !!agent.config.get('customBaseUrl');
     const ollamaUrl = agent.config.get('ollamaApiUrl') || 'http://localhost:11434';
     const ollamaHelper = new OllamaHelper(ollamaUrl);
     const hasOllama = await ollamaHelper.isRunning();
     const piAiEnabled = agent.config.get('usePiAI') !== false; // true by default
+    const configuredCount = listConfiguredModels(agent.config).length;
 
     console.log('');
     const piTuiStatus = isPiTuiAvailable() ? green('installed') : gray('not installed');
@@ -62,6 +228,13 @@ export async function showModelsMenu(context?: CliContext): Promise<void> {
         `${statusDot(hasNvidia, '')}  ${bold('NVIDIA')}       ${hasNvidia ? green('Key set') : gray('Not configured')}`,
         `${statusDot(hasAnthropic, '')}  ${bold('Anthropic')}    ${hasAnthropic ? green('Key set') : gray('Not configured')}`,
         `${statusDot(hasBedrock, '')}  ${bold('AWS Bedrock')}  ${hasBedrock ? green('Keys set') : gray('Not configured')}`,
+        `${statusDot(hasDeepseek, '')}  ${bold('DeepSeek')}     ${hasDeepseek ? green('Key set') : gray('Not configured')}`,
+        `${statusDot(hasGroq, '')}  ${bold('Groq')}         ${hasGroq ? green('Key set') : gray('Not configured')}`,
+        `${statusDot(hasMistral, '')}  ${bold('Mistral')}      ${hasMistral ? green('Key set') : gray('Not configured')}`,
+        `${statusDot(hasXai, '')}  ${bold('xAI (Grok)')}   ${hasXai ? green('Key set') : gray('Not configured')}`,
+        `${statusDot(hasPerplexity, '')}  ${bold('Perplexity')}   ${hasPerplexity ? green('Key set') : gray('Not configured')}`,
+        `${statusDot(hasCerebras, '')}  ${bold('Cerebras')}     ${hasCerebras ? green('Key set') : gray('Not configured')}`,
+        `${statusDot(hasCustom, '')}  ${bold('Custom/Compat')} ${hasCustom ? green('Configured') : gray('Not configured')}`,
     ];
     box(providerLines, { title: 'PROVIDERS', width: 52 });
     console.log('');
@@ -72,6 +245,7 @@ export async function showModelsMenu(context?: CliContext): Promise<void> {
             name: 'provider',
             message: cyan('Select provider to configure:'),
             choices: [
+                { name: `   ${bold('Switch Model')} ${dim(`(${configuredCount} configured)`)}`, value: 'switch' },
                 { name: `   ${bold('Model & Provider Setup')} ${dim(`(current: ${currentProvider} · 15+ providers)`)}`, value: 'pi_ai' },
                 new inquirer.Separator(dim('  ─── Per-Provider Config ──────────')),
                 { name: `  ${statusDot(hasOpenAI, '')} OpenAI ${dim('(GPT-4, etc.)')}`, value: 'openai' },
@@ -81,6 +255,7 @@ export async function showModelsMenu(context?: CliContext): Promise<void> {
                 { name: `  ${statusDot(hasNvidia, '')} NVIDIA ${dim('(AI models)')}`, value: 'nvidia' },
                 { name: `  ${statusDot(hasAnthropic, '')} Anthropic ${dim('(Claude)')}`, value: 'anthropic' },
                 { name: `  ${statusDot(hasBedrock, '')} AWS Bedrock ${dim('(foundation models)')}`, value: 'bedrock' },
+                { name: `  ${statusDot(hasCustom, '')} Custom / OpenAI-compatible ${dim('(own base URL + model)')}`, value: 'custom' },
                 new inquirer.Separator(dim('  ──────────────────────────────────')),
                 { name: dim('  ← Back'), value: 'back' }
             ]
@@ -89,7 +264,9 @@ export async function showModelsMenu(context?: CliContext): Promise<void> {
 
     if (provider === 'back') return showMainMenu();
 
-    if (provider === 'pi_ai') {
+    if (provider === 'switch') {
+        await showSwitchModelMenu(ctx);
+    } else if (provider === 'pi_ai') {
         await showPiAIConfig(ctx);
     } else if (provider === 'openai') {
         await showOpenAIConfig(ctx);
@@ -105,6 +282,8 @@ export async function showModelsMenu(context?: CliContext): Promise<void> {
         await showAnthropicConfig(ctx);
     } else if (provider === 'bedrock') {
         await showBedrockConfig(ctx);
+    } else if (provider === 'custom') {
+        await showCustomProviderConfig(ctx);
     }
 }
 
@@ -780,6 +959,13 @@ export async function showSetPrimaryProvider(context?: CliContext): Promise<void
     const hasNvidia = !!agent.config.get('nvidiaApiKey');
     const hasAnthropic = !!agent.config.get('anthropicApiKey');
     const hasBedrock = !!agent.config.get('bedrockAccessKeyId');
+    const hasDeepseek = !!agent.config.get('deepseekApiKey');
+    const hasGroq = !!agent.config.get('groqApiKey');
+    const hasMistral = !!agent.config.get('mistralApiKey');
+    const hasXai = !!agent.config.get('xaiApiKey');
+    const hasPerplexity = !!agent.config.get('perplexityApiKey');
+    const hasCerebras = !!agent.config.get('cerebrasApiKey');
+    const hasCustom = !!agent.config.get('customBaseUrl');
 
     const choices = [
         {
@@ -816,6 +1002,42 @@ export async function showSetPrimaryProvider(context?: CliContext): Promise<void
             value: 'bedrock',
             disabled: !hasBedrock
         },
+        { name: '─'.repeat(30), value: '__sep1__', disabled: true },
+        {
+            name: `DeepSeek${currentProvider === 'deepseek' ? ' ✓' : ''}`,
+            value: 'deepseek',
+            disabled: !hasDeepseek
+        },
+        {
+            name: `Groq${currentProvider === 'groq' ? ' ✓' : ''}`,
+            value: 'groq',
+            disabled: !hasGroq
+        },
+        {
+            name: `Mistral AI${currentProvider === 'mistral' ? ' ✓' : ''}`,
+            value: 'mistral',
+            disabled: !hasMistral
+        },
+        {
+            name: `xAI (Grok)${currentProvider === 'xai' ? ' ✓' : ''}`,
+            value: 'xai',
+            disabled: !hasXai
+        },
+        {
+            name: `Perplexity${currentProvider === 'perplexity' ? ' ✓' : ''}`,
+            value: 'perplexity',
+            disabled: !hasPerplexity
+        },
+        {
+            name: `Cerebras${currentProvider === 'cerebras' ? ' ✓' : ''}`,
+            value: 'cerebras',
+            disabled: !hasCerebras
+        },
+        {
+            name: `Custom / OpenAI-compatible${currentProvider === 'custom' ? ' ✓' : ''}`,
+            value: 'custom',
+            disabled: !hasCustom
+        },
         { name: 'Back', value: 'back' }
     ];
 
@@ -840,6 +1062,92 @@ export async function showSetPrimaryProvider(context?: CliContext): Promise<void
 
     await waitKeyPress();
     return showModelsMenu(ctx);
+}
+
+/**
+ * Configure the generic OpenAI-compatible provider.
+ *
+ * Any endpoint that speaks the OpenAI `/chat/completions` shape works here — DeepSeek, Together,
+ * Fireworks, DeepInfra, Groq-compatible proxies, vLLM, LM Studio, or a self-hosted gateway. The
+ * user supplies the base URL, an optional API key, and the model id.
+ */
+export async function showCustomProviderConfig(context?: CliContext): Promise<void> {
+    const ctx = context ?? getCliContext();
+    const { agent } = ctx;
+
+    renderScreenHeader('Custom / OpenAI-compatible Provider');
+
+    const base = agent.config.get('customBaseUrl') || '';
+    const key = agent.config.get('customApiKey') || '';
+    const model = agent.config.get('customModelName') || agent.config.get('modelName') || '';
+    const label = agent.config.get('customProviderLabel') || 'Custom';
+    const activeProvider = agent.config.get('llmProvider');
+
+    box([
+        `${dim('Label')}      ${bold(String(label))}`,
+        `${dim('Base URL')}   ${base ? cyan(String(base)) : yellow('not set')}`,
+        `${dim('API Key')}    ${key ? green('set') : gray('none (optional)')}`,
+        `${dim('Model')}      ${model ? bold(String(model)) : yellow('not set')}`,
+        `${dim('Status')}     ${activeProvider === 'custom' ? green('active primary provider') : gray('not primary')}`,
+    ], { title: 'CUSTOM PROVIDER', width: 64 });
+    console.log('');
+
+    const { action } = await inquirer.prompt([{
+        type: 'list', name: 'action', message: cyan('Custom provider:'),
+        choices: [
+            { name: `   ${bold('Set Base URL')} ${dim('(e.g. https://api.deepseek.com/v1)')}`, value: 'base' },
+            { name: `   ${bold('Set API Key')} ${dim('(optional for local endpoints)')}`, value: 'key' },
+            { name: `   ${bold('Set Model Name')}`, value: 'model' },
+            { name: `   ${bold('Set Display Label')}`, value: 'label' },
+            new inquirer.Separator(dim('  ──────────────────────────────────')),
+            { name: `   ${bold('Use as Primary Provider')}`, value: 'activate', disabled: !base },
+            { name: `   ${bold('Test Connection')}`, value: 'test', disabled: !base },
+            { name: dim('  ← Back'), value: 'back' },
+        ]
+    }]);
+
+    if (action === 'back') return showModelsMenu(ctx);
+
+    if (action === 'base') {
+        const { val } = await inquirer.prompt([{
+            type: 'input', name: 'val',
+            message: 'Base URL (include /v1 or the full /chat/completions path):',
+            default: base,
+        }]);
+        if (val?.trim()) agent.config.set('customBaseUrl', val.trim());
+    } else if (action === 'key') {
+        const { val } = await inquirer.prompt([{
+            type: 'password', name: 'val', mask: '*',
+            message: 'API key (leave blank to clear):',
+        }]);
+        agent.config.set('customApiKey', val?.trim() || undefined);
+    } else if (action === 'model') {
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Model id:', default: model }]);
+        if (val?.trim()) agent.config.set('customModelName', val.trim());
+    } else if (action === 'label') {
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Display label:', default: label }]);
+        if (val?.trim()) agent.config.set('customProviderLabel', val.trim());
+    } else if (action === 'activate') {
+        if (model) agent.config.set('modelName', model);
+        agent.config.set('llmProvider', 'custom' as any);
+        console.log(green(`Custom provider "${label}" is now the primary provider.`));
+    } else if (action === 'test') {
+        console.log(dim('\nSending a test completion...'));
+        try {
+            const reply = await agent.llm.call(
+                'Reply with the single word: ok',
+                'You are a connectivity check.',
+                'custom' as any,
+                model || undefined
+            );
+            console.log(green(`Connection OK. Model replied: ${String(reply).slice(0, 100)}`));
+        } catch (error: any) {
+            console.log(red(`Connection failed: ${error?.message || error}`));
+        }
+    }
+
+    await waitKeyPress();
+    return showCustomProviderConfig(ctx);
 }
 
 export async function showOpenRouterConfig(context?: CliContext): Promise<void> {

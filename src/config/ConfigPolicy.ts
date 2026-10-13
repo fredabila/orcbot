@@ -35,7 +35,15 @@ export class ConfigPolicy {
             level: ConfigChangeLevel.SAFE,
             description: 'LLM provider selection',
             reason: 'Agents can switch providers based on availability and task requirements',
-            validation: (value: any) => ['openai', 'google', 'bedrock', 'openrouter', 'nvidia', 'anthropic', 'ollama'].includes(value)
+            validation: (value: any) => ['openai', 'google', 'bedrock', 'openrouter', 'nvidia', 'anthropic', 'ollama', 'groq', 'mistral', 'deepseek', 'xai', 'perplexity', 'cerebras', 'custom'].includes(value)
+        }],
+        ['savedModels', {
+            key: 'savedModels',
+            level: ConfigChangeLevel.SAFE,
+            description: 'User-curated model shortlist for the Switch Model picker',
+            reason: 'Only a list of model ids the user can already reach; changes cannot grant new access',
+            validation: (value: any) => Array.isArray(value)
+                && value.every((e: any) => e && typeof e === 'object' && typeof e.model === 'string' && e.model.length > 0)
         }],
         ['ollamaApiUrl', {
             key: 'ollamaApiUrl',
@@ -253,6 +261,111 @@ export class ConfigPolicy {
             level: ConfigChangeLevel.APPROVAL,
             description: 'OpenRouter API key',
             reason: 'API keys are sensitive and should be approved',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['groqApiKey', {
+            key: 'groqApiKey',
+            level: ConfigChangeLevel.APPROVAL,
+            description: 'Groq API key',
+            reason: 'API keys are sensitive and should be approved',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['mistralApiKey', {
+            key: 'mistralApiKey',
+            level: ConfigChangeLevel.APPROVAL,
+            description: 'Mistral AI API key',
+            reason: 'API keys are sensitive and should be approved',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['deepseekApiKey', {
+            key: 'deepseekApiKey',
+            level: ConfigChangeLevel.APPROVAL,
+            description: 'DeepSeek API key',
+            reason: 'API keys are sensitive and should be approved',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['xaiApiKey', {
+            key: 'xaiApiKey',
+            level: ConfigChangeLevel.APPROVAL,
+            description: 'xAI (Grok) API key',
+            reason: 'API keys are sensitive and should be approved',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['perplexityApiKey', {
+            key: 'perplexityApiKey',
+            level: ConfigChangeLevel.APPROVAL,
+            description: 'Perplexity API key',
+            reason: 'API keys are sensitive and should be approved',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['cerebrasApiKey', {
+            key: 'cerebrasApiKey',
+            level: ConfigChangeLevel.APPROVAL,
+            description: 'Cerebras API key',
+            reason: 'API keys are sensitive and should be approved',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['huggingfaceApiKey', {
+            key: 'huggingfaceApiKey',
+            level: ConfigChangeLevel.APPROVAL,
+            description: 'HuggingFace API key',
+            reason: 'API keys are sensitive and should be approved',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['kimiApiKey', {
+            key: 'kimiApiKey',
+            level: ConfigChangeLevel.APPROVAL,
+            description: 'Kimi (Moonshot) API key',
+            reason: 'API keys are sensitive and should be approved',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['minimaxApiKey', {
+            key: 'minimaxApiKey',
+            level: ConfigChangeLevel.APPROVAL,
+            description: 'MiniMax API key',
+            reason: 'API keys are sensitive and should be approved',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['zaiApiKey', {
+            key: 'zaiApiKey',
+            level: ConfigChangeLevel.APPROVAL,
+            description: 'Z.ai API key',
+            reason: 'API keys are sensitive and should be approved',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['opencodeApiKey', {
+            key: 'opencodeApiKey',
+            level: ConfigChangeLevel.APPROVAL,
+            description: 'OpenCode API key',
+            reason: 'API keys are sensitive and should be approved',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['customApiKey', {
+            key: 'customApiKey',
+            level: ConfigChangeLevel.APPROVAL,
+            description: 'Custom OpenAI-compatible provider API key',
+            reason: 'API keys are sensitive and should be approved',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['customBaseUrl', {
+            key: 'customBaseUrl',
+            level: ConfigChangeLevel.APPROVAL,
+            description: 'Custom OpenAI-compatible provider base URL',
+            reason: 'Points the agent at an external endpoint, so it should be approved',
+            validation: (value: any) => typeof value === 'string' && /^https?:\/\//i.test(value)
+        }],
+        ['customModelName', {
+            key: 'customModelName',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Custom provider model name',
+            reason: 'Non-sensitive model id, same class as modelName',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['customProviderLabel', {
+            key: 'customProviderLabel',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Display label for the custom provider',
+            reason: 'Non-sensitive display preference',
             validation: (value: any) => typeof value === 'string' && value.length > 0
         }],
         ['braveSearchApiKey', {

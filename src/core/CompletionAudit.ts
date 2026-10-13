@@ -275,6 +275,12 @@ export interface CompletionAuditInput {
     taskComplexity?: string;
     loopDetected?: boolean;
     isLikelyAcknowledgementMessage: (message: string) => boolean;
+    /**
+     * True when the action completed through a terminal delivery tool (schedule_task,
+     * send_image, create_time_capsule). Those tools fulfil the request on their own and
+     * deliver via the tool result, so the "no user-visible message" rule must not block them.
+     */
+    terminalDeliverySucceeded?: boolean;
 }
 
 export function collectCompletionAuditIssues(input: CompletionAuditInput): string[] {
@@ -292,7 +298,7 @@ export function collectCompletionAuditIssues(input: CompletionAuditInput): strin
     const isComplexTask = !['trivial', 'simple'].includes(taskComplexity);
 
     if (messagesSent === 0) {
-        if (!input.loopDetected) {
+        if (!input.loopDetected && !input.terminalDeliverySucceeded) {
             issues.push('No user-visible message was sent for this channel task.');
         }
         return issues;

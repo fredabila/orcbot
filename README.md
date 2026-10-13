@@ -601,6 +601,7 @@ Key settings (excerpt):
 
 - `modelName`: LLM model to use
 - `llmProvider`: Explicit provider selection (`openai`, `google`, `bedrock`, `openrouter`)
+- `savedModels`: Curated shortlist for the model switcher, as a list of `{ model, provider?, label? }`. Powers `orcbot model` and TUI → Manage AI Models → Switch Model; several models per provider are allowed.
 - `openrouterApiKey`: API key for OpenRouter (access 200+ models)
 - `googleOAuthClientId`, `googleOAuthClientSecret`, `googleOAuthRedirectUri`: Google identity service settings for Gmail-backed auth workflows
 - `googleWorkspaceCliPath`, `googleWorkspaceCliAccount`: Optional Google Workspace CLI binary path and default account selector

@@ -64,6 +64,7 @@ import { BlockReviewer, ReviewResult, BlockVerdict } from './BlockReviewer';
 import { parseBrowserPerformActions } from './BrowserPerformParser';
 import { resolveBrowserScratchpadTarget } from './BrowserScratchpad';
 import { collectCompletionAuditIssues, StepLedger, auditDelivery, type DeliveryAuditResult } from './CompletionAudit';
+import { computeIsUserAdmin } from './permissions';
 import { buildDelegatedTaskFollowupAction } from './DelegatedTaskFollowup';
 import { resolveInboundRoute } from './InboundRouting';
 import { resolveDataHomePath } from '../utils/dataHome';
@@ -284,6 +285,19 @@ export class Agent {
             mistralApiKey: this.config.get('mistralApiKey'),
             cerebrasApiKey: this.config.get('cerebrasApiKey'),
             xaiApiKey: this.config.get('xaiApiKey'),
+            deepseekApiKey: this.config.get('deepseekApiKey'),
+            perplexityApiKey: this.config.get('perplexityApiKey'),
+            huggingfaceApiKey: this.config.get('huggingfaceApiKey'),
+            kimiApiKey: this.config.get('kimiApiKey'),
+            minimaxApiKey: this.config.get('minimaxApiKey'),
+            zaiApiKey: this.config.get('zaiApiKey'),
+            opencodeApiKey: this.config.get('opencodeApiKey'),
+            azureEndpoint: this.config.get('azureEndpoint'),
+            googleProjectId: this.config.get('googleProjectId'),
+            googleLocation: this.config.get('googleLocation'),
+            customApiKey: this.config.get('customApiKey'),
+            customBaseUrl: this.config.get('customBaseUrl'),
+            customModelName: this.config.get('customModelName'),
             ollamaApiUrl: this.config.get('ollamaApiUrl'),
             fallbackModelNames: this.config.get('fallbackModelNames'),
         });
@@ -676,6 +690,19 @@ export class Agent {
             mistralApiKey: newConfig.mistralApiKey,
             cerebrasApiKey: newConfig.cerebrasApiKey,
             xaiApiKey: newConfig.xaiApiKey,
+            deepseekApiKey: newConfig.deepseekApiKey,
+            perplexityApiKey: newConfig.perplexityApiKey,
+            huggingfaceApiKey: newConfig.huggingfaceApiKey,
+            kimiApiKey: newConfig.kimiApiKey,
+            minimaxApiKey: newConfig.minimaxApiKey,
+            zaiApiKey: newConfig.zaiApiKey,
+            opencodeApiKey: newConfig.opencodeApiKey,
+            azureEndpoint: newConfig.azureEndpoint,
+            googleProjectId: newConfig.googleProjectId,
+            googleLocation: newConfig.googleLocation,
+            customApiKey: newConfig.customApiKey,
+            customBaseUrl: newConfig.customBaseUrl,
+            customModelName: newConfig.customModelName,
             ollamaApiUrl: newConfig.ollamaApiUrl,
             fallbackModelNames: newConfig.fallbackModelNames,
             fastModelName: newConfig.fastModelName
@@ -1222,12 +1249,40 @@ export class Agent {
         return false;
     }
 
+    /** True when the action's originating user has admin/owner privileges. */
+    private isActionAdmin(action: Action): boolean {
+        return action.payload?.isAdmin !== false;
+    }
+
+    /** Tools that fulfil a request on their own (their result is the delivery). */
+    private static readonly TERMINAL_DELIVERY_TOOLS = new Set(['schedule_task', 'send_image', 'create_time_capsule']);
+
+    /**
+     * Record that a terminal delivery tool completed the action, so the completion audit does not
+     * flag "no user-visible message" and the completion path can confirm with the tool's output.
+     * Returns true when this was a successful terminal delivery.
+     */
+    private markTerminalDelivery(action: Action, toolName: string, resultString: string, resultIndicatesError: boolean): boolean {
+        if (resultIndicatesError || !Agent.TERMINAL_DELIVERY_TOOLS.has(toolName)) return false;
+        action.payload.terminalDeliverySucceeded = true;
+        action.payload.terminalDeliveryMessage = resultString;
+        return true;
+    }
+
+    /** Returns a block reason when a non-admin runs an elevated tool, else null. */
+    private getElevationBlockReason(action: Action, toolName: string, toolMeta: { isElevated?: boolean }): string | null {
+        if (!this.isActionAdmin(action) && toolMeta?.isElevated) {
+            return `Blocked elevated tool '${toolName}' — requires owner/admin permission (action ${action.id})`;
+        }
+        return null;
+    }
+
     private evaluateChannelToolPolicy(action: Action, toolName: string): { allowed: boolean; reason?: string } {
         const targetChannel = this.TOOL_CHANNEL_MAP[toolName];
         if (!targetChannel) return { allowed: true };
 
         const source = String(action.payload?.source || '').trim();
-        const isAdmin = action.payload?.isAdmin !== false;
+        const isAdmin = this.isActionAdmin(action);
         const isSourceChannelTask = ['telegram', 'whatsapp', 'discord', 'slack', 'email', 'gateway-chat'].includes(source);
         const isCrossChannelExempt = this.CROSS_CHANNEL_EXEMPT_TOOLS.has(toolName);
 
@@ -1542,6 +1597,61 @@ export class Agent {
                         return `Message sent to ${jid} via WhatsApp`;
                     }
                     return 'WhatsApp channel not available';
+                }
+            });
+
+            // Skill: Notify Owner (relay a non-owner contact's message/request to the owner)
+            this.skills.registerSkill({
+                name: 'notify_owner',
+                description: "Relay a message or request from a non-owner contact to the account owner. Use when a contact asks you to tell/ask/notify the owner, or requests something you are not permitted to do.",
+                usage: 'notify_owner(message, from?)',
+                isDeep: false,
+                isSideEffect: true,
+                handler: async (args: any) => {
+                    if (this.config.get('notifyOwnerEnabled') === false) {
+                        return { success: false, error: 'Owner notifications are disabled.' };
+                    }
+                    const message = String(args.message || args.content || args.text || '').trim();
+                    if (!message) return { success: false, error: 'Missing message.' };
+
+                    const currentAction = this.currentActionId
+                        ? this.actionQueue.getQueue().find(a => a.id === this.currentActionId)
+                        : undefined;
+                    const senderName = String(args.from || args.sender || args.senderName || currentAction?.payload?.senderName || '').trim();
+                    const senderSource = String(currentAction?.payload?.source || '').trim();
+                    const senderSourceId = String(currentAction?.payload?.sourceId || '').trim();
+                    const isSelfChat = currentAction?.payload?.isSelfChat === true;
+                    const relay = senderName ? `📨 Message for you from ${senderName}:\n${message}` : `📨 Message for you:\n${message}`;
+
+                    const ownerJid = String(this.config.get('whatsappOwnerJID') || '').trim();
+                    if (ownerJid && this.whatsapp) {
+                        await this.whatsapp.sendMessage(ownerJid, relay);
+                    } else {
+                        // Fall back to the gateway/web chat so the message is not lost.
+                        eventBus.emit('gateway:chat:response', {
+                            type: 'chat:message',
+                            role: 'assistant',
+                            content: relay,
+                            sourceId: 'owner',
+                            timestamp: new Date().toISOString(),
+                            messageId: `notify-owner-${Date.now()}`
+                        });
+                    }
+
+                    // Confirm to the contact that their message reached the owner, so the complaint
+                    // is acknowledged as received. Skip for the owner's own self-chat.
+                    if (senderSource && senderSourceId && !isSelfChat) {
+                        try {
+                            await this.deliverToChannel(
+                                { id: `${this.currentActionId || 'notify'}-owner-ack`, payload: { source: senderSource, sourceId: senderSourceId } } as any,
+                                "Passed your message to the owner. He'll check it."
+                            );
+                        } catch (e) {
+                            logger.warn(`Agent: notify_owner acknowledgment failed: ${e}`);
+                        }
+                    }
+
+                    return { success: true, message: 'Owner notified.' };
                 }
             });
 
@@ -9574,64 +9684,64 @@ The plugin handles all logic internally. See the plugin source for implementatio
         return lines.join('\n');
     }
 
-    private async sendNoResponseFallback(action: Action, reason?: string): Promise<boolean> {
+    /**
+     * Deliver a plain message back to the channel that originated an action. Shared by the
+     * no-response fallback and terminal-tool confirmations.
+     */
+    private async deliverToChannel(
+        action: Action,
+        message: string,
+        opts?: { emailSubject?: string; gatewayMessageIdPrefix?: string }
+    ): Promise<boolean> {
         const source = action.payload?.source;
         const sourceId = action.payload?.sourceId;
         if (!source) return false;
         if (source !== 'gateway-chat' && !sourceId) return false;
 
-        const groundedMessage = this.buildGroundedNoResponseMessage(action, reason);
-        const message = groundedMessage || (reason
-            ? `🔄 I encountered a slight technical hitch while processing that (${reason.slice(0, 80)}...). I'm attempting to resolve it or you can try rephrasing.`
-            : '🔄 I hit a brief snag before I could deliver my full response. I am looking into it now.');
-
         try {
             if (source === 'telegram' && this.telegram) {
                 await this.telegram.sendMessage(sourceId, message);
-                await this.primeDeliveryMessageClassification(message);
-                return true;
-            }
-            if (source === 'whatsapp' && this.whatsapp) {
+            } else if (source === 'whatsapp' && this.whatsapp) {
                 await this.whatsapp.sendMessage(sourceId, message);
-                await this.primeDeliveryMessageClassification(message);
-                return true;
-            }
-            if (source === 'discord' && this.discord) {
+            } else if (source === 'discord' && this.discord) {
                 await this.discord.sendMessage(sourceId, message);
-                await this.primeDeliveryMessageClassification(message);
-                return true;
-            }
-            if (source === 'slack' && this.slack) {
+            } else if (source === 'slack' && this.slack) {
                 await this.slack.sendMessage(sourceId, message);
-                await this.primeDeliveryMessageClassification(message);
-                return true;
-            }
-            if (source === 'email') {
+            } else if (source === 'email') {
                 const emailChannel = this.getOrCreateEmailChannel();
                 if (!emailChannel) return false;
-                const subject = action.payload?.subject ? `Re: ${action.payload.subject}` : 'OrcBot: request update';
+                const subject = opts?.emailSubject
+                    || (action.payload?.subject ? `Re: ${action.payload.subject}` : 'OrcBot: update');
                 await emailChannel.sendEmail(sourceId, subject, message, action.payload?.inReplyTo, action.payload?.references);
-                await this.primeDeliveryMessageClassification(message);
-                return true;
-            }
-            if (source === 'gateway-chat') {
+            } else if (source === 'gateway-chat') {
                 eventBus.emit('gateway:chat:response', {
                     type: 'chat:message',
                     role: 'assistant',
                     content: message,
                     sourceId,
                     timestamp: new Date().toISOString(),
-                    messageId: `fallback-${Date.now()}`
+                    messageId: `${opts?.gatewayMessageIdPrefix || 'msg'}-${Date.now()}`
                 });
-                await this.primeDeliveryMessageClassification(message);
-                return true;
+            } else {
+                return false;
             }
+            await this.primeDeliveryMessageClassification(message);
+            return true;
         } catch (e) {
-            logger.warn(`Agent: Failed to send no-response fallback for action ${action.id}: ${e}`);
+            logger.warn(`Agent: Failed to deliver message for action ${action.id}: ${e}`);
             return false;
         }
+    }
 
-        return false;
+    private async sendNoResponseFallback(action: Action, reason?: string): Promise<boolean> {
+        const groundedMessage = this.buildGroundedNoResponseMessage(action, reason);
+        const message = groundedMessage || (reason
+            ? `🔄 I encountered a slight technical hitch while processing that (${reason.slice(0, 80)}...). I'm attempting to resolve it or you can try rephrasing.`
+            : '🔄 I hit a brief snag before I could deliver my full response. I am looking into it now.');
+        return this.deliverToChannel(action, message, {
+            emailSubject: action.payload?.subject ? `Re: ${action.payload.subject}` : 'OrcBot: request update',
+            gatewayMessageIdPrefix: 'fallback'
+        });
     }
 
     /**
@@ -9935,7 +10045,8 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 sentMessagesInAction: context.sentMessagesInAction,
                 taskComplexity: context.taskComplexity,
                 loopDetected,
-                isLikelyAcknowledgementMessage: (message: string) => this.isLikelyAcknowledgementMessage(message)
+                isLikelyAcknowledgementMessage: (message: string) => this.isLikelyAcknowledgementMessage(message),
+                terminalDeliverySucceeded: !!action.payload?.terminalDeliverySucceeded
             });
 
             if (issues.length > 0) {
@@ -11105,7 +11216,7 @@ REFLECTION: <1-2 sentences>`;
     private async getToolExecutionBlockReason(params: {
         action: Action;
         toolCall: { name: string; metadata?: any };
-        toolMeta: { isSend?: boolean; isSideEffect?: boolean };
+        toolMeta: { isSend?: boolean; isSideEffect?: boolean; isElevated?: boolean };
         successfulSideEffectKeys: Set<string>;
         blockedFailedSignatures: Set<string>;
         blockedFailedTools?: Set<string>;
@@ -11130,6 +11241,14 @@ REFLECTION: <1-2 sentences>`;
             applyTurnCooldown = false,
             contextLabel,
         } = params;
+
+        // Elevated actions (commands, files, browser, scheduling, config/skills, image gen, tools)
+        // are owner/admin only. The parallel path already enforces this; enforce it here too so the
+        // sequential/main path cannot run an elevated tool for a non-admin channel contact.
+        const elevationBlock = this.getElevationBlockReason(action, toolCall.name, toolMeta);
+        if (elevationBlock) {
+            return elevationBlock;
+        }
 
         if (toolMeta.isSideEffect) {
             const sideEffectKey = this.buildSideEffectKey(toolCall.name, toolCall.metadata || {});
@@ -11443,6 +11562,9 @@ REFLECTION: <1-2 sentences>`;
                 !resultIndicatesError) {
                 state.goalsMet = true;
                 state.forceBreak = true;
+                // Terminal delivery tools complete the request by themselves; record the output so
+                // the completion path can confirm and the audit does not flag a missing message.
+                this.markTerminalDelivery(action, toolCall.name, resultString, resultIndicatesError);
                 break;
             }
         }
@@ -11484,12 +11606,12 @@ REFLECTION: <1-2 sentences>`;
 
         const parallelResults = await Promise.all(toolCalls.map(async (toolCall) => {
             const toolMeta = getSkillMeta(toolCall.name);
-            const isAdmin = action.payload?.isAdmin !== false;
-            if (!isAdmin && toolMeta.isElevated) {
+            const elevationBlock = this.getElevationBlockReason(action, toolCall.name, toolMeta);
+            if (elevationBlock) {
                 return {
                     toolCall,
                     toolMeta,
-                    toolResult: `Error: Skill '${toolCall.name}' requires admin privileges.`,
+                    toolResult: `Error: ${elevationBlock}`,
                     executionError: undefined,
                     toolDurationMs: 0,
                 };
@@ -11510,6 +11632,13 @@ REFLECTION: <1-2 sentences>`;
                 } finally {
                     this.endActiveToolExecution(activeToolToken);
                 }
+                // Parallel path: record terminal deliveries too (the sequential path does the same).
+                this.markTerminalDelivery(
+                    action,
+                    toolCall.name,
+                    typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult ?? ''),
+                    false
+                );
                 return {
                     toolCall,
                     toolMeta,
@@ -14693,7 +14822,33 @@ Respond with a single actionable task description (one sentence). Be specific ab
             startupTasks.push({ name: 'email', promise: this.email.start() });
         }
 
-        const results = await Promise.allSettled(startupTasks.map(t => t.promise));
+        // Start each channel with a bounded wait. A channel whose start() never settles
+        // (e.g. Telegram bot.launch() hanging on a 409 conflict or a network stall) must not
+        // block the agent loop from ever starting its worker pool.
+        const channelStartTimeoutMs = Math.max(5000, Number(this.config.get('channelStartTimeoutMs') ?? 30000));
+        const startChannel = async (name: string, promise: Promise<void>): Promise<string> => {
+            const startedAt = Date.now();
+            let timer: NodeJS.Timeout | undefined;
+            try {
+                await Promise.race([
+                    promise,
+                    new Promise<void>((_, reject) => {
+                        timer = setTimeout(
+                            () => reject(new Error(`channel start timed out after ${channelStartTimeoutMs}ms`)),
+                            channelStartTimeoutMs
+                        );
+                    })
+                ]);
+                logger.info(`Agent: ${name} channel started in ${Date.now() - startedAt}ms`);
+                return name;
+            } finally {
+                if (timer) clearTimeout(timer);
+            }
+        };
+
+        const results = await Promise.allSettled(
+            startupTasks.map(t => startChannel(t.name, t.promise))
+        );
         results.forEach((result, index) => {
             if (result.status === 'rejected') {
                 const name = startupTasks[index]?.name || 'unknown';
@@ -15410,48 +15565,13 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
     /**
      * Determine if the user who triggered an action has admin-level permissions.
-     * When adminUsers is not configured (undefined), everyone is admin (backwards compatible).
-     * CLI/Gateway tasks and WhatsApp owner messages are always admin.
+     *
+     * WhatsApp is owner-only for elevated actions: the linked owner's self-chat is admin, and
+     * external contacts are admin only when listed in `adminUsers.whatsapp`. Other channels keep
+     * the backwards-compatible default (no `adminUsers` => everyone admin). See `permissions.ts`.
      */
     public isUserAdmin(payload: any): boolean {
-        const adminUsers = this.config.get('adminUsers') as any;
-        // If no adminUsers configured at all, everyone is treated as admin (single-user / backwards compatible)
-        if (!adminUsers) return true;
-
-        const source = payload?.source;
-        // CLI/Gateway/autonomy tasks (no channel source) are always admin
-        if (!source) return true;
-        // WhatsApp owner is always admin
-        if (source === 'whatsapp' && payload?.isOwner) return true;
-
-        if (source === 'telegram') {
-            const list: string[] = adminUsers.telegram || [];
-            // If the telegram admin list is empty, all telegram users are admin
-            if (list.length === 0) return true;
-            return list.includes(String(payload.userId)) || list.includes(String(payload.sourceId));
-        }
-        if (source === 'discord') {
-            const list: string[] = adminUsers.discord || [];
-            if (list.length === 0) return true;
-            return list.includes(String(payload.userId));
-        }
-        if (source === 'whatsapp') {
-            const list: string[] = adminUsers.whatsapp || [];
-            if (list.length === 0) return true;
-            return list.includes(String(payload.sourceId));
-        }
-        if (source === 'slack') {
-            const list: string[] = adminUsers.slack || [];
-            if (list.length === 0) return true;
-            return list.includes(String(payload.userId)) || list.includes(String(payload.sourceId));
-        }
-        if (source === 'email') {
-            const list: string[] = adminUsers.email || [];
-            if (list.length === 0) return true;
-            const identity = String(payload.sourceId || payload.from || '').trim().toLowerCase();
-            return list.map((x: string) => String(x).trim().toLowerCase()).includes(identity);
-        }
-        return true; // Unknown source = admin
+        return computeIsUserAdmin(this.config.get('adminUsers') as any, payload);
     }
 
     public async pushTask(description: string, priority: number = 5, metadata: any = {}, lane: 'user' | 'autonomy' = 'user') {
@@ -17113,19 +17233,35 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 logger.warn(`Agent: Action ${action.id} terminated without achieving goals (guard rail or exhaustion). Marked as failed.`);
             }
             if (isUserFacingAction && messagesSent === 0) {
-                logger.error(`Agent: No user-visible response was delivered for action ${action.id}. source=${action.payload?.source} step=${currentStep}`);
-                const fallbackSent = await this.sendNoResponseFallback(action, actionStatus === 'failed' ? 'action-failed' : undefined);
-                if (fallbackSent) {
-                    messagesSent++;
-                    anyUserDeliverySuccess = true;
-                    logger.warn(`Agent: Sent no-response fallback message for action ${action.id}.`);
+                let delivered = false;
+                const terminalMessage = action.payload?.terminalDeliveryMessage;
+                if (goalsMet && terminalMessage) {
+                    // The action completed via a terminal tool (e.g. schedule_task). Confirm to
+                    // the user with the tool's own output instead of a failure-style fallback.
+                    delivered = await this.deliverToChannel(action, String(terminalMessage), { gatewayMessageIdPrefix: 'confirm' });
+                    if (delivered) {
+                        messagesSent++;
+                        anyUserDeliverySuccess = true;
+                        logger.info(`Agent: Delivered terminal confirmation for action ${action.id}.`);
+                    }
                 }
-                this.memory.saveMemory({
-                    id: `${action.id}-no-response-diagnostic`,
-                    type: 'short',
-                    content: `[SYSTEM: RESPONSE DIAGNOSTIC — no user-visible message was sent for this channel task.${fallbackSent ? ' A last-resort fallback message WAS sent to the user.' : ' Last-resort fallback message ALSO failed.'} Investigate blocked/suppressed send tools, channel policy, and tool failures for action ${action.id}.`,
-                    metadata: { actionId: action.id, source: action.payload?.source, noResponse: true, steps: currentStep, fallbackSent }
-                });
+                if (!delivered) {
+                    logger.error(`Agent: No user-visible response was delivered for action ${action.id}. source=${action.payload?.source} step=${currentStep}`);
+                    delivered = await this.sendNoResponseFallback(action, actionStatus === 'failed' ? 'action-failed' : undefined);
+                    if (delivered) {
+                        messagesSent++;
+                        anyUserDeliverySuccess = true;
+                        logger.warn(`Agent: Sent no-response fallback message for action ${action.id}.`);
+                    }
+                }
+                if (!delivered) {
+                    this.memory.saveMemory({
+                        id: `${action.id}-no-response-diagnostic`,
+                        type: 'short',
+                        content: `[SYSTEM: RESPONSE DIAGNOSTIC — no user-visible message was delivered for this channel task; the last-resort fallback also failed. Investigate blocked/suppressed send tools, channel policy, and tool failures for action ${action.id}.`,
+                        metadata: { actionId: action.id, source: action.payload?.source, noResponse: true, steps: currentStep, fallbackSent: false }
+                    });
+                }
             }
 
             // Record Final Response/Reasoning in Memory upon completion

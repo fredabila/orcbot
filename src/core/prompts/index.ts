@@ -27,6 +27,7 @@ export { CoreHelper } from './CoreHelper';
 export { EnvironmentHelper } from './EnvironmentHelper';
 export { ToolingHelper } from './ToolingHelper';
 export { CommunicationHelper } from './CommunicationHelper';
+export { AntiSlopHelper } from './AntiSlopHelper';
 export { BrowserHelper } from './BrowserHelper';
 export { ResearchHelper } from './ResearchHelper';
 export { SchedulingHelper } from './SchedulingHelper';

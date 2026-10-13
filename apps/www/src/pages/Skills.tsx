@@ -54,8 +54,11 @@ const SKILLS: Skill[] = [
   { name: 'book_log_add', sig: 'book_log_add(title, source, summary, tags, keyExcerpts, insights, documentId?)',desc: 'Add an abstractive summary of a resource to the Book Log.', tags: ['memory', 'rag'] }, { name: 'book_log_search', sig: 'book_log_search(query)', desc: 'Search the Book Log for summaries and insights.', tags: ['memory', 'rag'] }, { name: 'book_log_list', sig: 'book_log_list(limit?)', desc: 'List recent Book Log entries.', tags: ['memory', 'rag'] },
 ];
 
+// R-29: the tag colours are the three accents the design system already defines,
+// not a twelve-colour rainbow. The category is still encoded, the palette stays
+// inside the brand, and the off-brand purples and pinks are gone (DESIGN.md).
 const TAG_COLORS: Record<Tag, string> = {
-  messaging:    '#5cffb3', browser:      '#5cc9ff', system:       '#ffb347', memory:       '#c77fff', ai:           '#ff6b9d', orchestration:'#4dd9ac', scheduling:   '#ffd166', rag:          '#06d6a0', computer:     '#ff9f1c', tuning:       '#e0c3fc', email:        '#ff7eb3', dev:          '#89b4ff',
+  messaging:    '#5cffb3', browser:      '#5cc9ff', system:       '#ffb347', memory:       '#5cffb3', ai:           '#5cc9ff', orchestration:'#ffb347', scheduling:   '#5cc9ff', rag:          '#5cffb3', computer:     '#ffb347', tuning:       '#5cc9ff', email:        '#5cffb3', dev:          '#ffb347',
 };
 
 // ─── Plugin steps ─────────────────────────────────────────────────────────────
@@ -112,9 +115,6 @@ function Skills() {
 
   return (
     <div className="app">
-      <div className="bg-gradient-orbs" />
-      <div className="noise-overlay" />
-
       <Header scrolled={true} />
 
       {/* ── Hero ── */}
@@ -122,8 +122,8 @@ function Skills() {
         <div className="skills-hero-inner">
           <div className="section-label">Skills Registry</div>
           <h1 className="skills-hero-title">
-            {SKILLS.length}+ built-in skills,<br />
-            <span className="hero-title-em">infinitely extensible.</span>
+            Built-in skills,<br />
+            endlessly extensible.
           </h1>
           <p className="skills-hero-sub">
             Every capability OrcBot ships with, browse by category, search, and learn how to add your own.

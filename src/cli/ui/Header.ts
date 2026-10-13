@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { suspendConsoleLogging, resumeConsoleLogging } from '../../utils/logger';
 
 // ── ANSI color helpers (aligned with DESIGN.md) ───────────────────────────
 const c = {
@@ -131,17 +132,26 @@ let inAlternateScreen = false;
 
 /** Reset alternate screen state (useful for tests) */
 export function resetAlternateScreenState(): void {
+    if (inAlternateScreen) {
+        resumeConsoleLogging();
+    }
     inAlternateScreen = false;
 }
 
 /**
  * Enter terminal Alternate Screen Buffer (\x1b[?1049h).
  * Gives the TUI a dedicated, fixed single-page canvas with zero scrollback pollution.
+ *
+ * Console logging is muted for the duration: the prompt layer redraws by moving
+ * the cursor up over its own previous frame, so a stray log line between frames
+ * desynchronises that arithmetic and leaves duplicated/smeared menu rows.
+ * File log transports keep recording.
  */
 export function enterAlternateScreen(): void {
     if (process.stdout.isTTY && !inAlternateScreen) {
         process.stdout.write('\x1b[?1049h\x1b[H');
         inAlternateScreen = true;
+        suspendConsoleLogging();
 
         const restore = () => {
             if (inAlternateScreen) {
@@ -162,6 +172,7 @@ export function exitAlternateScreen(): void {
             process.stdout.write('\x1b[?1049l');
         }
         inAlternateScreen = false;
+        resumeConsoleLogging();
     }
 }
 

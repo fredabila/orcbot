@@ -55,15 +55,12 @@ const Engineering = () => {
 
   return (
     <div className="app engineering-page">
-      <div className="bg-gradient-orbs" />
-      <div className="noise-overlay" />
-
       <Header scrolled={true} />
 
       <main className="section-inner">
         <header className="eng-hero">
           <div className="section-label">Engineering the Future</div>
-          <h1 className="hero-title">Precision. <span className="hero-title-em">Autonomy.</span> Scale.</h1>
+          <h1 className="hero-title">Precision. Autonomy. Scale.</h1>
           <p className="section-desc">
             Vague prompts don't build bridges. OrcBot provides the deterministic framework where
             high-level reasoning meets absolute physical precision.

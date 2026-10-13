@@ -13,6 +13,7 @@ import { CoreHelper } from './CoreHelper';
 import { EnvironmentHelper } from './EnvironmentHelper';
 import { ToolingHelper } from './ToolingHelper';
 import { CommunicationHelper } from './CommunicationHelper';
+import { AntiSlopHelper } from './AntiSlopHelper';
 import { BrowserHelper } from './BrowserHelper';
 import { ResearchHelper } from './ResearchHelper';
 import { SchedulingHelper } from './SchedulingHelper';
@@ -58,6 +59,7 @@ export class PromptRouter {
         this.register(new PrivacyHelper());
         this.register(new ToolingHelper());
         this.register(new CommunicationHelper());
+        this.register(new AntiSlopHelper());
         this.register(new BrowserHelper());
         this.register(new ResearchHelper());
         this.register(new SchedulingHelper());

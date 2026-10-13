@@ -10,8 +10,12 @@ import { piAiCall, piAiCallWithTools, getPiProviders, getPiModels, piAiLogin, is
 import { convertToWhisperCompatible, getMimeType as getAudioHelperMimeType, isAudioFile } from '../utils/AudioHelper';
 import { eventBus } from './EventBus';
 import { DEFAULT_MODEL_IDS } from '../config/modelDefaults';
+import {
+    inferProviderFromModel,
+    hasStrongProviderSignal as modelHasStrongProviderSignal,
+} from '../config/providerInference';
 
-export type LLMProvider = 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia' | 'anthropic' | 'ollama' | 'groq' | 'mistral' | 'deepseek' | 'xai' | 'perplexity' | 'cerebras';
+export type LLMProvider = 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia' | 'anthropic' | 'ollama' | 'groq' | 'mistral' | 'deepseek' | 'xai' | 'perplexity' | 'cerebras' | 'custom';
 
 export interface LLMMessage {
     role: 'system' | 'user' | 'assistant';
@@ -91,6 +95,10 @@ export class MultiLLM {
     private azureEndpoint?: string;
     private googleProjectId?: string;
     private googleLocation?: string;
+    /** Generic OpenAI-compatible endpoint: any base URL + key + model the user supplies. */
+    private customKey?: string;
+    private customBaseUrl?: string;
+    private customModel?: string;
     private tokenTracker?: TokenTracker;
     private preferredProvider?: LLMProvider;
     private fallbackModelNames: Record<string, string> = {};
@@ -106,7 +114,8 @@ export class MultiLLM {
         cerebrasApiKey?: string, xaiApiKey?: string, huggingfaceApiKey?: string, kimiApiKey?: string, minimaxApiKey?: string,
         zaiApiKey?: string, perplexityApiKey?: string, deepseekApiKey?: string, opencodeApiKey?: string,
         ollamaApiUrl?: string, azureEndpoint?: string, googleProjectId?: string, googleLocation?: string,
-        fallbackModelNames?: Record<string, string>
+        fallbackModelNames?: Record<string, string>,
+        customApiKey?: string, customBaseUrl?: string, customModelName?: string
     }) {
         this.openaiKey = config?.apiKey || process.env.OPENAI_API_KEY;
         this.openrouterKey = config?.openrouterApiKey || process.env.OPENROUTER_API_KEY;
@@ -136,6 +145,9 @@ export class MultiLLM {
         this.azureEndpoint = config?.azureEndpoint || process.env.AZURE_OPENAI_ENDPOINT;
         this.googleProjectId = config?.googleProjectId || process.env.GOOGLE_PROJECT_ID;
         this.googleLocation = config?.googleLocation || process.env.GOOGLE_LOCATION;
+        this.customKey = config?.customApiKey || process.env.CUSTOM_API_KEY;
+        this.customBaseUrl = config?.customBaseUrl || process.env.CUSTOM_BASE_URL;
+        this.customModel = config?.customModelName || process.env.CUSTOM_MODEL_NAME;
         this.tokenTracker = config?.tokenTracker;
         this.preferredProvider = config?.llmProvider;
         this.fallbackModelNames = config?.fallbackModelNames || {};
@@ -157,7 +169,8 @@ export class MultiLLM {
         cerebrasApiKey?: string, xaiApiKey?: string, huggingfaceApiKey?: string, kimiApiKey?: string, minimaxApiKey?: string,
         zaiApiKey?: string, perplexityApiKey?: string, deepseekApiKey?: string, opencodeApiKey?: string,
         ollamaApiUrl?: string, azureEndpoint?: string, googleProjectId?: string, googleLocation?: string,
-        fallbackModelNames?: Record<string, string>, fastModelName?: string
+        fallbackModelNames?: Record<string, string>, fastModelName?: string,
+        customApiKey?: string, customBaseUrl?: string, customModelName?: string
     }) {
         if (config.apiKey !== undefined) this.openaiKey = config.apiKey;
         if (config.googleApiKey !== undefined) this.googleKey = config.googleApiKey;
@@ -189,6 +202,9 @@ export class MultiLLM {
         if (config.azureEndpoint !== undefined) this.azureEndpoint = config.azureEndpoint;
         if (config.googleProjectId !== undefined) this.googleProjectId = config.googleProjectId;
         if (config.googleLocation !== undefined) this.googleLocation = config.googleLocation;
+        if (config.customApiKey !== undefined) this.customKey = config.customApiKey;
+        if (config.customBaseUrl !== undefined) this.customBaseUrl = config.customBaseUrl;
+        if (config.customModelName !== undefined) this.customModel = config.customModelName;
         if (config.fallbackModelNames !== undefined) this.fallbackModelNames = config.fallbackModelNames;
         if (config.fastModelName !== undefined) this.fastModelName = config.fastModelName;
         this.maybePreferPiAiOAuthOverPlaceholderOpenAiKey();
@@ -266,6 +282,7 @@ export class MultiLLM {
             case 'openrouter': return !!this.openrouterKey && !this.openrouterKey.startsWith('your_');
             case 'bedrock': return !!this.bedrockAccessKeyId;
             case 'ollama': return true;
+            case 'custom': return !!this.customBaseUrl;
             default:
                 if (provider === 'groq' as any) return !!this.groqKey && !this.groqKey.startsWith('your_');
                 if (provider === 'mistral' as any) return !!this.mistralKey && !this.mistralKey.startsWith('your_');
@@ -304,6 +321,7 @@ export class MultiLLM {
             case 'nvidia': return 'nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4';
             case 'openrouter': return 'google/gemma-4-26b-a4b-it:free';
             case 'bedrock': return this.modelName;
+            case 'custom': return this.customModel || this.modelName;
             default: return this.modelName;
         }
     }
@@ -313,7 +331,7 @@ export class MultiLLM {
         const primaryProvider = this.resolveProviderForModel(provider || this.preferredProvider, primaryModel);
         let piAiError: Error | undefined;
 
-        if (this.usePiAI && primaryProvider !== 'ollama') {
+        if (this.usePiAI && primaryProvider !== 'ollama' && primaryProvider !== 'custom') {
             try {
                 return await piAiCall(prompt, systemMessage, this.getPiAIOptions(primaryModel, primaryProvider));
             } catch (e) {
@@ -332,6 +350,7 @@ export class MultiLLM {
             if (p === 'nvidia') return this.callNvidia(prompt, systemMessage, m, jsonMode);
             if (p === 'anthropic') return this.callAnthropic(prompt, systemMessage, m);
             if (p === 'ollama') return this.callOllama(prompt, systemMessage, m, jsonMode);
+            if (p === 'custom') return this.callCustom(prompt, systemMessage, m, jsonMode);
             
             try {
                 return await piAiCall(prompt, systemMessage, this.getPiAIOptions(m, p));
@@ -387,7 +406,7 @@ export class MultiLLM {
         const primaryProvider = this.resolveProviderForModel(provider || this.preferredProvider, primaryModel);
         let piAiToolError: Error | undefined;
 
-        if (this.usePiAI && primaryProvider !== 'ollama') {
+        if (this.usePiAI && primaryProvider !== 'ollama' && primaryProvider !== 'custom') {
             try {
                 return await piAiCallWithTools(prompt, systemMessage, tools, this.getPiAIOptions(primaryModel, primaryProvider));
             } catch (e) {
@@ -416,6 +435,8 @@ export class MultiLLM {
                     return this.callOpenRouterWithTools(prompt, systemMessage, tools, m);
                 case 'ollama':
                     return this.callOllamaWithTools(prompt, systemMessage, tools, m);
+                case 'custom':
+                    return this.callCustomWithTools(prompt, systemMessage, tools, m);
                 default:
                     try {
                         return await piAiCallWithTools(prompt, systemMessage, tools, this.getPiAIOptions(m, p));
@@ -451,7 +472,7 @@ export class MultiLLM {
 
     public supportsNativeToolCalling(provider?: LLMProvider): boolean {
         const p = provider || this.preferredProvider || this.inferProvider(this.modelName);
-        return ['openai', 'anthropic', 'google', 'openrouter', 'nvidia', 'ollama'].includes(p);
+        return ['openai', 'anthropic', 'google', 'openrouter', 'nvidia', 'ollama', 'custom'].includes(p);
     }
 
     private async callOllamaWithTools(
@@ -905,29 +926,13 @@ export class MultiLLM {
             case 'anthropic': return 'claude-sonnet-5-5';
             case 'ollama': return 'qwen3.8';
             case 'bedrock': return this.modelName;
+            case 'custom': return this.customModel || this.modelName;
             default: return this.modelName;
         }
     }
 
     public inferProvider(modelName: string): LLMProvider {
-        const lower = (modelName || '').toLowerCase();
-        if (lower.startsWith('ollama:') || lower.startsWith('local:') || lower.startsWith('ol:')) return 'ollama';
-        if (lower.includes('bedrock') || lower.startsWith('br:')) return 'bedrock';
-        if (lower.includes('claude') || lower.startsWith('anthropic:') || lower.startsWith('ant:')) return 'anthropic';
-        if (lower.startsWith('openrouter:') || lower.startsWith('openrouter/') || lower.startsWith('or:')) return 'openrouter';
-        if (lower.startsWith('nvidia:') || lower.startsWith('nv:')) return 'nvidia';
-        if (lower.startsWith('mistral:') || lower.startsWith('mi:')) return 'mistral';
-        if (lower.startsWith('groq:') || lower.startsWith('gr:')) return 'groq';
-        if (lower.startsWith('deepseek:') || lower.startsWith('ds:')) return 'deepseek';
-        if (lower.startsWith('xai:') || lower.startsWith('xi:')) return 'xai';
-        if (lower.startsWith('perplexity:') || lower.startsWith('pp:')) return 'perplexity';
-        if (lower.startsWith('cerebras:') || lower.startsWith('cb:')) return 'cerebras';
-        if (lower.includes('gemini')) return 'google';
-        if (lower.includes('gpt-') || lower.includes('o1-')) return 'openai';
-        if (lower.includes('mistral') || lower.includes('mixtral')) return 'mistral';
-        if (lower.includes('deepseek')) return 'deepseek';
-        if (lower.includes('llama')) return 'groq';
-        return 'openai';
+        return inferProviderFromModel(modelName) as LLMProvider;
     }
 
     private normalizeOpenRouterModel(modelName: string): string {
@@ -942,37 +947,22 @@ export class MultiLLM {
     private normalizeOllamaModel(modelName: string): string {
         return modelName.replace(/^ollama:/i, '').replace(/^local:/i, '');
     }
+    private normalizeCustomModel(modelName: string): string {
+        return modelName
+            .replace(/^custom:/i, '')
+            .replace(/^compat:/i, '')
+            .replace(/^openai-compatible:/i, '');
+    }
+
+    /** Resolve the endpoint URL for the generic OpenAI-compatible provider. */
+    private getCustomEndpoint(): string {
+        const base = (this.customBaseUrl || '').trim().replace(/\/+$/, '');
+        if (!base) throw new Error('Custom provider base URL not configured');
+        return base.endsWith('/chat/completions') ? base : `${base}/chat/completions`;
+    }
 
     private hasStrongProviderSignal(modelName: string): boolean {
-        const lower = (modelName || '').toLowerCase();
-        return lower.startsWith('ollama:') ||
-            lower.startsWith('local:') ||
-            lower.startsWith('ol:') ||
-            lower.includes('bedrock') ||
-            lower.startsWith('br:') ||
-            lower.includes('claude') ||
-            lower.startsWith('anthropic:') ||
-            lower.startsWith('ant:') ||
-            lower.startsWith('openrouter:') ||
-            lower.startsWith('openrouter/') ||
-            lower.startsWith('or:') ||
-            lower.startsWith('nvidia:') ||
-            lower.startsWith('nv:') ||
-            lower.startsWith('mistral:') ||
-            lower.startsWith('mi:') ||
-            lower.startsWith('groq:') ||
-            lower.startsWith('gr:') ||
-            lower.startsWith('deepseek:') ||
-            lower.startsWith('ds:') ||
-            lower.startsWith('xai:') ||
-            lower.startsWith('xi:') ||
-            lower.startsWith('perplexity:') ||
-            lower.startsWith('pp:') ||
-            lower.startsWith('cerebras:') ||
-            lower.startsWith('cb:') ||
-            lower.includes('gemini') ||
-            lower.includes('gpt-') ||
-            lower.includes('o1-');
+        return modelHasStrongProviderSignal(modelName);
     }
 
     private resolveProviderForModel(requestedProvider: LLMProvider | undefined, modelName: string): LLMProvider {
@@ -1226,6 +1216,91 @@ export class MultiLLM {
         }
     }
 
+    /**
+     * Generic OpenAI-compatible chat completion. Works with any endpoint that speaks the
+     * OpenAI `/chat/completions` shape (DeepSeek, Together, Fireworks, DeepInfra, vLLM,
+     * LM Studio, local proxies, ...). Base URL, optional key, and model come from config.
+     */
+    private async callCustom(prompt: string, systemMessage?: string, modelOverride?: string, jsonMode = false): Promise<string> {
+        const url = this.getCustomEndpoint();
+        const model = this.normalizeCustomModel(modelOverride || this.customModel || this.modelName);
+        const messages: LLMMessage[] = [];
+        if (systemMessage) messages.push({ role: 'system', content: systemMessage });
+        messages.push({ role: 'user', content: prompt });
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (this.customKey) headers['Authorization'] = `Bearer ${this.customKey}`;
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    model, messages, temperature: 0.7,
+                    ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
+                })
+            });
+            if (!response.ok) throw await MultiLLM.providerError('Custom provider', response);
+            const data = await response.json() as any;
+            const content = data?.choices?.[0]?.message?.content || '';
+            this.recordUsage('custom', model, prompt, data, content);
+            return content;
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    private async callCustomWithTools(
+        prompt: string,
+        systemMessage: string,
+        tools: LLMToolDefinition[],
+        model: string
+    ): Promise<LLMToolResponse> {
+        const url = this.getCustomEndpoint();
+        const resolvedModel = this.normalizeCustomModel(model);
+        const messages: LLMMessage[] = [];
+        if (systemMessage) messages.push({ role: 'system', content: systemMessage });
+        messages.push({ role: 'user', content: prompt });
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (this.customKey) headers['Authorization'] = `Bearer ${this.customKey}`;
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    model: resolvedModel,
+                    messages,
+                    temperature: 0.7,
+                    tools,
+                }),
+            });
+            if (!response.ok) {
+                const err = await response.text();
+                // An endpoint that does not implement tool calling should degrade to plain text
+                // rather than failing the turn.
+                if (response.status === 400 || response.status === 404) {
+                    const textResponse = await this.callCustom(prompt, systemMessage, resolvedModel);
+                    return { content: textResponse, toolCalls: [] };
+                }
+                throw new Error(`Custom provider Tool Call API Error: ${response.status} ${err}`);
+            }
+            const data = await response.json() as any;
+            const message = data.choices?.[0]?.message;
+            const textContent = message?.content || '';
+            const toolCalls: LLMToolCall[] = (message?.tool_calls || []).map((tc: any) => ({
+                name: tc.function?.name || '',
+                arguments: this.safeParseJson(tc.function?.arguments),
+                id: tc.id,
+            }));
+            this.recordUsage('custom', resolvedModel, prompt, data, textContent);
+            return { content: textContent, toolCalls, raw: data };
+        } catch (error: any) {
+            if (error?.message?.includes('tool')) {
+                const textResponse = await this.callCustom(prompt, systemMessage, resolvedModel);
+                return { content: textResponse, toolCalls: [] };
+            }
+            throw error;
+        }
+    }
+
     private async callBedrock(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
         const modelId = modelOverride || this.modelName;
         if (!this.bedrockRegion) throw new Error('Bedrock region not configured');
@@ -1250,7 +1325,7 @@ export class MultiLLM {
     private recordUsage(provider: LLMProvider, model: string, prompt: string, data: any, completionText?: string) {
         if (!this.tokenTracker) return;
         let pt = 0, ct = 0, tt = 0, cached = 0, est = true;
-        if ((provider === 'openai' || provider === 'openrouter' || provider === 'nvidia') && data?.usage) {
+        if ((provider === 'openai' || provider === 'openrouter' || provider === 'nvidia' || provider === 'custom') && data?.usage) {
             pt = data.usage.prompt_tokens; ct = data.usage.completion_tokens || 0; tt = data.usage.total_tokens || (pt + ct); est = false;
             // OpenAI, OpenRouter and their downstream providers report prompt-cache hits here.
             cached = data.usage.prompt_tokens_details?.cached_tokens || 0;
@@ -1466,6 +1541,13 @@ export class MultiLLM {
         if (this.anthropicKey && !this.anthropicKey.startsWith('your_')) providers.push('Anthropic (Claude)');
         if (this.nvidiaKey && !this.nvidiaKey.startsWith('your_')) providers.push('NVIDIA');
         if (this.openrouterKey && !this.openrouterKey.startsWith('your_')) providers.push('OpenRouter');
+        if (this.groqKey && !this.groqKey.startsWith('your_')) providers.push('Groq');
+        if (this.mistralKey && !this.mistralKey.startsWith('your_')) providers.push('Mistral');
+        if (this.deepseekKey && !this.deepseekKey.startsWith('your_')) providers.push('DeepSeek');
+        if (this.xaiKey && !this.xaiKey.startsWith('your_')) providers.push('xAI (Grok)');
+        if (this.perplexityKey && !this.perplexityKey.startsWith('your_')) providers.push('Perplexity');
+        if (this.cerebrasKey && !this.cerebrasKey.startsWith('your_')) providers.push('Cerebras');
+        if (this.customBaseUrl) providers.push('Custom (OpenAI-compatible)');
         if (this.ollamaUrl) providers.push('Ollama (Local)');
         
         return `Active Model: ${this.modelName}\nAvailable Providers: ${providers.join(', ') || 'None configured'}`;

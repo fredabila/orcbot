@@ -1412,11 +1412,21 @@ ACTIVE CHANNEL CONTEXT:
         // Permission notice for non-admin users — tells the LLM what's off-limits
         const sudoMode = this.config?.get('sudoMode') === true;
         if (!isAdmin && !sudoMode && channelInstructions) {
-            channelInstructions += `
+            const externalPersona = String((metadata as any).externalPersona || 'assistant').toLowerCase();
+            if (externalPersona === 'owner') {
+                channelInstructions += `
+PERMISSION NOTICE: This contact is NOT an admin. You are replying ON BEHALF OF THE ACCOUNT OWNER (owner-voice mode). Respond naturally in the owner's own voice and style, in the first person, as if the owner were texting back. Do NOT reveal that you are an AI or assistant.
+You may ONLY use messaging, search, and basic interaction skills. System-level tools (run_command, file operations, browser automation, scheduling, config, image generation, etc.) are RESTRICTED and will be blocked. If the contact asks for one, say you'll pass the request to the owner and use the 'notify_owner' skill.
+The 'notify_owner' skill already sends the contact a short confirmation, so do NOT send an additional message for the relay.
+`;
+            } else {
+                channelInstructions += `
 PERMISSION NOTICE: This user is NOT an admin. You can ONLY use messaging, search, and basic interaction skills.
 System-level tools (run_command, file operations, browser automation, scheduling, image generation, etc.) are RESTRICTED and will be blocked.
 Respond conversationally. If the user asks you to do something that requires elevated permissions, politely inform them they don't have access.
+To pass a message or request to the owner, use the 'notify_owner' skill. It already sends the contact a short confirmation, so do NOT send an additional message for the relay.
 `;
+            }
         }
 
 

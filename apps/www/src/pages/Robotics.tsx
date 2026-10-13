@@ -74,9 +74,6 @@ export default function Robotics() {
 
   return (
     <div className="app robotics-page">
-      <div className="backdrop" />
-      <div className="noise-overlay" />
-
       {/* ── Nav ──────────────────────────────────────────────── */}
       <Header scrolled={true} />
 

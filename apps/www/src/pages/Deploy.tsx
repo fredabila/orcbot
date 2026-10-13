@@ -111,9 +111,6 @@ ufw enable`, }, ];
 
   return (
     <div className="app deploy-page">
-      <div className="bg-gradient-orbs" />
-      <div className="noise-overlay" />
-
       <Header scrolled={true} />
 
       <header className="deploy-header">

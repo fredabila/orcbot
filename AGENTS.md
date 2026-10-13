@@ -3,16 +3,17 @@
 This file provides guidance to WARP (warp.dev) when working with code in this repository.
 
 ## Common commands
-- Install deps: `npm install`
-- Build (tsc): `npm run build`
-- Fast build: `npm run build:fast`
-- Dev CLI (ts-node): `npm run dev`
-- Run built CLI: `npm run start` (runs `dist/cli/index.js`)
-- Tests (Vitest): `npm test`
-- Watch tests: `npm run test:watch`
-- Run a single test file: `npx vitest run tests/<file>.test.ts`
-- Run a single test by name: `npx vitest run -t "test name"`
-- Browser tooling smoke test: `npm run browser:test`
+- Use **bun**, not npm, for this repo.
+- Install deps: `bun install`
+- Build (tsc): `bun run build`
+- Fast build: `bun run build:fast`
+- Dev CLI (ts-node): `bun run dev`
+- Run built CLI: `bun run start` (runs `dist/cli/index.js`)
+- Tests (Vitest): `bun run test`
+- Watch tests: `bun run test:watch`
+- Run a single test file: `bunx vitest run tests/<file>.test.ts`
+- Run a single test by name: `bunx vitest run -t "test name"`
+- Browser tooling smoke test: `bun run browser:test`
 - Lint: no lint script is defined in `package.json`
 
 ## High-level architecture (big picture)

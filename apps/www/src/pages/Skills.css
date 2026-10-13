@@ -1,10 +1,5 @@
 /* ─── Skills Page ───────────────────────────────────────────────────────── */
 
-/* ── Hero gradient accent for titles ── */
-.hero-title-em {
-  color: var(--accent);
-}
-
 /* ─── Skills Hero ────────────────────────────────────────────────────────── */
 .skills-hero {
   position: relative;
@@ -318,10 +313,8 @@
 }
 
 .skill-tag {
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   font-family: var(--font-mono);
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
   color: var(--tag-color, var(--text-dim));
   background: color-mix(in srgb, var(--tag-color, transparent) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--tag-color, var(--border-subtle)) 30%, transparent);
@@ -360,10 +353,8 @@
 }
 
 .skill-sig-label {
-  font-size: 0.7rem;
+  font-size: 0.78rem;
   font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
   color: var(--text-dim);
 }
 

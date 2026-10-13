@@ -66,9 +66,7 @@
 }
 
 .toc-title {
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
+  font-size: 0.85rem;
   color: var(--accent);
   margin-bottom: 18px;
 }
@@ -116,9 +114,7 @@
 }
 
 .content-section-label {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
+  font-size: 0.78rem;
   color: var(--accent);
   margin-bottom: 10px;
 }
@@ -285,10 +281,8 @@
 
 .rb-code-lang {
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   color: var(--text-soft);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
 
 .rb-code-copy {
@@ -374,10 +368,8 @@
 
 .safety-layer-num {
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: 0.78rem;
   color: var(--accent-warm);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
   margin-bottom: 6px;
 }
 
@@ -674,9 +666,7 @@
 }
 
 .guide-tab-sub {
-  font-size: 0.68rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 0.75rem;
   color: var(--text-soft);
 }
 
@@ -687,9 +677,7 @@
 .guide-tab-badge {
   padding: 2px 8px;
   border-radius: var(--radius-pill);
-  font-size: 0.62rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 0.68rem;
   font-weight: 600;
   margin-left: 4px;
 }

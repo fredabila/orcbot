@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
 
 :root {
   --bg-void: #0c0f14;
@@ -18,7 +18,7 @@
   --border-subtle: rgba(255, 255, 255, 0.08);
   --border-strong: rgba(255, 255, 255, 0.18);
 
-  --font-sans: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
 
   --radius-xs: 8px;
@@ -49,35 +49,25 @@ body {
 
 a { color: inherit; text-decoration: none; }
 
+/* R-32: every interactive element needs a visible keyboard focus indicator.
+   The accent colour reads as "focused", never as an error state. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
 .app {
   min-height: 100vh;
   position: relative;
   background: var(--bg-void);
 }
 
+/* MOTION 1: entrance only. drift, shimmer, pulse-ring and blink were declared
+   here but never applied to any element, so they are removed rather than kept
+   as decoration that does nothing. */
 @keyframes rise {
   from { opacity: 0; transform: translateY(24px); }
   to { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes drift {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-12px); }
-}
-
-@keyframes shimmer {
-  0% { background-position: 0% 50%; }
-  100% { background-position: 100% 50%; }
-}
-
-@keyframes pulse-ring {
-  0% { transform: scale(1); opacity: 0.8; }
-  100% { transform: scale(2.4); opacity: 0; }
-}
-
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
 }
 
 /* ── Nav ── */
@@ -236,7 +226,7 @@ a { color: inherit; text-decoration: none; }
   align-items: center;
   gap: 8px;
   border: 1px solid transparent;
-  transition: all 0.25s var(--ease-out);
+  transition: background-color 0.25s var(--ease-out), border-color 0.25s var(--ease-out), color 0.25s var(--ease-out), transform 0.25s var(--ease-out), box-shadow 0.25s var(--ease-out);
   cursor: pointer;
   text-decoration: none;
 }
@@ -322,10 +312,6 @@ a { color: inherit; text-decoration: none; }
   font-weight: 700;
 }
 
-.hero-title-em {
-  color: var(--accent);
-}
-
 .hero-subtitle {
   margin-top: 22px;
   font-size: 1.08rem;
@@ -347,7 +333,9 @@ a { color: inherit; text-decoration: none; }
   gap: 9px;
   font-weight: 600;
   border-radius: var(--radius-sm);
-  transition: all 0.25s var(--ease-out);
+  /* Named properties, never `all`: transitioning `all` also animates the focus
+     outline, so the keyboard focus ring fades in instead of appearing at once. */
+  transition: background-color 0.25s var(--ease-out), border-color 0.25s var(--ease-out), color 0.25s var(--ease-out), transform 0.25s var(--ease-out), box-shadow 0.25s var(--ease-out);
   border: 1px solid transparent;
   cursor: pointer;
   text-decoration: none;
@@ -381,76 +369,69 @@ a { color: inherit; text-decoration: none; }
   background: rgba(92, 255, 179, 0.06);
 }
 
-/* Stats strip */
-.hero-stats {
-  margin-top: 40px;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1px;
-  padding: 20px 0;
-  border-top: 1px solid var(--border-subtle);
+/* ── Hero trace ── */
+/* The hero's visual is the agent's own run. Deliberately not a stat strip and
+   not a fake shell window. */
+.trace {
+  margin: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  overflow: hidden;
 }
 
-.hero-stat {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 0 16px;
-  border-right: 1px solid var(--border-subtle);
-}
-
-.hero-stat:first-child { padding-left: 0; }
-.hero-stat:last-child { border-right: none; }
-
-.hero-stat-value {
-  font-size: 1.9rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--text-main);
-  line-height: 1;
-}
-
-.hero-stat-label {
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+.trace-cap {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 0.78rem;
   color: var(--text-soft);
 }
 
-/* Terminal demo */
-.hero-media {
-  animation: rise 0.7s 0.15s var(--ease-out) both;
+.trace-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
-.quickstart {
-  background: #0d1117;
-  border-radius: var(--radius-md);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  padding: 22px;
-  font-family: var(--font-mono);
-}
-
-.quickstart-cmd {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
+.trace-row {
+  display: grid;
+  grid-template-columns: auto minmax(9rem, auto) 1fr;
+  align-items: baseline;
+  gap: 14px;
+  padding: 11px 20px;
+  border-bottom: 1px solid var(--border-subtle);
   font-size: 0.82rem;
-  line-height: 1.6;
-  color: rgba(255, 255, 255, 0.9);
-  overflow-wrap: anywhere;
 }
 
-.qs-prompt { color: var(--accent); user-select: none; }
+.trace-row:last-child { border-bottom: none; }
 
-.quickstart-note {
-  margin: 16px 0 0;
-  font-family: var(--font-body, inherit);
-  font-size: 0.85rem;
-  line-height: 1.6;
-  color: rgba(255, 255, 255, 0.55);
+.trace-time {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
 }
 
-.quickstart-note code { color: var(--accent); }
+.trace-label { color: var(--text-main); font-weight: 600; }
+
+.trace-detail { color: var(--text-muted); }
+
+/* The accent marks the two events that carry a state: the guardrail holding,
+   and the conclusion being written. Nothing else here is coloured. */
+.trace-row.warn .trace-label { color: var(--accent-warm); }
+.trace-row.ok .trace-label { color: var(--accent); }
+
+@media (max-width: 620px) {
+  .trace-row {
+    grid-template-columns: auto 1fr;
+  }
+  .trace-detail { grid-column: 2; }
+}
+
+/* One deliberate entrance for the hero, and not one per section. */
+.hero-media {
+  animation: rise 0.6s 0.1s var(--ease-out) both;
+}
 
 /* Integrations row */
 .integrations-row {
@@ -464,9 +445,7 @@ a { color: inherit; text-decoration: none; }
 }
 
 .int-label {
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+  font-size: 0.78rem;
   color: var(--text-soft);
   white-space: nowrap;
 }
@@ -484,18 +463,13 @@ a { color: inherit; text-decoration: none; }
   border: 1px solid var(--border-subtle);
   font-size: 0.75rem;
   color: var(--text-muted);
-  transition: all 0.2s;
-}
-
-.int-chip:hover {
-  border-color: rgba(92,255,179,0.3);
-  color: var(--text-main);
 }
 
 /* ── Vision Section ── */
+/* Left-aligned like the hero and every other section. Centred multi-line prose
+   is measurably harder to read, and mixing the two aligns reads as an accident. */
 .vision-section {
   margin-top: 100px;
-  text-align: center;
 }
 
 .vision-grid {
@@ -505,21 +479,15 @@ a { color: inherit; text-decoration: none; }
   margin-top: 60px;
 }
 
+/* These cards are not interactive, so they do not lift or highlight on hover:
+   a hover state reads as a control, and a control that does nothing is worse
+   than no affordance at all. */
 .vision-card {
   padding: 32px;
   background: var(--bg-panel);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-subtle);
   text-align: left;
-  transition: all 0.3s var(--ease-out);
-  position: relative;
-  overflow: hidden;
-}
-
-.vision-card:hover {
-  transform: translateY(-8px);
-  border-color: rgba(92, 255, 179, 0.4);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
 }
 
 .vision-card h3 {
@@ -533,10 +501,6 @@ a { color: inherit; text-decoration: none; }
   font-size: 0.92rem;
   color: var(--text-muted);
   line-height: 1.65;
-}
-
-.vision-card:hover::after {
-  opacity: 1;
 }
 
 @media (max-width: 900px) {
@@ -559,18 +523,15 @@ main {
 
 .section { margin-bottom: 120px; }
 
+/* R-09: a plain label, not a capsule badge. The pill radius + thin border +
+   tinted fill + uppercase + wide tracking combination is the generic AI badge;
+   the label text alone already carries the meaning, so the decoration goes. */
 .section-label {
-  display: inline-block;
-  font-size: 0.7rem;
+  display: block;
+  font-size: 0.78rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
   color: var(--accent);
-  margin-bottom: 14px;
-  padding: 4px 10px;
-  border-radius: var(--radius-pill);
-  background: rgba(92,255,179,0.08);
-  border: 1px solid rgba(92,255,179,0.16);
+  margin-bottom: 10px;
 }
 
 .section-title {
@@ -585,7 +546,6 @@ main {
   color: var(--text-muted);
   max-width: 560px;
   margin-bottom: 44px;
-  margin-inline: auto; /* Ensure horizontal centering when max-width is applied */
   font-size: 1.02rem;
   line-height: 1.65;
 }
@@ -621,7 +581,7 @@ main {
   cursor: pointer;
   font-size: 0.82rem;
   font-weight: 500;
-  transition: all 0.2s var(--ease-out);
+  transition: background-color 0.2s var(--ease-out), border-color 0.2s var(--ease-out), color 0.2s var(--ease-out);
   font-family: var(--font-sans);
 }
 
@@ -666,7 +626,7 @@ main {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  transition: all 0.2s;
+  transition: background-color 0.2s, color 0.2s;
   font-family: var(--font-sans);
   white-space: nowrap;
 }
@@ -684,7 +644,6 @@ main {
 
 .install-footnote a { color: var(--accent); }
 .install-footnote a:hover { text-decoration: underline; }
-.dot-sep { opacity: 0.4; }
 
 /* ── Capabilities ── */
 .capabilities-grid {
@@ -693,73 +652,37 @@ main {
   gap: 16px;
 }
 
+/* These cards are not interactive: no hover lift, no accent bar appearing on
+   hover, and no per-card entrance. The section is deliberately static. */
 .capability-card {
   background: var(--bg-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   padding: 24px;
-  transition: all 0.28s var(--ease-out);
-  animation: rise 0.4s var(--ease-out) both;
-  position: relative;
-  overflow: hidden;
 }
-
-.capability-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: var(--accent);
-  opacity: 0;
-  transition: opacity 0.3s;
-}
-
-.capability-card:hover {
-  transform: translateY(-4px);
-  border-color: rgba(92, 255, 179, 0.3);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
-}
-
-.capability-card:hover::before { opacity: 1; }
 .capability-card h3 { font-size: 0.97rem; font-weight: 600; margin-bottom: 8px; }
 .capability-card p { font-size: 0.83rem; color: var(--text-muted); line-height: 1.55; }
 
-/* ── Marquee ── */
-@keyframes marquee-scroll {
-  from { transform: translateX(0); }
-  to   { transform: translateX(-50%); }
-}
-
+/* ── Capability cards ── */
+/* MOTION 1 keeps this section static. The old marquee referenced a @keyframes
+   that no element ever applied, so it never moved; meanwhile .marquee-fade-wrap
+   set overflow:hidden with no fade mask, which clipped the trailing cards, and
+   the cards carried pointer-events:none so they could not be reached at all.
+   A plain grid shows all nine and keeps them selectable. */
 .marquee-section {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: 14px;
   margin-top: 4px;
 }
 
-.marquee-fade-wrap {
-  overflow: hidden;
-}
-
-.marquee-track {
-  display: flex;
+.marquee-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 14px;
-  width: max-content;
-}
-
-.marquee-track-reverse {
-  animation-direction: reverse;
-  animation-duration: 22s;
 }
 
 .marquee-card {
-  min-width: 260px;
-  max-width: 280px;
-  flex-shrink: 0;
   user-select: none;
-  pointer-events: none;
 }
 
 .marquee-cta {
@@ -787,10 +710,7 @@ main {
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 20px;
-  transition: border-color 0.25s;
 }
-
-.step-item:hover { border-color: rgba(255,179,71,0.3); }
 
 .step-num {
   font-family: var(--font-mono);
@@ -822,13 +742,9 @@ main {
   transition: transform 0.25s var(--ease-out);
 }
 
-.arch-card:hover { transform: translateY(-3px); }
-
 .arch-title {
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
   margin-bottom: 14px;
   color: var(--arch-color, var(--accent-cool));
 }
@@ -856,7 +772,7 @@ main {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   padding: 24px;
-  transition: all 0.25s var(--ease-out);
+  transition: border-color 0.25s var(--ease-out), background-color 0.25s var(--ease-out), transform 0.25s var(--ease-out);
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -869,13 +785,15 @@ main {
   background: rgba(92, 255, 179, 0.05);
 }
 
-.doc-card:hover { transform: translateY(-4px); box-shadow: 0 12px 32px rgba(0,0,0,0.3); }
-.doc-card.featured:hover { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3); }
+.doc-card:hover { transform: translateY(-4px); }
 
 .doc-card-body { flex: 1; }
 .doc-card-body h3 { font-size: 0.97rem; font-weight: 600; margin-bottom: 6px; }
 .doc-card-body p { color: var(--text-muted); font-size: 0.82rem; line-height: 1.55; }
 
+/* R-08: the arrow lives here and nowhere else. It marks "this card leaves the
+   site for the docs", which is a real destination change, so it earns its place.
+   The hero and section buttons do not carry one. */
 .doc-card-arrow {
   display: flex;
   align-items: center;
@@ -901,16 +819,11 @@ main {
   text-align: center;
 }
 
+/* R-09: same capsule-badge combination as .section-label, same fix. */
 .cta-badge {
   display: inline-block;
-  padding: 4px 14px;
-  border-radius: var(--radius-pill);
-  background: rgba(92,255,179,0.12);
-  border: 1px solid rgba(92,255,179,0.25);
-  font-size: 0.72rem;
+  font-size: 0.8rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
   color: var(--accent);
   margin-bottom: 20px;
 }
@@ -1009,10 +922,8 @@ main {
 }
 
 .footer-col h4 {
-  font-size: 0.78rem;
+  font-size: 0.85rem;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
   color: var(--text-main);
   margin-bottom: 6px;
 }
@@ -1045,7 +956,6 @@ main {
 @media (max-width: 1024px) {
   .hero-grid { grid-template-columns: 1fr; gap: 40px; }
   .hero-media { max-width: 580px; }
-  .hero-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .capabilities-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .arch-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .docs-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1059,10 +969,6 @@ main {
   .mobile-toggle { display: block; }
   .nav { padding: 16px clamp(16px, 4vw, 40px); }
 
-  .hero-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .hero-stat:nth-child(2) { border-right: none; }
-  .hero-stat:nth-child(3) { border-right: 1px solid var(--border-subtle); padding-left: 0; }
-  
   .install-terminal { grid-template-columns: 1fr; }
   .terminal-cmd { white-space: normal; word-break: break-all; }
   .terminal-copy { justify-self: start; }
@@ -1084,11 +990,21 @@ main {
 @media (max-width: 480px) {
   .hero-title { font-size: 2.3rem; }
   .hero-actions { flex-direction: column; }
-  .hero-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .hero-stat { padding: 0 8px; }
-  .hero-stat:first-child { padding-left: 0; }
   .install-footnote { flex-direction: column; align-items: flex-start; gap: 4px; }
-  .install-footnote .dot-sep { display: none; }
   .footer-cols { grid-template-columns: 1fr 1fr; }
   .steps-grid { grid-template-columns: 1fr; }
+}
+
+/* Quality floor: honour the OS "reduce motion" preference. The hero's one
+   entrance and every transition collapse, so nobody is moved against their
+   own setting. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

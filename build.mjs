@@ -1,5 +1,5 @@
 import * as esbuild from 'esbuild';
-import { readdirSync, statSync, mkdirSync, copyFileSync } from 'fs';
+import { readdirSync, statSync, mkdirSync, copyFileSync, cpSync, existsSync } from 'fs';
 import { join } from 'path';
 
 // Recursively find all .ts files in src/
@@ -35,5 +35,10 @@ await esbuild.build({
 // Also copy cdp.mjs
 mkdirSync('dist/skills/chrome-cdp', { recursive: true });
 copyFileSync('src/skills/chrome-cdp/cdp.mjs', 'dist/skills/chrome-cdp/cdp.mjs');
+
+// Bundle the web dashboard so `dist/dashboard` ships with the package.
+if (existsSync('apps/dashboard')) {
+    cpSync('apps/dashboard', 'dist/dashboard', { recursive: true });
+}
 
 console.log(`✓ Build completed in ${Date.now() - start}ms`);

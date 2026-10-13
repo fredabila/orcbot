@@ -1738,6 +1738,167 @@ export async function showGatewayMenu(context?: CliContext): Promise<void> {
     return showGatewayMenu(ctx);
 }
 
+let managedGateway: { instance: any; port: number; host: string } | null = null;
+
+export function openDashboardInBrowser(url: string): void {
+    try {
+        if (process.platform === 'win32') {
+            spawnSync('cmd', ['/c', 'start', '', url], { stdio: 'ignore' });
+        } else if (process.platform === 'darwin') {
+            spawnSync('open', [url], { stdio: 'ignore' });
+        } else {
+            spawnSync('xdg-open', [url], { stdio: 'ignore' });
+        }
+    } catch (error: any) {
+        console.log(yellow(`Could not open browser automatically: ${error?.message || error}`));
+    }
+}
+
+export async function showWebDashboardMenu(context?: CliContext): Promise<void> {
+    const ctx = context ?? getCliContext();
+    const { agent, showMainMenu } = ctx;
+    renderScreenHeader('Web Dashboard');
+
+    const currentPort = agent.config.get('gatewayPort') || 3100;
+    const currentHost = agent.config.get('gatewayHost') || '0.0.0.0';
+    const apiKey = agent.config.get('gatewayApiKey');
+    const defaultStatic = agent.config.get('gatewayStaticDir') || path.join(process.cwd(), 'apps', 'dashboard');
+    const running = !!managedGateway;
+    const activePort = managedGateway?.port || currentPort;
+    const activeHost = managedGateway?.host || currentHost;
+    const connectHost = activeHost === '0.0.0.0' ? 'localhost' : activeHost;
+    const dashboardUrl = `http://${connectHost}:${activePort}/`;
+
+    box([
+        `${dim('Status')}     ${running ? green(bold('● RUNNING')) : gray('○ STOPPED')}`,
+        `${dim('Dashboard')}  ${cyan(dashboardUrl)}`,
+        `${dim('REST API')}   ${cyan(`http://${connectHost}:${activePort}/api`)}`,
+        `${dim('Auth')}       ${apiKey ? green('● API Key set') : yellow('○ No authentication')}`,
+        `${dim('Static')}     ${gray(String(defaultStatic))}`,
+    ], { title: 'WEB DASHBOARD', width: 58 });
+    console.log('');
+
+    const choices: any[] = [
+        { name: `   ${bold(running ? 'Restart Web Dashboard' : 'Start Web Dashboard')}`, value: 'start' },
+        { name: `   ${bold('Start Web Dashboard + Agent Loop')}`, value: 'start_with_agent' },
+    ];
+    if (running) choices.push({ name: `   ${bold('Stop Web Dashboard')}`, value: 'stop' });
+    choices.push({ name: `   ${bold('Open in Browser')}`, value: 'open' });
+    choices.push(new inquirer.Separator(dim('  ─── Settings ─────────────────────')));
+    choices.push({ name: `   Set Port ${dim(`(current: ${currentPort})`)}`, value: 'port' });
+    choices.push({ name: `   Set Host ${dim(`(current: ${currentHost})`)}`, value: 'host' });
+    choices.push({ name: `   Set Dashboard Folder`, value: 'static' });
+    choices.push({ name: `   ${apiKey ? 'Update' : 'Set'} API Key`, value: 'apikey' });
+    choices.push(new inquirer.Separator(dim('  ──────────────────────────────────')));
+    choices.push({ name: dim('  ← Back'), value: 'back' });
+
+    const { action } = await inquirer.prompt([
+        { type: 'list', name: 'action', message: cyan('Web Dashboard:'), choices }
+    ]);
+
+    if (action === 'back') return showMainMenu();
+
+    if (action === 'open') {
+        openDashboardInBrowser(dashboardUrl);
+        await waitKeyPress();
+        return showWebDashboardMenu(ctx);
+    }
+
+    if (action === 'stop') {
+        if (managedGateway) {
+            try { managedGateway.instance.stop(); } catch { /* ignore */ }
+            managedGateway = null;
+            console.log(green('\nWeb dashboard stopped.'));
+        }
+        await waitKeyPress();
+        return showWebDashboardMenu(ctx);
+    }
+
+    if (action === 'port') {
+        const { val } = await inquirer.prompt([
+            { type: 'number', name: 'val', message: 'Enter web dashboard port:', default: currentPort }
+        ]);
+        if (val) agent.config.set('gatewayPort', val);
+        return showWebDashboardMenu(ctx);
+    }
+
+    if (action === 'host') {
+        const { val } = await inquirer.prompt([
+            { type: 'input', name: 'val', message: 'Enter web dashboard host (0.0.0.0 for all interfaces):', default: currentHost }
+        ]);
+        if (val) agent.config.set('gatewayHost', val);
+        return showWebDashboardMenu(ctx);
+    }
+
+    if (action === 'static') {
+        const { val } = await inquirer.prompt([
+            { type: 'input', name: 'val', message: 'Path to dashboard static files:', default: String(defaultStatic) }
+        ]);
+        const trimmed = String(val || '').trim();
+        if (trimmed) {
+            const resolved = path.isAbsolute(trimmed) ? trimmed : path.join(process.cwd(), trimmed);
+            if (!fs.existsSync(resolved)) {
+                const { createDir } = await inquirer.prompt([
+                    { type: 'confirm', name: 'createDir', message: `Directory "${resolved}" does not exist. Create it?`, default: false }
+                ]);
+                if (createDir) {
+                    try { fs.mkdirSync(resolved, { recursive: true }); } catch (e: any) { console.log(yellow(`Failed to create directory: ${e?.message || e}`)); }
+                }
+            }
+            agent.config.set('gatewayStaticDir', resolved);
+            console.log(green(`Dashboard folder set to: ${resolved}`));
+        }
+        return showWebDashboardMenu(ctx);
+    }
+
+    if (action === 'apikey') {
+        const { val } = await inquirer.prompt([
+            { type: 'input', name: 'val', message: 'Enter API key (leave empty to disable auth):' }
+        ]);
+        agent.config.set('gatewayApiKey', val || undefined);
+        console.log(val ? green('API key set!') : yellow('Authentication disabled.'));
+        return showWebDashboardMenu(ctx);
+    }
+
+    // start / start_with_agent
+    if (managedGateway) {
+        try { managedGateway.instance.stop(); } catch { /* ignore */ }
+        managedGateway = null;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { GatewayServer } = require('../../gateway/GatewayServer');
+    const gateway = new GatewayServer(agent, agent.config, {
+        port: currentPort,
+        host: currentHost,
+        apiKey,
+        staticDir: defaultStatic
+    });
+
+    console.log('\nStarting OrcBot Web Dashboard...');
+    await gateway.start();
+
+    managedGateway = { instance: gateway, port: currentPort, host: currentHost };
+
+    const liveConnectHost = currentHost === '0.0.0.0' ? 'localhost' : currentHost;
+    const liveUrl = `http://${liveConnectHost}:${currentPort}/`;
+    console.log(green('\nWeb dashboard is ready!'));
+    console.log(`   Dashboard: ${cyan(liveUrl)}`);
+    console.log(`   REST API:  ${cyan(`http://${liveConnectHost}:${currentPort}/api`)}`);
+    console.log(`   WebSocket: ${cyan(`ws://${liveConnectHost}:${currentPort}`)}`);
+    if (apiKey) console.log(dim('   Auth: API key required'));
+
+    if (action === 'start_with_agent') {
+        console.log('Also starting agent loop...\n');
+        gateway.setAgentLoopStarted(true);
+        agent.start().catch((err: any) => logger.error(`Agent error: ${err}`));
+    }
+
+    openDashboardInBrowser(liveUrl);
+    await waitKeyPress();
+    return showWebDashboardMenu(ctx);
+}
+
 type TailscaleInfo = {
     cliAvailable: boolean;
     connected: boolean;

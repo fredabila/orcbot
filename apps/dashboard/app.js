@@ -29,6 +29,11 @@
         events: [],
         inspector: null,
         compactCanvas: false,
+        agentCanvas: null,
+        channels: [],
+        channelHotReloadKeys: [],
+        channelAuthEnabled: false,
+        channelsError: '',
         apiKey: loadApiKey(),
         lastRefreshAt: null
     };
@@ -40,6 +45,7 @@
         tasks: { eyebrow: 'Operations', title: 'Queue' },
         skills: { eyebrow: 'Capabilities', title: 'Skills' },
         services: { eyebrow: 'Runtime', title: 'Services' },
+        channels: { eyebrow: 'Messaging', title: 'Channels' },
         'data-home': { eyebrow: 'Administration', title: 'Data Home' },
         memory: { eyebrow: 'Context', title: 'Memory' },
         logs: { eyebrow: 'Observability', title: 'Logs' },
@@ -54,6 +60,7 @@
 
     function init() {
         bindElements();
+        bindSidebar();
         bindNavigation();
         bindActions();
         updateTopbar();
@@ -82,11 +89,57 @@
             'refreshBtn', 'newTaskBtn', 'quickTaskSend', 'canvasCompactBtn', 'canvasResetBtn',
             'canvasEventClear', 'chatSendBtn', 'clearChatBtn', 'taskComposerSubmit', 'refreshTasksBtn',
             'memorySearchBtn', 'refreshMemoryBtn', 'refreshLogsBtn', 'runApiBtn', 'loadCapabilitiesBtn',
-            'refreshConfigBtn', 'refreshSecurityBtn', 'rotateGatewayTokenBtn', 'rotateMcpKeyBtn', 'clearEventsBtn', 'refreshDataHomeBtn', 'dataHomeUpBtn', 'dataHomeRootBtn', 'dataHomeBrowseBtn',
+            'refreshConfigBtn',             'refreshSecurityBtn', 'rotateGatewayTokenBtn', 'rotateMcpKeyBtn', 'clearEventsBtn', 'refreshDataHomeBtn', 'dataHomeUpBtn', 'dataHomeRootBtn', 'dataHomeBrowseBtn',
             'dataHomeCreateDirBtn', 'dataHomeNewFileBtn', 'dataHomeRenameBtn', 'dataHomeDeleteBtn',
-            'dataHomeSaveBtn', 'dataHomeInspectBtn'
+            'dataHomeSaveBtn', 'dataHomeInspectBtn',
+            'agentCanvasPanel', 'agentCanvasTitle', 'agentCanvasHost', 'agentCanvasClear',
+            'sidebarToggle', 'channelsNote', 'channelsGrid'
         ].forEach((id) => {
             elements[id] = document.getElementById(id);
+        });
+    }
+
+    // ── Sidebar rail ──────────────────────────────────────────────────────────
+    // Collapsing is a user preference, so it is restored on load and written back
+    // on toggle. Storage can be unavailable (private mode, file://), so every
+    // access is guarded and the toggle still works for the session without it.
+    const SIDEBAR_STORAGE_KEY = 'orcbot.dashboard.sidebar';
+
+    function readSidebarCollapsed() {
+        try {
+            return window.localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'collapsed';
+        } catch (error) {
+            return false;
+        }
+    }
+
+    function writeSidebarCollapsed(collapsed) {
+        try {
+            window.localStorage.setItem(SIDEBAR_STORAGE_KEY, collapsed ? 'collapsed' : 'expanded');
+        } catch (error) {
+            // Storage unavailable; the toggle still applies for this session.
+        }
+    }
+
+    function applySidebarCollapsed(collapsed) {
+        const shell = document.querySelector('.shell');
+        if (shell) shell.classList.toggle('sidebar-collapsed', collapsed);
+
+        const button = elements.sidebarToggle;
+        if (!button) return;
+        const label = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+        button.setAttribute('aria-expanded', String(!collapsed));
+        button.setAttribute('aria-label', label);
+        button.title = label;
+    }
+
+    function bindSidebar() {
+        applySidebarCollapsed(readSidebarCollapsed());
+        elements.sidebarToggle?.addEventListener('click', () => {
+            const shell = document.querySelector('.shell');
+            const next = !(shell && shell.classList.contains('sidebar-collapsed'));
+            writeSidebarCollapsed(next);
+            applySidebarCollapsed(next);
         });
     }
 
@@ -137,7 +190,7 @@
             const value = btn.dataset.copy || '';
             navigator.clipboard.writeText(value)
                 .then(() => toast('Copied to clipboard'))
-                .catch(() => toast('Copy failed — try selecting the text manually'));
+                .catch(() => toast('Copy failed. Try selecting the text manually'));
         });
         elements.clearEventsBtn?.addEventListener('click', clearEvents);
         elements.canvasEventClear?.addEventListener('click', clearEvents);
@@ -156,6 +209,7 @@
         elements.dataHomeDeleteBtn?.addEventListener('click', deleteDataHomeSelection);
         elements.dataHomeSaveBtn?.addEventListener('click', saveDataHomeFile);
         elements.dataHomeInspectBtn?.addEventListener('click', inspectDataHomeSelection);
+        elements.agentCanvasClear?.addEventListener('click', clearAgentCanvas);
         elements.dataHomePathInput?.addEventListener('keydown', (event) => {
             if (event.key === 'Enter') browseDataHomePath();
         });
@@ -171,10 +225,27 @@
         });
     }
 
+    // A failing endpoint must degrade to one empty panel, never a blank view.
+    // apiFetch keeps throwing so callers like the API Lab can surface real
+    // errors; this wrapper is for the dashboard's own loaders, which all already
+    // have an empty render path and only need to be reached.
+    async function safeFetch(path) {
+        try {
+            return await apiFetch(path);
+        } catch (error) {
+            console.warn(`Dashboard request failed: ${path}`, error);
+            return null;
+        }
+    }
+
     async function refreshAll() {
-        await Promise.all([
+        // allSettled, not all: these loaders each own separate panels, and with
+        // Promise.all the first rejection aborted the rest, which is why one
+        // failing call left almost the whole dashboard blank.
+        await Promise.allSettled([
             loadOverview(),
             loadServices(),
+            loadChannels(),
             loadTasks(),
             loadSkills(),
             loadDataHome(state.dataHomeBrowsePath || ''),
@@ -190,8 +261,11 @@
     }
 
     async function loadOverview() {
-        const overview = await apiFetch('/dashboard/overview');
+        const overview = await safeFetch('/dashboard/overview');
         state.overview = overview;
+        // Rendered even when null: renderOverview falls back to an unreachable
+        // state, and it is the only thing that populates the metric grid, event
+        // feed, service strip, canvas and chat summary.
         renderOverview();
         updateHeaderStatus();
         updateBridgePreview();
@@ -199,10 +273,175 @@
     }
 
     async function loadServices() {
-        const response = await apiFetch('/services');
-        state.services = response.services || [];
+        const response = await safeFetch('/services');
+        state.services = response?.services || [];
         renderServices();
         return state.services;
+    }
+
+    // ── Channels ──────────────────────────────────────────────────────────────
+    // Channel descriptors come from the gateway, which also enforces the write
+    // allowlist. Secrets arrive as isSet only, never as values, so a token can be
+    // replaced from here but can never be read back out.
+    async function loadChannels() {
+        // Deliberately not safeFetch: this view has to say *why* it is empty. A
+        // gateway that predates /api/channels looks nothing like one that is simply
+        // unreachable, and "the gateway is offline" would be a lie for the first.
+        try {
+            const response = await apiFetch('/channels');
+            state.channels = response?.channels || [];
+            state.channelHotReloadKeys = response?.hotReloadKeys || [];
+            state.channelAuthEnabled = response?.authEnabled === true;
+            state.channelsError = '';
+        } catch (error) {
+            state.channels = [];
+            state.channelHotReloadKeys = [];
+            state.channelAuthEnabled = false;
+            state.channelsError = String(error?.message || error);
+            console.warn('Channels view: could not load channel descriptors', error);
+        }
+        renderChannels();
+        return state.channels;
+    }
+
+    function renderChannels() {
+        const channels = state.channels || [];
+
+        if (!channels.length) {
+            const reason = state.channelsError || '';
+            if (elements.channelsNote) elements.channelsNote.textContent = '';
+
+            // Name the actual cause. The gateway's own 404 body is 'API route not
+            // found', which is what an older build returns for /api/channels.
+            let message = 'The gateway replied but reported no channels.';
+            if (/API route not found|404/.test(reason)) {
+                message = 'This gateway has no /api/channels route, so it is an older build. Rebuild and restart it to list channels here.';
+            } else if (reason) {
+                message = `Could not load channels from the gateway: ${reason}`;
+            }
+            elements.channelsGrid.innerHTML = emptyState(message);
+            return;
+        }
+
+        elements.channelsNote.innerHTML = state.channelAuthEnabled
+            ? 'Changes are written to your local config file. A running agent reloads a channel as soon as its connection settings change.'
+            : 'Changes are written to your local config file, and <strong>gateway authentication is off</strong>, so anything that can reach this port can change these settings. Set <code>gatewayApiKey</code> to require a token.';
+
+        elements.channelsGrid.innerHTML = channels.map(renderChannelCard).join('');
+        elements.channelsGrid.querySelectorAll('[data-channel-save]').forEach((button) => {
+            button.addEventListener('click', () => saveChannel(button.dataset.channelSave));
+        });
+    }
+
+    function renderChannelCard(channel) {
+        const badge = channel.configured
+            ? '<span class="service-state state-healthy">configured</span>'
+            : '<span class="service-state state-idle">not configured</span>';
+
+        const readonly = (channel.readonlyInfo || []).map((info) => `
+            <div class="channel-readonly"><span>${escapeHtml(info.label)}</span><strong>${escapeHtml(String(info.value))}</strong></div>
+        `).join('');
+
+        const fields = channel.fields.map((field) => {
+            const id = `channel-${channel.id}-${field.key}`;
+            const hint = field.hint ? `<p class="channel-hint">${escapeHtml(field.hint)}</p>` : '';
+
+            if (field.type === 'boolean') {
+                return `
+                    <div class="channel-field">
+                        <label class="channel-toggle" for="${id}">
+                            <input id="${id}" type="checkbox" data-channel-field="${escapeAttribute(field.key)}" ${field.value ? 'checked' : ''}>
+                            <span>${escapeHtml(field.label)}</span>
+                        </label>
+                        ${hint}
+                    </div>
+                `;
+            }
+
+            const isSecret = field.type === 'secret';
+            const type = isSecret ? 'password' : (field.type === 'number' ? 'number' : 'text');
+            // Secrets render empty; the placeholder is what tells the operator a
+            // value is already stored.
+            const value = isSecret ? '' : escapeAttribute(String(field.value ?? ''));
+            const placeholder = isSecret ? (field.isSet ? 'set (type to replace)' : 'not set') : '';
+
+            return `
+                <div class="channel-field">
+                    <label for="${id}">${escapeHtml(field.label)}</label>
+                    <input id="${id}" class="field-input" type="${type}" data-channel-field="${escapeAttribute(field.key)}" value="${value}" placeholder="${escapeAttribute(placeholder)}" autocomplete="off" spellcheck="false">
+                    ${hint}
+                </div>
+            `;
+        }).join('');
+
+        return `
+            <article class="channel-card" data-channel="${escapeAttribute(channel.id)}">
+                <div class="channel-head">
+                    <div>
+                        <h3>${escapeHtml(channel.label)}</h3>
+                        <p class="channel-desc">${escapeHtml(channel.description)}</p>
+                    </div>
+                    <div class="inline-actions">
+                        ${badge}
+                        <button class="btn primary small" type="button" data-channel-save="${escapeAttribute(channel.id)}">Save</button>
+                    </div>
+                </div>
+                ${channel.configured ? '' : `<p class="channel-unset">${escapeHtml(channel.configuredHint)}</p>`}
+                ${readonly}
+                <div class="channel-fields">${fields}</div>
+                <p class="channel-note" data-channel-note="${escapeAttribute(channel.id)}"></p>
+            </article>
+        `;
+    }
+
+    async function saveChannel(channelId) {
+        const card = elements.channelsGrid?.querySelector(`[data-channel="${channelId}"]`);
+        if (!card) return;
+
+        const payload = {};
+        card.querySelectorAll('[data-channel-field]').forEach((input) => {
+            const key = input.dataset.channelField;
+            if (input.type === 'checkbox') {
+                payload[key] = input.checked;
+                return;
+            }
+            // A secret box left untouched is omitted entirely, so saving the rest of
+            // the card cannot clear a token the operator did not mean to change.
+            if (input.type === 'password' && input.value === '') return;
+            payload[key] = input.value;
+        });
+
+        const note = card.querySelector('[data-channel-note]');
+        const setNote = (message, className) => {
+            if (!note) return;
+            note.textContent = message;
+            note.className = `channel-note ${className}`.trim();
+        };
+
+        setNote('Saving…', '');
+        card.querySelectorAll('input, button').forEach((el) => { el.disabled = true; });
+
+        try {
+            const response = await apiFetch(`/channels/${encodeURIComponent(channelId)}`, {
+                method: 'PUT',
+                body: JSON.stringify(payload)
+            });
+            state.channels = response?.channels || state.channels;
+            // Re-render from the gateway's own view of the config, so the badges and
+            // the secret placeholders reflect what was actually stored.
+            renderChannels();
+            const updated = elements.channelsGrid.querySelector(`[data-channel="${channelId}"] [data-channel-note]`);
+            if (updated) {
+                updated.textContent = response?.hotReload
+                    ? 'Saved. The running agent has reloaded this channel.'
+                    : 'Saved. This takes effect on the next start.';
+                updated.className = 'channel-note saved';
+            }
+            toast(`${channelId} settings saved`);
+        } catch (error) {
+            setNote(`Could not save: ${error.message}`, 'error');
+            card.querySelectorAll('input, button').forEach((el) => { el.disabled = false; });
+        }
     }
 
     async function loadServiceDetail(serviceId) {
@@ -220,8 +459,8 @@
     }
 
     async function loadSkills() {
-        const response = await apiFetch('/skills');
-        state.skills = response.skills || [];
+        const response = await safeFetch('/skills');
+        state.skills = response?.skills || [];
         if (!state.selectedSkill && state.skills[0]) {
             state.selectedSkill = state.skills[0].name;
         }
@@ -235,20 +474,20 @@
         if (normalizedPath) params.set('path', normalizedPath);
 
         const [summary, treeResponse] = await Promise.all([
-            apiFetch('/data-home/summary'),
-            apiFetch(`/data-home/tree?${params.toString()}`)
+            safeFetch('/data-home/summary'),
+            safeFetch(`/data-home/tree?${params.toString()}`)
         ]);
 
-        if (treeResponse.entry?.type === 'file') {
+        if (treeResponse?.entry?.type === 'file') {
             const filePath = normalizeRelativePath(treeResponse.entry.path || normalizedPath);
             await loadDataHome(parentRelativePath(filePath));
             await loadDataHomeFile(filePath);
             return treeResponse;
         }
 
-        state.dataHomeSummary = summary;
-        state.dataHomeTree = treeResponse.entry || null;
-        state.dataHomeBrowsePath = treeResponse.requestedPath || '';
+        state.dataHomeSummary = summary || null;
+        state.dataHomeTree = treeResponse?.entry || null;
+        state.dataHomeBrowsePath = treeResponse?.requestedPath || '';
         if (elements.dataHomePathInput) {
             elements.dataHomePathInput.value = state.dataHomeBrowsePath;
         }
@@ -301,10 +540,10 @@
 
     async function loadTasks() {
         const [tasksResponse, queueResponse] = await Promise.all([
-            apiFetch('/tasks'),
-            apiFetch('/queue/stats')
+            safeFetch('/tasks'),
+            safeFetch('/queue/stats')
         ]);
-        state.tasks = tasksResponse.tasks || [];
+        state.tasks = tasksResponse?.tasks || [];
         if (state.overview) {
             state.overview.queue = {
                 ...(state.overview.queue || {}),
@@ -317,15 +556,15 @@
     }
 
     async function loadChatHistory() {
-        const response = await apiFetch('/chat/history');
-        state.chatMessages = normalizeChatMessages(response.messages || []);
+        const response = await safeFetch('/chat/history');
+        state.chatMessages = normalizeChatMessages(response?.messages || []);
         renderChat();
         return state.chatMessages;
     }
 
     async function loadMemory() {
-        const response = await apiFetch('/memory');
-        state.memoryItems = response.memories || [];
+        const response = await safeFetch('/memory');
+        state.memoryItems = response?.memories || [];
         renderMemoryTimeline(state.memoryItems);
         return state.memoryItems;
     }
@@ -345,20 +584,20 @@
         const params = new URLSearchParams({ lines: '200' });
         if (level && level !== 'all') params.set('level', level);
         if (search) params.set('search', search);
-        const response = await apiFetch(`/logs?${params.toString()}`);
-        state.logs = response.logs || [];
+        const response = await safeFetch(`/logs?${params.toString()}`);
+        state.logs = response?.logs || [];
         state.logInfo = {
-            total: response.total || 0,
-            filtered: !!response.filtered,
-            source: response.source || null,
-            sources: Array.isArray(response.sources) ? response.sources : []
+            total: response?.total || 0,
+            filtered: !!response?.filtered,
+            source: response?.source || null,
+            sources: Array.isArray(response?.sources) ? response.sources : []
         };
         renderLogs();
         return state.logs;
     }
 
     async function loadCapabilities() {
-        const capabilities = await apiFetch('/gateway/capabilities');
+        const capabilities = await safeFetch('/gateway/capabilities');
         state.capabilities = capabilities;
         renderCapabilities();
         updateHeaderStatus();
@@ -367,19 +606,19 @@
     }
 
     async function loadConfig() {
-        const response = await apiFetch('/config');
-        state.config = response.config || {};
+        const response = await safeFetch('/config');
+        state.config = response?.config || {};
         renderConfig();
         return state.config;
     }
 
     async function loadSecurity() {
         const [security, tokenStatus, audit] = await Promise.all([
-            apiFetch('/security'),
-            apiFetch('/gateway/token/status'),
-            apiFetch('/security/audit')
+            safeFetch('/security'),
+            safeFetch('/gateway/token/status'),
+            safeFetch('/security/audit')
         ]);
-        state.security = { ...security, token: tokenStatus, audit };
+        state.security = { ...(security || {}), token: tokenStatus, audit };
         renderSecurity();
         if (state.overview) {
             renderOverview();
@@ -389,7 +628,19 @@
 
     function renderOverview() {
         const overview = state.overview;
-        if (!overview) return;
+
+        if (!overview) {
+            // An unreachable gateway is a state the operator needs to read, not a
+            // field of empty boxes. The sub-panels are still rendered so each one
+            // shows its own empty state instead of nothing at all.
+            elements.modeDescription.textContent = 'Gateway unreachable. Start it with: orcbot gateway';
+            elements.metricGrid.innerHTML = emptyState('Metrics appear once the gateway responds');
+            renderEvents();
+            renderServiceStrip();
+            renderCanvas();
+            renderChatSummary();
+            return;
+        }
 
         elements.modeDescription.textContent = overview.status?.modeDescription || 'Gateway status unavailable';
 
@@ -900,7 +1151,7 @@
         const mcpBindHost = security.mcp?.host || '0.0.0.0';
         const mcpPort = security.mcp?.port || 3190;
         const mcpPath = security.mcp?.path || '/mcp';
-        // 0.0.0.0 is a bind address — clients connect to the real hostname
+        // 0.0.0.0 is a bind address; clients connect to the real hostname
         const mcpConnectHost = (mcpBindHost === '0.0.0.0') ? (window.location.hostname || 'localhost') : mcpBindHost;
         const mcpUrl = `http://${mcpBindHost}:${mcpPort}${mcpPath}`;
         const mcpConnectUrl = `http://${mcpConnectHost}:${mcpPort}${mcpPath}`;
@@ -958,7 +1209,7 @@
             },
             {
                 label: 'How to start MCP HTTP',
-                body: `To run the gateway dashboard AND MCP together in one command:\n\n  orcbot gateway --with-agent --with-mcp\n\nOr MCP HTTP only:\n\n  orcbot mcp --http\n\nWithout --http, orcbot mcp uses stdio — no HTTP port is opened.\n\nTo test in a browser, open the /health URL (MCP itself only accepts POST):\n  http://${mcpConnectHost}:${mcpPort}/health\n\nMCP clients (Cursor, Claude etc.) connect to:\n  ${mcpConnectUrl}`
+                body: `To run the gateway dashboard AND MCP together in one command:\n\n  orcbot gateway --with-agent --with-mcp\n\nOr MCP HTTP only:\n\n  orcbot mcp --http\n\nWithout --http, orcbot mcp uses stdio, and no HTTP port is opened.\n\nTo test in a browser, open the /health URL (MCP itself only accepts POST):\n  http://${mcpConnectHost}:${mcpPort}/health\n\nMCP clients (Cursor, Claude etc.) connect to:\n  ${mcpConnectUrl}`
             },
             {
                 label: 'Audit findings',
@@ -1012,7 +1263,7 @@
 
         if (response?.success && response?.token) {
             await loadSecurity();
-            toast(`MCP API key rotated — starts with ${response.token.slice(0, 4)}... Update your MCP client config.`);
+            toast(`MCP API key rotated. New key starts with ${response.token.slice(0, 4)}... Update your MCP client config.`);
         } else {
             toast('MCP key rotation failed. Check the console for details.');
         }
@@ -1050,6 +1301,43 @@
         elements.canvasInspector.textContent = state.inspector
             ? prettyJson(state.inspector.payload)
             : 'Select a service or run an API call to inspect payloads here.';
+    }
+
+    function renderAgentCanvas(message) {
+        state.agentCanvas = message || null;
+        const panel = elements.agentCanvasPanel || document.getElementById('agentCanvasPanel');
+        const host = elements.agentCanvasHost || document.getElementById('agentCanvasHost');
+        if (!panel || !host) return;
+
+        if (elements.agentCanvasTitle) {
+            elements.agentCanvasTitle.textContent = message?.title || 'Live Canvas';
+        }
+
+        const doc = [
+            '<!DOCTYPE html><html><head><meta charset="utf-8">',
+            `<style>${message?.css || ''}</style>`,
+            '</head><body>',
+            message?.html || '',
+            `<script>${message?.js || ''}<\/script>`,
+            '</body></html>'
+        ].join('');
+
+        host.innerHTML = '';
+        const frame = document.createElement('iframe');
+        frame.className = 'agent-canvas-frame';
+        frame.setAttribute('sandbox', 'allow-scripts allow-forms allow-modals allow-popups');
+        frame.srcdoc = doc;
+        host.appendChild(frame);
+
+        panel.hidden = false;
+        if (state.activeView !== 'canvas') switchView('canvas');
+        toast(`Canvas: ${message?.title || 'workspace'}`);
+    }
+
+    function clearAgentCanvas() {
+        state.agentCanvas = null;
+        if (elements.agentCanvasHost) elements.agentCanvasHost.innerHTML = '';
+        if (elements.agentCanvasPanel) elements.agentCanvasPanel.hidden = true;
     }
 
     function switchView(viewId) {
@@ -1476,6 +1764,11 @@
                 metadata: message.metadata || { kind: 'file', path: message.path }
             });
             renderChat();
+            return;
+        }
+
+        if (message.type === 'chat:canvas') {
+            renderAgentCanvas(message);
             return;
         }
 

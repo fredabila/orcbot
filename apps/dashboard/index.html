@@ -6,32 +6,78 @@
     <title>OrcBot Gateway</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
     <div class="shell">
         <aside class="sidebar">
             <div class="brand-block">
-                <div class="brand-mark">OB</div>
-                <div>
+                <div class="brand-mark" aria-hidden="true">OB</div>
+                <div class="brand-text">
                     <h1>OrcBot Ops</h1>
                 </div>
+                <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-controls="sidebarNav" aria-expanded="true" aria-label="Collapse sidebar" title="Collapse sidebar">
+                    <svg class="sidebar-toggle-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M12.5 5 7.5 10l5 5"/></svg>
+                </button>
             </div>
 
-            <nav class="nav-stack scroll-region">
-                <button class="nav-item active" data-view="overview"><span>Overview</span></button>
-                <button class="nav-item" data-view="canvas"><span>Canvas</span></button>
-                <button class="nav-item" data-view="chat"><span>Gateway Chat</span></button>
-                <button class="nav-item" data-view="tasks"><span>Queue</span></button>
-                <button class="nav-item" data-view="skills"><span>Skills</span></button>
-                <button class="nav-item" data-view="services"><span>Services</span></button>
-                <button class="nav-item" data-view="data-home"><span>Data Home</span></button>
-                <button class="nav-item" data-view="memory"><span>Memory</span></button>
-                <button class="nav-item" data-view="logs"><span>Logs</span></button>
-                <button class="nav-item" data-view="api"><span>API Lab</span></button>
-                <button class="nav-item" data-view="security"><span>Security</span></button>
-                <button class="nav-item" data-view="config"><span>Config</span></button>
+            <!-- One icon per view, each chosen for what the view actually shows, so the
+                 collapsed rail stays navigable. Labels stay in the DOM (visually hidden
+                 when collapsed) so every button keeps its accessible name. -->
+            <nav class="nav-stack scroll-region" id="sidebarNav" aria-label="Views">
+                <button class="nav-item active" data-view="overview" title="Overview">
+                    <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="2.5" width="6" height="6" rx="1.5"/><rect x="11.5" y="2.5" width="6" height="6" rx="1.5"/><rect x="2.5" y="11.5" width="6" height="6" rx="1.5"/><rect x="11.5" y="11.5" width="6" height="6" rx="1.5"/></svg>
+                    <span>Overview</span>
+                </button>
+                <button class="nav-item" data-view="canvas" title="Canvas">
+                    <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="2.5" width="15" height="15" rx="2"/><path d="M2.5 8.5h15M8.5 8.5v9"/></svg>
+                    <span>Canvas</span>
+                </button>
+                <button class="nav-item" data-view="chat" title="Gateway Chat">
+                    <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="10" rx="2.5"/><path d="M7 14v3l3.5-3"/></svg>
+                    <span>Gateway Chat</span>
+                </button>
+                <button class="nav-item" data-view="tasks" title="Queue">
+                    <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M7 5.5h10M7 10h10M7 14.5h10"/><path d="M3.5 5.5h.01M3.5 10h.01M3.5 14.5h.01"/></svg>
+                    <span>Queue</span>
+                </button>
+                <button class="nav-item" data-view="skills" title="Skills">
+                    <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M12.6 3.4a4 4 0 0 0-5.3 5.3L3.6 12.4a2 2 0 1 0 2.8 2.8l3.7-3.7a4 4 0 0 0 5.3-5.3l-2.3 2.3-2.1-.5-.5-2.1z"/></svg>
+                    <span>Skills</span>
+                </button>
+                <button class="nav-item" data-view="services" title="Services">
+                    <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="5" r="2.3"/><circle cx="15" cy="5" r="2.3"/><circle cx="10" cy="15" r="2.3"/><path d="M7.3 5h5.4M6.2 7.1l2.6 5.6M13.8 7.1l-2.6 5.6"/></svg>
+                    <span>Services</span>
+                </button>
+                <button class="nav-item" data-view="channels" title="Channels">
+                    <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="1.7"/><path d="M6.6 6.6a4.8 4.8 0 0 0 0 6.8M13.4 6.6a4.8 4.8 0 0 1 0 6.8"/><path d="M4.2 4.2a8.2 8.2 0 0 0 0 11.6M15.8 4.2a8.2 8.2 0 0 1 0 11.6"/></svg>
+                    <span>Channels</span>
+                </button>
+                <button class="nav-item" data-view="data-home" title="Data Home">
+                    <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h3l1.6 2H15a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+                    <span>Data Home</span>
+                </button>
+                <button class="nav-item" data-view="memory" title="Memory">
+                    <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.5 16.5 7 10 10.5 3.5 7z"/><path d="M3.5 10.5 10 14l6.5-3.5"/></svg>
+                    <span>Memory</span>
+                </button>
+                <button class="nav-item" data-view="logs" title="Logs">
+                    <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="4.5" y="2.5" width="11" height="15" rx="2"/><path d="M7.5 7h5M7.5 10h5M7.5 13h3"/></svg>
+                    <span>Logs</span>
+                </button>
+                <button class="nav-item" data-view="api" title="API Lab">
+                    <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2"/><path d="M6 8.5 8.5 11 6 13.5M10.5 13.5h4"/></svg>
+                    <span>API Lab</span>
+                </button>
+                <button class="nav-item" data-view="security" title="Security">
+                    <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="4" y="8.5" width="12" height="9" rx="2"/><path d="M7 8.5v-2a3 3 0 0 1 6 0v2"/></svg>
+                    <span>Security</span>
+                </button>
+                <button class="nav-item" data-view="config" title="Config">
+                    <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h14M3 10h14M3 14h14"/><circle cx="7.5" cy="6" r="1.9"/><circle cx="12.5" cy="10" r="1.9"/><circle cx="8.5" cy="14" r="1.9"/></svg>
+                    <span>Config</span>
+                </button>
             </nav>
 
             <div class="sidebar-footer">
@@ -72,7 +118,6 @@
             <section class="content view active" id="view-overview">
                 <div class="hero-panel">
                     <div>
-                        <div class="eyebrow">Gateway Overview</div>
                         <h3>One control plane for the agent, services, and live conversation flows.</h3>
                         <p id="modeDescription">Loading gateway status...</p>
                     </div>
@@ -88,7 +133,6 @@
                     <article class="panel panel-tall">
                         <div class="panel-head">
                             <div>
-                                <div class="eyebrow">Live Feed</div>
                                 <h3>Recent runtime events</h3>
                             </div>
                             <button class="icon-btn" id="clearEventsBtn">Clear</button>
@@ -99,7 +143,6 @@
                     <article class="panel">
                         <div class="panel-head">
                             <div>
-                                <div class="eyebrow">Quick Task</div>
                                 <h3>Push a high-priority operation</h3>
                             </div>
                         </div>
@@ -128,7 +171,6 @@
                 <article class="panel">
                     <div class="panel-head">
                         <div>
-                            <div class="eyebrow">Services</div>
                             <h3>Service registry snapshot</h3>
                         </div>
                         <button class="btn ghost small" data-jump="services">Open full registry</button>
@@ -139,7 +181,6 @@
                 <article class="panel">
                     <div class="panel-head">
                         <div>
-                            <div class="eyebrow">Workspace Guide</div>
                             <h3>What the canvas is for</h3>
                         </div>
                         <button class="btn ghost small" data-jump="canvas">Open canvas</button>
@@ -160,7 +201,6 @@
             <section class="content view" id="view-canvas">
                 <div class="canvas-header">
                     <div>
-                        <div class="eyebrow">Live Workspace</div>
                         <h3>Monitor OrcBot in one place and inspect what each subsystem is doing.</h3>
                         <p class="canvas-subtitle">The canvas is the operator view: bounded panels, live state, and internal scroll inside each panel instead of one long page.</p>
                     </div>
@@ -170,6 +210,10 @@
                     </div>
                 </div>
                 <div class="ops-canvas" id="opsCanvas">
+                    <section class="canvas-panel emphasis agent-canvas-panel" data-panel="live-canvas" id="agentCanvasPanel" hidden>
+                        <div class="canvas-panel-head"><span id="agentCanvasTitle">Live Canvas</span><button class="icon-btn" id="agentCanvasClear">Clear</button></div>
+                        <div class="canvas-panel-body agent-canvas-body" id="agentCanvasHost"></div>
+                    </section>
                     <section class="canvas-panel emphasis" data-panel="command">
                         <div class="canvas-panel-head"><span>Command Deck</span><button class="icon-btn" data-canvas-action="focus-chat">Focus</button></div>
                         <div class="canvas-panel-body">
@@ -212,7 +256,7 @@
                 <div class="workspace-grid two-up">
                     <article class="panel panel-tall">
                         <div class="panel-head">
-                            <div><div class="eyebrow">Registry</div><h3>Built-in and plugin skills</h3></div>
+                            <div><h3>Built-in and plugin skills</h3></div>
                             <div class="inline-actions">
                                 <input id="skillSearchInput" class="field-input compact wide-input" placeholder="filter skills">
                                 <button class="btn ghost small" id="refreshSkillsBtn">Refresh</button>
@@ -221,7 +265,7 @@
                         <div class="service-grid" id="skillsGrid"></div>
                     </article>
                     <article class="panel panel-tall">
-                        <div class="panel-head"><div><div class="eyebrow">Runner</div><h3 id="skillDetailTitle">Select a skill</h3></div></div>
+                        <div class="panel-head"><div><h3 id="skillDetailTitle">Select a skill</h3></div></div>
                         <div class="detail-stack" id="skillDetail"></div>
                     </article>
                 </div>
@@ -230,7 +274,7 @@
             <section class="content view" id="view-chat">
                 <div class="workspace-grid two-up">
                     <article class="panel panel-tall">
-                        <div class="panel-head"><div><div class="eyebrow">Conversation</div><h3>Gateway chat session</h3></div><button class="btn ghost small" id="clearChatBtn">Clear view</button></div>
+                        <div class="panel-head"><div><h3>Gateway chat session</h3></div><button class="btn ghost small" id="clearChatBtn">Clear view</button></div>
                         <div class="chat-thread" id="chatThread"></div>
                         <div class="chat-compose">
                             <textarea id="chatInput" class="text-area" rows="3" placeholder="Send a message to OrcBot through the gateway..."></textarea>
@@ -241,7 +285,7 @@
                         </div>
                     </article>
                     <article class="panel">
-                        <div class="panel-head"><div><div class="eyebrow">Session Stats</div><h3>Chat summary</h3></div></div>
+                        <div class="panel-head"><div><h3>Chat summary</h3></div></div>
                         <div class="stack-list" id="chatSummary"></div>
                     </article>
                 </div>
@@ -250,7 +294,7 @@
             <section class="content view" id="view-tasks">
                 <div class="workspace-grid two-up">
                     <article class="panel">
-                        <div class="panel-head"><div><div class="eyebrow">Queue Composer</div><h3>Create a task with metadata</h3></div></div>
+                        <div class="panel-head"><div><h3>Create a task with metadata</h3></div></div>
                         <div class="compose-stack">
                             <textarea id="taskComposerText" class="text-area" rows="5" placeholder="Task description..."></textarea>
                             <div class="inline-fields triple">
@@ -263,7 +307,7 @@
                         </div>
                     </article>
                     <article class="panel panel-tall">
-                        <div class="panel-head"><div><div class="eyebrow">Queue State</div><h3>Tasks and active actions</h3></div><button class="btn ghost small" id="refreshTasksBtn">Refresh</button></div>
+                        <div class="panel-head"><div><h3>Tasks and active actions</h3></div><button class="btn ghost small" id="refreshTasksBtn">Refresh</button></div>
                         <div class="queue-list" id="taskListView"></div>
                     </article>
                 </div>
@@ -272,21 +316,26 @@
             <section class="content view" id="view-services">
                 <div class="workspace-grid two-up">
                     <article class="panel panel-tall">
-                        <div class="panel-head"><div><div class="eyebrow">Registry</div><h3>Service catalog</h3></div></div>
+                        <div class="panel-head"><div><h3>Service catalog</h3></div></div>
                         <div class="service-grid" id="servicesGrid"></div>
                     </article>
                     <article class="panel panel-tall">
-                        <div class="panel-head"><div><div class="eyebrow">Snapshot</div><h3 id="serviceDetailTitle">Select a service</h3></div></div>
+                        <div class="panel-head"><div><h3 id="serviceDetailTitle">Select a service</h3></div></div>
                         <div class="detail-stack" id="serviceDetail"></div>
                     </article>
                 </div>
+            </section>
+
+            <section class="content view" id="view-channels">
+                <p class="channels-note" id="channelsNote">Loading channels...</p>
+                <div class="channel-grid" id="channelsGrid"></div>
             </section>
 
             <section class="content view" id="view-data-home">
                 <div class="workspace-grid two-up data-home-layout">
                     <article class="panel panel-tall">
                         <div class="panel-head">
-                            <div><div class="eyebrow">Browser</div><h3>Managed .orcbot directory</h3></div>
+                            <div><h3>Managed .orcbot directory</h3></div>
                             <div class="inline-actions">
                                 <button class="btn ghost small" id="dataHomeUpBtn">Up</button>
                                 <button class="btn ghost small" id="dataHomeRootBtn">Root</button>
@@ -306,7 +355,7 @@
                     </article>
                     <article class="panel panel-tall">
                         <div class="panel-head">
-                            <div><div class="eyebrow">Editor</div><h3 id="dataHomeEditorTitle">Select a file or folder</h3></div>
+                            <div><h3 id="dataHomeEditorTitle">Select a file or folder</h3></div>
                             <div class="inline-actions">
                                 <button class="btn ghost small" id="dataHomeNewFileBtn">New File</button>
                                 <button class="btn ghost small" id="dataHomeRenameBtn">Rename</button>
@@ -330,7 +379,7 @@
             <section class="content view" id="view-memory">
                 <div class="workspace-grid two-up">
                     <article class="panel">
-                        <div class="panel-head"><div><div class="eyebrow">Search</div><h3>Memory query</h3></div></div>
+                        <div class="panel-head"><div><h3>Memory query</h3></div></div>
                         <div class="compose-stack">
                             <input id="memorySearchInput" class="field-input" placeholder="Search memory text...">
                             <div class="inline-fields">
@@ -341,7 +390,7 @@
                         </div>
                     </article>
                     <article class="panel panel-tall">
-                        <div class="panel-head"><div><div class="eyebrow">Timeline</div><h3>Recent memory</h3></div><button class="btn ghost small" id="refreshMemoryBtn">Refresh</button></div>
+                        <div class="panel-head"><div><h3>Recent memory</h3></div><button class="btn ghost small" id="refreshMemoryBtn">Refresh</button></div>
                         <div class="timeline" id="memoryTimeline"></div>
                     </article>
                 </div>
@@ -350,7 +399,7 @@
             <section class="content view" id="view-logs">
                 <article class="panel panel-tall">
                     <div class="panel-head">
-                        <div><div class="eyebrow">Observability</div><h3>Foreground logs</h3></div>
+                        <div><h3>Foreground logs</h3></div>
                         <div class="inline-actions">
                             <select id="logLevel" class="field-input compact"><option value="all">all</option><option value="error">error</option><option value="warn">warn</option><option value="info">info</option></select>
                             <input id="logSearch" class="field-input compact" placeholder="filter text">
@@ -365,7 +414,7 @@
             <section class="content view" id="view-api">
                 <div class="workspace-grid two-up">
                     <article class="panel">
-                        <div class="panel-head"><div><div class="eyebrow">API Lab</div><h3>Test REST endpoints</h3></div></div>
+                        <div class="panel-head"><div><h3>Test REST endpoints</h3></div></div>
                         <div class="compose-stack">
                             <div class="inline-fields triple">
                                 <label><span>Method</span><select id="apiMethod" class="field-input"><option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option></select></label>
@@ -379,19 +428,19 @@
                         </div>
                     </article>
                     <article class="panel panel-tall">
-                        <div class="panel-head"><div><div class="eyebrow">Response</div><h3>Result inspector</h3></div></div>
+                        <div class="panel-head"><div><h3>Result inspector</h3></div></div>
                         <pre class="code-surface tall" id="apiResponse">Run a request to inspect JSON here.</pre>
                     </article>
                 </div>
                 <article class="panel">
-                    <div class="panel-head"><div><div class="eyebrow">Endpoint Catalog</div><h3>Capabilities and services</h3></div></div>
+                    <div class="panel-head"><div><h3>Capabilities and services</h3></div></div>
                     <div class="endpoint-grid" id="endpointCatalog"></div>
                 </article>
             </section>
 
             <section class="content view" id="view-config">
                 <article class="panel panel-tall">
-                    <div class="panel-head"><div><div class="eyebrow">Safe Config</div><h3>Runtime configuration</h3></div><div class="inline-actions"><input id="configSearchInput" class="field-input compact wide-input" placeholder="filter config"><button class="btn ghost small" id="refreshConfigBtn">Refresh</button></div></div>
+                    <div class="panel-head"><div><h3>Runtime configuration</h3></div><div class="inline-actions"><input id="configSearchInput" class="field-input compact wide-input" placeholder="filter config"><button class="btn ghost small" id="refreshConfigBtn">Refresh</button></div></div>
                     <div class="config-grid compact-list scroll-region" id="configGrid"></div>
                 </article>
             </section>
@@ -399,11 +448,11 @@
             <section class="content view" id="view-security">
                 <div class="workspace-grid two-up">
                     <article class="panel">
-                        <div class="panel-head"><div><div class="eyebrow">Gateway Auth</div><h3>Token, policy, and execution controls</h3></div><div class="inline-actions"><button class="btn ghost small" id="refreshSecurityBtn">Refresh</button><button class="btn primary small" id="rotateGatewayTokenBtn">Rotate Token</button><button class="btn ghost small" id="rotateMcpKeyBtn">Rotate MCP Key</button></div></div>
+                        <div class="panel-head"><div><h3>Token, policy, and execution controls</h3></div><div class="inline-actions"><button class="btn ghost small" id="refreshSecurityBtn">Refresh</button><button class="btn primary small" id="rotateGatewayTokenBtn">Rotate Token</button><button class="btn ghost small" id="rotateMcpKeyBtn">Rotate MCP Key</button></div></div>
                         <div class="stack-list compact-list scroll-region" id="securitySummary"></div>
                     </article>
                     <article class="panel panel-tall">
-                        <div class="panel-head"><div><div class="eyebrow">Hardening</div><h3>Gateway security surface</h3></div></div>
+                        <div class="panel-head"><div><h3>Gateway security surface</h3></div></div>
                         <div class="detail-stack compact-list scroll-region" id="securityGuidance"></div>
                     </article>
                 </div>

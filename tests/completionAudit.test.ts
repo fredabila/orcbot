@@ -62,6 +62,21 @@ describe('collectCompletionAuditIssues', () => {
         expect(issues).toEqual([]);
     });
 
+    it('does not block a successful terminal delivery tool (e.g. schedule_task)', () => {
+        const issues = collectCompletionAuditIssues({
+            isChannelTask: true,
+            messagesSent: 0,
+            substantiveDeliveriesSent: 0,
+            deepToolExecutedSinceLastMessage: false,
+            sentMessagesInAction: [],
+            taskComplexity: 'simple',
+            terminalDeliverySucceeded: true,
+            isLikelyAcknowledgementMessage: isAcknowledgement
+        });
+
+        expect(issues).toEqual([]);
+    });
+
     it('marks channel work incomplete when deep work finishes after the last user message', () => {
         const ledger = new StepLedger();
         ledger.record({

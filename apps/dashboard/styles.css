@@ -2,25 +2,24 @@
     --bg: #f2efe7;
     --surface: rgba(255, 251, 245, 0.88);
     --surface-strong: #fffaf2;
-    --surface-ink: #132028;
     --panel: #fcf8ef;
     --line: rgba(19, 32, 40, 0.12);
     --line-strong: rgba(19, 32, 40, 0.22);
     --text: #102028;
     --muted: #56646b;
-    --muted-soft: #78878d;
+    --muted-soft: #5f6e78;
     --accent: #0f8a6c;
     --accent-strong: #0a6d55;
-    --accent-soft: rgba(15, 138, 108, 0.12);
     --warn: #dd8b16;
     --danger: #c13e42;
     --blue: #1f73c9;
-    --shadow: 0 20px 60px rgba(22, 35, 44, 0.12);
-    --radius-xl: 28px;
-    --radius-lg: 20px;
-    --radius-md: 14px;
-    --radius-sm: 10px;
+    /* Smaller radii. The previous 28px panels read as cards floating on a page. */
+    --radius-xl: 16px;
+    --radius-lg: 12px;
+    --radius-md: 10px;
+    --radius-sm: 8px;
     --sidebar-width: 308px;
+    --sidebar-rail: 76px;
 }
 
 * {
@@ -34,10 +33,13 @@ html, body {
 }
 
 body {
-    font-family: 'Space Grotesk', sans-serif;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
     color: var(--text);
     background: var(--bg);
     padding: 16px;
+    /* A denser base: this is an operations console read many times a day. */
+    font-size: 0.875rem;
+    line-height: 1.5;
 }
 
 button,
@@ -61,6 +63,11 @@ pre {
     border: 1px solid rgba(19, 32, 40, 0.08);
     box-shadow: 0 10px 30px rgba(16, 32, 40, 0.08);
     background: var(--surface-strong);
+    transition: grid-template-columns 220ms ease;
+}
+
+.shell.sidebar-collapsed {
+    grid-template-columns: var(--sidebar-rail) minmax(0, 1fr);
 }
 
 .sidebar {
@@ -76,40 +83,74 @@ pre {
     overflow: hidden;
 }
 
+/* A masthead, not a card. The old block was a clamp(2.3rem, …, 3.35rem) heading
+   inside a 308px sidebar, so "OrcBot Ops" wrapped onto two lines and became the
+   loudest element on the page. Weight carries it now, not size. */
 .brand-block {
     display: flex;
     align-items: center;
-    gap: 16px;
-    padding: 16px 18px;
-    border: 1px solid rgba(15, 138, 108, 0.12);
-    border-radius: 24px;
-    background: var(--panel);
+    gap: 12px;
+    min-width: 0;
 }
 
 .brand-mark {
-    width: 60px;
-    height: 60px;
-    border-radius: 20px;
+    flex: 0 0 auto;
+    width: 38px;
+    height: 38px;
+    border-radius: 11px;
     display: grid;
     place-items: center;
     background: var(--accent);
     color: white;
     font-weight: 700;
-    font-size: 26px;
-    letter-spacing: 0.06em;
+    font-size: 15px;
+    letter-spacing: 0.04em;
 }
 
-.brand-block > div:last-child {
-    display: grid;
-    gap: 8px;
+.brand-text {
+    flex: 1 1 auto;
     min-width: 0;
 }
 
 .brand-block h1 {
-    font-size: clamp(2.3rem, 2vw + 1rem, 3.35rem);
-    line-height: 0.9;
-    letter-spacing: -0.05em;
-    text-wrap: balance;
+    font-size: 1.05rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.25;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sidebar-toggle {
+    flex: 0 0 auto;
+    margin-left: auto;
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border-radius: 9px;
+    border: 1px solid var(--line);
+    background: rgba(255, 255, 255, 0.6);
+    color: var(--muted);
+    cursor: pointer;
+    transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+
+.sidebar-toggle:hover {
+    color: var(--text);
+    border-color: var(--line-strong);
+}
+
+.sidebar-toggle-icon {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform 220ms ease;
 }
 
 .eyebrow {
@@ -123,6 +164,22 @@ pre {
 .panel h3,
 .canvas-header h3 {
     margin: 0;
+}
+
+/* One deliberate type scale. Previously the view title (24px), the section
+   headings (18px) and the focal headline (~18.7px) all sat within a few pixels
+   of each other at the same weight, so nothing read as more important. */
+.topbar h2 {
+    font-size: 1.375rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+}
+
+.hero-panel h3,
+.canvas-header h3 {
+    font-size: 1.0625rem;
+    font-weight: 600;
+    line-height: 1.35;
 }
 
 .nav-stack {
@@ -146,7 +203,20 @@ pre {
     border-radius: 14px;
     cursor: pointer;
     text-align: left;
-    transition: 180ms ease;
+    /* Named properties, not `all`: transitioning `all` also animates the focus
+       outline, so the keyboard focus ring fades in instead of appearing at once. */
+    transition: color 180ms ease, background-color 180ms ease, border-color 180ms ease, transform 180ms ease;
+}
+
+.nav-icon {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }
 
 .nav-item:hover,
@@ -251,8 +321,8 @@ pre {
 
 .content {
     display: none;
-    padding: 30px 36px 40px;
-    gap: 20px;
+    padding: 24px 32px 36px;
+    gap: 26px;
     align-content: start;
     max-width: 1880px;
     width: 100%;
@@ -263,19 +333,16 @@ pre {
     display: grid;
 }
 
+/* Only two things keep a box: the focal card for a view, and the bounded canvas
+   panels, where a bounded box is the whole point. Everything else is a section. */
 .hero-panel,
-.panel,
 .canvas-panel {
     border: 1px solid var(--line);
     background: var(--surface);
 }
 
-.panel {
-    padding: 2px;
-}
-
 .hero-panel {
-    padding: 26px 28px;
+    padding: 22px 24px;
     border-radius: var(--radius-xl);
     display: grid;
     grid-template-columns: 1.3fr auto;
@@ -284,9 +351,10 @@ pre {
 }
 
 .hero-panel p {
-    margin: 10px 0 0;
+    margin: 8px 0 0;
     color: var(--muted);
     max-width: 70ch;
+    font-size: 0.8125rem;
 }
 
 .metric-grid,
@@ -302,6 +370,7 @@ pre {
     gap: 14px;
 }
 
+/* These live inside sections now, so they carry no inset of their own. */
 .service-strip,
 .service-grid,
 .endpoint-grid,
@@ -310,14 +379,16 @@ pre {
 .timeline,
 .queue-list,
 .event-feed {
-    padding: 18px;
+    padding: 0;
 }
 
 .metric-grid {
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    border-top: 1px solid var(--line);
+    padding-top: 16px;
 }
 
-.metric-card,
+/* Boxes are for discrete objects: one event, one queued task, one service. */
 .service-pill,
 .stack-card,
 .timeline-item,
@@ -325,53 +396,53 @@ pre {
 .service-card,
 .endpoint-card,
 .config-card {
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-md);
     background: var(--surface-strong);
     border: 1px solid var(--line);
 }
 
+/* A stat is not an object, so it is not a box. Seven identical boxes read as
+   seven identical things, which is exactly the sameness this layout escapes. */
 .metric-card {
-    padding: 18px;
+    padding: 0;
 }
 
 .metric-card .label,
 .mini-label {
-    font-size: 11px;
+    font-size: 0.6875rem;
     color: var(--muted-soft);
 }
 
 .metric-card .value {
-    margin-top: 8px;
-    font-size: 28px;
+    margin-top: 4px;
+    font-size: 1.6rem;
     font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
 }
 
 .metric-card .sub {
-    margin-top: 8px;
+    margin-top: 4px;
     color: var(--muted);
-    font-size: 13px;
+    font-size: 0.75rem;
 }
 
 .split-grid,
 .workspace-grid.two-up {
     display: grid;
     grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
-    gap: 20px;
+    gap: 26px;
 }
 
 .workspace-grid {
     display: grid;
-    gap: 20px;
+    gap: 26px;
 }
 
-.panel,
+/* .panel is deliberately absent: it is a section now, so it carries no box. */
 .canvas-panel {
-    border-radius: var(--radius-xl);
+    border-radius: var(--radius-lg);
     overflow: hidden;
-}
-
-.panel-tall {
-    min-height: 420px;
 }
 
 .panel-head,
@@ -380,23 +451,39 @@ pre {
     justify-content: space-between;
     align-items: center;
     gap: 12px;
-    padding: 18px 20px;
+}
+
+/* The rule under the heading is what separates one section from the next, so the
+   section itself needs no border, background or radius. */
+.panel-head {
+    padding: 0 0 10px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 14px;
+}
+
+.canvas-panel-head {
+    padding: 16px 18px;
     border-bottom: 1px solid var(--line);
 }
 
 .panel-head h3,
 .canvas-panel-head span {
-    font-size: 18px;
+    font-size: 0.9375rem;
     font-weight: 600;
 }
 
 .compose-stack,
 .detail-stack,
-.panel-body,
+.panel-body {
+    display: grid;
+    gap: 14px;
+    padding: 0;
+}
+
 .canvas-panel-body {
     display: grid;
     gap: 14px;
-    padding: 20px;
+    padding: 18px;
 }
 
 .inline-fields {
@@ -492,6 +579,13 @@ pre {
     background: rgba(255, 255, 255, 0.72);
     border-color: var(--line);
     color: var(--text);
+}
+
+/* R-32: every interactive element needs a visible keyboard focus indicator.
+   Accent-coloured so focus reads as active, never as an error state. */
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
 }
 
 .event-feed,
@@ -620,16 +714,6 @@ pre {
     gap: 10px;
 }
 
-.service-card,
-.service-pill,
-.stack-card,
-.detail-card,
-.config-card,
-.endpoint-card,
-.queue-card,
-.timeline-item {
-}
-
 .service-state,
 .tag {
     display: inline-flex;
@@ -720,13 +804,13 @@ pre {
 }
 
 .log-surface {
-    min-height: 62vh;
+    min-height: 300px;
     line-height: 1.6;
     font-size: 13px;
 }
 
 .code-surface.tall {
-    min-height: 360px;
+    min-height: 220px;
 }
 
 .chat-thread {
@@ -1056,7 +1140,7 @@ pre {
 }
 
 .data-home-editor {
-    min-height: 360px;
+    min-height: 260px;
     font-family: 'IBM Plex Mono', monospace;
     line-height: 1.55;
 }
@@ -1185,7 +1269,13 @@ pre {
     }
 
     .brand-block {
-        padding: 14px 16px;
+        padding: 0;
+    }
+
+    /* The rail is a wide-viewport affordance; on mobile the sidebar is a stacked
+       header, so collapsing it would only remove the navigation. */
+    .sidebar-toggle {
+        display: none;
     }
 
     .topbar,
@@ -1201,5 +1291,259 @@ pre {
 
     .chat-bubble {
         max-width: 100%;
+    }
+}
+
+/* Live agent canvas (A2UI) rendered via render_canvas */
+.agent-canvas-panel {
+    grid-column: 1 / -1;
+    grid-row: auto;
+}
+
+.agent-canvas-body {
+    padding: 0;
+    display: flex;
+    min-height: 420px;
+}
+
+.agent-canvas-frame {
+    flex: 1;
+    width: 100%;
+    min-height: 420px;
+    border: 0;
+    background: #0b0d12;
+    border-radius: 10px;
+}
+
+/* ── Channels ── */
+/* A channel is a discrete object, so unlike a section it earns a box. */
+.channels-note {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.8125rem;
+    line-height: 1.55;
+    max-width: 84ch;
+}
+
+.channel-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+    gap: 20px;
+    align-items: start;
+}
+
+.channel-card {
+    display: grid;
+    gap: 14px;
+    padding: 18px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    background: var(--surface-strong);
+}
+
+.channel-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line);
+}
+
+/* Let the title block shrink so the badge and Save always stay on one line.
+   Without this the pair wraps on channels with a long description but not on
+   those with a short one, so the card headers vary for no reason. */
+.channel-head > div:first-child {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.channel-head .inline-actions {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+}
+
+.channel-head h3 {
+    margin: 0;
+    font-size: 0.9375rem;
+    font-weight: 600;
+}
+
+.channel-desc {
+    margin: 4px 0 0;
+    max-width: 62ch;
+    color: var(--muted);
+    font-size: 0.75rem;
+    line-height: 1.5;
+}
+
+.channel-unset {
+    margin: 0;
+    padding: 10px 12px;
+    border: 1px solid rgba(31, 115, 201, 0.18);
+    border-radius: var(--radius-sm);
+    background: rgba(31, 115, 201, 0.07);
+    color: var(--muted);
+    font-size: 0.75rem;
+}
+
+.channel-readonly {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-size: 0.75rem;
+    color: var(--muted);
+}
+
+.channel-readonly strong {
+    color: var(--text);
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 500;
+}
+
+.channel-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 12px;
+}
+
+.channel-field {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+    /* Top-align, so a checkbox field's label lines up with the text inputs'
+       labels instead of floating to the middle of the row. */
+    align-content: start;
+}
+
+.channel-field > label,
+.channel-toggle > span {
+    font-size: 0.75rem;
+    color: var(--muted);
+}
+
+.channel-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.channel-toggle input {
+    width: 15px;
+    height: 15px;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.channel-hint {
+    margin: 0;
+    font-size: 0.6875rem;
+    line-height: 1.45;
+    color: var(--muted-soft);
+}
+
+/* Reserved height so the card does not jump when a save note appears. */
+.channel-note {
+    margin: 0;
+    min-height: 1.2em;
+    font-size: 0.75rem;
+    color: var(--muted);
+}
+
+.channel-note.saved { color: var(--accent-strong); }
+.channel-note.error { color: var(--danger); }
+
+.channel-card input:disabled,
+.channel-card button:disabled {
+    opacity: 0.55;
+    cursor: progress;
+}
+
+/* ── Collapsed sidebar (icon rail) ──
+   Wide viewports only. Labels stay in the DOM as visually-hidden text so every
+   button keeps its accessible name, and title attributes give the pointer user
+   a tooltip. Collapsing is a preference, persisted in localStorage. */
+@media (min-width: 921px) {
+    .shell.sidebar-collapsed .sidebar {
+        padding-left: 12px;
+        padding-right: 12px;
+    }
+
+    .shell.sidebar-collapsed .brand-block {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    /* Hidden from the rail but kept in the accessibility tree: this h1 names the
+       product, so display:none would leave the collapsed page without a heading.
+       Same visually-hidden pattern as the nav labels below. */
+    .shell.sidebar-collapsed .brand-text {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        padding: 0;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+        border: 0;
+    }
+
+    .shell.sidebar-collapsed .sidebar-toggle {
+        margin-left: 0;
+    }
+
+    .shell.sidebar-collapsed .sidebar-toggle-icon {
+        transform: rotate(180deg);
+    }
+
+    .shell.sidebar-collapsed .nav-item {
+        justify-content: center;
+        gap: 0;
+        padding-left: 0;
+        padding-right: 0;
+    }
+
+    .shell.sidebar-collapsed .nav-item span {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        padding: 0;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+        border: 0;
+    }
+
+    .shell.sidebar-collapsed .nav-item:hover,
+    .shell.sidebar-collapsed .nav-item.active {
+        transform: none;
+    }
+
+    .shell.sidebar-collapsed .connection-row {
+        justify-content: center;
+        padding-left: 4px;
+        padding-right: 4px;
+    }
+
+    /* The rail has room only for the status dot. */
+    .shell.sidebar-collapsed .connection-row > div,
+    .shell.sidebar-collapsed .connection-row.compact {
+        display: none;
+    }
+}
+
+/* Quality floor: honour the OS "reduce motion" preference. This UI is
+   transition-only, so the honest guard is to collapse those durations. */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
     }
 }

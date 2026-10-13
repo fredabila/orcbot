@@ -20,6 +20,7 @@ This file lists the available skills for the agent.
 - **react_whatsapp(jid, message_id, emoji)**: [CORE MESSAGING] React to a WhatsApp message with an emoji.
 - **react_discord(channel_id, message_id, emoji)**: [CORE MESSAGING] React to a Discord message with an emoji.
 - **reply_whatsapp_status(jid, message)**: [CORE MESSAGING] Reply to a contact’s WhatsApp status.
+- **notify_owner(message, from?)**: [CORE MESSAGING] Relay a message/request from a non-owner contact to the owner. Delivers to the owner's WhatsApp self-chat, falling back to the gateway/web chat. Requires `notifyOwnerEnabled`.
 - **update_contact_profile(jid, profile_json)**: [MEMORY/STATE] Persist a WhatsApp contact profile.
 - **get_contact_profile(jid)**: [MEMORY/STATE] Retrieve a stored WhatsApp contact profile.
 - **list_whatsapp_contacts(limit?)**: [MEMORY/STATE] List recent WhatsApp contacts that interacted with the bot.

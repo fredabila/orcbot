@@ -14,6 +14,8 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { Agent } from '../core/Agent';
 import { ConfigManager } from '../config/ConfigManager';
+import { hasConfiguredProvider } from '../config/providerCredentials';
+import { inferProviderFromModel } from '../config/providerInference';
 import { collectDoctorReport } from '../cli/Doctor';
 import { logger } from '../utils/logger';
 import { eventBus } from '../core/EventBus';
@@ -26,6 +28,43 @@ export interface GatewayConfig {
     staticDir?: string;
     rateLimitPerMinute?: number;
 }
+
+/**
+ * One editable setting on a messaging channel.
+ *
+ * `type: 'secret'` fields are write-only: the API reports `isSet` and never the
+ * value, and the UI only sends one when the operator actually types something.
+ */
+export interface ChannelFieldDescriptor {
+    key: string;
+    label: string;
+    type: 'secret' | 'boolean' | 'text' | 'number';
+    hint?: string;
+    value?: string | number | boolean;
+    isSet?: boolean;
+}
+
+/** A messaging channel the gateway can report and configure. */
+export interface ChannelDescriptor {
+    id: string;
+    label: string;
+    description: string;
+    configured: boolean;
+    configuredHint: string;
+    fields: ChannelFieldDescriptor[];
+    /** Facts shown for context only. Never accepted as writable keys. */
+    readonlyInfo?: { label: string; value: string }[];
+}
+
+/**
+ * Config keys whose change makes a *running* agent reload the channel straight
+ * away. This mirrors the `channelEnablingKeys` list in Agent.ts; anything not
+ * listed here is picked up on the next start instead.
+ */
+const CHANNEL_HOT_RELOAD_KEYS = [
+    'telegramToken', 'discordToken', 'slackBotToken', 'slackAppToken',
+    'whatsappEnabled', 'emailEnabled'
+];
 
 export class GatewayServer {
     private app: express.Application;
@@ -77,16 +116,12 @@ export class GatewayServer {
     constructor(agent: Agent, config: ConfigManager, gatewayConfig: Partial<GatewayConfig> = {}) {
         this.agent = agent;
         this.config = config;
-        // Resolve staticDir to absolute path
-        let resolvedStaticDir = gatewayConfig.staticDir;
-        if (resolvedStaticDir) {
-            resolvedStaticDir = path.resolve(process.cwd(), resolvedStaticDir);
-        } else {
-            const defaultDashboardDir = path.resolve(process.cwd(), 'apps', 'dashboard');
-            if (fs.existsSync(defaultDashboardDir)) {
-                resolvedStaticDir = defaultDashboardDir;
-            }
-        }
+        // Resolve the dashboard static directory. Prefer an explicit override, then the
+        // persisted `gatewayStaticDir`, then the bundled dashboard (dist), then the repo
+        // `apps/dashboard` checkout so the UI works from any working directory.
+        const resolvedStaticDir = GatewayServer.resolveStaticDir(
+            gatewayConfig.staticDir || config.get('gatewayStaticDir')
+        );
 
         this.gatewayConfig = {
             port: gatewayConfig.port || config.get('gatewayPort') || 3100,
@@ -105,6 +140,45 @@ export class GatewayServer {
         this.setupRoutes();
         this.setupWebSocket();
         this.setupEventForwarding();
+    }
+
+    /**
+     * Locate the dashboard assets. An explicit path always wins, and is the escape
+     * hatch for testing a specific build.
+     *
+     * Otherwise a source checkout wins over the bundled copy: `apps/dashboard` is
+     * probed before `dist/dashboard`. The dashboard is static, so the server cannot
+     * rebuild it at runtime, while `dev` / `web` run the server through ts-node with
+     * no build step at all. Preferring the bundled copy meant a dashboard edit never
+     * appeared until someone remembered to rebuild, which is a silent trap. A
+     * published package has no `apps/` folder, so it still gets `dist/dashboard`;
+     * pass `-s dist/dashboard` to force the built copy in a checkout.
+     */
+    private static resolveStaticDir(explicit?: string): string | undefined {
+        if (explicit && String(explicit).trim()) {
+            const candidate = path.resolve(process.cwd(), String(explicit).trim());
+            if (fs.existsSync(candidate)) return candidate;
+            logger.warn(`Gateway: Static directory not found: ${candidate}`);
+        }
+
+        const packageRoot = path.resolve(__dirname, '..', '..');
+        const candidates = [
+            path.join(packageRoot, 'apps', 'dashboard'),
+            path.resolve(process.cwd(), 'apps', 'dashboard'),
+            path.join(packageRoot, 'dist', 'dashboard'),
+            path.resolve(process.cwd(), 'dist', 'dashboard')
+        ];
+
+        for (const candidate of candidates) {
+            try {
+                if (fs.existsSync(path.join(candidate, 'index.html'))) {
+                    return candidate;
+                }
+            } catch {
+                // ignore probing errors and keep looking
+            }
+        }
+        return explicit ? path.resolve(process.cwd(), String(explicit).trim()) : undefined;
     }
 
     /**
@@ -405,29 +479,137 @@ export class GatewayServer {
         return candidates.filter((candidate, index) => candidates.indexOf(candidate) === index && fs.existsSync(candidate));
     }
 
+    /**
+     * Single source of truth for the messaging channels this gateway reports and
+     * lets an operator configure. `fields` doubles as the write allowlist: the PUT
+     * route refuses any key not listed for that channel, so a request can never
+     * reach an unrelated config key.
+     */
+    private getChannelDescriptors(): ChannelDescriptor[] {
+        const secret = (key: string, label: string, hint?: string): ChannelFieldDescriptor => ({
+            key, label, type: 'secret', hint, isSet: !!this.config.get(key)
+        });
+        const toggle = (key: string, label: string, hint?: string): ChannelFieldDescriptor => ({
+            key, label, type: 'boolean', hint, value: this.config.get(key) === true
+        });
+        const text = (key: string, label: string, hint?: string): ChannelFieldDescriptor => ({
+            key, label, type: 'text', hint, value: String(this.config.get(key) ?? '')
+        });
+        const num = (key: string, label: string, hint?: string): ChannelFieldDescriptor => ({
+            key, label, type: 'number', hint, value: this.config.get(key) ?? ''
+        });
+
+        return [
+            {
+                id: 'telegram',
+                label: 'Telegram',
+                description: 'Bot API. An inbound message starts a task and the reply goes back to the same chat.',
+                configured: !!this.config.get('telegramToken'),
+                configuredHint: 'Add a bot token from @BotFather to switch this channel on.',
+                fields: [
+                    secret('telegramToken', 'Bot token', 'From @BotFather. Stored in your local config file.'),
+                    toggle('telegramAutoReplyEnabled', 'Reply to inbound messages automatically')
+                ]
+            },
+            {
+                id: 'whatsapp',
+                label: 'WhatsApp',
+                description: 'Linked device over Baileys. Pairing happens from the terminal, not from this page.',
+                configured: this.config.get('whatsappEnabled') === true,
+                configuredHint: 'Pair a device from the terminal, then enable WhatsApp here.',
+                fields: [
+                    toggle('whatsappEnabled', 'Enable WhatsApp', 'Turns the linked-device connection on.'),
+                    toggle('whatsappAutoReplyEnabled', 'Reply to inbound messages automatically'),
+                    toggle('whatsappStatusReplyEnabled', 'Reply to status updates'),
+                    toggle('whatsappAutoReactEnabled', 'React to inbound messages automatically')
+                ],
+                readonlyInfo: [
+                    { label: 'Linked account', value: this.config.get('whatsappOwnerJID') || 'not paired' }
+                ]
+            },
+            {
+                id: 'discord',
+                label: 'Discord',
+                description: 'Bot token from the Discord developer portal.',
+                configured: !!this.config.get('discordToken'),
+                configuredHint: 'Add a bot token to switch this channel on.',
+                fields: [
+                    secret('discordToken', 'Bot token', 'Bot tab in the Discord developer portal.'),
+                    toggle('discordAutoReplyEnabled', 'Reply to inbound messages automatically')
+                ]
+            },
+            {
+                id: 'slack',
+                label: 'Slack',
+                description: 'Socket-mode app. The socket needs both the bot token and an app-level token.',
+                configured: !!this.config.get('slackBotToken'),
+                configuredHint: 'Add the bot token and the app-level token from your Slack app.',
+                fields: [
+                    secret('slackBotToken', 'Bot token', 'Starts with xoxb-.'),
+                    secret('slackAppToken', 'App-level token', 'Starts with xapp-. Required for socket mode.'),
+                    secret('slackSigningSecret', 'Signing secret', 'Only needed if you also use the HTTP events route.'),
+                    toggle('slackAutoReplyEnabled', 'Reply to inbound messages automatically')
+                ]
+            },
+            {
+                id: 'email',
+                label: 'Email',
+                description: 'SMTP for sending, IMAP for reading. Your credentials stay in your local config file.',
+                configured: this.config.get('emailEnabled') === true,
+                configuredHint: 'Fill in the SMTP and IMAP details below, then enable email.',
+                fields: [
+                    toggle('emailEnabled', 'Enable email'),
+                    text('emailAddress', 'Address', 'The address shown to recipients.'),
+                    text('smtpHost', 'SMTP host', 'Sending.'),
+                    num('smtpPort', 'SMTP port', 'Usually 587, or 465 with implicit TLS.'),
+                    toggle('smtpSecure', 'SMTP implicit TLS', 'On for port 465, off for STARTTLS.'),
+                    text('smtpUsername', 'SMTP username'),
+                    secret('smtpPassword', 'SMTP password'),
+                    text('imapHost', 'IMAP host', 'Reading.'),
+                    num('imapPort', 'IMAP port', 'Usually 993.'),
+                    toggle('imapSecure', 'IMAP TLS'),
+                    text('imapUsername', 'IMAP username'),
+                    secret('imapPassword', 'IMAP password')
+                ]
+            }
+        ];
+    }
+
+    /**
+     * Legacy summary shape, derived from the descriptor list so the two can never
+     * disagree about what "configured" means for a channel. Consumed by
+     * GET /api/connections and by the service snapshot.
+     */
     private getConnectionsSummary() {
+        const byId = new Map(this.getChannelDescriptors().map((channel) => [channel.id, channel]));
+        const toggleValue = (id: string, key: string) => {
+            const field = byId.get(id)?.fields.find((candidate) => candidate.key === key);
+            return field?.value === true;
+        };
+
         return {
             telegram: {
-                configured: !!this.config.get('telegramToken'),
-                autoReply: this.config.get('telegramAutoReplyEnabled') || false
+                configured: !!byId.get('telegram')?.configured,
+                autoReply: toggleValue('telegram', 'telegramAutoReplyEnabled')
             },
             whatsapp: {
-                configured: !!this.config.get('whatsappEnabled'),
-                autoReply: this.config.get('whatsappAutoReplyEnabled') || false,
-                statusReply: this.config.get('whatsappStatusReplyEnabled') || false,
-                autoReact: this.config.get('whatsappAutoReactEnabled') || false,
+                configured: !!byId.get('whatsapp')?.configured,
+                connected: this.agent.whatsapp?.isConnected?.() ?? false,
+                autoReply: toggleValue('whatsapp', 'whatsappAutoReplyEnabled'),
+                statusReply: toggleValue('whatsapp', 'whatsappStatusReplyEnabled'),
+                autoReact: toggleValue('whatsapp', 'whatsappAutoReactEnabled'),
                 linkedAccount: this.config.get('whatsappOwnerJID') || null
             },
             discord: {
-                configured: !!this.config.get('discordToken'),
-                autoReply: this.config.get('discordAutoReplyEnabled') || false
+                configured: !!byId.get('discord')?.configured,
+                autoReply: toggleValue('discord', 'discordAutoReplyEnabled')
             },
             slack: {
-                configured: !!this.config.get('slackBotToken'),
-                autoReply: this.config.get('slackAutoReplyEnabled') || false
+                configured: !!byId.get('slack')?.configured,
+                autoReply: toggleValue('slack', 'slackAutoReplyEnabled')
             },
             email: {
-                configured: !!this.config.get('emailEnabled'),
+                configured: !!byId.get('email')?.configured,
                 address: this.config.get('emailAddress') || null
             }
         };
@@ -1348,6 +1530,70 @@ export class GatewayServer {
             }
         });
 
+        // ===== CHANNELS (descriptors + configuration) =====
+        router.get('/channels', (_req: Request, res: Response) => {
+            res.json({
+                channels: this.getChannelDescriptors(),
+                // Lets the UI say accurately whether a save reloads the channel now
+                // or only takes effect on the next start.
+                hotReloadKeys: CHANNEL_HOT_RELOAD_KEYS,
+                authEnabled: !!(this.gatewayConfig.apiKey || this.config.get('gatewayApiKey'))
+            });
+        });
+
+        router.put('/channels/:id', (req: Request, res: Response) => {
+            const descriptor = this.getChannelDescriptors().find((channel) => channel.id === req.params.id);
+            if (!descriptor) {
+                return res.status(400).json({ error: `Unknown channel: ${req.params.id}` });
+            }
+
+            const body = (req.body && typeof req.body === 'object') ? req.body : {};
+            const fields = new Map(descriptor.fields.map((field) => [field.key, field]));
+
+            // Validate every key before writing anything, so one bad key cannot
+            // leave a channel half-configured.
+            const unknownKeys = Object.keys(body).filter((key) => !fields.has(key));
+            if (unknownKeys.length) {
+                return res.status(400).json({
+                    error: `Not configurable for ${descriptor.id}: ${unknownKeys.join(', ')}`
+                });
+            }
+
+            const changed: string[] = [];
+            try {
+                for (const [key, raw] of Object.entries(body)) {
+                    const field = fields.get(key)!;
+
+                    if (field.type === 'boolean') {
+                        this.config.set(key, raw === true || raw === 'true');
+                    } else if (field.type === 'number') {
+                        const parsed = Number(raw);
+                        this.config.set(key, (raw === '' || raw === null || Number.isNaN(parsed)) ? undefined : parsed);
+                    } else if (field.type === 'secret') {
+                        // Write-only. Omitting a secret leaves it untouched and an
+                        // empty string is ignored rather than treated as a wipe, so
+                        // clearing the box by accident cannot break a live channel.
+                        // Sending null is the deliberate way to clear one.
+                        if (raw === null) this.config.set(key, '');
+                        else if (typeof raw === 'string' && raw.trim() !== '') this.config.set(key, raw.trim());
+                    } else {
+                        this.config.set(key, raw === null ? '' : String(raw));
+                    }
+                    changed.push(key);
+                }
+            } catch (error: any) {
+                return res.status(500).json({ error: error.message });
+            }
+
+            logger.info(`Gateway: channel '${descriptor.id}' updated (${changed.join(', ') || 'no keys'})`);
+            res.json({
+                success: true,
+                changed,
+                hotReload: changed.some((key) => CHANNEL_HOT_RELOAD_KEYS.includes(key)),
+                channels: this.getChannelDescriptors()
+            });
+        });
+
         // ===== AI MODELS =====
         router.get('/models', (_req: Request, res: Response) => {
             const models = this.getModelsSummary();
@@ -1744,6 +1990,11 @@ export class GatewayServer {
         eventBus.on('gateway:chat:file', (data: any) => {
             this.broadcast(data);
         });
+
+        // Listen for A2UI live-canvas renders from the agent
+        eventBus.on('gateway:chat:canvas', (data: any) => {
+            this.broadcast(data);
+        });
     }
 
     private broadcast(message: any) {
@@ -1797,7 +2048,8 @@ export class GatewayServer {
             configuredProviders: this.getConfiguredProviders(),
             channels: {
                 telegram: !!this.config.get('telegramToken'),
-                whatsapp: this.config.get('whatsappEnabled') || false
+                whatsapp: this.config.get('whatsappEnabled') || false,
+                whatsappConnected: this.agent.whatsapp?.isConnected?.() ?? false
             },
             safeMode: this.config.get('safeMode') || false,
             skillCount: this.agent.skills.getAllSkills().length,
@@ -1843,26 +2095,21 @@ export class GatewayServer {
     }
 
     private getConfiguredProviders(): { name: string; configured: boolean; isActive?: boolean }[] {
-        const modelName = (this.config.get('modelName') || '').toLowerCase();
+        const modelName = this.config.get('modelName') || '';
         const explicitProvider = this.config.get('llmProvider');
-        
-        // Infer which provider would be used for current model
-        let inferredProvider = 'openai'; // default
-        if (modelName.startsWith('ollama:') || modelName.startsWith('local:')) inferredProvider = 'ollama';
-        else if (modelName.includes('gemini')) inferredProvider = 'google';
-        else if (modelName.includes('claude')) inferredProvider = 'anthropic';
-        else if (modelName.includes('llama') || modelName.includes('mixtral')) inferredProvider = 'openrouter';
-        else if (modelName.includes('gpt') || modelName.includes('o1') || modelName.includes('o3')) inferredProvider = 'openai';
-        
-        const activeProvider = explicitProvider || inferredProvider;
+        const activeProvider = explicitProvider || inferProviderFromModel(modelName);
 
-        return [
-            { name: 'openai', configured: !!this.config.get('openaiApiKey'), isActive: activeProvider === 'openai' },
-            { name: 'google', configured: !!this.config.get('googleApiKey'), isActive: activeProvider === 'google' },
-            { name: 'openrouter', configured: !!this.config.get('openrouterApiKey'), isActive: activeProvider === 'openrouter' },
-            { name: 'nvidia', configured: !!this.config.get('nvidiaApiKey'), isActive: activeProvider === 'nvidia' },
-            { name: 'bedrock', configured: !!this.config.get('bedrockAccessKeyId'), isActive: activeProvider === 'bedrock' }
+        const providers = [
+            'openai', 'google', 'anthropic', 'openrouter', 'nvidia',
+            'groq', 'mistral', 'deepseek', 'xai', 'perplexity',
+            'cerebras', 'custom', 'bedrock'
         ];
+
+        return providers.map(name => ({
+            name,
+            configured: hasConfiguredProvider(this.config, name),
+            isActive: activeProvider === name
+        }));
     }
 
     private isSensitiveKey(key: string): boolean {

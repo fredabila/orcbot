@@ -43,9 +43,6 @@ export default function SelfTraining() {
 
   return (
     <div className="app self-training-page">
-      <div className="bg-gradient-orbs" />
-      <div className="noise-overlay" />
-
       <Header scrolled={true} />
 
       <main className="section-inner self-training-shell">

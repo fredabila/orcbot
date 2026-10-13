@@ -3,18 +3,35 @@ import { Link } from 'react-router-dom';
 import Header from './components/Header';
 import './index.css';
 
-function QuickStartPanel() {
+// The hero opens on the one thing that is actually characteristic of OrcBot: the
+// action loop itself. Every stage and detail below is the real documented loop
+// (heartbeat, simulation pre-plan, memory recall, tool execution, the signature
+// guardrail, the review gate, conclusion plus cleanup). The caption says plainly
+// that the run is an example, so nothing here reads as a captured measurement.
+function AgentTrace() {
+  const steps = [
+    { time: '00:00', label: 'Heartbeat fires', detail: 'picks the highest-priority queued action', tone: '' },
+    { time: '00:01', label: 'Simulation', detail: 'pre-plans the steps before anything runs', tone: '' },
+    { time: '00:04', label: 'Memory recall', detail: 'episodic matches injected into the prompt', tone: '' },
+    { time: '00:07', label: 'Decide and execute', detail: 'browser_navigate, then extract_data', tone: '' },
+    { time: '00:12', label: 'Guardrail holds', detail: 'identical call seen 3 times, step skipped', tone: 'warn' },
+    { time: '00:18', label: 'Review gate', detail: 'a second pass confirms the goal is met', tone: '' },
+    { time: '00:19', label: 'Conclusion written', detail: 'episodic summary saved, step memories cleared', tone: 'ok' },
+  ];
+
   return (
-    <div className="quickstart">
-      <div className="quickstart-cmd">
-        <span className="qs-prompt">$</span>
-        <code>curl -sSL https://orcbot.vercel.app/install.sh | bash</code>
-      </div>
-      <p className="quickstart-note">
-        Then start the terminal dashboard with <code>orcbot ui</code>, or run the agent
-        loop headless with <code>orcbot start</code>.
-      </p>
-    </div>
+    <figure className="trace" aria-label="Example OrcBot run">
+      <figcaption className="trace-cap">Example run, one task start to finish</figcaption>
+      <ol className="trace-list">
+        {steps.map((s, i) => (
+          <li className={`trace-row ${s.tone}`} key={i}>
+            <span className="trace-time">{s.time}</span>
+            <span className="trace-label">{s.label}</span>
+            <span className="trace-detail">{s.detail}</span>
+          </li>
+        ))}
+      </ol>
+    </figure>
   );
 }
 
@@ -40,39 +57,28 @@ function App() {
         <div className="hero-grid">
           <div className="hero-copy">
             <h1 className="hero-title">
-              Give your agents<br />
-              <span className="hero-title-em">a place to thrive.</span>
+              Plans the work,<br />
+              runs the tools,<br />
+              checks the result.
             </h1>
 
             <p className="hero-subtitle">
-              Imagine offering your AI a computer, a carefree world where they can live, orchestrate, and be as helpful as possible. OrcBot provides the digital environment
-              where autonomy feels natural and productivity feels like home.
+              OrcBot runs a full action loop on your own hardware. It picks the
+              highest-priority task, recalls what it learned last time, executes
+              tools, and reviews its own result before it stops.
             </p>
 
             <div className="hero-actions">
-              <a className="btn btn-primary btn-lg" href="#install">
-                Build their home
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-              </a>
+              <a className="btn btn-primary btn-lg" href="#install">Install OrcBot</a>
               <a className="btn btn-outline btn-lg" href="https://github.com/fredabila/orcbot" target="_blank" rel="noopener noreferrer">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-                Join the Mission
+                Read the source
               </a>
-            </div>
-
-            <div className="hero-stats">
-              {[
-                { label: 'Built-in skills', value: '260+' }, { label: 'Messaging channels', value: '5' }, { label: 'LLM providers', value: '7' }, { label: 'Memory tiers', value: '3' }, ].map((s, i) => (
-                <div className="hero-stat" key={i}>
-                  <span className="hero-stat-value">{s.value}</span>
-                  <span className="hero-stat-label">{s.label}</span>
-                </div>
-              ))}
             </div>
           </div>
 
           <div className="hero-media">
-            <QuickStartPanel />
+            <AgentTrace />
           </div>
         </div>
 
@@ -134,9 +140,8 @@ function App() {
               </button>
             </div>
             <div className="install-footnote">
-              <span>Requires Node.js ≥ 18</span>
-              <span className="dot-sep">·</span>
-              <a href="https://docs.orcbot.buzzchat.site/getting-started.html" target="_blank" rel="noopener noreferrer">Full setup guide →</a>
+              <span>Requires Node.js 18 or newer</span>
+              <a href="https://docs.orcbot.buzzchat.site/getting-started.html" target="_blank" rel="noopener noreferrer">Read the full setup guide</a>
             </div>
           </div>
         </section>
@@ -147,39 +152,26 @@ function App() {
           <h2 className="section-title">Everything an autonomous operator needs.</h2>
           <p className="section-desc">Opinionated, tactical, and resilient. OrcBot thinks ahead, delegates intelligently, and fixes itself when it breaks.</p>
           <div className="marquee-section">
-            <div className="marquee-fade-wrap">
-              <div className="marquee-track">
-                {[
-                  { title: 'TForce Tactical Guard', desc: 'Real-time health monitor that detects loops, fatigue, and ghosting, injecting automated recovery plans into the reasoning loop.' },
-                  { title: 'Recursive Helper Routing', desc: 'A sophisticated PromptRouter that intelligently activates related domain helpers (Browser -> Media) for seamless task execution.' },
-                  { title: 'Deep Memory Recall', desc: 'Dual-layered search system combining metadata-filtered semantic embeddings with literal file-based log retrieval.' },
-                  { title: 'Strategic Planning', desc: 'Simulates tasks before execution with roadmaps, contingencies, and loop protections built-in.' },
-                ].map((cap, i) => (
-                  <div className="marquee-card capability-card" key={i}>
-                    <h3>{cap.title}</h3>
-                    <p>{cap.desc}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="marquee-fade-wrap">
-              <div className="marquee-track marquee-track-reverse">
-                {[
-                  { title: 'Self-Evolving Skills', desc: 'Researches, writes, and installs its own TypeScript plugins when new capabilities are needed.' },
-                  { title: 'Self-Training Sidecar', desc: 'Captures accepted trajectories, prepares offline datasets, evaluates candidates, and promotes new models under admin control.' },
-                  { title: 'Guard Rails & Safety', desc: 'Loop detection, termination review, skill frequency limits, and deduplication protection.' },
-                  { title: 'Smart Skill Routing', desc: 'Intent-based skill selection with configurable routing rules for optimal tool matching.' },
-                  { title: 'Privacy First', desc: 'All logs, memories, configs, and context stay on your hardware. You own everything.' },
-                ].map((cap, i) => (
-                  <div className="marquee-card capability-card" key={i}>
-                    <h3>{cap.title}</h3>
-                    <p>{cap.desc}</p>
-                  </div>
-                ))}
-              </div>
+            <div className="marquee-grid">
+              {[
+                { title: 'TForce Tactical Guard', desc: 'Real-time health monitor that detects loops, fatigue, and ghosting, injecting automated recovery plans into the reasoning loop.' },
+                { title: 'Recursive Helper Routing', desc: 'A sophisticated PromptRouter that intelligently activates related domain helpers (Browser -> Media) for seamless task execution.' },
+                { title: 'Deep Memory Recall', desc: 'Dual-layered search system combining metadata-filtered semantic embeddings with literal file-based log retrieval.' },
+                { title: 'Strategic Planning', desc: 'Simulates tasks before execution with roadmaps, contingencies, and loop protections built-in.' },
+                { title: 'Self-Evolving Skills', desc: 'Researches, writes, and installs its own TypeScript plugins when new capabilities are needed.' },
+                { title: 'Self-Training Sidecar', desc: 'Captures accepted trajectories, prepares offline datasets, evaluates candidates, and promotes new models under admin control.' },
+                { title: 'Guard Rails & Safety', desc: 'Loop detection, termination review, skill frequency limits, and deduplication protection.' },
+                { title: 'Smart Skill Routing', desc: 'Intent-based skill selection with configurable routing rules for optimal tool matching.' },
+                { title: 'Privacy First', desc: 'All logs, memories, configs, and context stay on your hardware. You own everything.' },
+              ].map((cap, i) => (
+                <div className="marquee-card capability-card" key={i}>
+                  <h3>{cap.title}</h3>
+                  <p>{cap.desc}</p>
+                </div>
+              ))}
             </div>
             <div className="marquee-cta">
-              <Link to="/skills" className="btn btn-outline btn-sm">Explore all 260+ built-in skills →</Link>
+              <Link to="/skills" className="btn btn-outline btn-sm">See all 235 built-in skills</Link>
             </div>
           </div>
         </section>
@@ -204,10 +196,10 @@ function App() {
         <section id="architecture" className="section section-inner">
           <div className="section-label">Architecture</div>
           <h2 className="section-title">Local-first, modular, and fully swappable.</h2>
-          <p className="section-desc">Every block can be replaced, bring your own model, channels, or tools. Nothing is locked in.</p>
+          <p className="section-desc">Every block can be replaced. Five messaging channels, seven LLM providers, three memory tiers, and 235 built-in skills, none of them locked in.</p>
           <div className="arch-grid">
             {[
-              { color: '#5cffb3', title: 'Channels', items: ['Telegram', 'WhatsApp', 'Discord', 'Web Gateway', 'CLI / TUI'] }, { color: '#5cc9ff', title: 'Core Engine', items: ['Decision Engine', 'Pipeline & Guards', 'Orchestrator', 'Smart Heartbeat', 'Action Queue', 'Memory + Vectors'] }, { color: '#ffb347', title: 'Execution', items: ['Worker Processes', 'Skills Manager', 'Web Browser', 'Plugin System'] }, { color: '#c77fff', title: 'Providers', items: ['OpenAI / Gemini / Claude', 'Bedrock / NVIDIA / OpenRouter', 'Search APIs', 'CAPTCHA Solver'] }, ].map((col, i) => (
+              { color: '#5cffb3', title: 'Channels', items: ['Telegram', 'WhatsApp', 'Discord', 'Web Gateway', 'CLI / TUI'] }, { color: '#5cc9ff', title: 'Core Engine', items: ['Decision Engine', 'Pipeline & Guards', 'Orchestrator', 'Smart Heartbeat', 'Action Queue', 'Memory + Vectors'] }, { color: '#ffb347', title: 'Execution', items: ['Worker Processes', 'Skills Manager', 'Web Browser', 'Plugin System'] }, { color: '#5cc9ff', title: 'Providers', items: ['OpenAI / Gemini / Claude', 'Bedrock / NVIDIA / OpenRouter', 'Search APIs', 'CAPTCHA Solver'] }, ].map((col, i) => (
               <div className="arch-card" key={i} style={{ '--arch-color': col.color } as React.CSSProperties}>
                 <div className="arch-title">{col.title}</div>
                 <div className="arch-list">
@@ -295,7 +287,7 @@ function App() {
               <a href="https://docs.orcbot.buzzchat.site/configuration.html" target="_blank" rel="noopener noreferrer">Configuration</a>
               <a href="https://docs.orcbot.buzzchat.site/skills.html" target="_blank" rel="noopener noreferrer">Skills &amp; Plugins</a>
               <a href="https://docs.orcbot.buzzchat.site/architecture.html" target="_blank" rel="noopener noreferrer">Architecture</a>
-              <a href="https://docs.orcbot.buzzchat.site/" target="_blank" rel="noopener noreferrer">All Docs →</a>
+              <a href="https://docs.orcbot.buzzchat.site/" target="_blank" rel="noopener noreferrer">All docs</a>
             </div>
             <div className="footer-col">
               <h4>Project</h4>

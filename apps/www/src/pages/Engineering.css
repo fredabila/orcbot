@@ -43,10 +43,8 @@
 
 .p-subtitle {
   font-family: var(--font-mono);
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  color: #5cffb3;
-  letter-spacing: 0.12em;
+  font-size: 0.78rem;
+  color: var(--accent);
   display: block;
   margin-bottom: 8px;
 }
@@ -210,10 +208,9 @@
 }
 
 .p-context {
-  font-size: 0.75rem;
-  color: #5cffb3;
+  font-size: 0.78rem;
+  color: var(--accent);
   font-family: var(--font-mono);
-  text-transform: uppercase;
   display: block;
   margin-bottom: 4px;
 }
